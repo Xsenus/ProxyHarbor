@@ -1,3 +1,5 @@
+using System.ComponentModel.DataAnnotations;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -32,8 +34,8 @@ public sealed class ProxiesController(
     [OutputCache(PolicyName = "public-list")]
     public async Task<ActionResult<PagedResult<ProxyDto>>> Get(
         [FromQuery] ProxyProtocol? protocol,
-        [FromQuery] int? maxLatencyMs,
-        [FromQuery] decimal? minSuccessRate,
+        [FromQuery, Range(1, int.MaxValue)] int? maxLatencyMs,
+        [FromQuery, Range(typeof(decimal), "0", "100")] decimal? minSuccessRate,
         [FromQuery] int page = 1,
         [FromQuery] int pageSize = 100,
         CancellationToken cancellationToken = default)
@@ -51,16 +53,8 @@ public sealed class ProxiesController(
         var skip = (int)requestedOffset;
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
         var freshAfter = DateTimeOffset.UtcNow.AddMinutes(-collectorOptions.Value.PublicFreshnessMinutes);
-        var query = db.Proxies.AsNoTracking().Where(x =>
-            x.Status == ProxyStatus.Alive && x.LastCheckedAt >= freshAfter);
-        if (protocol.HasValue) query = query.Where(x => x.Protocol == protocol);
-        if (maxLatencyMs.HasValue) query = query.Where(x => x.LatencyMs <= maxLatencyMs);
-        if (minSuccessRate.HasValue)
-        {
-            var threshold = Math.Clamp(minSuccessRate.Value, 0, 100);
-            query = query.Where(x => x.SuccessfulChecks + x.FailedChecks > 0 &&
-                100m * x.SuccessfulChecks >= threshold * (x.SuccessfulChecks + x.FailedChecks));
-        }
+        var query = ApplyFilters(db.Proxies.AsNoTracking().Where(x =>
+            x.Status == ProxyStatus.Alive && x.LastCheckedAt >= freshAfter), protocol, maxLatencyMs, minSuccessRate);
         var entities = await query.OrderBy(x => x.LatencyMs).ThenByDescending(x => x.SuccessfulChecks)
             .Skip(skip).Take(pageSize).ToListAsync(cancellationToken);
         var items = entities.Select(ProxyDto.From).ToList();
@@ -71,7 +65,12 @@ public sealed class ProxiesController(
     /// <summary>Потоково экспортирует до 50 000 живых записей в json, xml, txt или csv.</summary>
     [HttpGet("export/{format}")]
     [EnableRateLimiting("export")]
-    public async Task<IActionResult> Export(string format, [FromQuery] ProxyProtocol? protocol, CancellationToken cancellationToken)
+    public async Task<IActionResult> Export(
+        string format,
+        [FromQuery] ProxyProtocol? protocol,
+        [FromQuery, Range(1, int.MaxValue)] int? maxLatencyMs,
+        [FromQuery, Range(typeof(decimal), "0", "100")] decimal? minSuccessRate,
+        CancellationToken cancellationToken)
     {
         var normalizedFormat = format.ToLowerInvariant();
         var contentType = normalizedFormat switch
@@ -96,9 +95,8 @@ public sealed class ProxiesController(
         {
             await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
             var freshAfter = DateTimeOffset.UtcNow.AddMinutes(-collectorOptions.Value.PublicFreshnessMinutes);
-            var query = db.Proxies.AsNoTracking().Where(x =>
-                x.Status == ProxyStatus.Alive && x.LastCheckedAt >= freshAfter);
-            if (protocol.HasValue) query = query.Where(x => x.Protocol == protocol);
+            var query = ApplyFilters(db.Proxies.AsNoTracking().Where(x =>
+                x.Status == ProxyStatus.Alive && x.LastCheckedAt >= freshAfter), protocol, maxLatencyMs, minSuccessRate);
             var proxies = query.OrderBy(x => x.LatencyMs).ThenBy(x => x.Id).Take(ExportLimit)
                 .AsAsyncEnumerable().Select(ProxyDto.From);
             var suffix = protocol?.ToString().ToLowerInvariant() ?? "all";
@@ -136,11 +134,20 @@ public sealed class ProxiesController(
     private static async Task WriteCsvAsync(Stream output, IAsyncEnumerable<ProxyDto> proxies, CancellationToken token)
     {
         await using var writer = new StreamWriter(output, Utf8NoBom, 64 * 1024, leaveOpen: true);
-        await writer.WriteLineAsync("protocol,host,port,latencyMs,successRate,lastCheckedAt".AsMemory(), token);
+        await writer.WriteLineAsync("protocol,host,port,latencyMs,successRate,lastCheckedAt,url,exitIp".AsMemory(), token);
         await foreach (var proxy in proxies.WithCancellation(token))
         {
-            var row = FormattableString.Invariant(
-                $"{proxy.Protocol},{proxy.Host},{proxy.Port},{proxy.LatencyMs},{proxy.SuccessRate},{proxy.LastCheckedAt:O}");
+            var row = string.Join(',', new[]
+            {
+                CsvField(proxy.Protocol.ToString()),
+                CsvField(proxy.Host),
+                proxy.Port.ToString(CultureInfo.InvariantCulture),
+                proxy.LatencyMs?.ToString(CultureInfo.InvariantCulture) ?? string.Empty,
+                proxy.SuccessRate.ToString(CultureInfo.InvariantCulture),
+                CsvField(proxy.LastCheckedAt?.ToString("O", CultureInfo.InvariantCulture) ?? string.Empty),
+                CsvField(proxy.Url),
+                CsvField(proxy.ExitIp ?? string.Empty)
+            });
             await writer.WriteLineAsync(row.AsMemory(), token);
         }
         await writer.FlushAsync(token);
@@ -148,7 +155,11 @@ public sealed class ProxiesController(
 
     private static async Task WriteXmlAsync(Stream output, IAsyncEnumerable<ProxyDto> proxies, CancellationToken token)
     {
-        using var writer = XmlWriter.Create(output, new XmlWriterSettings
+        // XmlWriter.Dispose выполняет синхронный Flush даже после FlushAsync. Kestrel и
+        // compression streams запрещают его, поэтому обёртка поглощает только финальный
+        // избыточный Flush, сохраняя запрет на любые синхронные записи.
+        using var asyncOutput = new AsyncXmlOutputStream(output);
+        using var writer = XmlWriter.Create(asyncOutput, new XmlWriterSettings
         {
             Async = true,
             Encoding = Utf8NoBom,
@@ -161,17 +172,79 @@ public sealed class ProxiesController(
         {
             token.ThrowIfCancellationRequested();
             await writer.WriteStartElementAsync(null, "proxy", null);
-            await writer.WriteElementStringAsync(null, "protocol", null, proxy.Protocol.ToString().ToLowerInvariant());
+            await writer.WriteElementStringAsync(null, "protocol", null, proxy.Protocol.ToString());
             await writer.WriteElementStringAsync(null, "host", null, proxy.Host);
             await writer.WriteElementStringAsync(null, "port", null, proxy.Port.ToString(System.Globalization.CultureInfo.InvariantCulture));
             await writer.WriteElementStringAsync(null, "latencyMs", null,
-                proxy.LatencyMs?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty);
-            await writer.WriteElementStringAsync(null, "successRate", null, proxy.SuccessRate.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                proxy.LatencyMs?.ToString(CultureInfo.InvariantCulture) ?? string.Empty);
+            await writer.WriteElementStringAsync(null, "successRate", null, proxy.SuccessRate.ToString(CultureInfo.InvariantCulture));
+            await writer.WriteElementStringAsync(null, "lastCheckedAt", null,
+                proxy.LastCheckedAt?.ToString("O", CultureInfo.InvariantCulture) ?? string.Empty);
+            await writer.WriteElementStringAsync(null, "url", null, proxy.Url);
+            await writer.WriteElementStringAsync(null, "exitIp", null, proxy.ExitIp ?? string.Empty);
             await writer.WriteEndElementAsync();
         }
         await writer.WriteEndElementAsync();
         await writer.WriteEndDocumentAsync();
         await writer.FlushAsync();
+    }
+
+    /// <summary>Применяет одинаковые ограничения к постраничной и потоковой публичной выдаче.</summary>
+    private static IQueryable<ProxyEndpoint> ApplyFilters(
+        IQueryable<ProxyEndpoint> query,
+        ProxyProtocol? protocol,
+        int? maxLatencyMs,
+        decimal? minSuccessRate)
+    {
+        if (protocol.HasValue) query = query.Where(x => x.Protocol == protocol);
+        if (maxLatencyMs.HasValue) query = query.Where(x => x.LatencyMs <= maxLatencyMs);
+        if (minSuccessRate.HasValue)
+        {
+            var threshold = minSuccessRate.Value;
+            query = query.Where(x => x.SuccessfulChecks + x.FailedChecks > 0 &&
+                100m * x.SuccessfulChecks >= threshold * (x.SuccessfulChecks + x.FailedChecks));
+        }
+        return query;
+    }
+
+    /// <summary>Кавычит строковое CSV-поле и нейтрализует spreadsheet formula injection.</summary>
+    private static string CsvField(string value)
+    {
+        if (value.Length > 0 && value[0] is '=' or '+' or '-' or '@') value = $"'{value}";
+        return $"\"{value.Replace("\"", "\"\"", StringComparison.Ordinal)}\"";
+    }
+
+    /// <summary>Адаптирует финальный Dispose XmlWriter к async-only HTTP response stream.</summary>
+    private sealed class AsyncXmlOutputStream(Stream inner) : Stream
+    {
+        public override bool CanRead => false;
+        public override bool CanSeek => false;
+        public override bool CanWrite => inner.CanWrite;
+        public override long Length => throw new NotSupportedException();
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        // Перед Dispose всегда выполняется XmlWriter.FlushAsync; повторный sync flush не нужен.
+        public override void Flush() { }
+        public override Task FlushAsync(CancellationToken cancellationToken) => inner.FlushAsync(cancellationToken);
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) =>
+            throw new InvalidOperationException("Synchronous XML response writes are forbidden.");
+        public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+            inner.WriteAsync(buffer, offset, count, cancellationToken);
+        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default) =>
+            inner.WriteAsync(buffer, cancellationToken);
+
+        protected override void Dispose(bool disposing)
+        {
+            // Жизненным циклом исходного Response.Body владеет ASP.NET Core.
+            base.Dispose(disposing);
+        }
     }
 }
 

@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Xml.Linq;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -56,7 +57,7 @@ public sealed class ProxyPublicationTests
         {
             HttpContext = new DefaultHttpContext { Response = { Body = output } }
         };
-        Assert.IsType<EmptyResult>(await controller.Export("txt", null, CancellationToken.None));
+        Assert.IsType<EmptyResult>(await controller.Export("txt", null, null, null, CancellationToken.None));
         var text = Encoding.UTF8.GetString(output.ToArray());
         Assert.Contains("8.8.8.8", text);
         Assert.DoesNotContain("1.1.1.1", text);
@@ -83,13 +84,116 @@ public sealed class ProxyPublicationTests
             HttpContext = new DefaultHttpContext { Response = { Body = output } }
         };
 
-        Assert.IsType<EmptyResult>(await controller.Export("json", ProxyProtocol.Http, CancellationToken.None));
+        Assert.IsType<EmptyResult>(await controller.Export(
+            "json", ProxyProtocol.Http, null, null, CancellationToken.None));
 
         using var json = JsonDocument.Parse(output.ToArray());
         var item = Assert.Single(json.RootElement.EnumerateArray());
         Assert.Equal("Http", item.GetProperty("protocol").GetString());
         Assert.Equal("http://[2001:4860:4860::8888]:8080", item.GetProperty("url").GetString());
         Assert.Contains("proxies-http.json", controller.Response.Headers.ContentDisposition.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task XmlAndCsvExportsContainTheFullStableContract()
+    {
+        var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+            .UseInMemoryDatabase($"structured-export-{Guid.NewGuid():N}")
+            .Options;
+        var checkedAt = new DateTimeOffset(2026, 8, 9, 10, 11, 12, TimeSpan.Zero);
+        var endpoint = Endpoint("2001:4860:4860::8888", ProxyStatus.Alive, checkedAt);
+        endpoint.Protocol = ProxyProtocol.Socks5;
+        endpoint.LatencyMs = 321;
+        endpoint.SuccessfulChecks = 4;
+        endpoint.FailedChecks = 1;
+        endpoint.ExitIp = "8.8.8.8";
+        await using (var seed = new ProxyHarborDbContext(options))
+        {
+            seed.Proxies.Add(endpoint);
+            await seed.SaveChangesAsync();
+        }
+
+        var xmlController = Controller(options, out var xmlOutput);
+        Assert.IsType<EmptyResult>(await xmlController.Export(
+            "xml", ProxyProtocol.Socks5, 500, 80, CancellationToken.None));
+        var xml = XDocument.Parse(Encoding.UTF8.GetString(xmlOutput.ToArray()));
+        var proxy = Assert.Single(xml.Root!.Elements("proxy"));
+        Assert.Equal("Socks5", proxy.Element("protocol")?.Value);
+        Assert.Equal("2001:4860:4860::8888", proxy.Element("host")?.Value);
+        Assert.Equal("8080", proxy.Element("port")?.Value);
+        Assert.Equal("321", proxy.Element("latencyMs")?.Value);
+        Assert.Equal("80", proxy.Element("successRate")?.Value);
+        Assert.Equal(checkedAt.ToString("O"), proxy.Element("lastCheckedAt")?.Value);
+        Assert.Equal("socks5://[2001:4860:4860::8888]:8080", proxy.Element("url")?.Value);
+        Assert.Equal("8.8.8.8", proxy.Element("exitIp")?.Value);
+
+        var csvController = Controller(options, out var csvOutput);
+        Assert.IsType<EmptyResult>(await csvController.Export(
+            "csv", ProxyProtocol.Socks5, 500, 80, CancellationToken.None));
+        var csvLines = Encoding.UTF8.GetString(csvOutput.ToArray()).Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal("protocol,host,port,latencyMs,successRate,lastCheckedAt,url,exitIp", csvLines[0].TrimEnd('\r'));
+        Assert.Equal(
+            $"\"Socks5\",\"2001:4860:4860::8888\",8080,321,80,\"{checkedAt:O}\",\"socks5://[2001:4860:4860::8888]:8080\",\"8.8.8.8\"",
+            csvLines[1].TrimEnd('\r'));
+    }
+
+    [Fact]
+    public async Task CsvExportNeutralizesSpreadsheetFormulaPrefixes()
+    {
+        var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+            .UseInMemoryDatabase($"csv-safety-{Guid.NewGuid():N}")
+            .Options;
+        var endpoint = Endpoint("=2+3", ProxyStatus.Alive, DateTimeOffset.UtcNow);
+        endpoint.ExitIp = "@malicious";
+        await using (var seed = new ProxyHarborDbContext(options))
+        {
+            seed.Proxies.Add(endpoint);
+            await seed.SaveChangesAsync();
+        }
+
+        var controller = Controller(options, out var output);
+        Assert.IsType<EmptyResult>(await controller.Export("csv", null, null, null, CancellationToken.None));
+        var csv = Encoding.UTF8.GetString(output.ToArray());
+
+        Assert.Contains("\"'=2+3\"", csv, StringComparison.Ordinal);
+        Assert.Contains("\"'@malicious\"", csv, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task PublicListAndTextExportApplyTheSameQualityFilters()
+    {
+        var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+            .UseInMemoryDatabase($"filter-parity-{Guid.NewGuid():N}")
+            .Options;
+        var now = DateTimeOffset.UtcNow;
+        var accepted = Endpoint("8.8.8.8", ProxyStatus.Alive, now);
+        accepted.LatencyMs = 200;
+        accepted.SuccessfulChecks = 9;
+        accepted.FailedChecks = 1;
+        var slow = Endpoint("1.1.1.1", ProxyStatus.Alive, now);
+        slow.LatencyMs = 900;
+        slow.SuccessfulChecks = 9;
+        slow.FailedChecks = 1;
+        var unreliable = Endpoint("9.9.9.9", ProxyStatus.Alive, now);
+        unreliable.LatencyMs = 100;
+        unreliable.SuccessfulChecks = 1;
+        unreliable.FailedChecks = 1;
+        await using (var seed = new ProxyHarborDbContext(options))
+        {
+            seed.Proxies.AddRange(accepted, slow, unreliable);
+            await seed.SaveChangesAsync();
+        }
+
+        var listController = new ProxiesController(
+            new TestDbFactory(options), Options.Create(new CollectorOptions { PublicFreshnessMinutes = 15 }));
+        var listAction = await listController.Get(ProxyProtocol.Http, 500, 80, 1, 100, CancellationToken.None);
+        var page = Assert.IsType<PagedResult<ProxyDto>>(Assert.IsType<OkObjectResult>(listAction.Result).Value);
+        Assert.Equal("8.8.8.8", Assert.Single(page.Items).Host);
+
+        var exportController = Controller(options, out var output);
+        Assert.IsType<EmptyResult>(await exportController.Export(
+            "txt", ProxyProtocol.Http, 500, 80, CancellationToken.None));
+        Assert.Equal("http://8.8.8.8:8080", Encoding.UTF8.GetString(output.ToArray()).Trim());
     }
 
     [Fact]
@@ -119,6 +223,20 @@ public sealed class ProxyPublicationTests
         SuccessfulChecks = status == ProxyStatus.Alive ? 1 : 0,
         FailedChecks = status == ProxyStatus.Dead ? 1 : 0
     };
+
+    private static ProxiesController Controller(
+        DbContextOptions<ProxyHarborDbContext> options,
+        out AsyncOnlyMemoryStream output)
+    {
+        var controller = new ProxiesController(
+            new TestDbFactory(options), Options.Create(new CollectorOptions { PublicFreshnessMinutes = 15 }));
+        output = new AsyncOnlyMemoryStream();
+        controller.ControllerContext = new ControllerContext
+        {
+            HttpContext = new DefaultHttpContext { Response = { Body = output } }
+        };
+        return controller;
+    }
 
     private sealed class TestDbFactory(DbContextOptions<ProxyHarborDbContext> options)
         : IDbContextFactory<ProxyHarborDbContext>

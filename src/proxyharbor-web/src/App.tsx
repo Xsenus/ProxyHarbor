@@ -229,6 +229,11 @@ export default function App() {
   }
 
   const protocolCounts = useMemo(() => Object.fromEntries(stats?.byProtocol.map(x => [x.protocol, x.count]) ?? []), [stats])
+  const exportQuery = useMemo(() => {
+    const query = new URLSearchParams({ maxLatencyMs: String(maxLatency) })
+    if (protocol !== 'All') query.set('protocol', protocol)
+    return query.toString()
+  }, [protocol, maxLatency])
   const freshness = stats?.lastRun?.startedAt ? timeAgo(stats.lastRun.startedAt) : 'ожидается'
   const latestCollection = diagnostics?.recentRuns[0]
   const latestBackup = diagnostics?.recentBackups[0]
@@ -271,7 +276,7 @@ export default function App() {
         </div>
       </section>
 
-      <section id="api" className="api-panel"><div><span className="kicker">ONE-CLICK EXPORT</span><h2>Забирайте как удобно</h2><p>Фильтруйте через API или скачивайте готовый список. Выдача содержит только прокси со статусом Alive.</p></div><div className="export-grid">{['json','xml','txt','csv'].map(format => <a key={format} href={`${API}/api/v1/export/${format}`}><span>.{format}</span><ArrowDownToLine size={18}/></a>)}</div><div className="endpoint"><span>GET</span><code>/api/v1/proxies?protocol=Socks5&amp;maxLatencyMs=1000</code></div></section>
+      <section id="api" className="api-panel"><div><span className="kicker">ONE-CLICK EXPORT</span><h2>Забирайте как удобно</h2><p>Фильтруйте через API или скачивайте готовый список. Экспорт применяет выбранные протокол и предел задержки и содержит только свежие Alive-прокси.</p></div><div className="export-grid">{['json','xml','txt','csv'].map(format => <a key={format} href={`${API}/api/v1/export/${format}?${exportQuery}`}><span>.{format}</span><ArrowDownToLine size={18}/></a>)}</div><div className="endpoint"><span>GET</span><code>/api/v1/proxies?protocol=Socks5&amp;maxLatencyMs=1000</code></div></section>
     </main>
 
     <footer aria-hidden={adminOpen || undefined}><div className="brand"><span className="brand-mark"><Network size={18}/></span><span>Proxy<span>Harbor</span></span></div><p>Используйте публичные прокси ответственно и в рамках закона.</p><span>© {new Date().getFullYear()}</span></footer>

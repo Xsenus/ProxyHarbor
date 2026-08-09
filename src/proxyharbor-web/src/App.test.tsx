@@ -63,6 +63,19 @@ describe('ProxyHarbor UI', () => {
     expect(trigger).toHaveFocus()
   })
 
+  it('keeps export links synchronized with public filters', async () => {
+    render(<App />)
+    await screen.findByText('система активна')
+    const jsonExport = screen.getByRole('link', { name: '.json' })
+    expect(jsonExport).toHaveAttribute('href', '/api/v1/export/json?maxLatencyMs=2000')
+
+    fireEvent.click(screen.getByRole('button', { name: 'SOCKS5' }))
+    fireEvent.change(screen.getByRole('slider'), { target: { value: '1000' } })
+
+    await waitFor(() => expect(jsonExport).toHaveAttribute(
+      'href', '/api/v1/export/json?maxLatencyMs=1000&protocol=Socks5'))
+  })
+
   it('labels built-in sources with canonical provider metadata', async () => {
     vi.mocked(fetch).mockImplementation(async input => {
       const url = String(input)

@@ -71,14 +71,14 @@ docker compose up -d --build
 
 ```text
 GET  /api/v1/proxies?protocol=Socks5&maxLatencyMs=1000&page=1&pageSize=100
-GET  /api/v1/export/json
-GET  /api/v1/export/xml
-GET  /api/v1/export/txt?protocol=Http
-GET  /api/v1/export/csv
+GET  /api/v1/export/json?maxLatencyMs=1500&minSuccessRate=80
+GET  /api/v1/export/xml?protocol=Socks5
+GET  /api/v1/export/txt?protocol=Http&maxLatencyMs=1000
+GET  /api/v1/export/csv?minSuccessRate=90
 GET  /api/v1/stats
 ```
 
-Экспорт потоково отдаёт до 50 000 свежих проверенных записей, не собирая многомегабайтный ответ в памяти API. JSON использует тот же camelCase-контракт и строковые названия протоколов, что и `/api/v1/proxies`. На один IP разрешено 120 обычных публичных запросов, 20 административных и 5 тяжёлых экспортов в минуту; один экземпляр API одновременно формирует не более двух экспортов. При превышении лимита сервис отвечает `429` или `503` и `Retry-After`. Короткий server-side cache сводки и страниц игнорирует неизвестные query-параметры, чтобы ими нельзя было раздувать число cache keys.
+Экспорт потоково отдаёт до 50 000 свежих проверенных записей, не собирая многомегабайтный ответ в памяти API, и поддерживает те же `protocol`, `maxLatencyMs` и `minSuccessRate`, что публичный список. JSON, XML и CSV содержат стабильные поля protocol/host/port/url/latency/success/exit IP/time; TXT содержит по одному готовому proxy URL на строку. CSV кавычит строки и нейтрализует spreadsheet formula injection. На один IP разрешено 120 обычных публичных запросов, 20 административных и 5 тяжёлых экспортов в минуту; один экземпляр API одновременно формирует не более двух экспортов. При превышении лимита сервис отвечает `429` или `503` и `Retry-After`. Короткий server-side cache сводки и страниц игнорирует неизвестные query-параметры, чтобы ими нельзя было раздувать число cache keys.
 
 Административные запросы требуют `X-Admin-Key`:
 

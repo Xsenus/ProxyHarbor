@@ -150,6 +150,9 @@ jobs:
             --data '{"name":"x","url":"http://127.0.0.1/list.txt","protocol":"Http"}' \
             http://127.0.0.1:5080/api/v1/admin/sources)
           test "$invalid_status" -eq 400
+          invalid_list_filter=$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            'http://127.0.0.1:5080/api/v1/proxies?maxLatencyMs=0')
+          test "$invalid_list_filter" -eq 400
           backup_json=$(curl --fail --silent -X POST \
             -H 'X-Admin-Key: integration-admin-key-at-least-24-chars' \
             http://127.0.0.1:5080/api/v1/admin/backup)
@@ -168,7 +171,10 @@ jobs:
              .recentBackups[0].sentToTelegram == false'
           curl --fail --silent http://127.0.0.1:5080/metrics | \
             grep 'proxyharbor_last_backup_success 1'
-          for attempt in {1..5}; do
+          invalid_export_filter=$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            'http://127.0.0.1:5080/api/v1/export/json?minSuccessRate=101')
+          test "$invalid_export_filter" -eq 400
+          for attempt in {1..4}; do
             export_status=$(curl --silent --output /dev/null --write-out '%{http_code}' \
               http://127.0.0.1:5080/api/v1/export/unsupported)
             test "$export_status" -eq 400
