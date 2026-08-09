@@ -15,8 +15,12 @@ public sealed class ProxyCollector(
     IOptions<CollectorOptions> options,
     ILogger<ProxyCollector> logger) : IDisposable
 {
+    private static readonly TimeSpan AuditWriteTimeout = TimeSpan.FromSeconds(15);
     private static readonly Action<ILogger, string, Exception?> SourceFailed =
         LoggerMessage.Define<string>(LogLevel.Warning, new EventId(1001, "SourceFailed"), "Не удалось получить источник {Source}");
+    private static readonly Action<ILogger, Exception?> CollectionAuditFailed =
+        LoggerMessage.Define(LogLevel.Error, new EventId(1002, "CollectionAuditFailed"),
+            "Не удалось сохранить итоговый аудит цикла сбора.");
     private readonly SemaphoreSlim _runGate = new(1, 1);
 
     /// <summary>Запускает один полный цикл сбора и возвращает его аудит.</summary>
@@ -30,6 +34,16 @@ public sealed class ProxyCollector(
                 dbFactory, PostgresAdvisoryLock.CollectionKey, cancellationToken)
                 ?? throw new OperationAlreadyRunningException("сбор источников");
             await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+
+            // Cluster lock доказывает, что живого collection-run в общей БД больше нет:
+            // незавершённые строки могли остаться только после kill, power loss или обрыва БД.
+            var recoveredAt = DateTimeOffset.UtcNow;
+            await db.Runs.Where(item => item.Status == "running" && item.FinishedAt == null)
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(item => item.FinishedAt, recoveredAt)
+                    .SetProperty(item => item.Status, "failed")
+                    .SetProperty(item => item.Error,
+                        "Сбор был прерван аварийным завершением предыдущего процесса."), cancellationToken);
             var run = new CollectionRun();
             db.Runs.Add(run);
             await db.SaveChangesAsync(cancellationToken);
@@ -128,10 +142,7 @@ public sealed class ProxyCollector(
             }
             catch (Exception ex)
             {
-                run.FinishedAt = DateTimeOffset.UtcNow;
-                run.Status = "failed";
-                run.Error = ex.ToString()[..Math.Min(2000, ex.ToString().Length)];
-                await db.SaveChangesAsync(CancellationToken.None);
+                await FailRunAuditAsync(run.Id, ex);
                 throw;
             }
         }
@@ -140,6 +151,27 @@ public sealed class ProxyCollector(
 
     /// <summary>Освобождает синхронизатор запуска при остановке контейнера DI.</summary>
     public void Dispose() => _runGate.Dispose();
+
+    private async Task FailRunAuditAsync(Guid id, Exception exception)
+    {
+        try
+        {
+            // Ошибка могла оставить основной DbContext/connection в непригодном состоянии.
+            // Отдельный контекст и bounded token не скрывают исходный сбой и не тормозят shutdown.
+            using var timeout = new CancellationTokenSource(AuditWriteTimeout);
+            await using var auditDb = await dbFactory.CreateDbContextAsync(timeout.Token);
+            var error = exception.ToString();
+            await auditDb.Runs.Where(item => item.Id == id).ExecuteUpdateAsync(setters => setters
+                .SetProperty(item => item.FinishedAt, DateTimeOffset.UtcNow)
+                .SetProperty(item => item.Status, "failed")
+                .SetProperty(item => item.Error, error[..Math.Min(2000, error.Length)]), timeout.Token);
+        }
+        catch (Exception auditException)
+        {
+            // Следующий cluster-lock-владелец восстановит оставшуюся running-строку.
+            CollectionAuditFailed(logger, auditException);
+        }
+    }
 
     private async Task<string> FetchSourceAsync(HttpClient client, string url, CancellationToken token)
     {
