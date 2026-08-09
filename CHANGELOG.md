@@ -13,6 +13,7 @@
 - Prometheus заранее предупреждает, когда ETA validation-очереди превышает допустимое окно свежести публичного каталога.
 - Transient HTTP-ответы proxy-feed освобождают соединение до retry backoff и не блокируют source connection pool во время ожидания.
 - Telegram retry закрывает response, multipart и backup file handle до ожидания `retry_after`.
+- Backup worker после ошибки повторяет полный цикл через 15 минут, а count/age retention не позволяет recovery-снимкам заполнить volume.
 
 ## [1.0.0] - 2026-08-10
 

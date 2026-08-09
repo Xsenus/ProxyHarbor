@@ -83,7 +83,7 @@ public sealed class BackupService(
                 // Локальная retention-политика не зависит от доступности Telegram. Иначе
                 // продолжительный внешний сбой оставлял бы новый архив на каждом цикле,
                 // никогда не удаляя старые файлы и в итоге мог исчерпать backup volume.
-                DeleteExpired(options.Directory, options.RetentionDays);
+                ApplyRetention(options.Directory, options.RetentionDays, options.IntervalHours);
                 var sentToTelegram = false;
                 if (telegramConfigured)
                 {
@@ -309,11 +309,24 @@ public sealed class BackupService(
             client, path, caption, options.TelegramBotToken!, options.TelegramChatId!, token);
     }
 
-    private static void DeleteExpired(string directory, int retentionDays)
+    /// <summary>Ограничивает backup volume одновременно возрастом и ожидаемым числом плановых снимков.</summary>
+    internal static void ApplyRetention(string directory, int retentionDays, int intervalHours)
     {
         var cutoff = DateTime.UtcNow.AddDays(-Math.Max(1, retentionDays));
-        foreach (var file in Directory.EnumerateFiles(directory, "*.phbackup"))
-            if (File.GetLastWriteTimeUtc(file) < cutoff) File.Delete(file);
+        var files = Directory.EnumerateFiles(directory, "*.phbackup")
+            .Select(path => new FileInfo(path))
+            .OrderByDescending(file => file.LastWriteTimeUtc)
+            .ThenByDescending(file => file.Name, StringComparer.Ordinal)
+            .ToList();
+        var retained = files.Where(file => file.LastWriteTimeUtc >= cutoff).ToList();
+        foreach (var expired in files.Where(file => file.LastWriteTimeUtc < cutoff)) expired.Delete();
+
+        // Два дополнительных файла допускают текущий и recovery-снимок, но длительный
+        // Telegram outage не превращает 15-минутные повторы в неограниченный рост volume.
+        var scheduledCapacity = (int)Math.Ceiling(
+            Math.Max(1, retentionDays) * 24d / Math.Max(1, intervalHours));
+        var maxFiles = checked(scheduledCapacity + 2);
+        foreach (var overflow in retained.Skip(maxFiles)) overflow.Delete();
     }
 
     /// <summary>Удаляет только незавершённые служебные файлы, никогда не затрагивая готовый encrypted backup.</summary>
@@ -458,17 +471,44 @@ internal static class BackupFileSplitter
 /// <summary>Запускает резервное копирование по расписанию только при явном включении.</summary>
 public sealed class BackupWorker(BackupService backup, IOptions<BackupOptions> options, ILogger<BackupWorker> logger) : Microsoft.Extensions.Hosting.BackgroundService
 {
+    internal enum CycleOutcome { Succeeded, PeerOwned, Failed }
+    private static readonly TimeSpan FailureRetryDelay = TimeSpan.FromMinutes(15);
     private static readonly Action<ILogger, Exception?> BackupFailed =
         LoggerMessage.Define(LogLevel.Error, new EventId(1202, "BackupFailed"), "Не удалось создать резервную копию.");
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         if (!options.Value.Enabled) return;
-        using var timer = new PeriodicTimer(TimeSpan.FromHours(Math.Max(1, options.Value.IntervalHours)));
-        do
+        while (!stoppingToken.IsCancellationRequested)
         {
-            try { await backup.CreateAndSendAsync(stoppingToken); }
-            catch (OperationAlreadyRunningException) { }
-            catch (Exception ex) when (!stoppingToken.IsCancellationRequested) { BackupFailed(logger, ex); }
-        } while (await timer.WaitForNextTickAsync(stoppingToken));
+            var outcome = CycleOutcome.Failed;
+            try
+            {
+                await backup.CreateAndSendAsync(stoppingToken);
+                outcome = CycleOutcome.Succeeded;
+            }
+            catch (OperationAlreadyRunningException)
+            {
+                // Другая реплика уже владеет cluster lock; не создаём retry-storm.
+                outcome = CycleOutcome.PeerOwned;
+            }
+            catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
+            {
+                BackupFailed(logger, ex);
+            }
+
+            await Task.Delay(NextDelay(options.Value.IntervalHours, outcome), stoppingToken);
+        }
+    }
+
+    /// <summary>После ошибки повторяет существенно раньше суточного production-интервала.</summary>
+    internal static TimeSpan NextDelay(int intervalHours, CycleOutcome outcome)
+    {
+        var regularDelay = TimeSpan.FromHours(Math.Max(1, intervalHours));
+        return outcome switch
+        {
+            CycleOutcome.Succeeded or CycleOutcome.PeerOwned => regularDelay,
+            CycleOutcome.Failed => regularDelay <= FailureRetryDelay ? regularDelay : FailureRetryDelay,
+            _ => throw new ArgumentOutOfRangeException(nameof(outcome))
+        };
     }
 }

@@ -189,7 +189,9 @@ CI собирает Cobertura coverage и через `tools/Assert-Coverage.ps1`
 
 ## Резервные копии и восстановление
 
-Backup хранится в volume `backups` и удаляется по истечении `Backup__RetentionDays`. Локальная retention-политика применяется сразу после атомарной публикации нового архива и не зависит от доступности Telegram, поэтому продолжительный внешний сбой не вызывает неограниченный рост volume. История попыток, размер созданного файла и факт успешной Telegram-доставки сохраняются в `BackupRuns`, доступны через admin diagnostics и Prometheus-метрики и очищаются по `Backup__HistoryRetentionDays`. Чтобы расшифровать файл на доверенной машине:
+Backup хранится в volume `backups` и удаляется по истечении `Backup__RetentionDays`. Локальная retention-политика применяется сразу после атомарной публикации нового архива, ограничивает набор и возрастом, и ожидаемым числом плановых снимков с двумя recovery-слотами и не зависит от доступности Telegram. Поэтому продолжительный внешний сбой не вызывает неограниченный рост volume даже при 15-минутных повторах. История попыток, размер созданного файла и факт успешной Telegram-доставки сохраняются в `BackupRuns`, доступны через admin diagnostics и Prometheus-метрики и очищаются по `Backup__HistoryRetentionDays`. Чтобы расшифровать файл на доверенной машине:
+
+После успешного запуска scheduler ждёт настроенный `Backup__IntervalHours`. После ошибки БД, шифрования или Telegram он автоматически повторяет полный backup через 15 минут; cluster-lock конфликт с другой репликой считается уже обслуживаемым циклом и не создаёт retry-storm.
 
 ```powershell
 ./tools/Decrypt-Backup.ps1 -InputFile ./proxyharbor.phbackup -OutputZip ./proxyharbor.zip -EncryptionKey 'ваш ключ'
