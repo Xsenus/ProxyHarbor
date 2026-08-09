@@ -105,11 +105,17 @@ public sealed class BackupService(
                 await BackupEncryption.EncryptAsync(zipPath, partialEncryptedPath, options.EncryptionKey, cancellationToken);
                 File.Move(partialEncryptedPath, encryptedPath);
                 File.Delete(zipPath);
+                var sentToTelegram = false;
                 if (telegramConfigured)
+                {
                     await SendToTelegramAsync(encryptedPath, options, cancellationToken);
+                    // Значение становится true только после подтверждения ok=true для файла
+                    // либо для каждой части; частичная отправка остаётся failed в audit.
+                    sentToTelegram = true;
+                }
 
                 DeleteExpired(options.Directory, options.RetentionDays);
-                await CompleteAuditAsync(backupRun.Id, encryptedPath, telegramConfigured, options.HistoryRetentionDays);
+                await CompleteAuditAsync(backupRun.Id, encryptedPath, sentToTelegram, options.HistoryRetentionDays);
                 BackupCreated(logger, encryptedPath, null);
                 return encryptedPath;
             }

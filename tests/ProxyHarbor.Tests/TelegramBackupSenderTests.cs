@@ -1,5 +1,5 @@
 using System.Net;
-using System.Net.Http.Headers;
+using System.Text;
 using ProxyHarbor.Infrastructure;
 
 namespace ProxyHarbor.Tests;
@@ -8,7 +8,7 @@ namespace ProxyHarbor.Tests;
 public sealed class TelegramBackupSenderTests
 {
     [Fact]
-    public async Task RetriesRateLimitAndSendsExpectedMultipartDocument()
+    public async Task RetriesBodyRateLimitAndSendsExpectedMultipartDocument()
     {
         var path = Path.Combine(Path.GetTempPath(), $"proxyharbor-telegram-{Guid.NewGuid():N}.phbackup");
         await File.WriteAllBytesAsync(path, [1, 2, 3, 4, 5]);
@@ -79,7 +79,7 @@ public sealed class TelegramBackupSenderTests
             var handler = new PermanentRejectionHandler();
             using var client = new HttpClient(handler);
 
-            var exception = await Assert.ThrowsAsync<HttpRequestException>(() =>
+            var exception = await Assert.ThrowsAnyAsync<HttpRequestException>(() =>
                 TelegramBackupSender.SendAsync(
                     client, path, "backup", "secret-token", "123456", CancellationToken.None));
 
@@ -88,6 +88,79 @@ public sealed class TelegramBackupSenderTests
         }
         finally { File.Delete(path); }
     }
+
+    [Fact]
+    public async Task HttpSuccessWithoutOkConfirmationIsRetriedButNeverAccepted()
+    {
+        var path = await TemporaryBackupAsync();
+        try
+        {
+            var handler = new MissingConfirmationHandler();
+            using var client = new HttpClient(handler);
+
+            var exception = await Assert.ThrowsAnyAsync<HttpRequestException>(() =>
+                TelegramBackupSender.SendAsync(
+                    client, path, "backup", "super-secret-token", "123456", CancellationToken.None));
+
+            Assert.Equal(3, handler.Attempts);
+            Assert.Null(exception.StatusCode);
+            Assert.Contains("ok=true", exception.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain("super-secret-token", exception.ToString(), StringComparison.Ordinal);
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
+    public async Task BodyErrorCodeOnHttpSuccessIsTreatedAsPermanentRejection()
+    {
+        var path = await TemporaryBackupAsync();
+        try
+        {
+            var handler = new BodyRejectionHandler();
+            using var client = new HttpClient(handler);
+
+            var exception = await Assert.ThrowsAnyAsync<HttpRequestException>(() =>
+                TelegramBackupSender.SendAsync(
+                    client, path, "backup", "secret-token", "123456", CancellationToken.None));
+
+            Assert.Equal(1, handler.Attempts);
+            Assert.Equal(HttpStatusCode.BadRequest, exception.StatusCode);
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
+    public async Task CallerCancellationIsNotRetriedOrConvertedToDeliveryFailure()
+    {
+        var path = await TemporaryBackupAsync();
+        try
+        {
+            var handler = new BlockingHandler();
+            using var client = new HttpClient(handler);
+            using var cancellation = new CancellationTokenSource();
+
+            var request = TelegramBackupSender.SendAsync(
+                client, path, "backup", "secret-token", "123456", cancellation.Token);
+            await handler.RequestStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            cancellation.Cancel();
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => request);
+            Assert.Equal(1, handler.Attempts);
+        }
+        finally { File.Delete(path); }
+    }
+
+    private static async Task<string> TemporaryBackupAsync()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"proxyharbor-telegram-{Guid.NewGuid():N}.phbackup");
+        await File.WriteAllBytesAsync(path, [1, 2, 3]);
+        return path;
+    }
+
+    private static HttpResponseMessage JsonResponse(HttpStatusCode statusCode, string json) => new(statusCode)
+    {
+        Content = new StringContent(json, Encoding.UTF8, "application/json")
+    };
 
     private sealed class RecordingHandler : HttpMessageHandler
     {
@@ -102,11 +175,10 @@ public sealed class TelegramBackupSenderTests
             MultipartBody = await request.Content!.ReadAsStringAsync(cancellationToken);
             if (Attempts == 1)
             {
-                var limited = new HttpResponseMessage(HttpStatusCode.TooManyRequests);
-                limited.Headers.RetryAfter = new RetryConditionHeaderValue(TimeSpan.Zero);
-                return limited;
+                return JsonResponse(HttpStatusCode.OK,
+                    """{"ok":false,"error_code":429,"parameters":{"retry_after":0}}""");
             }
-            return new HttpResponseMessage(HttpStatusCode.OK);
+            return JsonResponse(HttpStatusCode.OK, """{"ok":true,"result":{}}""");
         }
     }
 
@@ -122,7 +194,7 @@ public sealed class TelegramBackupSenderTests
                 throw new HttpRequestException($"Temporary failure for {request.RequestUri}");
 
             LastMultipartLength = (await request.Content!.ReadAsByteArrayAsync(cancellationToken)).Length;
-            return new HttpResponseMessage(HttpStatusCode.OK);
+            return JsonResponse(HttpStatusCode.OK, """{"ok":true,"result":{}}""");
         }
     }
 
@@ -139,7 +211,49 @@ public sealed class TelegramBackupSenderTests
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             Attempts++;
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.BadRequest));
+            return Task.FromResult(JsonResponse(
+                HttpStatusCode.BadRequest, """{"ok":false,"error_code":400,"description":"bad request"}"""));
+        }
+    }
+
+    private sealed class MissingConfirmationHandler : HttpMessageHandler
+    {
+        public int Attempts { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Attempts++;
+            return Task.FromResult(JsonResponse(
+                HttpStatusCode.OK, """{"parameters":{"retry_after":0}}"""));
+        }
+    }
+
+    private sealed class BodyRejectionHandler : HttpMessageHandler
+    {
+        public int Attempts { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Attempts++;
+            return Task.FromResult(JsonResponse(
+                HttpStatusCode.OK, """{"ok":false,"error_code":400,"description":"rejected"}"""));
+        }
+    }
+
+    private sealed class BlockingHandler : HttpMessageHandler
+    {
+        public int Attempts { get; private set; }
+        public TaskCompletionSource<bool> RequestStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            Attempts++;
+            RequestStarted.TrySetResult(true);
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            return JsonResponse(HttpStatusCode.OK, """{"ok":true,"result":{}}""");
         }
     }
 }

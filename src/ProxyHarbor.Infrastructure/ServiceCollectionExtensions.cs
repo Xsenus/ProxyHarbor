@@ -67,7 +67,16 @@ public static class ServiceCollectionExtensions
             PooledConnectionLifetime = TimeSpan.FromMinutes(5),
             ConnectCallback = PublicNetworkConnector.ConnectAsync
         });
-        services.AddHttpClient("telegram", client => client.Timeout = TimeSpan.FromMinutes(5)).RemoveAllLoggers();
+        services.AddHttpClient("telegram", client => client.Timeout = TimeSpan.FromMinutes(5))
+            .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+            {
+                AllowAutoRedirect = false,
+                ConnectTimeout = TimeSpan.FromSeconds(15),
+                PooledConnectionLifetime = TimeSpan.FromMinutes(5),
+                ConnectCallback = PublicNetworkConnector.ConnectAsync
+            })
+            // URI Bot API содержит token, поэтому стандартное HTTP-логирование полностью отключено.
+            .RemoveAllLoggers();
         services.AddHttpClient("origin", client => client.Timeout = TimeSpan.FromSeconds(10));
         services.AddSingleton<ProxyCollector>();
         services.AddSingleton<ProxyProbeService>();
