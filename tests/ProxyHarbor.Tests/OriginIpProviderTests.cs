@@ -1,5 +1,7 @@
 using System.Net;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using ProxyHarbor.Infrastructure;
@@ -9,6 +11,25 @@ namespace ProxyHarbor.Tests;
 /// <summary>Фиксирует fail-closed health-gate и кэширование control endpoint.</summary>
 public sealed class OriginIpProviderTests
 {
+    [Fact]
+    public void InfrastructureOptionsRejectPrivateControlIp()
+    {
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["ConnectionStrings:Postgres"] = "Host=127.0.0.1;Database=unused;Username=unused",
+            ["Collector:ProbeHost"] = "127.0.0.1"
+        }).Build();
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddProxyHarborInfrastructure(configuration);
+        using var provider = services.BuildServiceProvider();
+
+        var exception = Assert.Throws<OptionsValidationException>(() =>
+            _ = provider.GetRequiredService<IOptions<CollectorOptions>>().Value);
+
+        Assert.Contains("ProbeHost", exception.Message, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task UsesConfiguredHttpsEndpointAndCachesSuccessfulHealthCheck()
     {
@@ -50,6 +71,27 @@ public sealed class OriginIpProviderTests
 
         await Assert.ThrowsAsync<ProbeControlUnavailableException>(
             () => provider.GetRequiredAsync(CancellationToken.None));
+        await Assert.ThrowsAsync<ProbeControlUnavailableException>(
+            () => provider.GetRequiredAsync(CancellationToken.None));
+
+        Assert.Equal(1, handler.RequestCount);
+        Assert.Equal(0, health.Availability);
+    }
+
+    [Fact]
+    public async Task OversizedDirectResponseFailsClosedAndIsBounded()
+    {
+        var handler = new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(new string('x', 20 * 1024))
+        });
+        using var factory = new StubHttpClientFactory(handler);
+        var health = new ProbeControlHealth();
+        using var provider = new OriginIpProvider(
+            factory,
+            Options.Create(new CollectorOptions()),
+            health);
+
         await Assert.ThrowsAsync<ProbeControlUnavailableException>(
             () => provider.GetRequiredAsync(CancellationToken.None));
 

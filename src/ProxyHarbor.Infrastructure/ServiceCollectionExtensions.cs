@@ -40,6 +40,8 @@ public static class ServiceCollectionExtensions
             .Validate(x => x.RunRetentionDays is >= 1 and <= 3_650, "RunRetentionDays: 1..3650")
             .Validate(x => x.ProbePort is >= 1 and <= 65_535, "ProbePort: 1..65535")
             .Validate(x => Uri.CheckHostName(x.ProbeHost) != UriHostNameType.Unknown && !x.ProbeHost.Any(char.IsControl), "ProbeHost должен быть корректным DNS-именем или IP")
+            .Validate(x => !IPAddress.TryParse(x.ProbeHost, out var address) || NetworkSafety.IsPublicAddress(address),
+                "ProbeHost не может быть локальным, private или служебным IP")
             .Validate(x => x.ProbePath.StartsWith('/') && x.ProbePath.Length <= 2048 &&
                 !x.ProbePath.Any(char.IsControl) && !x.ProbePath.Contains('#'),
                 "ProbePath должен быть безопасным относительным HTTP-путём без fragment")
@@ -77,7 +79,17 @@ public static class ServiceCollectionExtensions
             })
             // URI Bot API содержит token, поэтому стандартное HTTP-логирование полностью отключено.
             .RemoveAllLoggers();
-        services.AddHttpClient("origin", client => client.Timeout = TimeSpan.FromSeconds(10));
+        services.AddHttpClient("origin", client => client.Timeout = TimeSpan.FromSeconds(10))
+            .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+            {
+                AllowAutoRedirect = false,
+                AutomaticDecompression = DecompressionMethods.All,
+                ConnectTimeout = TimeSpan.FromSeconds(5),
+                MaxConnectionsPerServer = 2,
+                PooledConnectionLifetime = TimeSpan.FromMinutes(5),
+                // Проверка выполняется непосредственно перед TCP connect и закрывает DNS rebinding.
+                ConnectCallback = PublicNetworkConnector.ConnectAsync
+            });
         services.AddSingleton<ProxyCollector>();
         services.AddSingleton<ProxyProbeService>();
         services.AddSingleton<ProbeControlHealth>();

@@ -8,6 +8,8 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     setupFiles: './src/testSetup.ts',
+    // Холодный запуск jsdom на Windows может превышать стандартные 5 секунд под антивирусной нагрузкой.
+    testTimeout: 15_000,
   },
   server: {
     // Разрешает безопасно открывать dev-сервер из изолированного браузера Docker Desktop.

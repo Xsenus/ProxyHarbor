@@ -62,7 +62,9 @@ public sealed class ProxyProbeService(IOptions<CollectorOptions> options, Origin
             await tls.WriteAsync(Encoding.ASCII.GetBytes(request), timeout.Token);
             await tls.FlushAsync(timeout.Token);
 
-            var response = await ReadLimitedAsync(tls, 64 * 1024, timeout.Token);
+            // Framing-reader завершает probe сразу после полного Content-Length/chunked body:
+            // корректный keep-alive control server не заставляет ждать закрытия TLS до timeout.
+            var response = await ProxyOriginResponse.ReadAsync(tls, 64 * 1024, timeout.Token);
             var exitIp = ProxyOriginResponse.ParseExitIp(response);
 
             timer.Stop();
@@ -84,18 +86,6 @@ public sealed class ProxyProbeService(IOptions<CollectorOptions> options, Origin
         }
     }
 
-    private static async Task<string> ReadLimitedAsync(Stream stream, int limit, CancellationToken token)
-    {
-        using var memory = new MemoryStream();
-        var buffer = new byte[4096];
-        while (memory.Length < limit)
-        {
-            var read = await stream.ReadAsync(buffer, token);
-            if (read == 0) break;
-            await memory.WriteAsync(buffer.AsMemory(0, read), token);
-        }
-        return Encoding.UTF8.GetString(memory.ToArray());
-    }
 }
 
 /// <summary>Кэширует внешний IP самого сервиса для корректного определения анонимности прокси.</summary>
@@ -104,6 +94,7 @@ public sealed class OriginIpProvider(
     IOptions<CollectorOptions> options,
     ProbeControlHealth health) : IDisposable
 {
+    private const int MaxDirectResponseBytes = 16 * 1024;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private string? _value;
     private DateTimeOffset _expiresAt;
@@ -127,12 +118,17 @@ public sealed class OriginIpProvider(
                 {
                     Query = query
                 };
-                var json = await clients.CreateClient("origin").GetStringAsync(builder.Uri, token);
+                var client = clients.CreateClient("origin");
+                using var response = await client.GetAsync(builder.Uri, HttpCompletionOption.ResponseHeadersRead, token);
+                response.EnsureSuccessStatusCode();
+                var json = await ReadDirectResponseAsync(response.Content, token);
                 using var document = JsonDocument.Parse(json);
                 var value = document.RootElement.TryGetProperty("ip", out var ipElement)
                     ? ipElement.GetString()
                     : null;
-                _value = IPAddress.TryParse(value, out var address) && NetworkSafety.IsPublicAddress(address) ? value : null;
+                _value = IPAddress.TryParse(value, out var address) && NetworkSafety.IsPublicAddress(address)
+                    ? address.ToString()
+                    : null;
                 _expiresAt = DateTimeOffset.UtcNow.AddSeconds(_value is null ? 15 : 60);
                 health.Record(_value is not null);
             }
@@ -142,7 +138,7 @@ public sealed class OriginIpProvider(
                 // отравлять короткий отрицательный cache для следующего запуска.
                 throw;
             }
-            catch (Exception ex) when (ex is HttpRequestException or JsonException or TaskCanceledException)
+            catch (Exception ex) when (ex is HttpRequestException or IOException or InvalidDataException or JsonException or TaskCanceledException)
             {
                 _value = null;
                 _expiresAt = DateTimeOffset.UtcNow.AddSeconds(15);
@@ -151,6 +147,25 @@ public sealed class OriginIpProvider(
             return _value ?? throw new ProbeControlUnavailableException();
         }
         finally { _gate.Release(); }
+    }
+
+    private static async Task<string> ReadDirectResponseAsync(HttpContent content, CancellationToken token)
+    {
+        if (content.Headers.ContentLength is > MaxDirectResponseBytes)
+            throw new InvalidDataException("Прямой ответ контрольного endpoint превышает 16 КБ.");
+        await using var input = await content.ReadAsStreamAsync(token);
+        using var output = new MemoryStream(Math.Min(MaxDirectResponseBytes, 4 * 1024));
+        var buffer = new byte[4 * 1024];
+        while (true)
+        {
+            var remaining = checked(MaxDirectResponseBytes - (int)output.Length);
+            var read = await input.ReadAsync(buffer.AsMemory(0, Math.Min(buffer.Length, remaining + 1)), token);
+            if (read == 0)
+                return Encoding.UTF8.GetString(output.GetBuffer(), 0, checked((int)output.Length));
+            if (output.Length + read > MaxDirectResponseBytes)
+                throw new InvalidDataException("Прямой ответ контрольного endpoint превышает 16 КБ.");
+            await output.WriteAsync(buffer.AsMemory(0, read), token);
+        }
     }
 
     public void Dispose() => _gate.Dispose();
