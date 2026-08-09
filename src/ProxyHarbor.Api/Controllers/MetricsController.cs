@@ -137,6 +137,10 @@ public sealed class MetricsController(
             sourceCatalog.IsComplete ? 1 : 0);
         Gauge(output, "proxyharbor_source_catalog_healthy", "Whether every built-in feed has a fresh successful non-empty audit.",
             sourceCatalog.IsHealthy ? 1 : 0);
+        Gauge(output, "proxyharbor_builtin_catalog_audit_timestamp_seconds",
+            "UTC midnight Unix timestamp of the latest full release audit of every built-in feed.",
+            new DateTimeOffset(
+                sourceCatalog.LastAuditedOn.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc)).ToUnixTimeSeconds());
         Gauge(output, "proxyharbor_builtin_sources_expected", "Built-in feeds expected by this release.",
             sourceCatalog.ExpectedSources);
         Gauge(output, "proxyharbor_builtin_sources_present", "Built-in feeds currently present in the database.",

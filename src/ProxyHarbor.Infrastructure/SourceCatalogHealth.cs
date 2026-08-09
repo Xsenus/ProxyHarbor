@@ -4,6 +4,7 @@ namespace ProxyHarbor.Infrastructure;
 
 /// <summary>Сводное состояние канонического каталога, не смешанное с пользовательскими feed'ами.</summary>
 public sealed record SourceCatalogSnapshot(
+    DateOnly LastAuditedOn,
     int ExpectedSources,
     int PresentSources,
     int EnabledSources,
@@ -64,6 +65,7 @@ public static class SourceCatalogHealth
             presentProviders == expectedProviders && enabledProviders == expectedProviders;
 
         return new SourceCatalogSnapshot(
+            BuiltInSourceCatalog.LastAuditedOn,
             expectedSources,
             entries.Length,
             enabled.Length,

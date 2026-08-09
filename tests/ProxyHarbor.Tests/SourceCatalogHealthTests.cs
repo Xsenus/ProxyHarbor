@@ -26,6 +26,7 @@ public sealed class SourceCatalogHealthTests
         var snapshot = SourceCatalogHealth.Calculate(sources, AuditNow, FreshnessWindow);
 
         Assert.Equal(81, snapshot.ExpectedSources);
+        Assert.Equal(new DateOnly(2026, 8, 9), snapshot.LastAuditedOn);
         Assert.Equal(81, snapshot.PresentSources);
         Assert.Equal(81, snapshot.EnabledSources);
         Assert.Equal(81, snapshot.HealthySources);
