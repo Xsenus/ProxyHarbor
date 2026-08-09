@@ -117,9 +117,12 @@ public sealed class AdminController(
             scheduled = x.Count(proxy => proxy.NextCheckAt > now),
             repeatedlyFailing = x.Count(proxy => proxy.ConsecutiveFailedChecks >= 3)
         }).FirstOrDefaultAsync(token);
+        var builtInUrls = BuiltInSourceCatalog.Sources.Select(source => source.Url).ToArray();
+        var sourceCatalog = SourceCatalogHealth.Calculate(await db.Sources.AsNoTracking()
+            .Where(source => builtInUrls.Contains(source.Url)).ToListAsync(token));
         var recentRuns = await db.Runs.AsNoTracking().OrderByDescending(x => x.StartedAt).Take(10).ToListAsync(token);
         var recentBackups = await db.BackupRuns.AsNoTracking().OrderByDescending(x => x.StartedAt).Take(10).ToListAsync(token);
-        return Ok(new { serverTime = now, databaseBytes, validationQueue = queue, recentRuns, recentBackups });
+        return Ok(new { serverTime = now, databaseBytes, validationQueue = queue, sourceCatalog, recentRuns, recentBackups });
     }
 
     [HttpPost("collect")]

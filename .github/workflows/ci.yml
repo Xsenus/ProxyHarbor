@@ -57,7 +57,11 @@ jobs:
             sleep 2
           done
           curl --fail --silent http://127.0.0.1:8080/api/v1/stats
-          curl --fail --silent http://127.0.0.1:8080/metrics | grep 'proxyharbor_sources_enabled 81'
+          metrics=$(curl --fail --silent http://127.0.0.1:8080/metrics)
+          echo "$metrics" | grep 'proxyharbor_sources_enabled 81'
+          echo "$metrics" | grep 'proxyharbor_source_catalog_complete 1'
+          echo "$metrics" | grep 'proxyharbor_builtin_sources_expected 81'
+          echo "$metrics" | grep 'proxyharbor_builtin_providers_expected 50'
           openapi_document=$(curl --fail --silent http://127.0.0.1:8080/openapi/v1.json)
           echo "$openapi_document" | jq --exit-status \
             '.components.securitySchemes.AdminApiKey.type == "apiKey" and
@@ -132,9 +136,15 @@ jobs:
           if grep --ignore-case '^Access-Control-Allow-Origin:' "$security_headers"; then exit 1; fi
           rm "$security_headers"
           curl --fail --silent http://127.0.0.1:5080/api/v1/stats
-          curl --fail --silent http://127.0.0.1:5080/metrics | grep 'proxyharbor_sources_enabled 81'
+          metrics=$(curl --fail --silent http://127.0.0.1:5080/metrics)
+          echo "$metrics" | grep 'proxyharbor_sources_enabled 81'
+          echo "$metrics" | grep 'proxyharbor_source_catalog_complete 1'
+          echo "$metrics" | grep 'proxyharbor_builtin_sources_present 81'
+          echo "$metrics" | grep 'proxyharbor_builtin_providers_present 50'
           sources=$(curl --fail --silent -H 'X-Admin-Key: integration-admin-key-at-least-24-chars' http://127.0.0.1:5080/api/v1/admin/sources)
           test "$(echo "$sources" | jq length)" -eq 81
+          test "$(echo "$sources" | jq '[.[] | select(.isBuiltIn)] | length')" -eq 81
+          test "$(echo "$sources" | jq '[.[].provider] | unique | length')" -eq 50
           invalid_status=$(curl --silent --output /dev/null --write-out '%{http_code}' \
             -X POST -H 'Content-Type: application/json' -H 'X-Admin-Key: integration-admin-key-at-least-24-chars' \
             --data '{"name":"x","url":"http://127.0.0.1/list.txt","protocol":"Http"}' \
@@ -149,7 +159,10 @@ jobs:
             -H 'X-Admin-Key: integration-admin-key-at-least-24-chars' \
             http://127.0.0.1:5080/api/v1/admin/diagnostics)
           echo "$backup_diagnostics" | jq --exit-status \
-            '.recentBackups[0].status == "completed" and
+            '.sourceCatalog.isComplete == true and
+             .sourceCatalog.expectedSources == 81 and
+             .sourceCatalog.expectedProviders == 50 and
+             .recentBackups[0].status == "completed" and
              .recentBackups[0].sizeBytes > 0 and
              .recentBackups[0].telegramConfigured == false and
              .recentBackups[0].sentToTelegram == false'

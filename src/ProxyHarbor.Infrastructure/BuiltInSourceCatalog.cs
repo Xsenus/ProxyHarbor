@@ -103,6 +103,10 @@ public static class BuiltInSourceCatalog
     private static readonly Dictionary<string, BuiltInSource> SourcesByUrl =
         Sources.ToDictionary(source => source.Url, StringComparer.Ordinal);
 
+    /// <summary>Число независимых владельцев feed'ов в текущей версии каталога.</summary>
+    public static int ProviderCount { get; } = Sources.Select(source => source.Provider)
+        .Distinct(StringComparer.Ordinal).Count();
+
     /// <summary>Возвращает канонические метаданные только для точного встроенного endpoint.</summary>
     public static BuiltInSource? FindByUrl(string url) =>
         SourcesByUrl.TryGetValue(url, out var source) ? source : null;

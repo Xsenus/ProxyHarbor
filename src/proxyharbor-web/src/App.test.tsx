@@ -96,6 +96,7 @@ describe('ProxyHarbor UI', () => {
       serverTime: '2026-08-09T07:00:00Z',
       databaseBytes: 25 * 1024 * 1024,
       validationQueue: { total: 1000, leased: 12, neverChecked: 40, due: 75, scheduled: 925, repeatedlyFailing: 3 },
+      sourceCatalog: { expectedSources: 81, presentSources: 81, enabledSources: 81, healthySources: 81, failingSources: 0, neverAuditedSources: 0, expectedProviders: 50, presentProviders: 50, enabledProviders: 50, isComplete: true, isHealthy: true },
       recentRuns: [{
         id: 'collection-1', startedAt: '2026-08-09T06:59:00Z', finishedAt: '2026-08-09T06:59:05Z',
         sourcesProcessed: 81, sourcesSucceeded: 81, sourcesFailed: 0, sourcesSkipped: 0,
@@ -129,6 +130,8 @@ describe('ProxyHarbor UI', () => {
     expect(screen.getByText('25 МБ')).toBeInTheDocument()
     expect(screen.getAllByText(/доставлен в Telegram/)).not.toHaveLength(0)
     expect(screen.getByText('184 005 кандидатов', { exact: false })).toBeInTheDocument()
+    expect(screen.getByLabelText('Состояние встроенного каталога')).toHaveTextContent('81/81')
+    expect(screen.getByLabelText('Состояние встроенного каталога')).toHaveTextContent('50/50 провайдеров')
 
     fireEvent.click(screen.getByRole('button', { name: 'Создать backup' }))
     await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([input, init]) =>

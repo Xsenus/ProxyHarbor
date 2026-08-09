@@ -34,11 +34,21 @@ public sealed class MetricsController(
             Due = x.Count(proxy => proxy.NextCheckAt == null || proxy.NextCheckAt <= now),
             Leased = x.Count(proxy => proxy.CheckLeaseUntil > now)
         }).FirstOrDefaultAsync(token);
-        var sources = await db.Sources.AsNoTracking().GroupBy(_ => 1).Select(x => new
+        var sources = await db.Sources.AsNoTracking().GroupBy(_ => 1).Select(group => new
         {
-            Enabled = x.Count(source => source.Enabled),
-            Failing = x.Count(source => source.Enabled && source.ConsecutiveFailures > 0)
+            Enabled = group.Count(source => source.Enabled),
+            Failing = group.Count(source => source.Enabled &&
+                (source.ConsecutiveFailures > 0 || source.LastError != null)),
+            Healthy = group.Count(source => source.Enabled && source.LastSucceededAt != null &&
+                source.LastItemCount > 0 && source.ConsecutiveFailures == 0 && source.LastError == null),
+            NeverAudited = group.Count(source => source.Enabled && source.LastFetchedAt == null)
         }).FirstOrDefaultAsync(token);
+        // Пользователь может добавить сколько угодно собственных feed'ов. В память загружаются
+        // только максимум 81 каноническая запись, нужная для catalog-specific расчёта.
+        var builtInUrls = BuiltInSourceCatalog.Sources.Select(source => source.Url).ToArray();
+        var builtInSources = await db.Sources.AsNoTracking()
+            .Where(source => builtInUrls.Contains(source.Url)).ToListAsync(token);
+        var sourceCatalog = SourceCatalogHealth.Calculate(builtInSources);
         // Текущий running-цикл не должен обнулять показатели последнего действительно завершённого запуска.
         var lastFinishedRun = await db.Runs.AsNoTracking().Where(x => x.FinishedAt != null)
             .OrderByDescending(x => x.FinishedAt).FirstOrDefaultAsync(token);
@@ -67,8 +77,31 @@ public sealed class MetricsController(
             probeControlHealth.CheckedAtUnixSeconds);
         Gauge(output, "proxyharbor_sources_enabled", "Enabled proxy source feeds.", sources?.Enabled ?? 0);
         Gauge(output, "proxyharbor_sources_failing", "Enabled feeds whose latest fetch failed.", sources?.Failing ?? 0);
-        Gauge(output, "proxyharbor_sources_healthy", "Enabled feeds whose latest fetch succeeded.",
-            (sources?.Enabled ?? 0) - (sources?.Failing ?? 0));
+        Gauge(output, "proxyharbor_sources_healthy", "Enabled feeds whose latest fetch succeeded with a non-empty result.",
+            sources?.Healthy ?? 0);
+        Gauge(output, "proxyharbor_sources_never_audited", "Enabled feeds not fetched yet.", sources?.NeverAudited ?? 0);
+        Gauge(output, "proxyharbor_source_catalog_complete", "Whether every built-in feed and provider is present and enabled.",
+            sourceCatalog.IsComplete ? 1 : 0);
+        Gauge(output, "proxyharbor_source_catalog_healthy", "Whether every built-in feed passed a successful non-empty audit.",
+            sourceCatalog.IsHealthy ? 1 : 0);
+        Gauge(output, "proxyharbor_builtin_sources_expected", "Built-in feeds expected by this release.",
+            sourceCatalog.ExpectedSources);
+        Gauge(output, "proxyharbor_builtin_sources_present", "Built-in feeds currently present in the database.",
+            sourceCatalog.PresentSources);
+        Gauge(output, "proxyharbor_builtin_sources_enabled", "Built-in feeds currently enabled.",
+            sourceCatalog.EnabledSources);
+        Gauge(output, "proxyharbor_builtin_sources_healthy", "Built-in feeds whose latest audit was successful and non-empty.",
+            sourceCatalog.HealthySources);
+        Gauge(output, "proxyharbor_builtin_sources_failing", "Enabled built-in feeds currently reporting a failure.",
+            sourceCatalog.FailingSources);
+        Gauge(output, "proxyharbor_builtin_sources_never_audited", "Enabled built-in feeds not fetched yet.",
+            sourceCatalog.NeverAuditedSources);
+        Gauge(output, "proxyharbor_builtin_providers_expected", "Independent built-in providers expected by this release.",
+            sourceCatalog.ExpectedProviders);
+        Gauge(output, "proxyharbor_builtin_providers_present", "Independent built-in providers represented in the database.",
+            sourceCatalog.PresentProviders);
+        Gauge(output, "proxyharbor_builtin_providers_enabled", "Independent built-in providers with at least one enabled feed.",
+            sourceCatalog.EnabledProviders);
         Gauge(output, "proxyharbor_proxies_published", "Alive proxies fresh enough for public API and exports.",
             await db.Proxies.AsNoTracking().CountAsync(x => x.Status == ProxyStatus.Alive && x.LastCheckedAt >= freshAfter, token));
         Gauge(output, "proxyharbor_collection_runs_active", "Collection runs currently marked as active.", activeRuns);
