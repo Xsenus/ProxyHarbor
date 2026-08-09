@@ -19,6 +19,22 @@ type Diagnostics = {
 
 const API = import.meta.env.VITE_API_URL ?? ''
 const protocols: Protocol[] = ['Http', 'Https', 'Socks4', 'Socks5']
+const adminKeyStorageName = 'proxyharbor-admin-key'
+
+function readStoredAdminKey() {
+  try { return sessionStorage.getItem(adminKeyStorageName) ?? '' }
+  catch { return '' }
+}
+
+function storeAdminKey(value: string) {
+  try { sessionStorage.setItem(adminKeyStorageName, value) }
+  catch { /* Storage может быть запрещён политикой браузера; in-memory session остаётся рабочей. */ }
+}
+
+function removeStoredAdminKey() {
+  try { sessionStorage.removeItem(adminKeyStorageName) }
+  catch { /* Локальное React-состояние очищается независимо от доступности Storage API. */ }
+}
 
 /** Основная панель: публичный каталог и компактное администрирование в одном интерфейсе. */
 export default function App() {
@@ -29,7 +45,7 @@ export default function App() {
   const [loading, setLoading] = useState(true)
   const [apiError, setApiError] = useState('')
   const [adminOpen, setAdminOpen] = useState(false)
-  const [adminKey, setAdminKey] = useState(() => sessionStorage.getItem('proxyharbor-admin-key') ?? '')
+  const [adminKey, setAdminKey] = useState(readStoredAdminKey)
   const [adminAuthenticated, setAdminAuthenticated] = useState(false)
   const [adminError, setAdminError] = useState('')
   const [sources, setSources] = useState<Source[]>([])
@@ -81,7 +97,7 @@ export default function App() {
       ])
       const unauthorizedResponse = [sourcesResponse, diagnosticsResponse].find(response => response.status === 401)
       if (unauthorizedResponse) {
-        sessionStorage.removeItem('proxyharbor-admin-key')
+        removeStoredAdminKey()
         setAdminAuthenticated(false)
         setSources([])
         setDiagnostics(null)
@@ -89,7 +105,7 @@ export default function App() {
       }
       if (!sourcesResponse.ok) throw new Error(await responseMessage(sourcesResponse, 'Неверный ключ администратора'))
       if (!diagnosticsResponse.ok) throw new Error(await responseMessage(diagnosticsResponse, 'Диагностика недоступна'))
-      sessionStorage.setItem('proxyharbor-admin-key', adminKey)
+      storeAdminKey(adminKey)
       const [sourceRows, diagnosticSnapshot] = await Promise.all([sourcesResponse.json(), diagnosticsResponse.json()])
       setSources(sourceRows)
       setDiagnostics(diagnosticSnapshot)
@@ -123,6 +139,17 @@ export default function App() {
     setAdminOpen(true)
   }
   const closeAdmin = useCallback(() => setAdminOpen(false), [])
+  const logoutAdmin = useCallback(() => {
+    removeStoredAdminKey()
+    setAdminKey('')
+    setAdminAuthenticated(false)
+    setAdminError('')
+    setSources([])
+    setDiagnostics(null)
+    setAction('')
+    setSourceBusy('')
+    window.requestAnimationFrame(() => adminKeyRef.current?.focus())
+  }, [])
 
   useEffect(() => {
     if (!adminOpen) return
@@ -167,7 +194,7 @@ export default function App() {
     try {
       const response = await fetch(`${API}/api/v1/admin/${name}`, { method: 'POST', headers: { 'X-Admin-Key': adminKey } })
       if (!response.ok) {
-        if (response.status === 401) { sessionStorage.removeItem('proxyharbor-admin-key'); setAdminAuthenticated(false) }
+        if (response.status === 401) { removeStoredAdminKey(); setAdminAuthenticated(false) }
         throw new Error(await responseMessage(response, 'Административная операция не выполнена'))
       }
       await Promise.all([load(), loadAdminData()])
@@ -186,7 +213,7 @@ export default function App() {
         body: JSON.stringify({ ...sourceDraft, enabled: true }),
       })
       if (!response.ok) {
-        if (response.status === 401) { sessionStorage.removeItem('proxyharbor-admin-key'); setAdminAuthenticated(false) }
+        if (response.status === 401) { removeStoredAdminKey(); setAdminAuthenticated(false) }
         throw new Error(await responseMessage(response, 'Не удалось добавить источник'))
       }
       setSourceDraft({ name: '', url: '', protocol: 'Http', priority: 100 })
@@ -205,7 +232,7 @@ export default function App() {
         body: JSON.stringify({ name: source.name, url: source.url, protocol: source.defaultProtocol, priority: source.priority, enabled: !source.enabled }),
       })
       if (!response.ok) {
-        if (response.status === 401) { sessionStorage.removeItem('proxyharbor-admin-key'); setAdminAuthenticated(false) }
+        if (response.status === 401) { removeStoredAdminKey(); setAdminAuthenticated(false) }
         throw new Error(await responseMessage(response, 'Не удалось изменить состояние источника'))
       }
       await loadAdminData()
@@ -220,7 +247,7 @@ export default function App() {
     try {
       const response = await fetch(`${API}/api/v1/admin/sources/${source.id}`, { method: 'DELETE', headers: { 'X-Admin-Key': adminKey } })
       if (!response.ok) {
-        if (response.status === 401) { sessionStorage.removeItem('proxyharbor-admin-key'); setAdminAuthenticated(false) }
+        if (response.status === 401) { removeStoredAdminKey(); setAdminAuthenticated(false) }
         throw new Error(await responseMessage(response, 'Не удалось удалить источник'))
       }
       await loadAdminData()
@@ -285,7 +312,7 @@ export default function App() {
       <section ref={adminDialogRef} className="admin-modal" role="dialog" aria-modal="true" aria-labelledby="admin-title">
         <button className="close" aria-label="Закрыть" onClick={closeAdmin}><X/></button>
         <span className="kicker">ADMIN CONSOLE</span><h2 id="admin-title">Управление сбором</h2><p>Ключ хранится только до закрытия вкладки.</p>
-        <div className="key-input"><KeyRound size={18}/><input ref={adminKeyRef} type="password" aria-label="Ключ администратора" placeholder="X-Admin-Key" value={adminKey} onChange={e => { setAdminKey(e.target.value); setAdminAuthenticated(false); setAdminError(''); setSources([]); setDiagnostics(null) }}/><button onClick={loadAdminData} disabled={adminLoading}>{adminLoading ? 'Проверяем…' : 'Войти'}</button></div>
+        <div className="key-input"><KeyRound size={18}/><input ref={adminKeyRef} type="password" aria-label="Ключ администратора" placeholder="X-Admin-Key" autoComplete="off" autoCapitalize="none" spellCheck={false} maxLength={256} value={adminKey} onChange={e => { setAdminKey(e.target.value); setAdminAuthenticated(false); setAdminError(''); setSources([]); setDiagnostics(null) }}/><button onClick={loadAdminData} disabled={adminLoading}>{adminLoading ? 'Проверяем…' : 'Войти'}</button>{adminAuthenticated && <button className="logout" onClick={logoutAdmin}>Выйти</button>}</div>
         {adminError && <div className="admin-notice" role="alert"><X size={16}/>{adminError}</div>}
         <div className="admin-actions">
           <button onClick={() => runAdminAction('collect')} disabled={!adminAuthenticated || !!action}><Play/> {action === 'collect' ? 'Собираем…' : 'Запустить сбор'}</button>

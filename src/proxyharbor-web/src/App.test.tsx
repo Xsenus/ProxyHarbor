@@ -30,7 +30,43 @@ describe('ProxyHarbor UI', () => {
 
   afterEach(() => {
     cleanup()
+    vi.restoreAllMocks()
     vi.unstubAllGlobals()
+  })
+
+  it('keeps an authenticated in-memory session when browser storage is unavailable', async () => {
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('Storage disabled', 'SecurityError')
+    })
+    vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => {
+      throw new DOMException('Storage disabled', 'SecurityError')
+    })
+    vi.mocked(fetch).mockImplementation(async input => {
+      const url = String(input)
+      if (url.includes('/api/v1/stats')) return jsonResponse(stats)
+      if (url.includes('/api/v1/proxies')) return jsonResponse({ items: [], page: 1, pageSize: 100, total: 0 })
+      if (url.includes('/api/v1/admin/sources')) return jsonResponse([])
+      if (url.includes('/api/v1/admin/diagnostics')) return jsonResponse({
+        serverTime: '2026-08-09T10:00:00Z', databaseBytes: 0,
+        validationQueue: { total: 0, leased: 0, neverChecked: 0, due: 0, scheduled: 0, repeatedlyFailing: 0 },
+        recentRuns: [], recentBackups: [],
+      })
+      return jsonResponse({ title: 'Unexpected request' }, 500)
+    })
+
+    render(<App />)
+    await screen.findByText('система активна')
+    fireEvent.click(screen.getByRole('button', { name: /^Управление$/ }))
+    fireEvent.change(screen.getByLabelText('Ключ администратора'), { target: { value: 'valid-admin-key' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Войти' }))
+
+    expect(await screen.findByLabelText('Диагностика сервиса')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Создать backup' })).toBeEnabled()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Выйти' }))
+    expect(screen.getByLabelText('Ключ администратора')).toHaveValue('')
+    expect(screen.queryByLabelText('Диагностика сервиса')).not.toBeInTheDocument()
   })
 
   it('keeps public API healthy when admin authentication fails', async () => {
@@ -159,6 +195,12 @@ describe('ProxyHarbor UI', () => {
     expect(screen.getByLabelText('Диагностика сервиса')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Создать backup' })).toBeEnabled()
     expect(sessionStorage.getItem('proxyharbor-admin-key')).toBe('valid-admin-key')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Выйти' }))
+    expect(sessionStorage.getItem('proxyharbor-admin-key')).toBeNull()
+    expect(screen.getByLabelText('Ключ администратора')).toHaveValue('')
+    expect(screen.queryByLabelText('Диагностика сервиса')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Создать backup' })).toBeDisabled()
   })
 })
 

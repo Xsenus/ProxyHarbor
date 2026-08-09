@@ -27,6 +27,8 @@ public sealed class ApiSecurityMiddlewareTests
         Assert.Equal(StatusCodes.Status401Unauthorized, context.Response.StatusCode);
         Assert.Equal("ApiKey realm=\"ProxyHarbor\"", context.Response.Headers.WWWAuthenticate);
         Assert.Equal("no-store", context.Response.Headers.CacheControl);
+        Assert.Equal("no-cache", context.Response.Headers.Pragma);
+        Assert.Equal("0", context.Response.Headers.Expires);
         AssertSecurityHeaders(context.Response.Headers);
         context.Response.Body.Position = 0;
         using var json = await JsonDocument.ParseAsync(context.Response.Body);
@@ -47,8 +49,41 @@ public sealed class ApiSecurityMiddlewareTests
         await pipeline(context);
 
         Assert.Equal(StatusCodes.Status204NoContent, context.Response.StatusCode);
+        Assert.Equal("no-store", context.Response.Headers.CacheControl);
+        Assert.Equal("no-cache", context.Response.Headers.Pragma);
         Assert.DoesNotContain(AdminKey, string.Join('\n', context.Response.Headers), StringComparison.Ordinal);
         AssertSecurityHeaders(context.Response.Headers);
+    }
+
+    [Fact]
+    public async Task MultipleHeaderValuesCannotAuthenticateCommaContainingKey()
+    {
+        var context = Context("/api/v1/admin/sources");
+        context.Request.Headers.Append("X-Admin-Key", "first");
+        context.Request.Headers.Append("X-Admin-Key", "second");
+        var nextCalled = false;
+        var pipeline = Pipeline(_ =>
+        {
+            nextCalled = true;
+            return Task.CompletedTask;
+        }, "first,second");
+
+        await pipeline(context);
+
+        Assert.False(nextCalled);
+        Assert.Equal(StatusCodes.Status401Unauthorized, context.Response.StatusCode);
+    }
+
+    [Fact]
+    public async Task OversizedHeaderIsRejectedBeforeAuthentication()
+    {
+        var context = Context("/api/v1/admin/sources");
+        context.Request.Headers["X-Admin-Key"] = new string('x', 257);
+        var pipeline = Pipeline(_ => throw new InvalidOperationException("oversized key must not pass"));
+
+        await pipeline(context);
+
+        Assert.Equal(StatusCodes.Status401Unauthorized, context.Response.StatusCode);
     }
 
     [Theory]
@@ -91,11 +126,11 @@ public sealed class ApiSecurityMiddlewareTests
         AssertSecurityHeaders(context.Response.Headers);
     }
 
-    private static RequestDelegate Pipeline(RequestDelegate terminal)
+    private static RequestDelegate Pipeline(RequestDelegate terminal, string adminKey = AdminKey)
     {
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
-            ["Security:AdminApiKey"] = AdminKey
+            ["Security:AdminApiKey"] = adminKey
         }).Build();
         var admin = new AdminApiKeyMiddleware(terminal, configuration);
         var security = new SecurityHeadersMiddleware(admin.InvokeAsync);
@@ -117,7 +152,9 @@ public sealed class ApiSecurityMiddlewareTests
         Assert.Equal("no-referrer", headers["Referrer-Policy"]);
         Assert.Equal("camera=(), microphone=(), geolocation=()", headers["Permissions-Policy"]);
         Assert.Equal("same-origin", headers["Cross-Origin-Opener-Policy"]);
+        Assert.Equal("same-origin", headers["Cross-Origin-Resource-Policy"]);
         Assert.Equal("none", headers["X-Permitted-Cross-Domain-Policies"]);
+        Assert.Equal("max-age=31536000", headers.StrictTransportSecurity);
         Assert.Equal("default-src 'none'; base-uri 'none'; frame-ancestors 'none'", headers.ContentSecurityPolicy);
     }
 }
