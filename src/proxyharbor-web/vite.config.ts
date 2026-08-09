@@ -8,6 +8,10 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     setupFiles: './src/testSetup.ts',
+    // Worker threads не требуют запуска отдельного Node-процесса для каждого pool worker
+    // и стабильно стартуют под Windows/антивирусом; пустой test discovery всегда является ошибкой.
+    pool: 'threads',
+    passWithNoTests: false,
     // Холодный запуск jsdom на Windows может превышать стандартные 5 секунд под антивирусной нагрузкой.
     testTimeout: 15_000,
   },

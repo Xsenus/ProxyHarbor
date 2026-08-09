@@ -15,6 +15,7 @@
 - Telegram retry закрывает response, multipart и backup file handle до ожидания `retry_after`.
 - Backup worker после ошибки повторяет полный цикл через 15 минут, а count/age retention не позволяет recovery-снимкам заполнить volume.
 - Collector отклоняет HTTP 200 HTML/WAF/error страницы, даже если они содержат похожий на прокси `IP:port`.
+- React test gate использует стабильный thread pool и fail-closed отклоняет запуск без обнаруженных тестов.
 
 ## [1.0.0] - 2026-08-10
 
