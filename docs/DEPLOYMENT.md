@@ -33,3 +33,14 @@ docker compose -f docker-compose.yml -f docker-compose.production.yml logs --tai
 Откат выполняйте на предыдущий проверенный Git commit той же командой. Не откатывайте код через уже применённые необратимые миграции без заранее проверенного плана восстановления БД.
 
 По умолчанию Caddy должен быть непосредственной публичной точкой входа. При добавлении CDN/load balancer настройте доверенные proxy ranges одновременно в Caddy и API; иначе rate limiting будет видеть адрес промежуточного узла. Никогда не доверяйте произвольному `X-Forwarded-For` из интернета.
+
+## Встроенный мониторинг
+
+Opt-in профиль запускает Prometheus с 30-дневным/10-ГБ bounded retention и готовыми alert rules:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.production.yml --profile monitoring up -d
+curl --fail http://127.0.0.1:9090/-/ready
+```
+
+Порт привязан только к loopback. Для удалённого просмотра используйте SSH tunnel `ssh -L 9090:127.0.0.1:9090 user@server`, а не открывайте Prometheus в интернет. История находится в volume `prometheus-data`; пределы меняются через `PROMETHEUS_RETENTION_TIME` и `PROMETHEUS_RETENTION_SIZE`. Уведомления требуют отдельного доверенного Alertmanager либо интеграции существующей monitoring-платформы. Runbook и alarms описаны в [MONITORING.md](MONITORING.md).

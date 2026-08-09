@@ -109,19 +109,32 @@ jobs:
         run: |
           docker compose config
           production_config=$(docker compose \
-            -f docker-compose.yml -f docker-compose.production.yml config --format json)
+            -f docker-compose.yml -f docker-compose.production.yml --profile monitoring \
+            config --format json)
           echo "$production_config" | jq --exit-status '
             ((.services.web.ports // []) | length == 0) and
             .services.caddy.image == "caddy:2.11.4-alpine" and
             .services.caddy.user == "65532:65532" and
             .services.caddy.read_only == true and
             ((.services.caddy.cap_drop // []) | index("ALL") != null) and
-            ([.services.caddy.ports[].published | tostring] | sort) == ["443", "443", "80"]'
+            ([.services.caddy.ports[].published | tostring] | sort) == ["443", "443", "80"] and
+            .services.prometheus.image == "prom/prometheus:v3.13.2-distroless" and
+            .services.prometheus.user == "65532:65532" and
+            .services.prometheus.read_only == true and
+            .services.prometheus.ports[0].host_ip == "127.0.0.1"'
           docker run --rm \
             --env PUBLIC_HOST=localhost --env ACME_EMAIL=ci@example.com \
             --volume "$PWD/deploy/Caddyfile:/etc/caddy/Caddyfile:ro" \
             caddy:2.11.4-alpine \
             caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+          docker run --rm --entrypoint /bin/promtool \
+            --volume "$PWD/deploy/prometheus:/etc/prometheus:ro" \
+            prom/prometheus:v3.13.2-distroless \
+            check config /etc/prometheus/prometheus.yml
+          docker run --rm --entrypoint /bin/promtool \
+            --volume "$PWD/deploy/prometheus:/etc/prometheus:ro" \
+            prom/prometheus:v3.13.2-distroless \
+            test rules /etc/prometheus/alerts.test.yml
       - name: Container smoke test
         env:
           POSTGRES_DB: proxyharbor
@@ -136,10 +149,11 @@ jobs:
           cleanup() {
             status=$?
             if [ "$status" -ne 0 ]; then
-              docker compose -f docker-compose.yml -f docker-compose.production.yml logs --no-color || true
+              docker compose -f docker-compose.yml -f docker-compose.production.yml \
+                --profile monitoring logs --no-color || true
             fi
             docker compose -f docker-compose.yml -f docker-compose.production.yml \
-              down --volumes --remove-orphans || true
+              --profile monitoring down --volumes --remove-orphans || true
             docker compose down --volumes --remove-orphans || true
             exit "$status"
           }
@@ -185,10 +199,15 @@ jobs:
           echo "$metrics" | grep 'proxyharbor_validation_attempts_last_5m 0'
           echo "$metrics" | grep 'proxyharbor_validation_last_attempt_timestamp_seconds 0'
           echo "$metrics" | grep 'proxyharbor_validation_runs_active 0'
+          echo "$metrics" | grep 'proxyharbor_background_workers_enabled 0'
+          echo "$metrics" | grep 'proxyharbor_collection_interval_seconds 900'
           echo "$metrics" | grep 'proxyharbor_validation_concurrency_limit 800'
           echo "$metrics" | grep 'proxyharbor_validation_batch_size 1600'
           echo "$metrics" | grep 'proxyharbor_validation_checks_per_second 0'
           echo "$metrics" | grep 'proxyharbor_validation_estimated_drain_seconds 0'
+          echo "$metrics" | grep 'proxyharbor_backup_enabled 0'
+          echo "$metrics" | grep 'proxyharbor_backup_interval_seconds 86400'
+          echo "$metrics" | grep 'proxyharbor_backup_telegram_configured 0'
           openapi_document=$(curl --fail --silent http://127.0.0.1:8080/openapi/v1.json)
           echo "$openapi_document" | jq --exit-status \
             '.components.securitySchemes.AdminApiKey.type == "apiKey" and
@@ -244,15 +263,24 @@ jobs:
           # Повторяем запуск через production override и проверяем не только
           # доступность TLS, но и фактическое container hardening.
           docker compose down --volumes
-          docker compose -f docker-compose.yml -f docker-compose.production.yml \
+          docker compose -f docker-compose.yml -f docker-compose.production.yml --profile monitoring \
             up --detach --build
           caddy_id=$(docker compose -f docker-compose.yml -f docker-compose.production.yml \
             ps --quiet caddy)
+          prometheus_id=$(docker compose -f docker-compose.yml -f docker-compose.production.yml \
+            --profile monitoring ps --quiet prometheus)
           test "$(docker inspect --format '{{.Config.User}}' "$caddy_id")" = '65532:65532'
           test "$(docker inspect --format '{{.HostConfig.ReadonlyRootfs}}' "$caddy_id")" = 'true'
           test "$(docker inspect --format '{{.HostConfig.PidsLimit}}' "$caddy_id")" = '128'
           test "$(docker inspect --format '{{.HostConfig.Init}}' "$caddy_id")" = 'true'
           docker inspect --format '{{json .HostConfig.CapDrop}}' "$caddy_id" | grep --ignore-case 'ALL'
+          test "$(docker inspect --format '{{.Config.User}}' "$prometheus_id")" = '65532:65532'
+          test "$(docker inspect --format '{{.HostConfig.ReadonlyRootfs}}' "$prometheus_id")" = 'true'
+          test "$(docker inspect --format '{{.HostConfig.PidsLimit}}' "$prometheus_id")" = '128'
+          test "$(docker inspect --format '{{.HostConfig.Memory}}' "$prometheus_id")" = '536870912'
+          test "$(docker inspect --format '{{.HostConfig.NanoCpus}}' "$prometheus_id")" = '1000000000'
+          docker inspect --format '{{json .HostConfig.CapDrop}}' "$prometheus_id" | grep --ignore-case 'ALL'
+          docker port "$prometheus_id" 9090/tcp | grep '^127.0.0.1:9090$'
           web_port=$(docker compose -f docker-compose.yml -f docker-compose.production.yml \
             port web 80 2>/dev/null || true)
           test -z "$web_port"
@@ -269,6 +297,9 @@ jobs:
           grep --ignore-case '^Content-Security-Policy:' "$tls_headers"
           grep --ignore-case '^Strict-Transport-Security:' "$tls_headers"
           rm "$tls_headers"
+          metrics_status=$(curl --silent --insecure --resolve localhost:443:127.0.0.1 \
+            --output /dev/null --write-out '%{http_code}' https://localhost/metrics)
+          test "$metrics_status" -eq 404
           redirect_headers=$(mktemp)
           redirect_status=$(curl --silent --resolve localhost:80:127.0.0.1 \
             --dump-header "$redirect_headers" \
@@ -285,6 +316,19 @@ jobs:
             --data-binary "@$oversized_body" https://localhost/api/v1/admin/sources)
           rm "$oversized_body"
           test "$oversized_status" -eq 413
+          for attempt in {1..60}; do
+            if curl --fail --silent http://127.0.0.1:9090/-/ready; then break; fi
+            if [ "$attempt" -eq 60 ]; then exit 1; fi
+            sleep 1
+          done
+          for attempt in {1..60}; do
+            if curl --fail --silent http://127.0.0.1:9090/api/v1/targets | jq --exit-status \
+              '.data.activeTargets | any(.labels.job == "proxyharbor" and .health == "up")'; then break; fi
+            if [ "$attempt" -eq 60 ]; then exit 1; fi
+            sleep 1
+          done
+          curl --fail --silent http://127.0.0.1:9090/api/v1/rules | jq --exit-status \
+            '[.data.groups[].rules[] | select(.type == "alerting")] | length == 15'
 
   postgres-integration:
     runs-on: ubuntu-latest

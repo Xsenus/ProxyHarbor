@@ -1,0 +1,132 @@
+rule_files:
+  - alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  - name: API down respects the grace period
+    interval: 1m
+    input_series:
+      - series: 'up{job="proxyharbor",instance="api:8080"}'
+        values: '0x4'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: ProxyHarborApiDown
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: ProxyHarborApiDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: proxyharbor
+              instance: api:8080
+            exp_annotations:
+              summary: ProxyHarbor API недоступен
+              description: Prometheus не может получить /metrics API более двух минут.
+
+  - name: Collection stall uses configured interval and worker guard
+    interval: 1m
+    input_series:
+      - series: proxyharbor_last_successful_collection_timestamp_seconds
+        values: '0x12'
+      - series: proxyharbor_collection_interval_seconds
+        values: '900x12'
+      - series: proxyharbor_background_workers_enabled
+        values: '1x12'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: ProxyHarborCollectionStalled
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: Сбор источников остановился
+              description: Успешного цикла нет дольше четырёх настроенных интервалов.
+
+  - name: Disabled backup never raises backup alarms
+    interval: 1m
+    input_series:
+      - series: proxyharbor_backup_enabled
+        values: '0x20'
+      - series: proxyharbor_backup_interval_seconds
+        values: '3600x20'
+      - series: proxyharbor_last_backup_success
+        values: '0x20'
+      - series: proxyharbor_last_backup_timestamp_seconds
+        values: '0x20'
+      - series: proxyharbor_backup_telegram_configured
+        values: '1x20'
+      - series: proxyharbor_last_backup_sent_to_telegram
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ProxyHarborBackupFailed
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: ProxyHarborBackupStale
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: ProxyHarborTelegramDeliveryFailed
+        exp_alerts: []
+
+  - name: Enabled backup reports missing snapshot and Telegram delivery
+    interval: 1m
+    input_series:
+      - series: proxyharbor_backup_enabled
+        values: '1x16'
+      - series: proxyharbor_backup_interval_seconds
+        values: '3600x16'
+      - series: proxyharbor_last_backup_success
+        values: '0x16'
+      - series: proxyharbor_last_backup_timestamp_seconds
+        values: '0x16'
+      - series: proxyharbor_backup_telegram_configured
+        values: '1x16'
+      - series: proxyharbor_last_backup_sent_to_telegram
+        values: '0x16'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: ProxyHarborBackupFailed
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: Последний backup неуспешен
+              description: Зашифрованный снимок не завершился успешно либо первый backup не был создан.
+      - eval_time: 16m
+        alertname: ProxyHarborBackupStale
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: Backup просрочен
+              description: Успешный backup не укладывается в полтора настроенных интервала.
+      - eval_time: 16m
+        alertname: ProxyHarborTelegramDeliveryFailed
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: Backup не подтверждён Telegram
+              description: Telegram настроен, но последний успешный backup не имеет подтверждённой доставки.
+
+  - name: Validation stall requires due work healthy control and workers
+    interval: 1m
+    input_series:
+      - series: proxyharbor_validation_due
+        values: '50x16'
+      - series: proxyharbor_background_workers_enabled
+        values: '1x16'
+      - series: proxyharbor_probe_control_available
+        values: '1x16'
+      - series: proxyharbor_validation_attempts_last_5m
+        values: '0x16'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: ProxyHarborValidationStalled
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: Очередь проверки не обрабатывается
+              description: Есть due-прокси и доступный control endpoint, но попыток проверки нет.

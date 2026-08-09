@@ -30,7 +30,14 @@ https://{$PUBLIC_HOST} {
 		max_size 64KB
 	}
 
-	@api path /api/* /openapi/* /health/* /healthz /metrics
+	# В production метрики забирает внутренний Prometheus напрямую у API.
+	# Не публикуем operational topology и дорогой DB-срез в интернет.
+	@metrics path /metrics
+	handle @metrics {
+		respond 404
+	}
+
+	@api path /api/* /openapi/* /health/* /healthz
 	handle @api {
 		reverse_proxy api:8080 {
 			transport http {

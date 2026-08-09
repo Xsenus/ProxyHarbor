@@ -15,6 +15,7 @@
 - ограничение частоты запросов, SSRF-защита источников, контейнеры без root и с read-only ФС;
 - потоковые зашифрованные AES-256-GCM снимки БД и настроек с отправкой в Telegram;
 - постоянный аудит создания, размера и подтверждённой Telegram-доставки каждого backup;
+- opt-in Prometheus с bounded retention и проверяемыми alert rules для API, сбора, validation и backup;
 - CI для backend, frontend, тестов и проверки Docker Compose.
 
 ## Быстрый запуск в Docker
@@ -27,7 +28,7 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-Интерфейс: `http://localhost:8080`. OpenAPI: `http://localhost:8080/openapi/v1.json`. Liveness: `/health/live`, readiness БД: `/health/ready` (совместимый `/healthz` перенаправляет на readiness), Prometheus-метрики: `/metrics`.
+Интерфейс: `http://localhost:8080`. OpenAPI: `http://localhost:8080/openapi/v1.json`. Liveness: `/health/live`, readiness БД: `/health/ready` (совместимый `/healthz` перенаправляет на readiness), локальные Prometheus-метрики: `/metrics` (production gateway их не публикует).
 
 API автоматически применяет EF Core migrations и синхронизирует встроенный каталог при старте. PostgreSQL advisory lock сериализует этот этап между одновременно запускаемыми репликами: только одна выполняет migrations/seed, остальные ожидают и затем проверяют уже обновлённую схему. Ожидание использует короткий `pg_try_advisory_lock`, а не блокирующий statement snapshot, поэтому не образует deadlock с `CREATE INDEX CONCURRENTLY`. Это позволяет безопасный rolling restart без гонки DDL и дублирования источников.
 
@@ -44,6 +45,14 @@ curl https://proxy.example.com/health/ready
 
 Production override убирает прямой порт `8080` у frontend и публикует только Caddy на 80/443. Caddy автоматически получает и продлевает сертификат, перенаправляет HTTP на HTTPS, сохраняет ACME-состояние в volumes и работает без root, capabilities и writable root filesystem. Базовый `docker compose up` предназначен для локальной проверки по HTTP, а не для публичного сервера. Подробный checklist: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
+Для локально доступной operational history и готовых предупреждений добавьте профиль мониторинга:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.production.yml --profile monitoring up -d --build
+```
+
+Prometheus слушает только `127.0.0.1:9090`; production gateway намеренно не публикует `/metrics`. Полный список alarms и действия оператора: [docs/MONITORING.md](docs/MONITORING.md).
+
 ## Конфигурация
 
 Настройки задаются стандартным способом ASP.NET Core: значения окружения с `__` заменяют секции JSON.
@@ -56,6 +65,9 @@ Production override убирает прямой порт `8080` у frontend и �
 | `ForwardedHeaders__KnownNetworks__0...N` | CIDR только доверенных reverse proxy; Docker Compose задаёт изолированную `/24` сеть |
 | `PUBLIC_HOST` | Публичное DNS-имя production без схемы и пути |
 | `ACME_EMAIL` | Контакт для автоматического выпуска TLS-сертификата |
+| `PROMETHEUS_PORT` | Loopback-порт opt-in Prometheus, по умолчанию 9090 |
+| `PROMETHEUS_RETENTION_TIME` | Максимальный возраст метрик, по умолчанию 30d |
+| `PROMETHEUS_RETENTION_SIZE` | Максимальный объём TSDB, по умолчанию 10GB |
 | `Collector__BackgroundWorkersEnabled` | Позволяет отключить workers для миграций, CI или отдельной API-реплики |
 | `VALIDATION_CONCURRENCY` / `Collector__ValidationConcurrency` | Параллельность сетевых проверок, по умолчанию 800 |
 | `VALIDATION_BATCH_SIZE` / `Collector__ValidationBatchSize` | Размер одной очереди, по умолчанию 1600 |

@@ -15,6 +15,7 @@ namespace ProxyHarbor.Api.Controllers;
 public sealed class MetricsController(
     IDbContextFactory<ProxyHarborDbContext> dbFactory,
     IOptions<CollectorOptions> collectorOptions,
+    IOptions<BackupOptions> backupOptions,
     ProbeControlHealth probeControlHealth) : ControllerBase
 {
     [HttpGet]
@@ -103,6 +104,10 @@ public sealed class MetricsController(
             validationTelemetry.FailedRuns);
         Gauge(output, "proxyharbor_validation_runs_active", "Validation batches currently marked as active.",
             validationTelemetry.ActiveRuns);
+        Gauge(output, "proxyharbor_background_workers_enabled", "Whether built-in collection and validation workers are enabled.",
+            collectorOptions.Value.BackgroundWorkersEnabled ? 1 : 0);
+        Gauge(output, "proxyharbor_collection_interval_seconds", "Configured interval between collection cycles in seconds.",
+            collectorOptions.Value.CollectionIntervalMinutes * 60L);
         Gauge(output, "proxyharbor_validation_concurrency_limit", "Configured maximum concurrent validation probes.",
             collectorOptions.Value.ValidationConcurrency);
         Gauge(output, "proxyharbor_validation_batch_size", "Configured maximum proxies claimed by one validation batch.",
@@ -173,6 +178,13 @@ public sealed class MetricsController(
             lastFinishedRun?.FinishedAt is { } finishedAt
                 ? Math.Max(0, (finishedAt - lastFinishedRun.StartedAt).TotalSeconds)
                 : 0);
+        Gauge(output, "proxyharbor_backup_enabled", "Whether scheduled encrypted backups are enabled.",
+            backupOptions.Value.Enabled ? 1 : 0);
+        Gauge(output, "proxyharbor_backup_interval_seconds", "Configured interval between scheduled backups in seconds.",
+            backupOptions.Value.IntervalHours * 3_600L);
+        Gauge(output, "proxyharbor_backup_telegram_configured", "Whether both Telegram delivery settings are currently configured.",
+            !string.IsNullOrWhiteSpace(backupOptions.Value.TelegramBotToken) &&
+            !string.IsNullOrWhiteSpace(backupOptions.Value.TelegramChatId) ? 1 : 0);
         Gauge(output, "proxyharbor_backup_runs_active", "Backup runs currently marked as active.", activeBackups);
         Gauge(output, "proxyharbor_last_backup_success", "Whether the latest finished backup completed successfully.",
             lastFinishedBackup?.Status == "completed" ? 1 : 0);

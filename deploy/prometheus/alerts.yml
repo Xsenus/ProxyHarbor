@@ -1,0 +1,168 @@
+groups:
+  - name: proxyharbor.availability
+    rules:
+      - alert: ProxyHarborApiDown
+        expr: up{job="proxyharbor"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: ProxyHarbor API недоступен
+          description: Prometheus не может получить /metrics API более двух минут.
+
+      - alert: ProxyHarborBackgroundWorkersDisabled
+        expr: proxyharbor_background_workers_enabled == 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: Фоновые workers отключены
+          description: Автоматический сбор и проверка прокси отключены в production-конфигурации.
+
+      - alert: ProxyHarborNoPublishedProxies
+        expr: proxyharbor_proxies_published == 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: Публичная выдача прокси пуста
+          description: В API более 30 минут нет свежих проверенных прокси.
+
+  - name: proxyharbor.collection
+    rules:
+      - alert: ProxyHarborCollectionStalled
+        expr: |
+          (
+            proxyharbor_last_successful_collection_timestamp_seconds == 0
+            or
+            time() - proxyharbor_last_successful_collection_timestamp_seconds
+              > 4 * proxyharbor_collection_interval_seconds
+          )
+          and on() proxyharbor_background_workers_enabled == 1
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: Сбор источников остановился
+          description: Успешного цикла нет дольше четырёх настроенных интервалов.
+
+      - alert: ProxyHarborCollectionHung
+        expr: proxyharbor_collection_runs_active > 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: Цикл сбора выполняется слишком долго
+          description: Collection run остаётся активным более 30 минут.
+
+      - alert: ProxyHarborSourceCatalogIncomplete
+        expr: proxyharbor_source_catalog_complete == 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: Встроенный каталог источников неполон
+          description: Присутствуют или включены не все канонические feed и провайдеры.
+
+      - alert: ProxyHarborSourceCatalogUnhealthy
+        expr: proxyharbor_source_catalog_healthy == 0
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: Каталог источников длительно нездоров
+          description: Не все встроенные feed имеют свежий полный успешный результат.
+
+      - alert: ProxyHarborCollectionTruncated
+        expr: |
+          proxyharbor_last_collection_candidate_limit_reached > 0
+          or proxyharbor_last_collection_sources_truncated > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Результат сбора усечён защитным лимитом
+          description: Увеличьте лимит только после проверки размера и корректности проблемного feed.
+
+  - name: proxyharbor.validation
+    rules:
+      - alert: ProxyHarborProbeControlUnavailable
+        expr: proxyharbor_probe_control_available == 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: Контрольный endpoint проверки недоступен
+          description: Validator работает fail-closed и не арендует очередь без доверенного control endpoint.
+
+      - alert: ProxyHarborValidationStalled
+        expr: |
+          proxyharbor_validation_due > 0
+          and on() proxyharbor_background_workers_enabled == 1
+          and on() proxyharbor_probe_control_available == 1
+          and on() proxyharbor_validation_attempts_last_5m == 0
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: Очередь проверки не обрабатывается
+          description: Есть due-прокси и доступный control endpoint, но попыток проверки нет.
+
+      - alert: ProxyHarborValidationFailures
+        expr: proxyharbor_validation_runs_failed_last_5m > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Validation-партии завершаются ошибкой
+          description: За последние пять минут зафиксированы failed validation runs.
+
+  - name: proxyharbor.backup
+    rules:
+      - alert: ProxyHarborBackupFailed
+        expr: |
+          proxyharbor_last_backup_success == 0
+          and on() proxyharbor_backup_enabled == 1
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: Последний backup неуспешен
+          description: Зашифрованный снимок не завершился успешно либо первый backup не был создан.
+
+      - alert: ProxyHarborBackupStale
+        expr: |
+          (
+            proxyharbor_last_backup_timestamp_seconds == 0
+            or
+            time() - proxyharbor_last_backup_timestamp_seconds
+              > 1.5 * proxyharbor_backup_interval_seconds
+          )
+          and on() proxyharbor_backup_enabled == 1
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: Backup просрочен
+          description: Успешный backup не укладывается в полтора настроенных интервала.
+
+      - alert: ProxyHarborBackupHung
+        expr: proxyharbor_backup_runs_active > 0
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: Backup выполняется слишком долго
+          description: Backup run остаётся активным более одного часа.
+
+      - alert: ProxyHarborTelegramDeliveryFailed
+        expr: |
+          proxyharbor_backup_enabled == 1
+          and on() proxyharbor_backup_telegram_configured == 1
+          and on() proxyharbor_last_backup_sent_to_telegram == 0
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: Backup не подтверждён Telegram
+          description: Telegram настроен, но последний успешный backup не имеет подтверждённой доставки.

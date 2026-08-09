@@ -35,7 +35,52 @@ services:
         max-file: "5"
     security_opt: [no-new-privileges:true]
 
+  # Opt-in профиль хранит operational history и вычисляет alert rules. Web UI
+  # доступен только с самого хоста либо через явно настроенный SSH tunnel.
+  prometheus:
+    profiles: [monitoring]
+    image: prom/prometheus:v3.13.2-distroless
+    restart: unless-stopped
+    depends_on:
+      api: { condition: service_healthy }
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=${PROMETHEUS_RETENTION_TIME:-30d}
+      - --storage.tsdb.retention.size=${PROMETHEUS_RETENTION_SIZE:-10GB}
+      - --query.max-concurrency=10
+      - --query.timeout=30s
+      - --web.max-connections=64
+    ports:
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
+    healthcheck:
+      test: ["CMD", "/bin/promtool", "query", "instant", "http://127.0.0.1:9090", "vector(1)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./deploy/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus-data:/prometheus
+    networks: [backend]
+    user: "65532:65532"
+    init: true
+    pids_limit: 128
+    mem_limit: 512m
+    cpus: 1.0
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    security_opt: [no-new-privileges:true]
+
 volumes:
   # Сертификаты и ACME-состояние должны переживать замену контейнера.
   caddy-data:
   caddy-config:
+  prometheus-data:

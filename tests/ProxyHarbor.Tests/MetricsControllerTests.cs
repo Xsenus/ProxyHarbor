@@ -32,6 +32,7 @@ public sealed class MetricsControllerTests
 
         var controller = new MetricsController(
             new TestDbFactory(options), Options.Create(new CollectorOptions { CollectionIntervalMinutes = 15 }),
+            Options.Create(new BackupOptions()),
             new ProbeControlHealth());
 
         var result = Assert.IsType<ContentResult>(await controller.Get(CancellationToken.None));
@@ -40,6 +41,11 @@ public sealed class MetricsControllerTests
         Assert.Contains("proxyharbor_sources_stale 1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_builtin_sources_healthy 0", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_builtin_sources_stale 1", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_background_workers_enabled 1", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_collection_interval_seconds 900", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_backup_enabled 0", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_backup_interval_seconds 86400", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_backup_telegram_configured 0", metrics, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -137,7 +143,16 @@ public sealed class MetricsControllerTests
         var controlHealth = new ProbeControlHealth();
         controlHealth.Record(available: true);
         var controller = new MetricsController(
-            new TestDbFactory(options), Options.Create(new CollectorOptions { PublicFreshnessMinutes = 15 }), controlHealth);
+            new TestDbFactory(options),
+            Options.Create(new CollectorOptions { PublicFreshnessMinutes = 15, CollectionIntervalMinutes = 20 }),
+            Options.Create(new BackupOptions
+            {
+                Enabled = true,
+                IntervalHours = 12,
+                TelegramBotToken = "test-token",
+                TelegramChatId = "123"
+            }),
+            controlHealth);
 
         var result = Assert.IsType<ContentResult>(await controller.Get(CancellationToken.None));
         var metrics = result.Content!;
@@ -162,6 +177,8 @@ public sealed class MetricsControllerTests
         Assert.Contains("proxyharbor_validation_deferred_last_5m 1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_validation_runs_failed_last_5m 1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_validation_runs_active 1", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_background_workers_enabled 1", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_collection_interval_seconds 1200", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_validation_concurrency_limit 800", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_validation_batch_size 1600", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_validation_checks_per_second 2", metrics, StringComparison.Ordinal);
@@ -177,6 +194,9 @@ public sealed class MetricsControllerTests
         Assert.Contains("proxyharbor_last_collection_timestamp_seconds 1700000100", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_last_collection_duration_seconds 12.5", metrics, StringComparison.Ordinal);
         Assert.DoesNotContain("proxyharbor_last_collection_candidates 999", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_backup_enabled 1", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_backup_interval_seconds 43200", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_backup_telegram_configured 1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_backup_runs_active 1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_last_backup_success 1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_last_backup_telegram_configured 1", metrics, StringComparison.Ordinal);
