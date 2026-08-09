@@ -34,6 +34,21 @@ API автоматически применяет EF Core migrations и синх
 
 Первый полезный список появляется не мгновенно: сервис сначала загружает кандидатов, затем непрерывно проверяет их пакетами. Скорость регулируется `Collector__ValidationConcurrency`; Docker-профиль гарантирует `nofile=8192` для настроенных 800 параллельных probes, но при ручном запуске лимит файловых дескрипторов и пропускную способность сети контролирует оператор. Методика и результаты live-тюнинга приведены в [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
 
+## Версионированные контейнерные релизы
+
+После подключения репозитория к GitHub push строгого SemVer-тега `vX.Y.Z` запускает отдельный release workflow. Сначала tagged commit повторно проходит locked restore, проверку EF model, все backend-тесты на настоящей PostgreSQL, frontend-тесты/audits и Compose/contracts; write-permissions отсутствуют до успеха этого gate. Затем workflow параллельно публикует `proxyharbor-api`, `proxyharbor-web` и `proxyharbor-restore` для `linux/amd64` и `linux/arm64` в GHCR namespace владельца репозитория. Каждый manifest получает OCI labels, встроенную версию, BuildKit SBOM/provenance и точный digest в `proxyharbor-release.json`; для публичного репозитория дополнительно создаётся подписанная GitHub/Sigstore provenance-attestation. Все внешние actions закреплены полными commit SHA и проверяются отдельным supply-chain gate.
+
+GitHub Release прикладывает base, production и release Compose-файлы. Поэтому проверенную версию можно запустить без локальной сборки:
+
+```bash
+cp .env.example .env
+export PROXYHARBOR_IMAGE_PREFIX=ghcr.io/your-github-owner
+export PROXYHARBOR_IMAGE_TAG=1.2.3
+docker compose -f docker-compose.yml -f docker-compose.release.yml -f docker-compose.production.yml up -d
+```
+
+Для prerelease используется полный нормализованный image tag из release manifest; разделитель `+` SemVer build metadata кодируется как `_build_`, что исключает столкновение с допустимым prerelease-именем. Тег `latest` и плавающий `major.minor` обновляются только стабильными релизами. Compose CI доказывает, что release overlay полностью удаляет локальные `build`-секции. Процедура выпуска и проверка attestations описаны в [docs/RELEASING.md](docs/RELEASING.md).
+
 ## Production HTTPS
 
 Создайте DNS A/AAAA-запись на сервер, откройте входящие TCP 80/443 и UDP 443, затем задайте в `.env` bare hostname `PUBLIC_HOST` (без `https://` и пути) и контактный `ACME_EMAIL`:

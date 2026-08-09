@@ -1,0 +1,15 @@
+# Overlay отключает локальную сборку трёх собственных сервисов и использует
+# версионированные release manifests из GHCR. Prefix позволяет fork'ам публиковать
+# образы в собственный namespace без правки репозитория.
+services:
+  api:
+    image: ${PROXYHARBOR_IMAGE_PREFIX:?set PROXYHARBOR_IMAGE_PREFIX}/proxyharbor-api:${PROXYHARBOR_IMAGE_TAG:?set PROXYHARBOR_IMAGE_TAG}
+    build: !reset null
+
+  restore:
+    image: ${PROXYHARBOR_IMAGE_PREFIX:?set PROXYHARBOR_IMAGE_PREFIX}/proxyharbor-restore:${PROXYHARBOR_IMAGE_TAG:?set PROXYHARBOR_IMAGE_TAG}
+    build: !reset null
+
+  web:
+    image: ${PROXYHARBOR_IMAGE_PREFIX:?set PROXYHARBOR_IMAGE_PREFIX}/proxyharbor-web:${PROXYHARBOR_IMAGE_TAG:?set PROXYHARBOR_IMAGE_TAG}
+    build: !reset null

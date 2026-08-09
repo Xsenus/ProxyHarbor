@@ -72,6 +72,7 @@ describe('ProxyHarbor UI', () => {
   it('keeps public API healthy when admin authentication fails', async () => {
     render(<App />)
     expect(await screen.findByText('система активна')).toBeInTheDocument()
+    expect(screen.getByText(/v0\.0\.0-local · ©/)).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: /^Управление$/ }))
     fireEvent.change(screen.getByLabelText('Ключ администратора'), { target: { value: 'wrong-key' } })

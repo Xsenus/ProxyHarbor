@@ -1,0 +1,229 @@
+name: Release containers
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  verify:
+    name: Verify tagged commit
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_DB: proxyharbor_release_verify
+          POSTGRES_USER: proxyharbor
+          POSTGRES_PASSWORD: release-verify-password
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U proxyharbor -d proxyharbor_release_verify"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with: { dotnet-version: '10.0.302' }
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: '22', cache: npm, cache-dependency-path: src/proxyharbor-web/package-lock.json }
+      - name: Validate release and workflow contracts
+        shell: pwsh
+        run: |
+          ./tools/Get-ReleaseMetadata.ps1 -Tag $env:GITHUB_REF_NAME -RepositoryOwner $env:GITHUB_REPOSITORY_OWNER -OutputFile $env:GITHUB_OUTPUT
+          ./tools/Test-ReleaseMetadata.ps1
+          ./tools/Test-WorkflowSecurity.ps1
+          ./tools/Test-AuditSourceFeeds.ps1
+      - name: Build and test backend against PostgreSQL
+        env:
+          PROXYHARBOR_INTEGRATION_POSTGRES: Host=127.0.0.1;Port=5432;Database=proxyharbor_release_verify;Username=proxyharbor;Password=release-verify-password;Pooling=false
+        run: |
+          dotnet restore ProxyHarbor.slnx --locked-mode
+          dotnet build ProxyHarbor.slnx --configuration Release --no-restore
+          dotnet test ProxyHarbor.slnx --configuration Release --no-build --no-restore
+          dotnet tool restore
+          dotnet ef migrations has-pending-model-changes \
+            --project src/ProxyHarbor.Infrastructure/ProxyHarbor.Infrastructure.csproj \
+            --startup-project src/ProxyHarbor.Api/ProxyHarbor.Api.csproj \
+            --configuration Release --no-build
+          dotnet list ProxyHarbor.slnx package --vulnerable --include-transitive --no-restore
+      - name: Build, test and audit frontend
+        working-directory: src/proxyharbor-web
+        run: |
+          npm ci
+          npm audit --audit-level=moderate
+          npm run lint
+          npm test
+          npm run build
+      - name: Verify release Compose overlay
+        env:
+          POSTGRES_DB: proxyharbor
+          POSTGRES_USER: proxyharbor
+          POSTGRES_PASSWORD: release-verify-password
+          ADMIN_API_KEY: release-verify-admin-key-at-least-24-chars
+          BACKUP_ENCRYPTION_KEY: release-verify-encryption-key-at-least-32-chars
+          TELEGRAM_BOT_TOKEN: release-verify-telegram-token
+          TELEGRAM_CHAT_ID: "123456"
+          PUBLIC_HOST: release.example.test
+          ACME_EMAIL: release@example.test
+          PROXYHARBOR_IMAGE_PREFIX: ghcr.io/example
+          PROXYHARBOR_IMAGE_TAG: 1.2.3
+        run: |
+          rendered=$(docker compose \
+            -f docker-compose.yml -f docker-compose.release.yml -f docker-compose.production.yml \
+            --profile monitoring --profile tools config --format json)
+          echo "$rendered" | jq --exit-status '
+            .services.api.image == "ghcr.io/example/proxyharbor-api:1.2.3" and
+            .services.api.build == null and
+            .services.restore.image == "ghcr.io/example/proxyharbor-restore:1.2.3" and
+            .services.restore.build == null and
+            .services.web.image == "ghcr.io/example/proxyharbor-web:1.2.3" and
+            .services.web.build == null and
+            ((.services.web.ports // []) | length == 0)'
+
+  publish:
+    name: Publish ${{ matrix.component }}
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - component: api
+            image: proxyharbor-api
+            dockerfile: src/ProxyHarbor.Api/Dockerfile
+          - component: restore
+            image: proxyharbor-restore
+            dockerfile: src/ProxyHarbor.Restore/Dockerfile
+          - component: web
+            image: proxyharbor-web
+            dockerfile: src/proxyharbor-web/Dockerfile
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Validate release tag and derive immutable metadata
+        id: release
+        shell: pwsh
+        run: ./tools/Get-ReleaseMetadata.ps1 -Tag $env:GITHUB_REF_NAME -RepositoryOwner $env:GITHUB_REPOSITORY_OWNER -OutputFile $env:GITHUB_OUTPUT
+      - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+        with: { platforms: arm64 }
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - name: Authenticate Buildx to the repository GHCR namespace
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Derive OCI tags and labels
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ steps.release.outputs.image-prefix }}/${{ matrix.image }}
+          flavor: latest=false
+          tags: |
+            type=raw,value=${{ steps.release.outputs.image-tag }}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ steps.release.outputs.is-prerelease == 'false' }}
+            type=raw,value=latest,enable=${{ steps.release.outputs.is-prerelease == 'false' }}
+          labels: |
+            org.opencontainers.image.title=ProxyHarbor ${{ matrix.component }}
+            org.opencontainers.image.description=ProxyHarbor production ${{ matrix.component }} container
+            org.opencontainers.image.licenses=MIT
+      - name: Build multi-architecture image with embedded SBOM and provenance
+        id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ steps.release.outputs.version }}
+            SOURCE_REVISION=${{ github.sha }}
+          cache-from: type=gha,scope=release-${{ matrix.component }}
+          cache-to: type=gha,mode=max,scope=release-${{ matrix.component }}
+          sbom: true
+          provenance: mode=max
+      - name: Create signed GitHub build-provenance attestation
+        if: github.event.repository.visibility == 'public' || vars.ENABLE_GITHUB_ATTESTATIONS == 'true'
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ steps.release.outputs.image-prefix }}/${{ matrix.image }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+          create-storage-record: false
+      - name: Record exact release digest
+        shell: bash
+        env:
+          COMPONENT: ${{ matrix.component }}
+          IMAGE: ${{ steps.release.outputs.image-prefix }}/${{ matrix.image }}
+          VERSION: ${{ steps.release.outputs.version }}
+          IMAGE_TAG: ${{ steps.release.outputs.image-tag }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          REVISION: ${{ github.sha }}
+        run: |
+          mkdir -p release-metadata
+          jq --null-input --compact-output \
+            --arg component "$COMPONENT" --arg image "$IMAGE" --arg version "$VERSION" --arg imageTag "$IMAGE_TAG" \
+            --arg digest "$DIGEST" --arg revision "$REVISION" \
+            '{component:$component,image:$image,version:$version,imageTag:$imageTag,digest:$digest,revision:$revision}' \
+            > "release-metadata/$COMPONENT.json"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-metadata-${{ matrix.component }}
+          path: release-metadata/${{ matrix.component }}.json
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    name: Publish GitHub release manifest
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Validate release tag
+        id: release
+        shell: pwsh
+        run: ./tools/Get-ReleaseMetadata.ps1 -Tag $env:GITHUB_REF_NAME -RepositoryOwner $env:GITHUB_REPOSITORY_OWNER -OutputFile $env:GITHUB_OUTPUT
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: release-metadata-*
+          path: release-metadata
+          merge-multiple: true
+      - name: Assemble digest manifest and publish idempotent GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ steps.release.outputs.version }}
+          IS_PRERELEASE: ${{ steps.release.outputs.is-prerelease }}
+          REVISION: ${{ github.sha }}
+        run: |
+          test "$(find release-metadata -maxdepth 1 -name '*.json' -type f | wc -l)" -eq 3
+          jq --slurp --arg version "$VERSION" --arg revision "$REVISION" \
+            '{schemaVersion:1,version:$version,revision:$revision,images:(sort_by(.component))}' \
+            release-metadata/*.json > proxyharbor-release.json
+          release_args=(--verify-tag --title "ProxyHarbor $VERSION")
+          if [[ "$IS_PRERELEASE" == 'true' ]]; then release_args+=(--prerelease); fi
+          assets=(proxyharbor-release.json docker-compose.yml docker-compose.release.yml docker-compose.production.yml .env.example)
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${assets[@]}" --clobber
+          else
+            gh release create "$TAG" "${assets[@]}" --generate-notes "${release_args[@]}"
+          fi

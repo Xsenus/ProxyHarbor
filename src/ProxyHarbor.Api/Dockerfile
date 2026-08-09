@@ -10,7 +10,10 @@ COPY ["src/ProxyHarbor.Api/ProxyHarbor.Api.csproj", "src/ProxyHarbor.Api/"]
 COPY ["src/ProxyHarbor.Api/packages.lock.json", "src/ProxyHarbor.Api/"]
 RUN dotnet restore "src/ProxyHarbor.Api/ProxyHarbor.Api.csproj" --locked-mode
 COPY . .
-RUN dotnet publish "src/ProxyHarbor.Api/ProxyHarbor.Api.csproj" -c Release -o /app --no-restore /p:UseAppHost=false
+ARG VERSION=0.0.0-local
+ARG SOURCE_REVISION=unknown
+RUN dotnet publish "src/ProxyHarbor.Api/ProxyHarbor.Api.csproj" -c Release -o /app --no-restore \
+    /p:UseAppHost=false /p:Version="$VERSION" /p:SourceRevisionId="$SOURCE_REVISION" /p:ContinuousIntegrationBuild=true
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0.10-alpine3.23 AS runtime
 RUN addgroup -S proxyharbor && adduser -S proxyharbor -G proxyharbor && mkdir -p /app/backups && chown -R proxyharbor:proxyharbor /app

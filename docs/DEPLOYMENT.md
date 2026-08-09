@@ -32,6 +32,8 @@ docker compose -f docker-compose.yml -f docker-compose.production.yml logs --tai
 
 Откат выполняйте на предыдущий проверенный Git commit той же командой. Не откатывайте код через уже применённые необратимые миграции без заранее проверенного плана восстановления БД.
 
+Для версионированного GHCR-релиза добавьте `docker-compose.release.yml` между base и production-файлами и задайте `PROXYHARBOR_IMAGE_PREFIX`/`PROXYHARBOR_IMAGE_TAG`. Такой запуск использует опубликованные multi-architecture manifests и не содержит локальных build-секций. Точные digest находятся в приложенном `proxyharbor-release.json`; полный порядок выпуска и attestation-проверки приведён в [RELEASING.md](RELEASING.md).
+
 По умолчанию Caddy должен быть непосредственной публичной точкой входа. При добавлении CDN/load balancer настройте доверенные proxy ranges одновременно в Caddy и API; иначе rate limiting будет видеть адрес промежуточного узла. Никогда не доверяйте произвольному `X-Forwarded-For` из интернета.
 
 ## Встроенный мониторинг

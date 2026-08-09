@@ -3,6 +3,9 @@ WORKDIR /app
 COPY src/proxyharbor-web/package*.json ./
 RUN npm ci
 COPY src/proxyharbor-web/ .
+ARG VERSION=0.0.0-local
+ARG SOURCE_REVISION=unknown
+ENV VITE_APP_VERSION=$VERSION VITE_SOURCE_REVISION=$SOURCE_REVISION
 RUN npm run build
 
 FROM nginx:1.29-alpine

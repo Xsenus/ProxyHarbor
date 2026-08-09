@@ -32,6 +32,9 @@ services:
     build:
       context: .
       dockerfile: src/ProxyHarbor.Api/Dockerfile
+      args:
+        VERSION: ${PROXYHARBOR_BUILD_VERSION:-0.0.0-local}
+        SOURCE_REVISION: ${PROXYHARBOR_SOURCE_REVISION:-unknown}
     restart: unless-stopped
     depends_on:
       postgres: { condition: service_healthy }
@@ -79,6 +82,9 @@ services:
     build:
       context: .
       dockerfile: src/ProxyHarbor.Restore/Dockerfile
+      args:
+        VERSION: ${PROXYHARBOR_BUILD_VERSION:-0.0.0-local}
+        SOURCE_REVISION: ${PROXYHARBOR_SOURCE_REVISION:-unknown}
     depends_on:
       postgres: { condition: service_healthy }
     environment:
@@ -104,6 +110,9 @@ services:
     build:
       context: .
       dockerfile: src/proxyharbor-web/Dockerfile
+      args:
+        VERSION: ${PROXYHARBOR_BUILD_VERSION:-0.0.0-local}
+        SOURCE_REVISION: ${PROXYHARBOR_SOURCE_REVISION:-unknown}
     restart: unless-stopped
     depends_on:
       api: { condition: service_healthy }

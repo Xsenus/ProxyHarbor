@@ -60,6 +60,12 @@ jobs:
       - name: Verify source-audit evidence contracts
         shell: pwsh
         run: ./tools/Test-AuditSourceFeeds.ps1
+      - name: Verify release metadata contracts
+        shell: pwsh
+        run: ./tools/Test-ReleaseMetadata.ps1
+      - name: Verify workflow supply-chain pins
+        shell: pwsh
+        run: ./tools/Test-WorkflowSecurity.ps1
       - run: npm ci
         working-directory: src/proxyharbor-web
       - run: npm audit --audit-level=moderate
@@ -111,6 +117,8 @@ jobs:
           ACME_EMAIL: ci@example.com
           TELEGRAM_BOT_TOKEN: ci-telegram-token
           TELEGRAM_CHAT_ID: "123456"
+          PROXYHARBOR_IMAGE_PREFIX: ghcr.io/example
+          PROXYHARBOR_IMAGE_TAG: 1.2.3
         run: |
           docker compose config
           production_config=$(docker compose \
@@ -147,6 +155,17 @@ jobs:
               exit 1
             fi
           done
+          release_config=$(docker compose \
+            -f docker-compose.yml -f docker-compose.release.yml -f docker-compose.production.yml \
+            --profile monitoring --profile tools config --format json)
+          echo "$release_config" | jq --exit-status '
+            .services.api.image == "ghcr.io/example/proxyharbor-api:1.2.3" and
+            .services.api.build == null and
+            .services.restore.image == "ghcr.io/example/proxyharbor-restore:1.2.3" and
+            .services.restore.build == null and
+            .services.web.image == "ghcr.io/example/proxyharbor-web:1.2.3" and
+            .services.web.build == null and
+            ((.services.web.ports // []) | length == 0)'
           docker run --rm \
             --env PUBLIC_HOST=localhost --env ACME_EMAIL=ci@example.com \
             --volume "$PWD/deploy/Caddyfile:/etc/caddy/Caddyfile:ro" \

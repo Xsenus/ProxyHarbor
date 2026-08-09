@@ -27,3 +27,7 @@ PostgreSQL integration-тесты используют одну внешнюю �
 - перед PR выполните `tools/Audit-SourceFeeds.ps1` на отдельной тестовой БД.
 
 Не добавляйте сами списки прокси, токены, `.env`, backup-файлы и production-дампы в Git.
+
+## Release changes
+
+Не создавайте release tag из непроверенной feature-ветки. Любое изменение Dockerfile, Compose overlay или `.github/workflows/release.yml` должно пройти `Test-ReleaseMetadata.ps1`, `Test-WorkflowSecurity.ps1`, actionlint и container configuration gate. Выпуск выполняется только строгим SemVer-тегом по процедуре [docs/RELEASING.md](docs/RELEASING.md).
