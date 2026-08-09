@@ -1,0 +1,140 @@
+using System.Net;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
+using ProxyHarbor.Infrastructure;
+
+namespace ProxyHarbor.Tests;
+
+/// <summary>Фиксирует fail-closed health-gate и кэширование control endpoint.</summary>
+public sealed class OriginIpProviderTests
+{
+    [Fact]
+    public async Task UsesConfiguredHttpsEndpointAndCachesSuccessfulHealthCheck()
+    {
+        var handler = new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("{\"ip\":\"8.8.8.8\"}")
+        });
+        using var factory = new StubHttpClientFactory(handler);
+        var health = new ProbeControlHealth();
+        using var provider = new OriginIpProvider(
+            factory,
+            Options.Create(new CollectorOptions
+            {
+                ProbeHost = "probe.example",
+                ProbePort = 8443,
+                ProbePath = "/who?format=json"
+            }),
+            health);
+
+        Assert.Equal("8.8.8.8", await provider.GetRequiredAsync(CancellationToken.None));
+        Assert.Equal("8.8.8.8", await provider.GetRequiredAsync(CancellationToken.None));
+
+        Assert.Equal(1, handler.RequestCount);
+        Assert.Equal("https://probe.example:8443/who?format=json", handler.LastRequestUri?.AbsoluteUri);
+        Assert.Equal(1, health.Availability);
+        Assert.True(health.CheckedAtUnixSeconds > 0);
+    }
+
+    [Fact]
+    public async Task UnavailableEndpointFailsClosedAndCachesShortFailure()
+    {
+        var handler = new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));
+        using var factory = new StubHttpClientFactory(handler);
+        var health = new ProbeControlHealth();
+        using var provider = new OriginIpProvider(
+            factory,
+            Options.Create(new CollectorOptions()),
+            health);
+
+        await Assert.ThrowsAsync<ProbeControlUnavailableException>(
+            () => provider.GetRequiredAsync(CancellationToken.None));
+        await Assert.ThrowsAsync<ProbeControlUnavailableException>(
+            () => provider.GetRequiredAsync(CancellationToken.None));
+
+        Assert.Equal(1, handler.RequestCount);
+        Assert.Equal(0, health.Availability);
+    }
+
+    [Fact]
+    public async Task UnavailableEndpointStopsValidatorBeforeDatabaseQueueClaim()
+    {
+        var handler = new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.TooManyRequests));
+        using var factory = new StubHttpClientFactory(handler);
+        var settings = Options.Create(new CollectorOptions());
+        using var origin = new OriginIpProvider(factory, settings, new ProbeControlHealth());
+        using var validator = new ProxyValidator(
+            new ThrowingDbFactory(),
+            new ProxyProbeService(settings, origin),
+            settings,
+            NullLogger<ProxyValidator>.Instance);
+
+        await Assert.ThrowsAsync<ProbeControlUnavailableException>(
+            () => validator.ValidateBatchAsync(CancellationToken.None));
+
+        Assert.Equal(1, handler.RequestCount);
+    }
+
+    [Fact]
+    public async Task CallerCancellationIsNotCachedAsEndpointFailure()
+    {
+        using var handler = new BlockingHandler();
+        using var factory = new StubHttpClientFactory(handler);
+        var health = new ProbeControlHealth();
+        using var provider = new OriginIpProvider(
+            factory,
+            Options.Create(new CollectorOptions()),
+            health);
+        using var cancellation = new CancellationTokenSource();
+
+        var request = provider.GetRequiredAsync(cancellation.Token);
+        await handler.RequestStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => request);
+        Assert.Equal(-1, health.Availability);
+        Assert.Equal(0, health.CheckedAtUnixSeconds);
+    }
+
+    private sealed class StubHttpClientFactory(HttpMessageHandler handler) : IHttpClientFactory, IDisposable
+    {
+        private readonly HttpClient _client = new(handler, disposeHandler: false);
+        public HttpClient CreateClient(string name) => _client;
+        public void Dispose() => _client.Dispose();
+    }
+
+    private sealed class StubHandler(Func<HttpRequestMessage, HttpResponseMessage> responseFactory) : HttpMessageHandler
+    {
+        public int RequestCount { get; private set; }
+        public Uri? LastRequestUri { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            RequestCount++;
+            LastRequestUri = request.RequestUri;
+            return Task.FromResult(responseFactory(request));
+        }
+    }
+
+    private sealed class BlockingHandler : HttpMessageHandler
+    {
+        public TaskCompletionSource<bool> RequestStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            RequestStarted.TrySetResult(true);
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            return new HttpResponseMessage(HttpStatusCode.OK);
+        }
+    }
+
+    private sealed class ThrowingDbFactory : IDbContextFactory<ProxyHarborDbContext>
+    {
+        public ProxyHarborDbContext CreateDbContext() => throw new InvalidOperationException("Очередь БД не должна запрашиваться.");
+        public Task<ProxyHarborDbContext> CreateDbContextAsync(CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("Очередь БД не должна запрашиваться.");
+    }
+}

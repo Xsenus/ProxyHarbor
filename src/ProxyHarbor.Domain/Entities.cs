@@ -97,7 +97,9 @@ public sealed record ProxyCheckResult(
     int? LatencyMs,
     string? ExitIp,
     bool IsAnonymous,
-    string? Error);
+    string? Error,
+    // Контрольная инфраструктура не позволила оценить прокси; статистика качества не меняется.
+    bool IsDeferred = false);
 
 /// <summary>Унифицированный ответ со страницей данных.</summary>
 public sealed record PagedResult<T>(IReadOnlyList<T> Items, int Page, int PageSize, int Total);

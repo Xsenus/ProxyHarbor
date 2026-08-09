@@ -20,13 +20,16 @@ public sealed class ProxyValidator(
     private readonly SemaphoreSlim _runGate = new(1, 1);
 
     /// <summary>Проверяет приоритетный пакет и возвращает число фактически сохранённых результатов.</summary>
-    public async Task<(int Checked, int Alive)> ValidateBatchAsync(CancellationToken cancellationToken)
+    public async Task<(int Checked, int Alive, int Deferred)> ValidateBatchAsync(CancellationToken cancellationToken)
     {
         if (!await _runGate.WaitAsync(0, cancellationToken))
             throw new OperationAlreadyRunningException("проверка прокси");
         try
         {
             var settings = options.Value;
+            // Health-gate выполняется до SELECT ... FOR UPDATE: при сбое control endpoint
+            // очередь остаётся свободной, а рабочие прокси не получают ложный Dead.
+            await probe.EnsureControlEndpointAvailableAsync(cancellationToken);
             var now = DateTimeOffset.UtcNow;
             var concurrency = Math.Clamp(settings.ValidationConcurrency, 1, 1000);
             var batchSize = Math.Clamp(settings.ValidationBatchSize, 1, 100_000);
@@ -36,7 +39,7 @@ public sealed class ProxyValidator(
             var leaseId = Guid.NewGuid();
 
             var proxies = await ClaimBatchAsync(batchSize, now, leaseUntil, leaseId, cancellationToken);
-            if (proxies.Count == 0) return (0, 0);
+            if (proxies.Count == 0) return (0, 0, 0);
 
             var results = new System.Collections.Concurrent.ConcurrentBag<ProxyCheckResult>();
             await Parallel.ForEachAsync(proxies, new ParallelOptions
@@ -47,11 +50,17 @@ public sealed class ProxyValidator(
             {
                 try { results.Add(await probe.CheckAsync(proxy, token)); }
                 catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+                catch (ProbeControlUnavailableException exception)
+                {
+                    results.Add(new ProxyCheckResult(proxy.Id, false, null, null, false,
+                        exception.Message, IsDeferred: true));
+                }
                 catch (Exception exception)
                 {
-                    // Ошибка одной реализации/записи не должна терять результаты всего арендованного пакета.
+                    // Неизвестная ошибка реализации не доказывает неисправность внешнего прокси.
                     UnexpectedProbeFailure(logger, proxy.Key, exception);
-                    results.Add(new ProxyCheckResult(proxy.Id, false, null, null, false, "internal probe error"));
+                    results.Add(new ProxyCheckResult(proxy.Id, false, null, null, false,
+                        "internal probe error", IsDeferred: true));
                 }
             });
 
@@ -107,11 +116,11 @@ public sealed class ProxyValidator(
         return proxies;
     }
 
-    private async Task<(int Checked, int Alive)> PersistResultsAsync(
+    internal async Task<(int Checked, int Alive, int Deferred)> PersistResultsAsync(
         ScheduledProxyCheck[] updates,
         CancellationToken token)
     {
-        if (updates.Length == 0) return (0, 0);
+        if (updates.Length == 0) return (0, 0, 0);
         await using var strategyDb = await dbFactory.CreateDbContextAsync(token);
         var strategy = strategyDb.Database.CreateExecutionStrategy();
         return await strategy.ExecuteAsync(async () =>
@@ -122,7 +131,7 @@ public sealed class ProxyValidator(
             await using var transaction = await connection.BeginTransactionAsync(token);
             await using (var create = new NpgsqlCommand("""
                 CREATE TEMP TABLE proxy_check_update (
-                    id uuid NOT NULL, lease_id uuid NOT NULL, alive boolean NOT NULL,
+                    id uuid NOT NULL, lease_id uuid NOT NULL, outcome integer NOT NULL,
                     latency_ms integer NULL, exit_ip text NULL, is_anonymous boolean NOT NULL,
                     error text NULL, checked_at timestamptz NOT NULL, next_check_at timestamptz NOT NULL,
                     failure_streak integer NOT NULL
@@ -132,7 +141,7 @@ public sealed class ProxyValidator(
 
             await using (var writer = await connection.BeginBinaryImportAsync("""
                 COPY proxy_check_update
-                    (id, lease_id, alive, latency_ms, exit_ip, is_anonymous, error, checked_at, next_check_at, failure_streak)
+                    (id, lease_id, outcome, latency_ms, exit_ip, is_anonymous, error, checked_at, next_check_at, failure_streak)
                 FROM STDIN (FORMAT BINARY)
                 """, token))
             {
@@ -141,7 +150,7 @@ public sealed class ProxyValidator(
                     await writer.StartRowAsync(token);
                     await writer.WriteAsync(update.ProxyId, NpgsqlDbType.Uuid, token);
                     await writer.WriteAsync(update.LeaseId, NpgsqlDbType.Uuid, token);
-                    await writer.WriteAsync(update.IsAlive, NpgsqlDbType.Boolean, token);
+                    await writer.WriteAsync((int)update.Outcome, NpgsqlDbType.Integer, token);
                     if (update.LatencyMs.HasValue) await writer.WriteAsync(update.LatencyMs.Value, NpgsqlDbType.Integer, token); else await writer.WriteNullAsync(token);
                     if (update.ExitIp is not null) await writer.WriteAsync(update.ExitIp, NpgsqlDbType.Text, token); else await writer.WriteNullAsync(token);
                     await writer.WriteAsync(update.IsAnonymous, NpgsqlDbType.Boolean, token);
@@ -155,34 +164,37 @@ public sealed class ProxyValidator(
 
             await using var merge = new NpgsqlCommand("""
                 UPDATE "Proxies" AS proxy SET
-                    "LastCheckedAt" = incoming.checked_at,
+                    "LastCheckedAt" = CASE WHEN incoming.outcome = 2 THEN proxy."LastCheckedAt" ELSE incoming.checked_at END,
                     "NextCheckAt" = incoming.next_check_at,
                     "CheckLeaseUntil" = NULL,
                     "CheckLeaseId" = NULL,
-                    "Status" = CASE WHEN incoming.alive THEN 1 ELSE 2 END,
-                    "LatencyMs" = incoming.latency_ms,
-                    "ExitIp" = incoming.exit_ip,
-                    "IsAnonymous" = incoming.is_anonymous,
+                    "Status" = CASE incoming.outcome WHEN 1 THEN 1 WHEN 0 THEN 2 ELSE proxy."Status" END,
+                    "LatencyMs" = CASE WHEN incoming.outcome = 2 THEN proxy."LatencyMs" ELSE incoming.latency_ms END,
+                    "ExitIp" = CASE WHEN incoming.outcome = 2 THEN proxy."ExitIp" ELSE incoming.exit_ip END,
+                    "IsAnonymous" = CASE WHEN incoming.outcome = 2 THEN proxy."IsAnonymous" ELSE incoming.is_anonymous END,
                     "LastError" = incoming.error,
-                    "SuccessfulChecks" = proxy."SuccessfulChecks" + CASE WHEN incoming.alive THEN 1 ELSE 0 END,
-                    "FailedChecks" = proxy."FailedChecks" + CASE WHEN incoming.alive THEN 0 ELSE 1 END,
+                    "SuccessfulChecks" = proxy."SuccessfulChecks" + CASE WHEN incoming.outcome = 1 THEN 1 ELSE 0 END,
+                    "FailedChecks" = proxy."FailedChecks" + CASE WHEN incoming.outcome = 0 THEN 1 ELSE 0 END,
                     "ConsecutiveFailedChecks" = incoming.failure_streak
                 FROM proxy_check_update AS incoming
                 WHERE proxy."Id" = incoming.id AND proxy."CheckLeaseId" = incoming.lease_id
-                RETURNING incoming.alive
+                RETURNING incoming.outcome
                 """, connection, transaction);
             var checkedCount = 0;
             var aliveCount = 0;
+            var deferredCount = 0;
             await using (var reader = await merge.ExecuteReaderAsync(token))
             {
                 while (await reader.ReadAsync(token))
                 {
-                    checkedCount++;
-                    if (reader.GetBoolean(0)) aliveCount++;
+                    var outcome = (ProxyCheckOutcome)reader.GetInt32(0);
+                    if (outcome == ProxyCheckOutcome.Deferred) deferredCount++;
+                    else checkedCount++;
+                    if (outcome == ProxyCheckOutcome.Alive) aliveCount++;
                 }
             }
             await transaction.CommitAsync(token);
-            return (checkedCount, aliveCount);
+            return (checkedCount, aliveCount, deferredCount);
         });
     }
 
@@ -200,9 +212,21 @@ internal static class ProxyCheckScheduler
         DateTimeOffset now,
         CollectorOptions options)
     {
-        var failureStreak = result.IsAlive ? 0 : checked(previousFailureStreak + 1);
+        var outcome = result.IsDeferred
+            ? ProxyCheckOutcome.Deferred
+            : result.IsAlive ? ProxyCheckOutcome.Alive : ProxyCheckOutcome.Dead;
+        var failureStreak = outcome switch
+        {
+            ProxyCheckOutcome.Alive => 0,
+            ProxyCheckOutcome.Dead => checked(previousFailureStreak + 1),
+            _ => previousFailureStreak
+        };
         TimeSpan delay;
-        if (result.IsAlive)
+        if (outcome == ProxyCheckOutcome.Deferred)
+        {
+            delay = TimeSpan.FromMinutes(1);
+        }
+        else if (outcome == ProxyCheckOutcome.Alive)
         {
             delay = TimeSpan.FromMinutes(options.ValidationIntervalMinutes);
         }
@@ -218,7 +242,7 @@ internal static class ProxyCheckScheduler
         return new ScheduledProxyCheck(
             result.ProxyId,
             leaseId,
-            result.IsAlive,
+            outcome,
             result.LatencyMs,
             result.ExitIp?[..Math.Min(64, result.ExitIp.Length)],
             result.IsAnonymous,
@@ -233,7 +257,7 @@ internal static class ProxyCheckScheduler
 internal sealed record ScheduledProxyCheck(
     Guid ProxyId,
     Guid LeaseId,
-    bool IsAlive,
+    ProxyCheckOutcome Outcome,
     int? LatencyMs,
     string? ExitIp,
     bool IsAnonymous,
@@ -241,3 +265,5 @@ internal sealed record ScheduledProxyCheck(
     DateTimeOffset CheckedAt,
     DateTimeOffset NextCheckAt,
     int FailureStreak);
+
+internal enum ProxyCheckOutcome { Dead, Alive, Deferred }

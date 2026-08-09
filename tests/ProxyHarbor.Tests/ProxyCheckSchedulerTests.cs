@@ -48,6 +48,19 @@ public sealed class ProxyCheckSchedulerTests
         Assert.Equal(500, scheduled.Error!.Length);
     }
 
+    [Fact]
+    public void DeferredProbePreservesQualityAndRetriesSoon()
+    {
+        var result = new ProxyCheckResult(
+            Guid.NewGuid(), false, null, null, false, "control unavailable", IsDeferred: true);
+
+        var scheduled = ProxyCheckScheduler.Create(result, 7, Guid.NewGuid(), Now, Options);
+
+        Assert.Equal(ProxyCheckOutcome.Deferred, scheduled.Outcome);
+        Assert.Equal(7, scheduled.FailureStreak);
+        Assert.Equal(Now.AddMinutes(1), scheduled.NextCheckAt);
+    }
+
     private static ProxyCheckResult Result(bool alive) =>
         new(Guid.NewGuid(), alive, alive ? 100 : null, alive ? "1.1.1.1" : null, alive, alive ? null : "failed");
 }

@@ -1,4 +1,3 @@
-using System.Text.Json;
 using ProxyHarbor.Infrastructure;
 
 namespace ProxyHarbor.Tests;
@@ -26,9 +25,9 @@ public sealed class ProxyOriginResponseTests
     [Fact]
     public void RejectsNonSuccessStatusAndMalformedJson()
     {
-        Assert.Throws<IOException>(() => ProxyOriginResponse.ParseExitIp(
+        Assert.Throws<ProbeControlResponseException>(() => ProxyOriginResponse.ParseExitIp(
             "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n"));
-        Assert.ThrowsAny<JsonException>(() => ProxyOriginResponse.ParseExitIp(
+        Assert.Throws<ProbeControlResponseException>(() => ProxyOriginResponse.ParseExitIp(
             "HTTP/1.1 200 OK\r\nContent-Length: 1\r\n\r\n{"));
     }
 }

@@ -44,13 +44,16 @@ public sealed class MetricsControllerTests
             await seed.SaveChangesAsync();
         }
 
+        var controlHealth = new ProbeControlHealth();
+        controlHealth.Record(available: true);
         var controller = new MetricsController(
-            new TestDbFactory(options), Options.Create(new CollectorOptions { PublicFreshnessMinutes = 15 }));
+            new TestDbFactory(options), Options.Create(new CollectorOptions { PublicFreshnessMinutes = 15 }), controlHealth);
 
         var result = Assert.IsType<ContentResult>(await controller.Get(CancellationToken.None));
         var metrics = result.Content!;
         Assert.Contains("proxyharbor_sources_healthy 1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_collection_runs_active 1", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_probe_control_available 1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_last_collection_success 1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_last_collection_candidates 42", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_last_collection_sources_skipped 0", metrics, StringComparison.Ordinal);

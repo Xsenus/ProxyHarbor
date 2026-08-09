@@ -40,7 +40,9 @@ public static class ServiceCollectionExtensions
             .Validate(x => x.RunRetentionDays is >= 1 and <= 3_650, "RunRetentionDays: 1..3650")
             .Validate(x => x.ProbePort is >= 1 and <= 65_535, "ProbePort: 1..65535")
             .Validate(x => Uri.CheckHostName(x.ProbeHost) != UriHostNameType.Unknown && !x.ProbeHost.Any(char.IsControl), "ProbeHost должен быть корректным DNS-именем или IP")
-            .Validate(x => x.ProbePath.StartsWith('/') && x.ProbePath.Length <= 2048 && !x.ProbePath.Any(char.IsControl), "ProbePath должен быть безопасным относительным HTTP-путём")
+            .Validate(x => x.ProbePath.StartsWith('/') && x.ProbePath.Length <= 2048 &&
+                !x.ProbePath.Any(char.IsControl) && !x.ProbePath.Contains('#'),
+                "ProbePath должен быть безопасным относительным HTTP-путём без fragment")
             .ValidateOnStart();
         services.AddOptions<BackupOptions>().Bind(configuration.GetSection(BackupOptions.Section))
             .Validate(x => x.IntervalHours is >= 1 and <= 8_760, "IntervalHours: 1..8760")
@@ -69,6 +71,7 @@ public static class ServiceCollectionExtensions
         services.AddHttpClient("origin", client => client.Timeout = TimeSpan.FromSeconds(10));
         services.AddSingleton<ProxyCollector>();
         services.AddSingleton<ProxyProbeService>();
+        services.AddSingleton<ProbeControlHealth>();
         services.AddSingleton<OriginIpProvider>();
         services.AddSingleton<ProxyValidator>();
         services.AddSingleton<BackupService>();

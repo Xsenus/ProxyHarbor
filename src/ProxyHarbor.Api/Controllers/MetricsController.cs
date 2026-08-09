@@ -14,7 +14,8 @@ namespace ProxyHarbor.Api.Controllers;
 [ApiController, Route("metrics"), EnableRateLimiting("public"), ApiExplorerSettings(IgnoreApi = true)]
 public sealed class MetricsController(
     IDbContextFactory<ProxyHarborDbContext> dbFactory,
-    IOptions<CollectorOptions> collectorOptions) : ControllerBase
+    IOptions<CollectorOptions> collectorOptions,
+    ProbeControlHealth probeControlHealth) : ControllerBase
 {
     [HttpGet]
     [Produces("text/plain")]
@@ -60,6 +61,10 @@ public sealed class MetricsController(
                 .AppendLine(row.Count.ToString(CultureInfo.InvariantCulture));
         Gauge(output, "proxyharbor_validation_due", "Proxy records currently due for validation.", queue?.Due ?? 0);
         Gauge(output, "proxyharbor_validation_leased", "Proxy records currently leased by validators.", queue?.Leased ?? 0);
+        Gauge(output, "proxyharbor_probe_control_available", "Control endpoint health: 1 available, 0 unavailable, -1 not checked.",
+            probeControlHealth.Availability);
+        Gauge(output, "proxyharbor_probe_control_last_check_timestamp_seconds", "Unix timestamp of the latest control endpoint health check.",
+            probeControlHealth.CheckedAtUnixSeconds);
         Gauge(output, "proxyharbor_sources_enabled", "Enabled proxy source feeds.", sources?.Enabled ?? 0);
         Gauge(output, "proxyharbor_sources_failing", "Enabled feeds whose latest fetch failed.", sources?.Failing ?? 0);
         Gauge(output, "proxyharbor_sources_healthy", "Enabled feeds whose latest fetch succeeded.",

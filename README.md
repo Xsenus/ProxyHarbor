@@ -45,6 +45,9 @@ docker compose up -d --build
 | `Collector__ValidationConcurrency` | Параллельность сетевых проверок, по умолчанию 200 |
 | `Collector__ValidationBatchSize` | Размер одной очереди, по умолчанию 1000 |
 | `Collector__PublicFreshnessMinutes` | Максимальный возраст проверки для публичной выдачи, по умолчанию 15 минут |
+| `Collector__ProbeHost` | DNS-имя доверенного HTTPS endpoint, возвращающего JSON `{ "ip": "..." }` |
+| `Collector__ProbePort` | TCP-порт контрольного endpoint, по умолчанию 443 |
+| `Collector__ProbePath` | HTTP path и query контрольного endpoint, по умолчанию `/?format=json` |
 | `Collector__DeadRetryBaseMinutes` | Начальная пауза перед повторной проверкой нерабочего прокси, по умолчанию 15 минут |
 | `Collector__DeadRetryMaxHours` | Верхняя граница экспоненциальной паузы для нерабочих прокси, по умолчанию 24 часа |
 | `Collector__SourceConcurrency` | Параллельность загрузки feed'ов, по умолчанию 8 |
@@ -93,6 +96,8 @@ POST   /api/v1/admin/backup
 `diagnostics` возвращает очередь проверки, последние циклы сбора и последние backup-запуски, включая итоговый статус, размер файла и подтверждённый факт Telegram-доставки. Те же сигналы доступны в `/metrics` как `proxyharbor_last_backup_success`, `proxyharbor_last_backup_sent_to_telegram`, `proxyharbor_last_backup_timestamp_seconds` и `proxyharbor_backup_runs_active`.
 
 Повторный запуск `collect` или `backup`, пока операция уже выполняется этой или другой репликой, немедленно получает HTTP `409`. Для `validate` тот же ответ действует внутри одной реплики; разные реплики безопасно арендуют непересекающиеся пакеты PostgreSQL. Долгие административные запросы поэтому не накапливаются в локальной очереди.
+
+Перед арендой validation-пакета сервис напрямую проверяет control endpoint и кэширует результат на короткий срок. Если endpoint недоступен, очередь не арендуется. Если уже установленный TLS-туннель получил от control endpoint ошибочный HTTP/JSON-ответ, результат помечается `deferred`: lease освобождается, повтор назначается через минуту, но Status, latency, счётчики успехов/ошибок и failure streak прокси не изменяются. `POST /api/v1/admin/validate` возвращает числа `checked`, `alive` и `deferred`; Prometheus публикует `proxyharbor_probe_control_available` (`-1` до первой проверки, `0` при сбое, `1` при успехе) и время последней проверки.
 
 Background collector применяет bounded exponential backoff только к feed’ам с последовательными ошибками; `NextFetchAt` виден в admin API и панели. Ручной `POST /api/v1/admin/collect` всегда принудительно проверяет все включённые источники, поэтому используется для полного аудита 81 endpoint. HTTP 404 и другие постоянные 4xx не повторяются, а ответ 2xx без единого распознаваемого прокси считается сбоем, а не ложным успехом.
 

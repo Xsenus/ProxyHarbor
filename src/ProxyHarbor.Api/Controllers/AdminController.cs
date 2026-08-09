@@ -127,13 +127,13 @@ public sealed class AdminController(
     [HttpPost("validate")]
     public async Task<IActionResult> Validate(CancellationToken token)
     {
-        (int Checked, int Alive) result;
+        (int Checked, int Alive, int Deferred) result;
         try { result = await validator.ValidateBatchAsync(token); }
         catch (OperationAlreadyRunningException exception)
         {
             return Conflict(new ProblemDetails { Title = exception.Message, Status = 409 });
         }
-        return Ok(new { result.Checked, result.Alive });
+        return Ok(new { result.Checked, result.Alive, result.Deferred });
     }
 
     [HttpPost("backup")]
