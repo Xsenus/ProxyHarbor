@@ -68,6 +68,8 @@ jobs:
               test -f /context/global.json && \
               test -f /context/src/ProxyHarbor.Api/ProxyHarbor.Api.csproj && \
               test -f /context/src/ProxyHarbor.Api/packages.lock.json && \
+              test -f /context/src/ProxyHarbor.Restore/ProxyHarbor.Restore.csproj && \
+              test -f /context/src/ProxyHarbor.Restore/packages.lock.json && \
               test -f /context/src/ProxyHarbor.Infrastructure/packages.lock.json && \
               test -f /context/src/ProxyHarbor.Domain/packages.lock.json && \
               test -f /context/src/proxyharbor-web/package-lock.json && \
@@ -100,9 +102,12 @@ jobs:
           }
           trap cleanup EXIT
           docker compose up --detach --build
+          docker compose --profile tools build restore
+          docker compose --profile tools create restore
           api_id=$(docker compose ps --quiet api)
           web_id=$(docker compose ps --quiet web)
           postgres_id=$(docker compose ps --quiet postgres)
+          restore_id=$(docker compose --profile tools ps --all --quiet restore)
           test "$(docker inspect --format '{{.Config.User}}' "$api_id")" = 'proxyharbor'
           test "$(docker inspect --format '{{.HostConfig.ReadonlyRootfs}}' "$api_id")" = 'true'
           test "$(docker inspect --format '{{.HostConfig.PidsLimit}}' "$api_id")" = '512'
@@ -114,6 +119,13 @@ jobs:
           test "$(docker inspect --format '{{.HostConfig.ReadonlyRootfs}}' "$web_id")" = 'true'
           test "$(docker inspect --format '{{.HostConfig.PidsLimit}}' "$web_id")" = '128'
           test "$(docker inspect --format '{{.HostConfig.PidsLimit}}' "$postgres_id")" = '256'
+          test "$(docker inspect --format '{{.Config.User}}' "$restore_id")" = 'proxyharbor'
+          test "$(docker inspect --format '{{.HostConfig.ReadonlyRootfs}}' "$restore_id")" = 'true'
+          test "$(docker inspect --format '{{.HostConfig.PidsLimit}}' "$restore_id")" = '256'
+          test "$(docker inspect --format '{{.HostConfig.Init}}' "$restore_id")" = 'true'
+          docker inspect --format '{{json .HostConfig.CapDrop}}' "$restore_id" | grep --ignore-case 'ALL'
+          docker compose --profile tools rm --force --volumes restore
+          docker compose --profile tools run --rm --no-deps restore --help | grep 'ProxyHarbor restore'
           for attempt in {1..90}; do
             if curl --fail --silent http://127.0.0.1:8080/health/ready; then break; fi
             if [ "$attempt" -eq 90 ]; then exit 1; fi
@@ -158,6 +170,27 @@ jobs:
           rm "$oversized_body"
           test "$oversized_status" -eq 413
           docker compose restart api
+          for attempt in {1..60}; do
+            if curl --fail --silent http://127.0.0.1:8080/health/ready; then break; fi
+            if [ "$attempt" -eq 60 ]; then exit 1; fi
+            sleep 1
+          done
+          backup_response=$(curl --fail --silent --request POST \
+            --header 'X-Admin-Key: ci-admin-key-at-least-24-chars' \
+            http://127.0.0.1:8080/api/v1/admin/backup)
+          backup_file=$(echo "$backup_response" | jq --raw-output '.created')
+          test -n "$backup_file"
+          test "$backup_file" != 'null'
+          docker compose stop web api
+          docker compose exec -T postgres psql --username proxyharbor --dbname proxyharbor \
+            --set ON_ERROR_STOP=1 --command 'DELETE FROM "Sources";'
+          test "$(docker compose exec -T postgres psql --username proxyharbor --dbname proxyharbor \
+            --tuples-only --no-align --command 'SELECT COUNT(*) FROM "Sources";')" -eq 0
+          docker compose --profile tools run --rm restore \
+            --input "/app/backups/$backup_file" --replace-existing-data
+          test "$(docker compose exec -T postgres psql --username proxyharbor --dbname proxyharbor \
+            --tuples-only --no-align --command 'SELECT COUNT(*) FROM "Sources";')" -eq 81
+          docker compose up --detach api web
           for attempt in {1..60}; do
             if curl --fail --silent http://127.0.0.1:8080/health/ready; then break; fi
             if [ "$attempt" -eq 60 ]; then exit 1; fi

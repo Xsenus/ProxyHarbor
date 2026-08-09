@@ -10,6 +10,8 @@
 !src/ProxyHarbor.Infrastructure/**
 !src/ProxyHarbor.Api/
 !src/ProxyHarbor.Api/**
+!src/ProxyHarbor.Restore/
+!src/ProxyHarbor.Restore/**
 !src/proxyharbor-web/
 !src/proxyharbor-web/**
 

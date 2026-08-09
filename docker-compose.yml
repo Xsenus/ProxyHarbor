@@ -63,6 +63,30 @@ services:
     logging: *bounded-logging
     security_opt: [no-new-privileges:true]
 
+  # Одноразовый opt-in инструмент аварийного восстановления. Обычный `up`
+  # его не создаёт; profile tools нужно указывать явно.
+  restore:
+    profiles: [tools]
+    build:
+      context: .
+      dockerfile: src/ProxyHarbor.Restore/Dockerfile
+    depends_on:
+      postgres: { condition: service_healthy }
+    environment:
+      ConnectionStrings__Postgres: Host=postgres;Port=5432;Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}
+      Backup__EncryptionKey: ${BACKUP_ENCRYPTION_KEY}
+    volumes:
+      - backups:/app/backups:ro
+      # Анонимный writable volume не сохраняет plaintext ZIP в постоянном backup volume.
+      - /restore-temp
+    networks: [backend]
+    init: true
+    pids_limit: 256
+    read_only: true
+    cap_drop: [ALL]
+    logging: *bounded-logging
+    security_opt: [no-new-privileges:true]
+
   web:
     build:
       context: .

@@ -156,6 +156,16 @@ $env:Backup__EncryptionKey='ваш ключ'
 dotnet run -c Release --project src/ProxyHarbor.Restore -- --input ./proxyharbor.phbackup --replace-existing-data
 ```
 
+На опубликованном Docker Compose-хосте локальный .NET SDK не требуется. Restore вынесен в opt-in profile `tools`, запускается без root с read-only root filesystem и по умолчанию только показывает справку. Сначала остановите процессы, которые пишут в БД, затем запустите одноразовый контейнер с точным именем backup из volume и после успеха верните сервисы:
+
+```powershell
+docker compose stop web api
+docker compose --profile tools run --rm restore --input /app/backups/proxyharbor-YYYYMMDD-HHMMSS.phbackup --replace-existing-data
+docker compose up -d api web
+```
+
+Команда `run --rm` удаляет контейнер и его анонимный `/restore-temp`; постоянный volume `backups` подключён только для чтения. Расшифрованный ZIP никогда не записывается в `backups`. Перед заменой production-данных всё равно выполните пробное восстановление в отдельную БД, переопределив `ConnectionStrings__Postgres` для restore-контейнера.
+
 Restore сначала проверяет аутентификацию backup, manifest, точный allowlist ZIP-записей, отсутствие секретов, дубликатов и oversized settings-файлов, под общей startup-блокировкой применяет миграции, затем заменяет таблицы прокси, источников, циклов сбора, validation-аудита и backup-аудита в одной транзакции. Manifest v4 требует `validation-runs.json` и полный snapshot collector/backup/runtime-настроек, включая AllowedHosts и уровни логирования, но не секретные значения; restore продолжает принимать архивы v2/v3. Потоковый PostgreSQL binary COPY ускоряет импорт больших снимков; при любой ошибке исходные данные целевой БД сохраняются. Готовый `.phbackup` публикуется в каталоге атомарно; plaintext ZIP в актуальной версии не создаётся, а новый запуск под cluster lock всё ещё удаляет legacy ZIP, `.partial` и временные Telegram-части после аварийного завершения. PostgreSQL integration-gate создаёт настоящий зашифрованный снимок, удаляет исходный marker и сравнивает после restore все сохраняемые поля пяти таблиц на отдельных схемах; отдельный повреждённый снимок доказывает rollback без потери прежней target-БД.
 
 Успешная Telegram-доставка записывается в аудит только после HTTP 2xx и обязательного Bot API подтверждения `ok=true` для файла либо каждой нумерованной части. Ответы 429/5xx и временные сетевые ошибки повторяются до трёх раз; `retry_after` принимается как из HTTP-заголовка, так и из JSON `parameters`. Некорректный/слишком большой ответ не считается успехом, bot token исключён из HTTP-логирования, а redirect запрещён.
