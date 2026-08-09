@@ -5,18 +5,52 @@ using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.ResponseCompression;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.OpenApi;
 using ProxyHarbor.Api;
 using ProxyHarbor.Infrastructure;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.WebHost.ConfigureKestrel(options => options.AddServerHeader = false);
 
-if (!builder.Environment.IsDevelopment() && (builder.Configuration["Security:AdminApiKey"]?.Length ?? 0) < 24)
-    throw new InvalidOperationException("В Production параметр Security__AdminApiKey должен содержать не менее 24 символов.");
+if (!builder.Environment.IsDevelopment())
+{
+    var adminKey = builder.Configuration["Security:AdminApiKey"];
+    if (adminKey is null || adminKey.Length is < 24 or > 256 || adminKey.Any(char.IsControl))
+        throw new InvalidOperationException(
+            "В Production параметр Security__AdminApiKey должен содержать 24–256 символов без управляющих знаков.");
+}
 
 builder.Services.AddProxyHarborInfrastructure(builder.Configuration);
 builder.Services.AddControllers().AddJsonOptions(x =>
     x.JsonSerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter()));
-builder.Services.AddOpenApi();
+builder.Services.AddOpenApi(options =>
+{
+    options.AddDocumentTransformer((document, _, _) =>
+    {
+        document.Components ??= new OpenApiComponents();
+        document.Components.SecuritySchemes ??= new Dictionary<string, IOpenApiSecurityScheme>();
+        document.Components.SecuritySchemes["AdminApiKey"] = new OpenApiSecurityScheme
+        {
+            Type = SecuritySchemeType.ApiKey,
+            In = ParameterLocation.Header,
+            Name = "X-Admin-Key",
+            Description = "Административный ключ ProxyHarbor; передавайте только по HTTPS."
+        };
+        return Task.CompletedTask;
+    });
+    options.AddOperationTransformer((operation, context, _) =>
+    {
+        if (context.Description.RelativePath?.StartsWith("api/v1/admin", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            operation.Security ??= [];
+            operation.Security.Add(new OpenApiSecurityRequirement
+            {
+                [new OpenApiSecuritySchemeReference("AdminApiKey", context.Document, null)] = []
+            });
+        }
+        return Task.CompletedTask;
+    });
+});
 builder.Services.AddProblemDetails();
 builder.Services.AddResponseCompression(x =>
 {
@@ -37,10 +71,25 @@ builder.Services.AddOutputCache(options =>
         .Expire(TimeSpan.FromSeconds(15))
         // Неизвестные query-параметры не должны создавать неограниченное число cache keys.
         .SetVaryByQuery([]));
+    options.AddPolicy("health", policy => policy
+        .Expire(TimeSpan.FromSeconds(2))
+        .SetVaryByQuery([]));
 });
-builder.Services.AddCors(x => x.AddPolicy("frontend", policy => policy
-    .WithOrigins(builder.Configuration.GetSection("Cors:Origins").Get<string[]>() ?? ["http://localhost:5173"])
-    .AllowAnyHeader().AllowAnyMethod()));
+var configuredCorsOrigins = builder.Configuration.GetSection("Cors:Origins").Get<string[]>();
+var corsOrigins = (configuredCorsOrigins ?? (builder.Environment.IsDevelopment() ? ["http://localhost:5173"] : []))
+    .Where(origin => !string.IsNullOrWhiteSpace(origin))
+    .Select(origin => origin.Trim().TrimEnd('/'))
+    .Distinct(StringComparer.OrdinalIgnoreCase)
+    .ToArray();
+if (corsOrigins.Any(origin => !Uri.TryCreate(origin, UriKind.Absolute, out var uri) ||
+    uri.Scheme is not ("http" or "https") || uri.AbsolutePath != "/" || !string.IsNullOrEmpty(uri.Query) ||
+    !string.IsNullOrEmpty(uri.Fragment) || !string.IsNullOrEmpty(uri.UserInfo)))
+    throw new InvalidOperationException("Cors__Origins должен содержать только HTTP(S) origins без пути, query и fragment.");
+builder.Services.AddCors(x => x.AddPolicy("frontend", policy =>
+{
+    if (corsOrigins.Length > 0)
+        policy.WithOrigins(corsOrigins).AllowAnyHeader().AllowAnyMethod();
+}));
 builder.Services.AddRateLimiter(x =>
 {
     x.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
@@ -84,10 +133,18 @@ builder.Services.Configure<ApiBehaviorOptions>(x => x.SuppressMapClientErrors = 
 var app = builder.Build();
 var forwardedHeaders = new ForwardedHeadersOptions
 {
-    ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto
+    ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto,
+    ForwardLimit = 1,
+    RequireHeaderSymmetry = true
 };
-forwardedHeaders.KnownIPNetworks.Add(System.Net.IPNetwork.Parse("172.16.0.0/12"));
+foreach (var network in builder.Configuration.GetSection("ForwardedHeaders:KnownNetworks").Get<string[]>() ?? [])
+{
+    if (!System.Net.IPNetwork.TryParse(network, out var parsedNetwork))
+        throw new InvalidOperationException($"Некорректная доверенная сеть ForwardedHeaders__KnownNetworks: {network}");
+    forwardedHeaders.KnownIPNetworks.Add(parsedNetwork);
+}
 app.UseForwardedHeaders(forwardedHeaders);
+app.UseMiddleware<SecurityHeadersMiddleware>();
 app.UseExceptionHandler();
 app.UseResponseCompression();
 app.UseRouting();
@@ -95,7 +152,7 @@ app.UseCors("frontend");
 app.UseRateLimiter();
 app.UseOutputCache();
 app.UseMiddleware<AdminApiKeyMiddleware>();
-app.MapOpenApi();
+app.MapOpenApi().CacheOutput("public-summary").RequireRateLimiting("public");
 app.MapControllers();
 app.MapGet("/health/live", () => Results.Ok(new { status = "healthy" }));
 app.MapGet("/health/ready", async (IDbContextFactory<ProxyHarborDbContext> factory, CancellationToken token) =>
@@ -104,7 +161,7 @@ app.MapGet("/health/ready", async (IDbContextFactory<ProxyHarborDbContext> facto
     return await db.Database.CanConnectAsync(token)
         ? Results.Ok(new { status = "healthy", time = DateTimeOffset.UtcNow })
         : Results.Problem("database unavailable", statusCode: 503);
-});
+}).CacheOutput("health");
 app.MapGet("/healthz", () => Results.Redirect("/health/ready"));
 
 await using (var scope = app.Services.CreateAsyncScope())

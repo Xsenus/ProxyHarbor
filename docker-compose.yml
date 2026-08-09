@@ -28,6 +28,7 @@ services:
       ASPNETCORE_ENVIRONMENT: Production
       ConnectionStrings__Postgres: Host=postgres;Port=5432;Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}
       Security__AdminApiKey: ${ADMIN_API_KEY}
+      ForwardedHeaders__KnownNetworks__0: ${BACKEND_SUBNET:-172.30.0.0/24}
       Collector__BackgroundWorkersEnabled: ${BACKGROUND_WORKERS_ENABLED:-true}
       Backup__Enabled: ${BACKUP_ENABLED:-false}
       Backup__Directory: /app/backups
@@ -60,3 +61,6 @@ volumes:
 networks:
   backend:
     driver: bridge
+    ipam:
+      config:
+        - subnet: ${BACKEND_SUBNET:-172.30.0.0/24}

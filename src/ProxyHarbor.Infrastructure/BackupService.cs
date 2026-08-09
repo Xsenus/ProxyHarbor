@@ -3,6 +3,7 @@ using System.IO.Compression;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -14,6 +15,7 @@ public sealed class BackupService(
     IHttpClientFactory httpClientFactory,
     IOptions<BackupOptions> backupOptions,
     IOptions<CollectorOptions> collectorOptions,
+    IConfiguration configuration,
     ILogger<BackupService> logger) : IDisposable
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -65,6 +67,8 @@ public sealed class BackupService(
                         telegramConfigured = !string.IsNullOrWhiteSpace(options.TelegramBotToken),
                         secretsIncluded = false
                     }, cancellationToken);
+                    await WriteJsonAsync(archive, "settings/runtime.json",
+                        BackupRuntimeSettings.FromConfiguration(configuration), cancellationToken);
                     await WriteJsonAsync(archive, "manifest.json", new { version = 2, createdAt = DateTimeOffset.UtcNow, secretsIncluded = false }, cancellationToken);
                     await snapshot.CommitAsync(cancellationToken);
                 });
@@ -126,6 +130,22 @@ public sealed class BackupService(
     }
 
     public void Dispose() => _runGate.Dispose();
+}
+
+/// <summary>Безопасная часть runtime-конфигурации; значения секретов отсутствуют на уровне типа.</summary>
+internal sealed record BackupRuntimeSettings(
+    string[] CorsOrigins,
+    string[] ForwardedHeaderKnownNetworks,
+    bool AdminApiKeyConfigured,
+    bool AdminApiKeyIncluded,
+    bool ConnectionStringIncluded)
+{
+    internal static BackupRuntimeSettings FromConfiguration(IConfiguration configuration) => new(
+        configuration.GetSection("Cors:Origins").Get<string[]>() ?? [],
+        configuration.GetSection("ForwardedHeaders:KnownNetworks").Get<string[]>() ?? [],
+        !string.IsNullOrWhiteSpace(configuration["Security:AdminApiKey"]),
+        AdminApiKeyIncluded: false,
+        ConnectionStringIncluded: false);
 }
 
 /// <summary>Потоково создаёт по одной временной части и гарантированно удаляет её после отправки.</summary>

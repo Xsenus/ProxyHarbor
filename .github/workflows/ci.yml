@@ -58,8 +58,21 @@ jobs:
           done
           curl --fail --silent http://127.0.0.1:8080/api/v1/stats
           curl --fail --silent http://127.0.0.1:8080/metrics | grep 'proxyharbor_sources_enabled 81'
-          curl --fail --silent http://127.0.0.1:8080/openapi/v1.json | grep '"openapi"'
+          openapi_document=$(curl --fail --silent http://127.0.0.1:8080/openapi/v1.json)
+          echo "$openapi_document" | jq --exit-status \
+            '.components.securitySchemes.AdminApiKey.type == "apiKey" and
+             (.paths["/api/v1/admin/sources"].get.security[0] | has("AdminApiKey")) and
+             (.paths["/api/v1/proxies"].get.security == null)'
           curl --fail --silent http://127.0.0.1:8080/health/live
+          index_html=$(curl --fail --silent http://127.0.0.1:8080/)
+          asset_path=$(echo "$index_html" | grep --only-matching --extended-regexp '/assets/[^" ]+\.js' | head --lines 1)
+          test -n "$asset_path"
+          asset_headers=$(mktemp)
+          curl --fail --silent --dump-header "$asset_headers" --output /dev/null "http://127.0.0.1:8080$asset_path"
+          grep --ignore-case '^Content-Security-Policy:' "$asset_headers"
+          grep --ignore-case '^X-Content-Type-Options: nosniff' "$asset_headers"
+          grep --ignore-case '^Cache-Control:.*max-age=' "$asset_headers"
+          rm "$asset_headers"
 
   postgres-integration:
     runs-on: ubuntu-latest
@@ -103,6 +116,21 @@ jobs:
             curl --fail --silent http://127.0.0.1:5080/health/ready && break
             sleep 1
           done
+          security_headers=$(mktemp)
+          curl --fail --silent --dump-header "$security_headers" --output /dev/null http://127.0.0.1:5080/health/live
+          grep --ignore-case '^X-Content-Type-Options: nosniff' "$security_headers"
+          grep --ignore-case '^Content-Security-Policy:' "$security_headers"
+          if grep --ignore-case '^Server:' "$security_headers"; then exit 1; fi
+          unauthorized_status=$(curl --silent --dump-header "$security_headers" --output /dev/null --write-out '%{http_code}' \
+            http://127.0.0.1:5080/api/v1/admin/sources)
+          test "$unauthorized_status" -eq 401
+          grep --ignore-case '^WWW-Authenticate: ApiKey' "$security_headers"
+          grep --ignore-case '^Cache-Control: no-store' "$security_headers"
+          curl --silent --request OPTIONS --dump-header "$security_headers" --output /dev/null \
+            --header 'Origin: http://localhost:5173' --header 'Access-Control-Request-Method: GET' \
+            http://127.0.0.1:5080/api/v1/proxies
+          if grep --ignore-case '^Access-Control-Allow-Origin:' "$security_headers"; then exit 1; fi
+          rm "$security_headers"
           curl --fail --silent http://127.0.0.1:5080/api/v1/stats
           curl --fail --silent http://127.0.0.1:5080/metrics | grep 'proxyharbor_sources_enabled 81'
           sources=$(curl --fail --silent -H 'X-Admin-Key: integration-admin-key-at-least-24-chars' http://127.0.0.1:5080/api/v1/admin/sources)
