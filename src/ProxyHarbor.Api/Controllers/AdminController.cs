@@ -156,6 +156,8 @@ public sealed class AdminController(
             deferredLastFiveMinutes = validationTelemetry.Deferred,
             failedRunsLastFiveMinutes = validationTelemetry.FailedRuns,
             activeRuns = validationTelemetry.ActiveRuns,
+            concurrencyLimit = collectorOptions.Value.ValidationConcurrency,
+            batchSize = collectorOptions.Value.ValidationBatchSize,
             checksPerSecond = validationTelemetry.ChecksPerSecond,
             estimatedDrainSeconds = validationTelemetry.EstimatedDrainSeconds,
             queue.lastAttemptAt

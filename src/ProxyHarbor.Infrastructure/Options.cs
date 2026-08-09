@@ -10,8 +10,8 @@ public sealed class CollectorOptions
     public int PublicFreshnessMinutes { get; set; } = 15;
     public int DeadRetryBaseMinutes { get; set; } = 15;
     public int DeadRetryMaxHours { get; set; } = 24;
-    public int ValidationConcurrency { get; set; } = 200;
-    public int ValidationBatchSize { get; set; } = 1000;
+    public int ValidationConcurrency { get; set; } = 800;
+    public int ValidationBatchSize { get; set; } = 1_600;
     public int ProbeTimeoutSeconds { get; set; } = 8;
     public int SourceTimeoutSeconds { get; set; } = 20;
     public int SourceConcurrency { get; set; } = 8;

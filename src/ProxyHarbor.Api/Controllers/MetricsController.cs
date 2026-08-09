@@ -103,6 +103,10 @@ public sealed class MetricsController(
             validationTelemetry.FailedRuns);
         Gauge(output, "proxyharbor_validation_runs_active", "Validation batches currently marked as active.",
             validationTelemetry.ActiveRuns);
+        Gauge(output, "proxyharbor_validation_concurrency_limit", "Configured maximum concurrent validation probes.",
+            collectorOptions.Value.ValidationConcurrency);
+        Gauge(output, "proxyharbor_validation_batch_size", "Configured maximum proxies claimed by one validation batch.",
+            collectorOptions.Value.ValidationBatchSize);
         GaugeDouble(output, "proxyharbor_validation_checks_per_second", "Exact persisted validation attempts per second over the last five minutes.",
             validationTelemetry.ChecksPerSecond);
         Gauge(output, "proxyharbor_validation_estimated_drain_seconds", "Estimated seconds to drain the currently due validation queue; zero means unavailable or empty.",

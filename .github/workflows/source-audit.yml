@@ -43,6 +43,7 @@ jobs:
           Security__AdminApiKey: source-audit-admin-key-at-least-24-chars
           Collector__BackgroundWorkersEnabled: false
           Collector__SourceTimeoutSeconds: 30
+          Collector__ValidationConcurrency: 200
           Collector__ValidationBatchSize: 250
           Backup__Enabled: false
         run: |

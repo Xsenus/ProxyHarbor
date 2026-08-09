@@ -162,6 +162,8 @@ public sealed class MetricsControllerTests
         Assert.Contains("proxyharbor_validation_deferred_last_5m 1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_validation_runs_failed_last_5m 1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_validation_runs_active 1", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_validation_concurrency_limit 800", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_validation_batch_size 1600", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_validation_checks_per_second 2", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_validation_estimated_drain_seconds 2", metrics, StringComparison.Ordinal);
         Assert.Contains($"proxyharbor_validation_last_attempt_timestamp_seconds {latestValidationAttempt.ToUnixTimeSeconds()}",

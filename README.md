@@ -31,7 +31,7 @@ docker compose up -d --build
 
 API автоматически применяет EF Core migrations и синхронизирует встроенный каталог при старте. PostgreSQL advisory lock сериализует этот этап между одновременно запускаемыми репликами: только одна выполняет migrations/seed, остальные ожидают и затем проверяют уже обновлённую схему. Это позволяет безопасный rolling restart без гонки DDL и дублирования источников.
 
-Первый полезный список появляется не мгновенно: сервис сначала загружает кандидатов, затем проверяет их пакетами. Скорость регулируется `Collector__ValidationConcurrency`; не повышайте её выше допустимого для вашего лимита файловых дескрипторов и сети.
+Первый полезный список появляется не мгновенно: сервис сначала загружает кандидатов, затем непрерывно проверяет их пакетами. Скорость регулируется `Collector__ValidationConcurrency`; Docker-профиль гарантирует `nofile=8192` для настроенных 800 параллельных probes, но при ручном запуске лимит файловых дескрипторов и пропускную способность сети контролирует оператор. Методика и результаты live-тюнинга приведены в [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
 
 ## Конфигурация
 
@@ -44,8 +44,8 @@ API автоматически применяет EF Core migrations и синх
 | `Cors__Origins__0...N` | Явный список доверенных browser origins; в Production по умолчанию пуст |
 | `ForwardedHeaders__KnownNetworks__0...N` | CIDR только доверенных reverse proxy; Docker Compose задаёт изолированную `/24` сеть |
 | `Collector__BackgroundWorkersEnabled` | Позволяет отключить workers для миграций, CI или отдельной API-реплики |
-| `Collector__ValidationConcurrency` | Параллельность сетевых проверок, по умолчанию 200 |
-| `Collector__ValidationBatchSize` | Размер одной очереди, по умолчанию 1000 |
+| `VALIDATION_CONCURRENCY` / `Collector__ValidationConcurrency` | Параллельность сетевых проверок, по умолчанию 800 |
+| `VALIDATION_BATCH_SIZE` / `Collector__ValidationBatchSize` | Размер одной очереди, по умолчанию 1600 |
 | `Collector__PublicFreshnessMinutes` | Максимальный возраст проверки для публичной выдачи, по умолчанию 15 минут |
 | `Collector__ProbeHost` | DNS-имя доверенного HTTPS endpoint, возвращающего JSON `{ "ip": "..." }` |
 | `Collector__ProbePort` | TCP-порт контрольного endpoint, по умолчанию 443 |

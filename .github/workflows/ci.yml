@@ -107,6 +107,8 @@ jobs:
           test "$(docker inspect --format '{{.HostConfig.ReadonlyRootfs}}' "$api_id")" = 'true'
           test "$(docker inspect --format '{{.HostConfig.PidsLimit}}' "$api_id")" = '512'
           test "$(docker inspect --format '{{.HostConfig.Init}}' "$api_id")" = 'true'
+          docker inspect --format '{{json .HostConfig.Ulimits}}' "$api_id" |
+            jq --exit-status 'any(.[]; .Name == "nofile" and .Soft == 8192 and .Hard == 8192)'
           docker inspect --format '{{json .HostConfig.CapDrop}}' "$api_id" | grep --ignore-case 'ALL'
           test "$(docker inspect --format '{{index .HostConfig.LogConfig.Config "max-size"}}' "$api_id")" = '10m'
           test "$(docker inspect --format '{{.HostConfig.ReadonlyRootfs}}' "$web_id")" = 'true'
@@ -128,6 +130,8 @@ jobs:
           echo "$metrics" | grep 'proxyharbor_validation_attempts_last_5m 0'
           echo "$metrics" | grep 'proxyharbor_validation_last_attempt_timestamp_seconds 0'
           echo "$metrics" | grep 'proxyharbor_validation_runs_active 0'
+          echo "$metrics" | grep 'proxyharbor_validation_concurrency_limit 800'
+          echo "$metrics" | grep 'proxyharbor_validation_batch_size 1600'
           echo "$metrics" | grep 'proxyharbor_validation_checks_per_second 0'
           echo "$metrics" | grep 'proxyharbor_validation_estimated_drain_seconds 0'
           openapi_document=$(curl --fail --silent http://127.0.0.1:8080/openapi/v1.json)
@@ -236,6 +240,8 @@ jobs:
           echo "$metrics" | grep 'proxyharbor_validation_attempts_last_5m 0'
           echo "$metrics" | grep 'proxyharbor_validation_last_attempt_timestamp_seconds 0'
           echo "$metrics" | grep 'proxyharbor_validation_runs_active 0'
+          echo "$metrics" | grep 'proxyharbor_validation_concurrency_limit 800'
+          echo "$metrics" | grep 'proxyharbor_validation_batch_size 1600'
           echo "$metrics" | grep 'proxyharbor_validation_checks_per_second 0'
           echo "$metrics" | grep 'proxyharbor_validation_estimated_drain_seconds 0'
           sources=$(curl --fail --silent -H 'X-Admin-Key: integration-admin-key-at-least-24-chars' http://127.0.0.1:5080/api/v1/admin/sources)

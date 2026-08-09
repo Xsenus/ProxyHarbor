@@ -39,6 +39,8 @@ services:
       Security__AdminApiKey: ${ADMIN_API_KEY}
       ForwardedHeaders__KnownNetworks__0: ${BACKEND_SUBNET:-172.30.0.0/24}
       Collector__BackgroundWorkersEnabled: ${BACKGROUND_WORKERS_ENABLED:-true}
+      Collector__ValidationConcurrency: ${VALIDATION_CONCURRENCY:-800}
+      Collector__ValidationBatchSize: ${VALIDATION_BATCH_SIZE:-1600}
       Backup__Enabled: ${BACKUP_ENABLED:-false}
       Backup__Directory: /app/backups
       Backup__HistoryRetentionDays: ${BACKUP_HISTORY_RETENTION_DAYS:-365}
@@ -50,6 +52,10 @@ services:
     networks: [backend]
     init: true
     pids_limit: 512
+    ulimits:
+      nofile:
+        soft: 8192
+        hard: 8192
     stop_grace_period: 2m
     read_only: true
     tmpfs: [/tmp]
