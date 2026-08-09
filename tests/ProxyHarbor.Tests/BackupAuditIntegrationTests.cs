@@ -8,6 +8,7 @@ using ProxyHarbor.Infrastructure;
 namespace ProxyHarbor.Tests;
 
 /// <summary>Проверяет постоянный аудит backup на настоящей PostgreSQL, когда она доступна в CI.</summary>
+[Collection(PostgresIntegrationGroup.Name)]
 public sealed class BackupAuditIntegrationTests
 {
     [Fact]

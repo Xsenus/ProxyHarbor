@@ -4,42 +4,61 @@ using ProxyHarbor.Domain;
 
 namespace ProxyHarbor.Infrastructure;
 
-/// <summary>Безопасно извлекает IP/hostname и порт из распространённых текстовых форматов.</summary>
+/// <summary>Безопасно извлекает IP и порт из распространённых текстовых форматов.</summary>
 public static partial class ProxyParser
 {
-    [GeneratedRegex(@"(?im)(?:(?<scheme>https?|socks4|socks5)://)?(?<host>(?:\[[0-9a-f:]+\])|(?:\d{1,3}\.){3}\d{1,3}|(?:[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?)):(?<port>\d{1,5})")]
+    [GeneratedRegex(
+        @"(?<host>(?:\[[0-9a-f:]+\])|(?:\d{1,3}\.){3}\d{1,3}):(?<port>\d{1,5})",
+        RegexOptions.IgnoreCase | RegexOptions.Multiline | RegexOptions.CultureInvariant | RegexOptions.NonBacktracking)]
     private static partial Regex EndpointRegex();
 
     /// <summary>Разбирает содержимое источника и возвращает только синтаксически допустимые уникальные адреса.</summary>
     public static IReadOnlyCollection<(string Host, int Port, ProxyProtocol Protocol)> Parse(
         string content,
-        ProxyProtocol defaultProtocol)
+        ProxyProtocol defaultProtocol) => Parse(content, defaultProtocol, int.MaxValue);
+
+    /// <summary>
+    /// Разбирает не более <paramref name="maxResults"/> уникальных адресов, не создавая полный
+    /// промежуточный список для потенциально многомиллионного недоверенного feed'а.
+    /// </summary>
+    public static IReadOnlyCollection<(string Host, int Port, ProxyProtocol Protocol)> Parse(
+        string content,
+        ProxyProtocol defaultProtocol,
+        int maxResults)
     {
-        var result = new Dictionary<string, (string, int, ProxyProtocol)>(StringComparer.OrdinalIgnoreCase);
+        ArgumentNullException.ThrowIfNull(content);
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxResults, 1);
+        var result = new List<(string Host, int Port, ProxyProtocol Protocol)>(Math.Min(maxResults, 4_096));
+        var unique = new HashSet<(string Host, int Port, ProxyProtocol Protocol)>();
 
         foreach (Match match in EndpointRegex().Matches(content))
         {
-            var host = match.Groups["host"].Value.Trim('[', ']');
-            if (!int.TryParse(match.Groups["port"].Value, out var port) || port is < 1 or > 65535)
+            var host = match.Groups["host"].ValueSpan;
+            if (host.Length >= 2 && host[0] == '[' && host[^1] == ']') host = host[1..^1];
+            var portText = match.Groups["port"].ValueSpan;
+            if (!int.TryParse(portText, out var port) || port is < 1 or > 65535)
                 continue;
 
-            // Доменные имена исключены намеренно: они позволяют DNS rebinding к внутренней сети.
+            // Regex даже не выделяет доменные endpoints: их исключение блокирует DNS rebinding.
             if (!IPAddress.TryParse(host, out var ip) || !NetworkSafety.IsPublicAddress(ip)) continue;
 
-            var protocol = ParseProtocol(match.Groups["scheme"].Value, defaultProtocol);
+            // Scheme находится непосредственно перед IP, но намеренно не включён в regex:
+            // так URL/временные метки в заголовке feed'а не влияют на поиск следующего endpoint.
+            var protocol = ParseProtocolBefore(content.AsSpan(0, match.Index), defaultProtocol);
             var normalizedHost = ip.ToString();
-            result[$"{protocol}:{normalizedHost}:{port}"] = (normalizedHost, port, protocol);
+            var endpoint = (normalizedHost, port, protocol);
+            if (!unique.Add(endpoint)) continue;
+            result.Add(endpoint);
+            if (result.Count == maxResults) break;
         }
 
-        return result.Values;
+        return result;
     }
 
-    private static ProxyProtocol ParseProtocol(string value, ProxyProtocol fallback) => value.ToLowerInvariant() switch
-    {
-        "http" => ProxyProtocol.Http,
-        "https" => ProxyProtocol.Https,
-        "socks4" => ProxyProtocol.Socks4,
-        "socks5" => ProxyProtocol.Socks5,
-        _ => fallback
-    };
+    private static ProxyProtocol ParseProtocolBefore(ReadOnlySpan<char> prefix, ProxyProtocol fallback) =>
+        prefix.EndsWith("http://", StringComparison.OrdinalIgnoreCase) ? ProxyProtocol.Http :
+        prefix.EndsWith("https://", StringComparison.OrdinalIgnoreCase) ? ProxyProtocol.Https :
+        prefix.EndsWith("socks4://", StringComparison.OrdinalIgnoreCase) ? ProxyProtocol.Socks4 :
+        prefix.EndsWith("socks5://", StringComparison.OrdinalIgnoreCase) ? ProxyProtocol.Socks5 :
+        fallback;
 }

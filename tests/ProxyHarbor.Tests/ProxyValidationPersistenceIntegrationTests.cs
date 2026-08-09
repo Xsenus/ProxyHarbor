@@ -8,6 +8,7 @@ using ProxyHarbor.Infrastructure;
 namespace ProxyHarbor.Tests;
 
 /// <summary>Проверяет нейтральное сохранение deferred-результата на настоящей PostgreSQL.</summary>
+[Collection(PostgresIntegrationGroup.Name)]
 public sealed class ProxyValidationPersistenceIntegrationTests
 {
     [Fact]

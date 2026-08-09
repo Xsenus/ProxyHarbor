@@ -16,6 +16,8 @@ npm run build
 
 Для изменений PostgreSQL создайте EF Core migration и убедитесь, что `dotnet ef migrations has-pending-model-changes` не сообщает расхождений. Для сетевой логики добавляйте unit-тест либо воспроизводимый integration-сценарий.
 
+PostgreSQL integration-тесты используют одну внешнюю базу и сериализованы xUnit-коллекцией. Задайте `PROXYHARBOR_INTEGRATION_POSTGRES`; тест concurrent startup дополнительно создаёт и удаляет только собственную случайную schema, чтобы проверить гонку migrations/seed на чистом состоянии без изменения пользовательских таблиц.
+
 ## Новые proxy-feed’ы
 
 - только публичный HTTPS URL без регистрации и секретного API-ключа;

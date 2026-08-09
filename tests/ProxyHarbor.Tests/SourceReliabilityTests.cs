@@ -26,6 +26,17 @@ public sealed class SourceReliabilityTests
     }
 
     [Fact]
+    public void FeedParserAppliesLimitBeforeReturningCandidates()
+    {
+        var parsed = SourceFeedParser.ParseRequired(
+            "1.1.1.1:80\n8.8.8.8:81\n9.9.9.9:82",
+            ProxyProtocol.Http,
+            maxResults: 2);
+
+        Assert.Equal(2, parsed.Count);
+    }
+
+    [Fact]
     public void RetryPolicyDoesNotRepeatPermanentHttpStatus()
     {
         var exception = new HttpRequestException("not found", null, HttpStatusCode.NotFound);

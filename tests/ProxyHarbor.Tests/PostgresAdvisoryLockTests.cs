@@ -4,6 +4,7 @@ using ProxyHarbor.Infrastructure;
 namespace ProxyHarbor.Tests;
 
 /// <summary>Проверяет реальную cluster-wide семантику advisory lock при наличии integration PostgreSQL.</summary>
+[Collection(PostgresIntegrationGroup.Name)]
 public sealed class PostgresAdvisoryLockTests
 {
     [Fact]

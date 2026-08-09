@@ -66,4 +66,40 @@ public sealed class ProxyParserTests
         var entity = new ProxyEndpoint { Host = proxy.Host, Port = proxy.Port, Protocol = proxy.Protocol };
         Assert.Equal("https://[2606:4700:4700::1111]:443", entity.Key);
     }
+
+    [Fact]
+    public void ParseStopsAtConfiguredUniqueResultLimit()
+    {
+        var result = ProxyParser.Parse(
+            "8.8.8.8:80\n8.8.8.8:80\n1.1.1.1:81\n9.9.9.9:82\n208.67.222.222:83",
+            ProxyProtocol.Http,
+            maxResults: 3);
+
+        Assert.Equal(3, result.Count);
+        Assert.Equal(
+            [("8.8.8.8", 80, ProxyProtocol.Http), ("1.1.1.1", 81, ProxyProtocol.Http), ("9.9.9.9", 82, ProxyProtocol.Http)],
+            result);
+    }
+
+    [Fact]
+    public void ParseContinuesAfterEndpointLikeHeaderNoiseAndUnsafeAddress()
+    {
+        const string content = """
+            # Generated https://github.com/example/project -> 2026-08-09 08:40:27.418
+            0.0.0.0:80
+            1.0.171.213:8080
+            8.8.8.8:443
+            """;
+
+        var result = ProxyParser.Parse(content, ProxyProtocol.Https);
+
+        Assert.Equal(
+            [("1.0.171.213", 8080, ProxyProtocol.Https), ("8.8.8.8", 443, ProxyProtocol.Https)],
+            result);
+    }
+
+    [Fact]
+    public void ParseRejectsNonPositiveResultLimit() =>
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            ProxyParser.Parse("8.8.8.8:80", ProxyProtocol.Http, maxResults: 0));
 }

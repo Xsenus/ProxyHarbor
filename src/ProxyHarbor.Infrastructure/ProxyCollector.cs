@@ -55,8 +55,11 @@ public sealed class ProxyCollector(
                     try
                     {
                         var content = await FetchSourceAsync(client, source.Url, token);
-                        var parsed = SourceFeedParser.ParseRequired(content, source.DefaultProtocol);
-                        foreach (var item in parsed.Take(options.Value.MaxProxiesPerSource))
+                        // Лимит применяется внутри parser: крупный недоверенный feed не может сначала
+                        // построить неограниченную коллекцию, которая будет усечена только здесь.
+                        var parsed = SourceFeedParser.ParseRequired(
+                            content, source.DefaultProtocol, options.Value.MaxProxiesPerSource);
+                        foreach (var item in parsed)
                         {
                             if (Volatile.Read(ref candidateCount) >= options.Value.MaxCandidatesPerRun) break;
                             var key = $"{item.Protocol}:{item.Host}:{item.Port}";
@@ -66,7 +69,7 @@ public sealed class ProxyCollector(
                             Interlocked.Decrement(ref candidateCount);
                             break;
                         }
-                        sourceResults.Add((source.Id, Math.Min(parsed.Count, options.Value.MaxProxiesPerSource), null));
+                        sourceResults.Add((source.Id, parsed.Count, null));
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException || !token.IsCancellationRequested)
                     {
@@ -268,9 +271,10 @@ internal static class SourceFeedParser
 {
     internal static IReadOnlyCollection<(string Host, int Port, ProxyProtocol Protocol)> ParseRequired(
         string content,
-        ProxyProtocol defaultProtocol)
+        ProxyProtocol defaultProtocol,
+        int maxResults = int.MaxValue)
     {
-        var parsed = ProxyParser.Parse(content, defaultProtocol);
+        var parsed = ProxyParser.Parse(content, defaultProtocol, maxResults);
         if (parsed.Count == 0)
             throw new InvalidDataException("Источник не содержит распознаваемых прокси.");
         return parsed;
