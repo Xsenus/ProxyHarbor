@@ -9,6 +9,7 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
     public DbSet<ProxyEndpoint> Proxies => Set<ProxyEndpoint>();
     public DbSet<ProxySource> Sources => Set<ProxySource>();
     public DbSet<CollectionRun> Runs => Set<CollectionRun>();
+    public DbSet<ValidationRun> ValidationRuns => Set<ValidationRun>();
     public DbSet<BackupRun> BackupRuns => Set<BackupRun>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -19,6 +20,7 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
         proxy.HasIndex(x => new { x.Status, x.Protocol, x.LatencyMs, x.LastCheckedAt });
         proxy.HasIndex(x => new { x.Status, x.LastSeenAt });
         proxy.HasIndex(x => new { x.NextCheckAt, x.CheckLeaseUntil });
+        proxy.HasIndex(x => x.CheckLeaseId);
         proxy.HasIndex(x => x.LastValidationAttemptAt);
         proxy.Ignore(x => x.Key);
         proxy.Ignore(x => x.SuccessRate);
@@ -36,6 +38,13 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
         source.Property(x => x.LastError).HasMaxLength(500);
 
         modelBuilder.Entity<CollectionRun>().Property(x => x.Error).HasMaxLength(2000);
+
+        var validationRun = modelBuilder.Entity<ValidationRun>();
+        validationRun.HasIndex(x => x.LeaseId).IsUnique();
+        validationRun.HasIndex(x => x.StartedAt);
+        validationRun.HasIndex(x => new { x.Status, x.FinishedAt });
+        validationRun.Property(x => x.Status).HasMaxLength(32);
+        validationRun.Property(x => x.Error).HasMaxLength(2000);
 
         var backupRun = modelBuilder.Entity<BackupRun>();
         backupRun.HasIndex(x => x.StartedAt);

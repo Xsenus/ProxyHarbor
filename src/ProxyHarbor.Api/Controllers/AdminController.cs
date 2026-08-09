@@ -134,23 +134,51 @@ public sealed class AdminController(
             due = x.Count(proxy => proxy.NextCheckAt == null || proxy.NextCheckAt <= now),
             scheduled = x.Count(proxy => proxy.NextCheckAt > now),
             repeatedlyFailing = x.Count(proxy => proxy.ConsecutiveFailedChecks >= 3),
-            attemptsLastFiveMinutes = x.Count(proxy => proxy.LastValidationAttemptAt >= validationWindowStart),
-            checkedLastFiveMinutes = x.Count(proxy => proxy.LastValidationAttemptAt >= validationWindowStart &&
-                !proxy.LastValidationDeferred),
-            aliveLastFiveMinutes = x.Count(proxy => proxy.LastValidationAttemptAt >= validationWindowStart &&
-                !proxy.LastValidationDeferred && proxy.Status == ProxyStatus.Alive),
-            deferredLastFiveMinutes = x.Count(proxy => proxy.LastValidationAttemptAt >= validationWindowStart &&
-                proxy.LastValidationDeferred),
             lastAttemptAt = x.Max(proxy => proxy.LastValidationAttemptAt)
         }).FirstOrDefaultAsync(token);
+        var validationRuns = await db.ValidationRuns.AsNoTracking()
+            .Where(run => run.FinishedAt >= validationWindowStart || run.Status == "running")
+            .ToListAsync(token);
+        var validationTelemetry = ValidationTelemetry.Calculate(
+            validationRuns, validationWindowStart, queue?.due ?? 0);
+        var validationQueue = queue is null ? null : new
+        {
+            queue.total,
+            queue.leased,
+            queue.neverChecked,
+            queue.neverAttempted,
+            queue.due,
+            queue.scheduled,
+            queue.repeatedlyFailing,
+            attemptsLastFiveMinutes = validationTelemetry.Attempts,
+            checkedLastFiveMinutes = validationTelemetry.Checked,
+            aliveLastFiveMinutes = validationTelemetry.Alive,
+            deferredLastFiveMinutes = validationTelemetry.Deferred,
+            failedRunsLastFiveMinutes = validationTelemetry.FailedRuns,
+            activeRuns = validationTelemetry.ActiveRuns,
+            checksPerSecond = validationTelemetry.ChecksPerSecond,
+            estimatedDrainSeconds = validationTelemetry.EstimatedDrainSeconds,
+            queue.lastAttemptAt
+        };
         var builtInUrls = BuiltInSourceCatalog.Sources.Select(source => source.Url).ToArray();
         var sourceCatalog = SourceCatalogHealth.Calculate(
             await db.Sources.AsNoTracking().Where(source => builtInUrls.Contains(source.Url)).ToListAsync(token),
             now,
             SourceCatalogHealth.FreshnessWindow(collectorOptions.Value.CollectionIntervalMinutes));
         var recentRuns = await db.Runs.AsNoTracking().OrderByDescending(x => x.StartedAt).Take(10).ToListAsync(token);
+        var recentValidationRuns = await db.ValidationRuns.AsNoTracking()
+            .OrderByDescending(x => x.StartedAt).Take(10).ToListAsync(token);
         var recentBackups = await db.BackupRuns.AsNoTracking().OrderByDescending(x => x.StartedAt).Take(10).ToListAsync(token);
-        return Ok(new { serverTime = now, databaseBytes, validationQueue = queue, sourceCatalog, recentRuns, recentBackups });
+        return Ok(new
+        {
+            serverTime = now,
+            databaseBytes,
+            validationQueue,
+            sourceCatalog,
+            recentRuns,
+            recentValidationRuns,
+            recentBackups
+        });
     }
 
     [HttpPost("collect")]

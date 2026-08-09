@@ -77,6 +77,7 @@ public sealed class BackupPipelineTests
                     "database/proxies.json",
                     "database/runs.json",
                     "database/sources.json",
+                    "database/validation-runs.json",
                     "manifest.json",
                     "settings/backup.json",
                     "settings/collector.json",

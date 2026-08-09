@@ -91,6 +91,7 @@ jobs:
             $validation = Get-Content validation-audit.json -Raw | ConvertFrom-Json
             "## Proxy validation audit" >> $env:GITHUB_STEP_SUMMARY
             "- Success: $($validation.success)" >> $env:GITHUB_STEP_SUMMARY
+            "- Attempts: $($validation.attempts)" >> $env:GITHUB_STEP_SUMMARY
             "- Checked: $($validation.checked)" >> $env:GITHUB_STEP_SUMMARY
             "- Alive: $($validation.alive)" >> $env:GITHUB_STEP_SUMMARY
             "- Deferred: $($validation.deferred)" >> $env:GITHUB_STEP_SUMMARY

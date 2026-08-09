@@ -65,7 +65,7 @@ public sealed class ProxySource
     public string? LastError { get; set; }
 }
 
-/// <summary>Аудит одного цикла сбора и проверки.</summary>
+/// <summary>Аудит одного цикла сбора источников.</summary>
 public sealed class CollectionRun
 {
     public Guid Id { get; set; } = Guid.NewGuid();
@@ -82,6 +82,22 @@ public sealed class CollectionRun
     public bool CandidateLimitReached { get; set; }
     public int NewProxies { get; set; }
     public int AliveProxies { get; set; }
+    public string Status { get; set; } = "running";
+    public string? Error { get; set; }
+}
+
+/// <summary>Постоянный аудит одной арендованной validation-партии.</summary>
+public sealed class ValidationRun
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    /// <summary>Токен связывает аудит с арендованными proxy rows и позволяет безопасно выявить crash.</summary>
+    public Guid LeaseId { get; set; }
+    public DateTimeOffset StartedAt { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset? FinishedAt { get; set; }
+    public int Claimed { get; set; }
+    public int Checked { get; set; }
+    public int Alive { get; set; }
+    public int Deferred { get; set; }
     public string Status { get; set; } = "running";
     public string? Error { get; set; }
 }

@@ -193,6 +193,7 @@ public sealed class BackupRestoreRoundTripIntegrationTests
         db.Sources.Add(ExpectedCustomSource());
         db.Proxies.Add(ExpectedProxy());
         db.Runs.Add(ExpectedCollectionRun());
+        db.ValidationRuns.Add(ExpectedValidationRun());
         db.BackupRuns.Add(ExpectedBackupRun());
         await db.SaveChangesAsync();
     }
@@ -220,6 +221,9 @@ public sealed class BackupRestoreRoundTripIntegrationTests
 
         var run = await db.Runs.AsNoTracking().SingleAsync();
         Assert.Equivalent(ExpectedCollectionRun(), run, strict: true);
+
+        var validationRun = await db.ValidationRuns.AsNoTracking().SingleAsync();
+        Assert.Equivalent(ExpectedValidationRun(), validationRun, strict: true);
 
         var backupRun = await db.BackupRuns.AsNoTracking().SingleAsync();
         Assert.Equivalent(ExpectedBackupRun(), backupRun, strict: true);
@@ -298,6 +302,20 @@ public sealed class BackupRestoreRoundTripIntegrationTests
         Error = "representative backup detail"
     };
 
+    private static ValidationRun ExpectedValidationRun() => new()
+    {
+        Id = SnapshotIds.ValidationRun,
+        LeaseId = SnapshotIds.Lease,
+        StartedAt = SnapshotTime.AddMinutes(-5),
+        FinishedAt = SnapshotTime.AddMinutes(-4).AddSeconds(-30),
+        Claimed = 1_000,
+        Checked = 994,
+        Alive = 6,
+        Deferred = 6,
+        Status = "completed",
+        Error = "representative validation detail"
+    };
+
     private static DateTimeOffset SnapshotTime =>
         new(2026, 8, 9, 10, 11, 12, TimeSpan.Zero);
 
@@ -343,5 +361,6 @@ public sealed class BackupRestoreRoundTripIntegrationTests
         internal static readonly Guid CollectionRun = Guid.Parse("10000000-0000-0000-0000-000000000003");
         internal static readonly Guid BackupRun = Guid.Parse("10000000-0000-0000-0000-000000000004");
         internal static readonly Guid Lease = Guid.Parse("10000000-0000-0000-0000-000000000005");
+        internal static readonly Guid ValidationRun = Guid.Parse("10000000-0000-0000-0000-000000000006");
     }
 }

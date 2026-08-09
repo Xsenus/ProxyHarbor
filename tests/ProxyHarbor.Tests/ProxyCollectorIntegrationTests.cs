@@ -37,6 +37,8 @@ public sealed class ProxyCollectorIntegrationTests
 
             var abandonedId = Guid.NewGuid();
             var sourceId = Guid.NewGuid();
+            var expiredValidationRunId = Guid.NewGuid();
+            var activeValidationRunId = Guid.NewGuid();
             await using (var seed = await factory.CreateDbContextAsync())
             {
                 seed.Runs.Add(new CollectionRun
@@ -45,6 +47,22 @@ public sealed class ProxyCollectorIntegrationTests
                     StartedAt = DateTimeOffset.UtcNow.AddHours(-1),
                     Status = "running"
                 });
+                seed.ValidationRuns.AddRange(
+                    new ValidationRun
+                    {
+                        Id = expiredValidationRunId,
+                        LeaseId = Guid.NewGuid(),
+                        StartedAt = DateTimeOffset.UtcNow.AddDays(-40),
+                        FinishedAt = DateTimeOffset.UtcNow.AddDays(-40).AddMinutes(1),
+                        Status = "completed"
+                    },
+                    new ValidationRun
+                    {
+                        Id = activeValidationRunId,
+                        LeaseId = Guid.NewGuid(),
+                        StartedAt = DateTimeOffset.UtcNow.AddDays(-40),
+                        Status = "running"
+                    });
                 seed.Sources.Add(new ProxySource
                 {
                     Id = sourceId,
@@ -102,6 +120,8 @@ public sealed class ProxyCollectorIntegrationTests
             Assert.NotNull(failed.FinishedAt);
             Assert.Contains("CanceledException", failed.Error, StringComparison.Ordinal);
             Assert.DoesNotContain(runs, run => run.Status == "running" || run.FinishedAt == null);
+            Assert.False(await verify.ValidationRuns.AnyAsync(run => run.Id == expiredValidationRunId));
+            Assert.True(await verify.ValidationRuns.AnyAsync(run => run.Id == activeValidationRunId && run.Status == "running"));
             Assert.Equal(1, await verify.Proxies.CountAsync());
             var source = await verify.Sources.AsNoTracking().SingleAsync(item => item.Id == sourceId);
             Assert.Equal(2, source.LastItemCount);

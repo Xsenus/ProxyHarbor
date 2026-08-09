@@ -225,6 +225,8 @@ public sealed class BackupService(
                 await WriteJsonAsync(archive, "database/proxies.json", db.Proxies.AsNoTracking().AsAsyncEnumerable(), token);
                 await WriteJsonAsync(archive, "database/sources.json", db.Sources.AsNoTracking().AsAsyncEnumerable(), token);
                 await WriteJsonAsync(archive, "database/runs.json", db.Runs.AsNoTracking().AsAsyncEnumerable(), token);
+                await WriteJsonAsync(archive, "database/validation-runs.json",
+                    db.ValidationRuns.AsNoTracking().AsAsyncEnumerable(), token);
                 // Текущий аудит завершается только после шифрования и Telegram-доставки,
                 // поэтому в снимок входят лишь полностью определённые предыдущие попытки.
                 await WriteJsonAsync(archive, "database/backup-runs.json",
@@ -244,7 +246,7 @@ public sealed class BackupService(
                 await WriteJsonAsync(archive, "settings/runtime.json",
                     BackupRuntimeSettings.FromConfiguration(configuration), token);
                 await WriteJsonAsync(archive, "manifest.json",
-                    new { version = 3, createdAt = DateTimeOffset.UtcNow, secretsIncluded = false }, token);
+                    new { version = 4, createdAt = DateTimeOffset.UtcNow, secretsIncluded = false }, token);
             }
             await output.FlushAsync(token);
             await snapshot.CommitAsync(token);

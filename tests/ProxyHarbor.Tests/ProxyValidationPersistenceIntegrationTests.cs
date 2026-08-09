@@ -95,6 +95,59 @@ public sealed class ProxyValidationPersistenceIntegrationTests
             Assert.Equal(7, saved.SuccessfulChecks);
             Assert.Equal(2, saved.FailedChecks);
             Assert.Equal(1, saved.ConsecutiveFailedChecks);
+            var failedRun = await verify.ValidationRuns.AsNoTracking().SingleAsync();
+            Assert.Equal("failed", failedRun.Status);
+            Assert.Equal(1, failedRun.Claimed);
+            Assert.Equal(0, failedRun.Checked);
+            Assert.NotNull(failedRun.FinishedAt);
+            Assert.Contains("canceled", failedRun.Error!, StringComparison.OrdinalIgnoreCase);
+
+            // Повторяем ту же строку на гарантированно закрытом порту: сетевой Dead является
+            // полноценным результатом и должен завершить следующий batch audit.
+            using var unusedPortReservation = new TcpListener(IPAddress.Loopback, 0);
+            unusedPortReservation.Start();
+            var unusedPort = ((IPEndPoint)unusedPortReservation.LocalEndpoint).Port;
+            unusedPortReservation.Stop();
+            var staleRunId = Guid.NewGuid();
+            var activeRunId = Guid.NewGuid();
+            var activeLease = Guid.NewGuid();
+            verify.ValidationRuns.AddRange(
+                new ValidationRun
+                {
+                    Id = staleRunId,
+                    LeaseId = Guid.NewGuid(),
+                    StartedAt = DateTimeOffset.UtcNow.AddMinutes(-10)
+                },
+                new ValidationRun
+                {
+                    Id = activeRunId,
+                    LeaseId = activeLease,
+                    StartedAt = DateTimeOffset.UtcNow.AddMinutes(-10)
+                });
+            verify.Proxies.Add(new ProxyEndpoint
+            {
+                Host = "203.0.113.200",
+                Port = 65_000,
+                CheckLeaseId = activeLease,
+                CheckLeaseUntil = DateTimeOffset.UtcNow.AddMinutes(5)
+            });
+            await verify.SaveChangesAsync();
+            await verify.Proxies.Where(proxy => proxy.Id == proxyId).ExecuteUpdateAsync(setters => setters
+                .SetProperty(proxy => proxy.Port, unusedPort)
+                .SetProperty(proxy => proxy.NextCheckAt, (DateTimeOffset?)null));
+
+            Assert.Equal((1, 0, 0), await validator.ValidateBatchAsync(CancellationToken.None));
+            var completedRun = await verify.ValidationRuns.AsNoTracking()
+                .Where(run => run.Status == "completed").SingleAsync();
+            Assert.Equal(1, completedRun.Claimed);
+            Assert.Equal(1, completedRun.Checked);
+            Assert.Equal(0, completedRun.Alive);
+            Assert.Equal(0, completedRun.Deferred);
+            Assert.NotNull(completedRun.FinishedAt);
+            Assert.Equal("failed", await verify.ValidationRuns.Where(run => run.Id == staleRunId)
+                .Select(run => run.Status).SingleAsync());
+            Assert.Equal("running", await verify.ValidationRuns.Where(run => run.Id == activeRunId)
+                .Select(run => run.Status).SingleAsync());
         }
         finally
         {

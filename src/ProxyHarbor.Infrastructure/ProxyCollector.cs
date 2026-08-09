@@ -150,6 +150,10 @@ public sealed class ProxyCollector(
                     .ExecuteDeleteAsync(cancellationToken);
                 var runCutoff = now.AddDays(-options.Value.RunRetentionDays);
                 await db.Runs.Where(x => x.StartedAt < runCutoff).ExecuteDeleteAsync(cancellationToken);
+                // Долгая активная validation-партия другой реплики не должна потерять
+                // ownership своей audit row из-за retention collection-цикла.
+                await db.ValidationRuns.Where(x => x.StartedAt < runCutoff && x.Status != "running")
+                    .ExecuteDeleteAsync(cancellationToken);
                 return run;
             }
             catch (Exception ex)

@@ -19,11 +19,25 @@ public sealed class BackupArchiveValidatorTests
     public void AcceptsCurrentBackupManifestWithAuditHistory()
     {
         using var archive = CreateArchive(
-            """{"version":3,"createdAt":"2026-08-09T10:00:00Z","secretsIncluded":false}""",
+            """{"version":4,"createdAt":"2026-08-09T10:00:00Z","secretsIncluded":false}""",
             includeBackupRuns: true,
+            includeValidationRuns: true,
             includeSettings: true);
 
         BackupArchiveValidator.Validate(archive);
+    }
+
+    [Fact]
+    public void CurrentManifestRequiresValidationAuditHistory()
+    {
+        using var archive = CreateArchive(
+            """{"version":4,"createdAt":"2026-08-09T10:00:00Z","secretsIncluded":false}""",
+            includeBackupRuns: true,
+            includeSettings: true);
+
+        var exception = Assert.Throws<InvalidDataException>(() => BackupArchiveValidator.Validate(archive));
+
+        Assert.Contains("database/validation-runs.json", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -113,6 +127,7 @@ public sealed class BackupArchiveValidatorTests
     private static ZipArchive CreateArchive(
         string manifest,
         bool includeBackupRuns = false,
+        bool includeValidationRuns = false,
         bool includeSettings = false,
         string? omittedEntry = null,
         string? unexpectedEntry = null,
@@ -126,6 +141,7 @@ public sealed class BackupArchiveValidatorTests
             AddEntry(writer, "database/sources.json", "[]");
             AddEntry(writer, "database/runs.json", "[]");
             if (includeBackupRuns) AddEntry(writer, "database/backup-runs.json", "[]");
+            if (includeValidationRuns) AddEntry(writer, "database/validation-runs.json", "[]");
             if (includeSettings)
             {
                 if (omittedEntry != "settings/collector.json") AddEntry(writer, "settings/collector.json", "{}");

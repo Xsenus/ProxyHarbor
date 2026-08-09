@@ -6,14 +6,16 @@ type Proxy = { host: string; port: number; protocol: Protocol; url: string; late
 type Stats = { alive: number; staleAlive: number; pending: number; dead: number; dueForCheck: number; scheduledChecks: number; averageLatencyMs: number | null; sources: number; failingSources: number; repeatedlyFailingSources: number; truncatedSources: number; byProtocol: { protocol: Protocol; count: number }[]; lastRun?: { startedAt: string; candidatesFound: number; newProxies: number; sourcesTruncated: number; candidateLimitReached: boolean; status: string } }
 type Source = { id: string; name: string; url: string; defaultProtocol: Protocol; enabled: boolean; priority: number; lastItemCount: number; lastResultTruncated: boolean; lastFetchedAt?: string; lastSucceededAt?: string; nextFetchAt?: string; consecutiveFailures: number; lastError?: string; isBuiltIn: boolean; provider?: string; catalogRank?: number }
 type CollectionRun = { id: string; startedAt: string; finishedAt?: string; sourcesProcessed: number; sourcesSucceeded: number; sourcesFailed: number; sourcesSkipped: number; sourcesTruncated: number; candidatesFound: number; candidateLimitReached: boolean; newProxies: number; status: string; error?: string }
+type ValidationRun = { id: string; startedAt: string; finishedAt?: string; claimed: number; checked: number; alive: number; deferred: number; status: string; error?: string }
 type BackupRun = { id: string; startedAt: string; finishedAt?: string; status: string; fileName?: string; sizeBytes: number; telegramConfigured: boolean; sentToTelegram: boolean; error?: string }
 type SourceCatalogSnapshot = { expectedSources: number; presentSources: number; enabledSources: number; healthySources: number; failingSources: number; neverAuditedSources: number; staleSources: number; truncatedSources: number; expectedProviders: number; presentProviders: number; enabledProviders: number; isComplete: boolean; isHealthy: boolean }
 type Diagnostics = {
   serverTime: string
   databaseBytes: number
-  validationQueue?: { total: number; leased: number; neverChecked: number; neverAttempted: number; due: number; scheduled: number; repeatedlyFailing: number; attemptsLastFiveMinutes: number; checkedLastFiveMinutes: number; aliveLastFiveMinutes: number; deferredLastFiveMinutes: number; lastAttemptAt?: string }
+  validationQueue?: { total: number; leased: number; neverChecked: number; neverAttempted: number; due: number; scheduled: number; repeatedlyFailing: number; attemptsLastFiveMinutes: number; checkedLastFiveMinutes: number; aliveLastFiveMinutes: number; deferredLastFiveMinutes: number; failedRunsLastFiveMinutes: number; activeRuns: number; checksPerSecond: number; estimatedDrainSeconds?: number; lastAttemptAt?: string }
   sourceCatalog?: SourceCatalogSnapshot
   recentRuns: CollectionRun[]
+  recentValidationRuns?: ValidationRun[]
   recentBackups: BackupRun[]
 }
 
@@ -322,7 +324,7 @@ export default function App() {
         {adminAuthenticated && <section className="admin-diagnostics" aria-label="Диагностика сервиса">
           <div className="diagnostics-heading"><h3>Диагностика</h3><button aria-label="Обновить диагностику" onClick={loadAdminData} disabled={adminLoading}><RefreshCw className={adminLoading ? 'spin' : ''}/></button></div>
           <div className="diagnostic-grid">
-            <article><span>Очередь проверки</span><strong>{formatNumber(diagnostics?.validationQueue?.due)}</strong><small>{formatNumber(diagnostics?.validationQueue?.attemptsLastFiveMinutes)} попыток за 5 мин · {formatNumber(diagnostics?.validationQueue?.aliveLastFiveMinutes)} живых · {formatNumber(diagnostics?.validationQueue?.deferredLastFiveMinutes)} отложено · {diagnostics?.validationQueue?.lastAttemptAt ? timeAgo(diagnostics.validationQueue.lastAttemptAt) : 'попыток ещё нет'}</small></article>
+            <article><span>Очередь проверки</span><strong>{formatNumber(diagnostics?.validationQueue?.due)}</strong><small>{formatNumber(diagnostics?.validationQueue?.attemptsLastFiveMinutes)} попыток за 5 мин · {formatRate(diagnostics?.validationQueue?.checksPerSecond)} · ETA {formatDuration(diagnostics?.validationQueue?.estimatedDrainSeconds)} · {formatNumber(diagnostics?.validationQueue?.aliveLastFiveMinutes)} живых · {formatNumber(diagnostics?.validationQueue?.deferredLastFiveMinutes)} отложено</small></article>
             <article><span>Последний сбор</span><strong className={latestCollection?.candidateLimitReached || latestCollection?.sourcesTruncated ? 'status-running' : statusClass(latestCollection?.status)}>{latestCollection?.candidateLimitReached || latestCollection?.sourcesTruncated ? 'достигнут лимит' : statusLabel(latestCollection?.status)}</strong><small>{latestCollection ? `${formatNumber(latestCollection.candidatesFound)} кандидатов · ${timeAgo(latestCollection.startedAt)}` : 'Циклов пока нет'}</small></article>
             <article><span>Последний backup</span><strong className={statusClass(latestBackup?.status)}>{statusLabel(latestBackup?.status)}</strong><small>{latestBackup ? `${formatBytes(latestBackup.sizeBytes)} · ${backupDelivery(latestBackup)}` : 'Backup ещё не создавался'}</small></article>
             <article><span>Размер PostgreSQL</span><strong>{formatBytes(diagnostics?.databaseBytes)}</strong><small>{formatNumber(diagnostics?.validationQueue?.total)} известных прокси</small></article>
@@ -330,6 +332,7 @@ export default function App() {
           </div>
           <div className="diagnostic-history">
             <div><h4>Последние сборы</h4>{diagnostics?.recentRuns.slice(0, 4).map(run => <article key={run.id} title={run.error}><span><i className={run.candidateLimitReached || run.sourcesTruncated ? 'status-running' : statusClass(run.status)}/>{timeAgo(run.startedAt)}</span><small>{formatNumber(run.sourcesSucceeded)}/{formatNumber(run.sourcesProcessed)} источников · +{formatNumber(run.newProxies)}{run.sourcesTruncated ? ` · усечено: ${run.sourcesTruncated}` : ''}{run.candidateLimitReached ? ' · общий лимит' : ''}</small></article>)}{diagnostics?.recentRuns.length === 0 && <p>Истории пока нет.</p>}</div>
+            <div><h4>Последние проверки</h4>{(diagnostics?.recentValidationRuns ?? []).slice(0, 4).map(run => <article key={run.id} title={run.error}><span><i className={statusClass(run.status)}/>{timeAgo(run.startedAt)}</span><small>{formatNumber(run.checked + run.deferred)}/{formatNumber(run.claimed)} попыток · {formatNumber(run.alive)} живых · {run.finishedAt ? formatDuration((new Date(run.finishedAt).getTime() - new Date(run.startedAt).getTime()) / 1000) : 'выполняется'}</small></article>)}{(diagnostics?.recentValidationRuns ?? []).length === 0 && <p>Истории пока нет.</p>}</div>
             <div><h4>История backup</h4>{diagnostics?.recentBackups.slice(0, 4).map(run => <article key={run.id} title={run.error}><span><i className={statusClass(run.status)}/>{run.fileName ?? timeAgo(run.startedAt)}</span><small>{formatBytes(run.sizeBytes)} · {backupDelivery(run)}</small></article>)}{diagnostics?.recentBackups.length === 0 && <p>Истории пока нет.</p>}</div>
           </div>
         </section>}
@@ -360,6 +363,8 @@ function formatBytes(value?: number) {
   if (value < 1024 ** 3) return `${(value / 1024 ** 2).toLocaleString('ru-RU', { maximumFractionDigits: 1 })} МБ`
   return `${(value / 1024 ** 3).toLocaleString('ru-RU', { maximumFractionDigits: 1 })} ГБ`
 }
+function formatRate(value?: number) { return value === undefined || value <= 0 ? 'скорость неизвестна' : `${value.toLocaleString('ru-RU', { maximumFractionDigits: 1 })}/с` }
+function formatDuration(value?: number) { if (value === undefined || value <= 0) return '—'; if (value < 60) return `${Math.ceil(value)} сек`; const minutes = Math.ceil(value / 60); if (minutes < 60) return `${minutes} мин`; return `${Math.floor(minutes / 60)} ч ${minutes % 60} мин` }
 function statusClass(status?: string) { return status === 'completed' ? 'status-ok' : status === 'failed' ? 'status-failed' : 'status-running' }
 function catalogStatusClass(catalog?: SourceCatalogSnapshot) { return !catalog ? '' : catalog.isHealthy ? 'status-ok' : catalog.isComplete ? 'status-running' : 'status-failed' }
 function statusLabel(status?: string) { return status === 'completed' ? 'успешно' : status === 'failed' ? 'ошибка' : status === 'running' ? 'выполняется' : 'нет данных' }

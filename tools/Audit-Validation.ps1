@@ -10,6 +10,7 @@ $report = [ordered]@{
     auditedAt = [DateTimeOffset]::UtcNow.ToString('O')
     apiBaseUrl = $ApiBaseUrl
     success = $false
+    attempts = 0
     checked = 0
     alive = 0
     deferred = 0
@@ -29,16 +30,17 @@ try {
     $report.checked = [int]$validation.checked
     $report.alive = [int]$validation.alive
     $report.deferred = [int]$validation.deferred
+    $report.attempts = $report.checked + $report.deferred
 
-    if ($report.checked -le 0) { throw 'Validator не сохранил ни одного результата.' }
+    if ($report.attempts -le 0) { throw 'Validator не сохранил ни одной попытки.' }
     if ($report.alive -lt 0 -or $report.deferred -lt 0 -or
-        $report.alive + $report.deferred -gt $report.checked) {
+        $report.alive -gt $report.checked) {
         throw "Некорректные validation counters: checked=$($report.checked), alive=$($report.alive), deferred=$($report.deferred)."
     }
 
     $diagnostics = Invoke-RestMethod -Method Get -Uri "$ApiBaseUrl/api/v1/admin/diagnostics" -Headers $headers
     $report.attemptsLastFiveMinutes = [int]$diagnostics.validationQueue.attemptsLastFiveMinutes
-    if ($report.attemptsLastFiveMinutes -lt $report.checked -or
+    if ($report.attemptsLastFiveMinutes -lt $report.attempts -or
         -not $diagnostics.validationQueue.lastAttemptAt) {
         throw 'Persisted validation telemetry не отражает только что завершённую партию.'
     }
@@ -88,7 +90,7 @@ try {
     }
 
     $report.success = $true
-    Write-Host "Validation-аудит пройден: $($report.checked) проверено, $($report.alive) Alive, $($report.deferred) Deferred; JSON/XML/TXT/CSV согласованы." -ForegroundColor Green
+    Write-Host "Validation-аудит пройден: $($report.attempts) попыток, $($report.checked) объективных результатов, $($report.alive) Alive, $($report.deferred) Deferred; JSON/XML/TXT/CSV согласованы." -ForegroundColor Green
 } catch {
     $report.error = $_.Exception.Message
     throw

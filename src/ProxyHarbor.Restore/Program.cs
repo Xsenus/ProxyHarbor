@@ -36,7 +36,8 @@ internal static class RestoreApplication
                 await BackupEncryption.DecryptAsync(options.InputFile!, zipPath, options.EncryptionKey!, CancellationToken.None);
                 var counts = await RestoreDatabaseAsync(zipPath, options.ConnectionString!, CancellationToken.None);
                 Console.WriteLine($"Восстановление завершено: {counts.Proxies:N0} прокси, {counts.Sources:N0} источников, " +
-                    $"{counts.Runs:N0} циклов сбора, {counts.BackupRuns:N0} циклов backup.");
+                    $"{counts.Runs:N0} циклов сбора, {counts.ValidationRuns:N0} validation-партий, " +
+                    $"{counts.BackupRuns:N0} циклов backup.");
                 return 0;
             }
             finally
@@ -71,6 +72,7 @@ internal static class RestoreApplication
 
             // Замена выполняется в одной транзакции: при любой ошибке старая БД остаётся целой.
             await db.BackupRuns.ExecuteDeleteAsync(token);
+            await db.ValidationRuns.ExecuteDeleteAsync(token);
             await db.Runs.ExecuteDeleteAsync(token);
             await db.Proxies.ExecuteDeleteAsync(token);
             await db.Sources.ExecuteDeleteAsync(token);
@@ -99,6 +101,15 @@ internal static class RestoreApplication
                 """COPY "Runs" ("Id", "StartedAt", "FinishedAt", "SourcesProcessed", "SourcesSucceeded", "SourcesFailed", "SourcesSkipped", "SourcesTruncated", "CandidatesFound", "CandidateLimitReached", "NewProxies", "AliveProxies", "Status", "Error") FROM STDIN (FORMAT BINARY)""",
                 WriteRunAsync,
                 token);
+            var validationRunCount = archive.GetEntry("database/validation-runs.json") is null
+                ? 0
+                : await ImportAsync<ValidationRun>(
+                    archive,
+                    "database/validation-runs.json",
+                    connection,
+                    """COPY "ValidationRuns" ("Id", "LeaseId", "StartedAt", "FinishedAt", "Claimed", "Checked", "Alive", "Deferred", "Status", "Error") FROM STDIN (FORMAT BINARY)""",
+                    WriteValidationRunAsync,
+                    token);
             var backupRunCount = archive.GetEntry("database/backup-runs.json") is null
                 ? 0
                 : await ImportAsync<BackupRun>(
@@ -109,7 +120,7 @@ internal static class RestoreApplication
                     WriteBackupRunAsync,
                     token);
             await transaction.CommitAsync(token);
-            return new RestoreCounts(proxyCount, sourceCount, runCount, backupRunCount);
+            return new RestoreCounts(proxyCount, sourceCount, runCount, validationRunCount, backupRunCount);
         });
     }
 
@@ -211,6 +222,24 @@ internal static class RestoreApplication
         await WriteNullableReferenceAsync(writer, entity.Error, token);
     }
 
+    private static async ValueTask WriteValidationRunAsync(
+        NpgsqlBinaryImporter writer,
+        ValidationRun entity,
+        CancellationToken token)
+    {
+        await writer.StartRowAsync(token);
+        await writer.WriteAsync(entity.Id, token);
+        await writer.WriteAsync(entity.LeaseId, token);
+        await writer.WriteAsync(entity.StartedAt, token);
+        await WriteNullableValueAsync(writer, entity.FinishedAt, token);
+        await writer.WriteAsync(entity.Claimed, token);
+        await writer.WriteAsync(entity.Checked, token);
+        await writer.WriteAsync(entity.Alive, token);
+        await writer.WriteAsync(entity.Deferred, token);
+        await writer.WriteAsync(entity.Status, token);
+        await WriteNullableReferenceAsync(writer, entity.Error, token);
+    }
+
     private static async ValueTask WriteNullableValueAsync<T>(NpgsqlBinaryImporter writer, T? value, CancellationToken token)
         where T : struct
     {
@@ -225,7 +254,7 @@ internal static class RestoreApplication
         else await writer.WriteAsync(value, token);
     }
 
-    private sealed record RestoreCounts(int Proxies, int Sources, int Runs, int BackupRuns);
+    private sealed record RestoreCounts(int Proxies, int Sources, int Runs, int ValidationRuns, int BackupRuns);
 }
 
 /// <summary>Минимальный разбор аргументов без дополнительных runtime-зависимостей.</summary>

@@ -144,13 +144,17 @@ describe('ProxyHarbor UI', () => {
     const diagnostics = {
       serverTime: '2026-08-09T07:00:00Z',
       databaseBytes: 25 * 1024 * 1024,
-      validationQueue: { total: 1000, leased: 12, neverChecked: 40, neverAttempted: 38, due: 75, scheduled: 925, repeatedlyFailing: 3, attemptsLastFiveMinutes: 1000, checkedLastFiveMinutes: 994, aliveLastFiveMinutes: 6, deferredLastFiveMinutes: 6, lastAttemptAt: '2026-08-09T06:59:55Z' },
+      validationQueue: { total: 1000, leased: 12, neverChecked: 40, neverAttempted: 38, due: 75, scheduled: 925, repeatedlyFailing: 3, attemptsLastFiveMinutes: 1000, checkedLastFiveMinutes: 994, aliveLastFiveMinutes: 6, deferredLastFiveMinutes: 6, failedRunsLastFiveMinutes: 0, activeRuns: 1, checksPerSecond: 34.4, estimatedDrainSeconds: 3, lastAttemptAt: '2026-08-09T06:59:55Z' },
       sourceCatalog: { expectedSources: 81, presentSources: 81, enabledSources: 81, healthySources: 79, failingSources: 0, neverAuditedSources: 0, staleSources: 1, truncatedSources: 1, expectedProviders: 50, presentProviders: 50, enabledProviders: 50, isComplete: true, isHealthy: false },
       recentRuns: [{
         id: 'collection-1', startedAt: '2026-08-09T06:59:00Z', finishedAt: '2026-08-09T06:59:05Z',
         sourcesProcessed: 81, sourcesSucceeded: 81, sourcesFailed: 0, sourcesSkipped: 0,
         sourcesTruncated: 1, candidatesFound: 184005, candidateLimitReached: true,
         newProxies: 6377, status: 'completed',
+      }],
+      recentValidationRuns: [{
+        id: 'validation-1', startedAt: '2026-08-09T06:59:30Z', finishedAt: '2026-08-09T06:59:40Z',
+        claimed: 1000, checked: 994, alive: 6, deferred: 6, status: 'completed',
       }],
       recentBackups: [{
         id: 'backup-1', startedAt: '2026-08-09T06:58:00Z', finishedAt: '2026-08-09T06:58:10Z',
@@ -181,8 +185,11 @@ describe('ProxyHarbor UI', () => {
     expect(screen.getAllByText(/доставлен в Telegram/)).not.toHaveLength(0)
     expect(screen.getByText('184 005 кандидатов', { exact: false })).toBeInTheDocument()
     expect(screen.getByText('1 000 попыток за 5 мин', { exact: false })).toBeInTheDocument()
-    expect(screen.getByText('6 живых', { exact: false })).toBeInTheDocument()
+    expect(screen.getAllByText('6 живых', { exact: false })).toHaveLength(2)
     expect(screen.getByText('6 отложено', { exact: false })).toBeInTheDocument()
+    expect(screen.getByText('34,4/с', { exact: false })).toBeInTheDocument()
+    expect(screen.getByText('ETA 3 сек', { exact: false })).toBeInTheDocument()
+    expect(screen.getByText('1 000/1 000 попыток', { exact: false })).toBeInTheDocument()
     expect(screen.getByText('достигнут лимит')).toBeInTheDocument()
     expect(screen.getByLabelText('Состояние встроенного каталога')).toHaveTextContent('81/81')
     expect(screen.getByLabelText('Состояние встроенного каталога')).toHaveTextContent('50/50 провайдеров')

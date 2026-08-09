@@ -82,6 +82,33 @@ public sealed class MetricsControllerTests
                     LastValidationDeferred = true
                 },
                 new ProxyEndpoint { Host = "9.9.9.9", Port = 8082 });
+            seed.ValidationRuns.AddRange(
+                new ValidationRun
+                {
+                    LeaseId = Guid.NewGuid(),
+                    StartedAt = sourceAuditedAt.AddMinutes(-1).AddSeconds(-1),
+                    FinishedAt = sourceAuditedAt.AddMinutes(-1),
+                    Claimed = 2,
+                    Checked = 1,
+                    Alive = 1,
+                    Deferred = 1,
+                    Status = "completed"
+                },
+                new ValidationRun
+                {
+                    LeaseId = Guid.NewGuid(),
+                    StartedAt = sourceAuditedAt.AddSeconds(-31),
+                    FinishedAt = sourceAuditedAt.AddSeconds(-30),
+                    Status = "failed",
+                    Error = "probe pipeline failed"
+                },
+                new ValidationRun
+                {
+                    LeaseId = Guid.NewGuid(),
+                    StartedAt = sourceAuditedAt,
+                    Claimed = 3,
+                    Status = "running"
+                });
             seed.Runs.AddRange(
                 new CollectionRun
                 {
@@ -133,6 +160,10 @@ public sealed class MetricsControllerTests
         Assert.Contains("proxyharbor_validation_checked_last_5m 1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_validation_alive_last_5m 1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_validation_deferred_last_5m 1", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_validation_runs_failed_last_5m 1", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_validation_runs_active 1", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_validation_checks_per_second 2", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_validation_estimated_drain_seconds 2", metrics, StringComparison.Ordinal);
         Assert.Contains($"proxyharbor_validation_last_attempt_timestamp_seconds {latestValidationAttempt.ToUnixTimeSeconds()}",
             metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_probe_control_available 1", metrics, StringComparison.Ordinal);

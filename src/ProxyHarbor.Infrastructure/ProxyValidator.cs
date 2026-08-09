@@ -14,6 +14,7 @@ public sealed class ProxyValidator(
     IOptions<CollectorOptions> options,
     ILogger<ProxyValidator> logger) : IDisposable
 {
+    private static readonly TimeSpan AuditWriteTimeout = TimeSpan.FromSeconds(15);
     private static readonly Action<ILogger, string, Exception?> UnexpectedProbeFailure =
         LoggerMessage.Define<string>(LogLevel.Error, new EventId(1301, "UnexpectedProbeFailure"),
             "Непредусмотренная ошибка проверки прокси {ProxyKey}");
@@ -23,6 +24,9 @@ public sealed class ProxyValidator(
     private static readonly Action<ILogger, Guid, Exception?> LeaseReleaseFailed =
         LoggerMessage.Define<Guid>(LogLevel.Warning, new EventId(1303, "LeaseReleaseFailed"),
             "Не удалось досрочно освободить аренду validation-пакета {LeaseId}; она истечёт автоматически");
+    private static readonly Action<ILogger, Guid, Exception?> ValidationAuditFailed =
+        LoggerMessage.Define<Guid>(LogLevel.Error, new EventId(1304, "ValidationAuditFailed"),
+            "Не удалось сохранить итоговый аудит validation-партии {ValidationRunId}");
     private readonly SemaphoreSlim _runGate = new(1, 1);
 
     /// <summary>Проверяет приоритетный пакет и возвращает число фактически сохранённых результатов.</summary>
@@ -33,6 +37,7 @@ public sealed class ProxyValidator(
         try
         {
             var settings = options.Value;
+            var startedAt = DateTimeOffset.UtcNow;
             // Health-gate выполняется до SELECT ... FOR UPDATE: при сбое control endpoint
             // очередь остаётся свободной, а рабочие прокси не получают ложный Dead.
             await probe.EnsureControlEndpointAvailableAsync(cancellationToken);
@@ -49,57 +54,135 @@ public sealed class ProxyValidator(
             var proxies = await ClaimBatchAsync(batchSize, now, leaseUntil, leaseId, cancellationToken);
             if (proxies.Count == 0) return (0, 0, 0);
 
-            using var heartbeatStop = new CancellationTokenSource();
-            var heartbeat = MaintainLeaseAsync(leaseId, leaseDuration, heartbeatStop.Token);
+            var validationRunId = Guid.NewGuid();
+            var auditStarted = false;
             try
             {
-                var results = new System.Collections.Concurrent.ConcurrentBag<ProxyCheckResult>();
-                await Parallel.ForEachAsync(proxies, new ParallelOptions
+                await StartRunAuditAsync(
+                    validationRunId, leaseId, startedAt, proxies.Count, leaseDuration, cancellationToken);
+                auditStarted = true;
+                using var heartbeatStop = new CancellationTokenSource();
+                var heartbeat = MaintainLeaseAsync(leaseId, leaseDuration, heartbeatStop.Token);
+                try
                 {
-                    MaxDegreeOfParallelism = concurrency,
-                    CancellationToken = cancellationToken
-                }, async (proxy, token) =>
-                {
-                    try { results.Add(await probe.CheckAsync(proxy, token)); }
-                    catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
-                    catch (ProbeControlUnavailableException exception)
+                    var results = new System.Collections.Concurrent.ConcurrentBag<ProxyCheckResult>();
+                    await Parallel.ForEachAsync(proxies, new ParallelOptions
                     {
-                        results.Add(new ProxyCheckResult(proxy.Id, false, null, null, false,
-                            exception.Message, IsDeferred: true));
-                    }
-                    catch (Exception exception)
+                        MaxDegreeOfParallelism = concurrency,
+                        CancellationToken = cancellationToken
+                    }, async (proxy, token) =>
                     {
-                        // Неизвестная ошибка реализации не доказывает неисправность внешнего прокси.
-                        UnexpectedProbeFailure(logger, proxy.Key, exception);
-                        results.Add(new ProxyCheckResult(proxy.Id, false, null, null, false,
-                            "internal probe error", IsDeferred: true));
-                    }
-                });
+                        try { results.Add(await probe.CheckAsync(proxy, token)); }
+                        catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+                        catch (ProbeControlUnavailableException exception)
+                        {
+                            results.Add(new ProxyCheckResult(proxy.Id, false, null, null, false,
+                                exception.Message, IsDeferred: true));
+                        }
+                        catch (Exception exception)
+                        {
+                            // Неизвестная ошибка реализации не доказывает неисправность внешнего прокси.
+                            UnexpectedProbeFailure(logger, proxy.Key, exception);
+                            results.Add(new ProxyCheckResult(proxy.Id, false, null, null, false,
+                                "internal probe error", IsDeferred: true));
+                        }
+                    });
 
-                now = DateTimeOffset.UtcNow;
-                var proxiesById = proxies.ToDictionary(x => x.Id);
-                var updates = results.Select(result => ProxyCheckScheduler.Create(
-                    result,
-                    proxiesById[result.ProxyId].ConsecutiveFailedChecks,
-                    leaseId,
-                    now,
-                    settings)).ToArray();
-                return await PersistResultsAsync(updates, cancellationToken);
+                    now = DateTimeOffset.UtcNow;
+                    var proxiesById = proxies.ToDictionary(x => x.Id);
+                    var updates = results.Select(result => ProxyCheckScheduler.Create(
+                        result,
+                        proxiesById[result.ProxyId].ConsecutiveFailedChecks,
+                        leaseId,
+                        now,
+                        settings)).ToArray();
+                    var persisted = await PersistResultsAsync(updates, cancellationToken);
+                    await CompleteRunAuditAsync(validationRunId, persisted);
+                    return persisted;
+                }
+                finally
+                {
+                    await heartbeatStop.CancelAsync();
+                    await heartbeat;
+                }
             }
-            catch
+            catch (Exception exception)
             {
                 await ReleaseLeaseBestEffortAsync(leaseId);
+                if (auditStarted) await FailRunAuditAsync(validationRunId, exception);
                 throw;
-            }
-            finally
-            {
-                await heartbeatStop.CancelAsync();
-                await heartbeat;
             }
         }
         finally
         {
             _runGate.Release();
+        }
+    }
+
+    private async Task StartRunAuditAsync(
+        Guid id,
+        Guid leaseId,
+        DateTimeOffset startedAt,
+        int claimed,
+        TimeSpan leaseDuration,
+        CancellationToken token)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(token);
+        var now = DateTimeOffset.UtcNow;
+        var staleBefore = now.Subtract(leaseDuration);
+        // Running-аудит восстанавливается только после истечения связанной proxy lease:
+        // активную партию другой реплики этот запрос никогда не пометит failed.
+        await db.ValidationRuns.Where(run => run.Status == "running" && run.StartedAt < staleBefore &&
+                !db.Proxies.Any(proxy => proxy.CheckLeaseId == run.LeaseId && proxy.CheckLeaseUntil >= now))
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(run => run.FinishedAt, now)
+                .SetProperty(run => run.Status, "failed")
+                .SetProperty(run => run.Error,
+                    "Validation-партия была прервана аварийным завершением предыдущего процесса."), token);
+        db.ValidationRuns.Add(new ValidationRun
+        {
+            Id = id,
+            LeaseId = leaseId,
+            StartedAt = startedAt,
+            Claimed = claimed
+        });
+        await db.SaveChangesAsync(token);
+    }
+
+    private async Task CompleteRunAuditAsync(
+        Guid id,
+        (int Checked, int Alive, int Deferred) result)
+    {
+        using var timeout = new CancellationTokenSource(AuditWriteTimeout);
+        await using var db = await dbFactory.CreateDbContextAsync(timeout.Token);
+        var updated = await db.ValidationRuns.Where(run => run.Id == id && run.Status == "running")
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(run => run.FinishedAt, DateTimeOffset.UtcNow)
+                .SetProperty(run => run.Checked, result.Checked)
+                .SetProperty(run => run.Alive, result.Alive)
+                .SetProperty(run => run.Deferred, result.Deferred)
+                .SetProperty(run => run.Status, "completed"), timeout.Token);
+        if (updated != 1)
+            throw new InvalidOperationException("Validation-аудит потерял ownership своей running-строки.");
+    }
+
+    private async Task FailRunAuditAsync(Guid id, Exception exception)
+    {
+        try
+        {
+            using var timeout = new CancellationTokenSource(AuditWriteTimeout);
+            await using var db = await dbFactory.CreateDbContextAsync(timeout.Token);
+            var error = exception.ToString();
+            await db.ValidationRuns.Where(run => run.Id == id && run.Status == "running")
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(run => run.FinishedAt, DateTimeOffset.UtcNow)
+                    .SetProperty(run => run.Status, "failed")
+                    .SetProperty(run => run.Error, error[..Math.Min(2000, error.Length)]), timeout.Token);
+        }
+        catch (Exception auditException)
+        {
+            // После истечения proxy lease следующая реплика восстановит running-аудит.
+            ValidationAuditFailed(logger, id, auditException);
         }
     }
 
