@@ -30,7 +30,7 @@ public sealed class AdminController(
     public async Task<ActionResult<ProxySource>> CreateSource([FromBody] SourceRequest request, CancellationToken token)
     {
         if (!await NetworkSafety.IsSafePublicHttpsUrlAsync(request.Url, token))
-            return Problem("Разрешены только публичные HTTPS-адреса источников.", statusCode: 400);
+            return Problem("Разрешены только публичные HTTPS-адреса источников без fragment.", statusCode: 400);
         await using var db = await dbFactory.CreateDbContextAsync(token);
         var normalizedUrl = new Uri(request.Url, UriKind.Absolute).AbsoluteUri;
         if (await db.Sources.AnyAsync(x => x.Url == normalizedUrl, token))
@@ -48,23 +48,28 @@ public sealed class AdminController(
     [HttpPut("sources/{id:guid}")]
     public async Task<IActionResult> UpdateSource(Guid id, [FromBody] SourceRequest request, CancellationToken token)
     {
-        if (!await NetworkSafety.IsSafePublicHttpsUrlAsync(request.Url, token))
-            return Problem("Разрешены только публичные HTTPS-адреса источников.", statusCode: 400);
+        var normalizedUrl = new Uri(request.Url, UriKind.Absolute).AbsoluteUri;
         await using var db = await dbFactory.CreateDbContextAsync(token);
         var source = await db.Sources.FindAsync([id], token);
         if (source is null) return NotFound();
-        var normalizedUrl = new Uri(request.Url, UriKind.Absolute).AbsoluteUri;
         var builtIn = BuiltInSourceCatalog.FindByUrl(source.Url);
         if (builtIn is not null &&
-            (!string.Equals(normalizedUrl, builtIn.Url, StringComparison.Ordinal) || request.Protocol != builtIn.Protocol))
+            (!string.Equals(normalizedUrl, builtIn.Url, StringComparison.Ordinal) ||
+                request.Protocol != builtIn.Protocol ||
+                !string.Equals(request.Name.Trim(), builtIn.Name, StringComparison.Ordinal) ||
+                request.Priority != builtIn.Rank * 10))
             return Conflict(new ProblemDetails
             {
-                Title = "URL и протокол встроенного источника неизменяемы; его можно включить или отключить",
+                Title = "Метаданные встроенного источника неизменяемы; его можно только включить или отключить",
                 Status = 409
             });
+        // Канонический built-in уже прошёл release-аудит и не меняется этим запросом.
+        // Для пользовательского endpoint проверяем актуальный DNS до сохранения.
+        if (builtIn is null && !await NetworkSafety.IsSafePublicHttpsUrlAsync(normalizedUrl, token))
+            return Problem("Разрешены только публичные HTTPS-адреса источников без fragment.", statusCode: 400);
         if (await db.Sources.AnyAsync(x => x.Id != id && x.Url == normalizedUrl, token))
             return Conflict(new ProblemDetails { Title = "Источник с таким URL уже существует", Status = 409 });
-        var endpointChanged = !string.Equals(source.Url, normalizedUrl, StringComparison.OrdinalIgnoreCase) ||
+        var endpointChanged = !string.Equals(source.Url, normalizedUrl, StringComparison.Ordinal) ||
             source.DefaultProtocol != request.Protocol;
         var reenabled = request.Enabled && !source.Enabled;
         source.Name = request.Name.Trim(); source.Url = normalizedUrl; source.DefaultProtocol = request.Protocol;
@@ -167,9 +172,20 @@ public sealed class AdminController(
 public sealed record SourceRequest(
     [Required, StringLength(120, MinimumLength = 2)] string Name,
     [Required, StringLength(2048), Url] string Url,
-    ProxyProtocol Protocol,
+    [EnumDataType(typeof(ProxyProtocol))] ProxyProtocol Protocol,
     [Range(-10_000, 10_000)] int Priority = 100,
-    bool Enabled = true);
+    bool Enabled = true) : IValidatableObject
+{
+    public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+    {
+        if (string.IsNullOrWhiteSpace(Name) || Name.Trim().Length < 2)
+            yield return new ValidationResult(
+                "Имя источника после удаления пробелов должно содержать минимум два символа.",
+                [nameof(Name)]);
+        if (!Enum.IsDefined(Protocol))
+            yield return new ValidationResult("Неизвестный протокол источника.", [nameof(Protocol)]);
+    }
+}
 
 /// <summary>Источник вместе с неизменяемой принадлежностью к встроенному каталогу.</summary>
 public sealed record SourceResponse(

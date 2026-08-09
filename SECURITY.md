@@ -6,7 +6,7 @@
 
 ## Границы доверия
 
-ProxyHarbor получает недоверенные данные из внешних публичных feed’ов. Поэтому проект ограничивает размер и время ответа, запрещает private и актуальные IANA special-purpose ranges, повторно проверяет DNS перед соединением и независимо валидирует каждый прокси. Фильтр блокирует в том числе 6to4, benchmarking и documentation prefixes, не отбрасывая соседние публичные сети более широкими масками. Публичный прокси контролируется третьей стороной: через него нельзя передавать пароли, платёжные данные, cookies или иные секреты.
+ProxyHarbor получает недоверенные данные из внешних публичных feed’ов. Поэтому проект ограничивает размер и время ответа, запрещает private и актуальные IANA special-purpose ranges, URL fragments, повторно проверяет DNS перед соединением и независимо валидирует каждый прокси. Фильтр блокирует в том числе 6to4, benchmarking и documentation prefixes, не отбрасывая соседние публичные сети более широкими масками. После канонизации scheme/host URL path и query сравниваются точно, без ошибочного case folding. Публичный прокси контролируется третьей стороной: через него нельзя передавать пароли, платёжные данные, cookies или иные секреты.
 
 Канонические реестры для сопровождения фильтра: [IANA IPv4 Special-Purpose Address Space](https://www.iana.org/assignments/iana-ipv4-special-registry/iana-ipv4-special-registry.xhtml) и [IANA IPv6 Special-Purpose Address Space](https://www.iana.org/assignments/iana-ipv6-special-registry/iana-ipv6-special-registry.xhtml).
 

@@ -50,6 +50,12 @@ public sealed class ProxyParserTests
         Assert.True(NetworkSafety.IsPublicAddress(System.Net.IPAddress.Parse(value)));
 
     [Fact]
+    public async Task SourceUrlRejectsFragmentEvenForPublicHttpsAddress() =>
+        Assert.False(await NetworkSafety.IsSafePublicHttpsUrlAsync(
+            "https://8.8.8.8/feed.txt#ignored-fragment",
+            CancellationToken.None));
+
+    [Fact]
     public void ParseRemovesDuplicatesAndUnsafeAddresses()
     {
         var result = ProxyParser.Parse("8.8.8.8:80\n8.8.8.8:80\n127.0.0.1:90\n192.168.1.2:80\n999.1.1.1:80\n8.8.8.8:99999", ProxyProtocol.Http);

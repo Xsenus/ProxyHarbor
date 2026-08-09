@@ -62,7 +62,7 @@ public static class DatabaseSeeder
     private static async Task MigrateAndSeedAsync(ProxyHarborDbContext db, CancellationToken cancellationToken)
     {
         await db.Database.MigrateAsync(cancellationToken);
-        var legacyUrls = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        var legacyUrls = new HashSet<string>(StringComparer.Ordinal)
         {
             "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/protocols/http/data.txt",
             "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/protocols/socks4/data.txt",
@@ -73,7 +73,9 @@ public static class DatabaseSeeder
             "https://raw.githubusercontent.com/iplocate/free-proxy-list/main/protocols/http.txt",
             "https://raw.githubusercontent.com/iplocate/free-proxy-list/main/protocols/socks5.txt"
         };
-        var existing = await db.Sources.ToDictionaryAsync(x => x.Url, StringComparer.OrdinalIgnoreCase, cancellationToken);
+        // Uri.AbsoluteUri уже канонизирует scheme/host, но path и query остаются
+        // регистрозависимыми: /Feed и /feed могут быть разными HTTPS-ресурсами.
+        var existing = await db.Sources.ToDictionaryAsync(x => x.Url, StringComparer.Ordinal, cancellationToken);
 
         // Удаляем только URL из первоначальной встроенной версии, заменённые каноническими feed'ами.
         db.Sources.RemoveRange(existing.Values.Where(x => legacyUrls.Contains(x.Url)));
