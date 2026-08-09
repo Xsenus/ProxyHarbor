@@ -1,7 +1,9 @@
+using System.Net;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using Npgsql;
 using ProxyHarbor.Domain;
 using ProxyHarbor.Infrastructure;
 
@@ -11,6 +13,8 @@ namespace ProxyHarbor.Tests;
 [Collection(PostgresIntegrationGroup.Name)]
 public sealed class BackupAuditIntegrationTests
 {
+    private const string EncryptionKey = "integration-encryption-key-32-chars";
+
     [Fact]
     [Trait("Category", "PostgresIntegration")]
     public async Task FailureIsRecordedAndAbandonedRunIsRecovered()
@@ -49,7 +53,7 @@ public sealed class BackupAuditIntegrationTests
                 Options.Create(new BackupOptions
                 {
                     Directory = invalidDirectory,
-                    EncryptionKey = "integration-encryption-key-32-chars"
+                    EncryptionKey = EncryptionKey
                 }),
                 Options.Create(new CollectorOptions()),
                 new ConfigurationBuilder().Build(),
@@ -83,6 +87,77 @@ public sealed class BackupAuditIntegrationTests
         }
     }
 
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
+    public async Task TelegramFailureStillAppliesLocalRetentionAndAuditsPublishedBackup()
+    {
+        var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
+        if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
+
+        var schema = $"proxyharbor_backup_delivery_{Guid.NewGuid():N}";
+        var backupDirectory = Path.Combine(Path.GetTempPath(), $"proxyharbor-delivery-{Guid.NewGuid():N}");
+        var builder = new NpgsqlConnectionStringBuilder(baseConnectionString) { SearchPath = schema };
+        await using var admin = new NpgsqlConnection(baseConnectionString);
+        await admin.OpenAsync();
+        await using (var create = new NpgsqlCommand($"CREATE SCHEMA {schema}", admin))
+            await create.ExecuteNonQueryAsync();
+
+        try
+        {
+            var dbOptions = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+                .UseNpgsql(builder.ConnectionString)
+                .Options;
+            var factory = new TestDbFactory(dbOptions);
+            await using (var migrationDb = await factory.CreateDbContextAsync())
+                await migrationDb.Database.MigrateAsync();
+
+            Directory.CreateDirectory(backupDirectory);
+            var expiredBackup = Path.Combine(backupDirectory, "proxyharbor-expired.phbackup");
+            await File.WriteAllTextAsync(expiredBackup, "expired");
+            File.SetLastWriteTimeUtc(expiredBackup, DateTime.UtcNow.AddDays(-8));
+
+            using var clients = new RejectingTelegramClientFactory();
+            using var service = new BackupService(
+                factory,
+                clients,
+                Options.Create(new BackupOptions
+                {
+                    Directory = backupDirectory,
+                    EncryptionKey = EncryptionKey,
+                    RetentionDays = 7,
+                    TelegramBotToken = "test-token",
+                    TelegramChatId = "123456"
+                }),
+                Options.Create(new CollectorOptions()),
+                new ConfigurationBuilder().Build(),
+                NullLogger<BackupService>.Instance);
+
+            await Assert.ThrowsAnyAsync<HttpRequestException>(
+                () => service.CreateAndSendAsync(CancellationToken.None));
+
+            Assert.False(File.Exists(expiredBackup));
+            var publishedBackup = Assert.Single(Directory.EnumerateFiles(backupDirectory, "*.phbackup"));
+            var file = new FileInfo(publishedBackup);
+            Assert.True(file.Length > 0);
+
+            await using var verify = await factory.CreateDbContextAsync();
+            var failed = await verify.BackupRuns.AsNoTracking().SingleAsync();
+            Assert.Equal("failed", failed.Status);
+            Assert.True(failed.TelegramConfigured);
+            Assert.False(failed.SentToTelegram);
+            Assert.Equal(file.Name, failed.FileName);
+            Assert.Equal(file.Length, failed.SizeBytes);
+            Assert.NotNull(failed.FinishedAt);
+            Assert.Contains("Telegram", failed.Error, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            if (Directory.Exists(backupDirectory)) Directory.Delete(backupDirectory, recursive: true);
+            await using var drop = new NpgsqlCommand($"DROP SCHEMA IF EXISTS {schema} CASCADE", admin);
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
+
     private sealed class TestDbFactory(DbContextOptions<ProxyHarborDbContext> options)
         : IDbContextFactory<ProxyHarborDbContext>
     {
@@ -94,5 +169,30 @@ public sealed class BackupAuditIntegrationTests
     private sealed class UnusedHttpClientFactory : IHttpClientFactory
     {
         public HttpClient CreateClient(string name) => throw new InvalidOperationException("HTTP не должен использоваться в этом сценарии.");
+    }
+
+    private sealed class RejectingTelegramClientFactory : IHttpClientFactory, IDisposable
+    {
+        private readonly HttpClient _client = new(new RejectingTelegramHandler());
+
+        public HttpClient CreateClient(string name)
+        {
+            Assert.Equal("telegram", name);
+            return _client;
+        }
+
+        public void Dispose() => _client.Dispose();
+    }
+
+    private sealed class RejectingTelegramHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.BadRequest)
+            {
+                Content = new StringContent(
+                    "{\"ok\":false,\"error_code\":400,\"description\":\"delivery rejected\"}")
+            });
     }
 }

@@ -110,6 +110,11 @@ public sealed class BackupService(
                 await BackupEncryption.EncryptAsync(zipPath, partialEncryptedPath, options.EncryptionKey, cancellationToken);
                 File.Move(partialEncryptedPath, encryptedPath);
                 File.Delete(zipPath);
+
+                // Локальная retention-политика не зависит от доступности Telegram. Иначе
+                // продолжительный внешний сбой оставлял бы новый архив на каждом цикле,
+                // никогда не удаляя старые файлы и в итоге мог исчерпать backup volume.
+                DeleteExpired(options.Directory, options.RetentionDays);
                 var sentToTelegram = false;
                 if (telegramConfigured)
                 {
@@ -119,7 +124,6 @@ public sealed class BackupService(
                     sentToTelegram = true;
                 }
 
-                DeleteExpired(options.Directory, options.RetentionDays);
                 await CompleteAuditAsync(backupRun.Id, encryptedPath, sentToTelegram, options.HistoryRetentionDays);
                 BackupCreated(logger, encryptedPath, null);
                 return encryptedPath;
