@@ -88,7 +88,9 @@ if (corsOrigins.Any(origin => !Uri.TryCreate(origin, UriKind.Absolute, out var u
 builder.Services.AddCors(x => x.AddPolicy("frontend", policy =>
 {
     if (corsOrigins.Length > 0)
-        policy.WithOrigins(corsOrigins).AllowAnyHeader().AllowAnyMethod();
+        policy.WithOrigins(corsOrigins).AllowAnyHeader().AllowAnyMethod()
+            .WithExposedHeaders(
+                "Content-Disposition", "X-Export-Limit", "X-Export-Offset", "X-Export-Truncated", "X-Next-Offset");
 }));
 builder.Services.AddRateLimiter(x =>
 {

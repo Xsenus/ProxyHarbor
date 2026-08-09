@@ -183,6 +183,7 @@ jobs:
           Backup__Enabled: false
           Backup__Directory: /tmp/proxyharbor-backups
           Backup__EncryptionKey: integration-backup-key-at-least-32-chars
+          Cors__Origins__0: https://dashboard.example
         run: |
           dotnet run --no-build -c Release --no-launch-profile --project src/ProxyHarbor.Api/ProxyHarbor.Api.csproj > api.log 2>&1 &
           api_pid=$!
@@ -231,9 +232,35 @@ jobs:
              "ConsecutiveFailedChecks", "LastError")
           VALUES
             ('20000000-0000-0000-0000-000000000001', '8.8.4.4', 18080, 3, 1, 321, '1.0.0.1', 'DE', true,
-             '2026-08-09T10:00:00Z', '2026-08-09T11:00:00Z', '2026-08-09T12:00:00Z', '2026-08-09T12:05:00Z',
+             '2026-08-09T10:00:00Z', '2026-08-09T11:00:00Z', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP + interval '5 minutes',
              7, 2, 1, 'ci round-trip marker');
           SQL
+          export_headers=$(mktemp)
+          json_export=$(curl --fail --silent --dump-header "$export_headers" \
+            --header 'Origin: https://dashboard.example' \
+            'http://127.0.0.1:5080/api/v1/export/json?limit=1&offset=0')
+          echo "$json_export" | jq --exit-status \
+            'length == 1 and .[0].host == "8.8.4.4" and .[0].protocol == "Socks5"'
+          grep --ignore-case '^Content-Type: application/json; charset=utf-8' "$export_headers"
+          grep --ignore-case '^X-Export-Limit: 1' "$export_headers"
+          grep --ignore-case '^X-Export-Offset: 0' "$export_headers"
+          grep --ignore-case '^X-Export-Truncated: false' "$export_headers"
+          grep --ignore-case '^Access-Control-Allow-Origin: https://dashboard.example' "$export_headers"
+          grep --ignore-case '^Access-Control-Expose-Headers:.*X-Next-Offset' "$export_headers"
+          xml_export=$(curl --fail --silent --dump-header "$export_headers" \
+            'http://127.0.0.1:5080/api/v1/export/xml?limit=1')
+          echo "$xml_export" | grep '<host>8.8.4.4</host>'
+          grep --ignore-case '^Content-Type: application/xml; charset=utf-8' "$export_headers"
+          txt_export=$(curl --fail --silent --dump-header "$export_headers" \
+            'http://127.0.0.1:5080/api/v1/export/txt?limit=1')
+          test "$txt_export" = 'socks5://8.8.4.4:18080'
+          grep --ignore-case '^Content-Type: text/plain; charset=utf-8' "$export_headers"
+          csv_export=$(curl --fail --silent --dump-header "$export_headers" \
+            'http://127.0.0.1:5080/api/v1/export/csv?limit=1')
+          echo "$csv_export" | grep '^protocol,host,port,latencyMs,successRate,lastCheckedAt,url,exitIp'
+          echo "$csv_export" | grep '"Socks5","8.8.4.4",18080,321'
+          grep --ignore-case '^Content-Type: text/csv; charset=utf-8' "$export_headers"
+          rm "$export_headers"
           backup_json=$(curl --fail --silent -X POST \
             -H 'X-Admin-Key: integration-admin-key-at-least-24-chars' \
             http://127.0.0.1:5080/api/v1/admin/backup)
@@ -257,10 +284,23 @@ jobs:
           test "$(PGPASSWORD=integration-password psql -tAc \
             "SELECT count(*) FROM \"Proxies\" WHERE \"Id\" = '20000000-0000-0000-0000-000000000001';" \
             -h 127.0.0.1 -U proxyharbor -d proxyharbor)" -eq 0
+          # Сбрасываем in-memory token bucket после четырёх успешных export smoke-запросов,
+          # чтобы последующая проверка ровно пятого/шестого запроса была детерминированной.
+          kill "$api_pid"
+          wait "$api_pid" || true
+          dotnet run --no-build -c Release --no-launch-profile --project src/ProxyHarbor.Api/ProxyHarbor.Api.csproj >> api.log 2>&1 &
+          api_pid=$!
+          for attempt in {1..60}; do
+            curl --fail --silent http://127.0.0.1:5080/health/ready && break
+            sleep 1
+          done
           invalid_export_filter=$(curl --silent --output /dev/null --write-out '%{http_code}' \
             'http://127.0.0.1:5080/api/v1/export/json?minSuccessRate=101')
           test "$invalid_export_filter" -eq 400
-          for attempt in {1..4}; do
+          invalid_export_limit=$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            'http://127.0.0.1:5080/api/v1/export/json?limit=50001')
+          test "$invalid_export_limit" -eq 400
+          for attempt in {1..3}; do
             export_status=$(curl --silent --output /dev/null --write-out '%{http_code}' \
               http://127.0.0.1:5080/api/v1/export/unsupported)
             test "$export_status" -eq 400

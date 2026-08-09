@@ -197,6 +197,53 @@ public sealed class ProxyPublicationTests
     }
 
     [Fact]
+    public async Task ExportContinuationMakesTheHardResponseLimitExplicitAndRetrievable()
+    {
+        var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+            .UseInMemoryDatabase($"export-continuation-{Guid.NewGuid():N}")
+            .Options;
+        var now = DateTimeOffset.UtcNow;
+        var fastest = Endpoint("1.1.1.1", ProxyStatus.Alive, now);
+        fastest.LatencyMs = 100;
+        var middle = Endpoint("8.8.8.8", ProxyStatus.Alive, now);
+        middle.LatencyMs = 200;
+        var slowest = Endpoint("9.9.9.9", ProxyStatus.Alive, now);
+        slowest.LatencyMs = 300;
+        await using (var seed = new ProxyHarborDbContext(options))
+        {
+            seed.Proxies.AddRange(slowest, fastest, middle);
+            await seed.SaveChangesAsync();
+        }
+
+        var firstController = Controller(options, out var firstOutput);
+        Assert.IsType<EmptyResult>(await firstController.Export(
+            "txt", null, null, null, CancellationToken.None, limit: 2, offset: 0));
+        var firstPage = Encoding.UTF8.GetString(firstOutput.ToArray())
+            .Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal(["http://1.1.1.1:8080", "http://8.8.8.8:8080"], firstPage);
+        Assert.Equal("2", firstController.Response.Headers["X-Export-Limit"]);
+        Assert.Equal("0", firstController.Response.Headers["X-Export-Offset"]);
+        Assert.Equal("true", firstController.Response.Headers["X-Export-Truncated"]);
+        Assert.Equal("2", firstController.Response.Headers["X-Next-Offset"]);
+
+        var secondController = Controller(options, out var secondOutput);
+        Assert.IsType<EmptyResult>(await secondController.Export(
+            "txt", null, null, null, CancellationToken.None, limit: 2, offset: 2));
+        Assert.Equal("http://9.9.9.9:8080", Encoding.UTF8.GetString(secondOutput.ToArray()).Trim());
+        Assert.Equal("false", secondController.Response.Headers["X-Export-Truncated"]);
+        Assert.False(secondController.Response.Headers.ContainsKey("X-Next-Offset"));
+        Assert.Contains("proxies-all-offset-2.txt",
+            secondController.Response.Headers.ContentDisposition.ToString(), StringComparison.Ordinal);
+
+        var terminalController = Controller(options, out var terminalOutput);
+        Assert.IsType<EmptyResult>(await terminalController.Export(
+            "txt", null, null, null, CancellationToken.None, limit: 50_000, offset: int.MaxValue));
+        Assert.Empty(terminalOutput.ToArray());
+        Assert.Equal("false", terminalController.Response.Headers["X-Export-Truncated"]);
+        Assert.False(terminalController.Response.Headers.ContainsKey("X-Next-Offset"));
+    }
+
+    [Fact]
     public async Task ExtremePageNumberIsRejectedBeforeDatabaseOffsetOverflows()
     {
         var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()

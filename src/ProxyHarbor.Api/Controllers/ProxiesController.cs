@@ -20,7 +20,7 @@ public sealed class ProxiesController(
     IDbContextFactory<ProxyHarborDbContext> dbFactory,
     IOptions<CollectorOptions> collectorOptions) : ControllerBase
 {
-    private const int ExportLimit = 50_000;
+    private const int MaxExportPageSize = 50_000;
     private const int ConcurrentExportLimit = 2;
     private static readonly UTF8Encoding Utf8NoBom = new(false);
     private static readonly SemaphoreSlim ExportConcurrencyGate = new(ConcurrentExportLimit, ConcurrentExportLimit);
@@ -62,7 +62,7 @@ public sealed class ProxiesController(
         return Ok(new PagedResult<ProxyDto>(items, page, pageSize, total));
     }
 
-    /// <summary>Потоково экспортирует до 50 000 живых записей в json, xml, txt или csv.</summary>
+    /// <summary>Потоково экспортирует страницу живых записей в json, xml, txt или csv.</summary>
     [HttpGet("export/{format}")]
     [EnableRateLimiting("export")]
     public async Task<IActionResult> Export(
@@ -70,7 +70,9 @@ public sealed class ProxiesController(
         [FromQuery] ProxyProtocol? protocol,
         [FromQuery, Range(1, int.MaxValue)] int? maxLatencyMs,
         [FromQuery, Range(typeof(decimal), "0", "100")] decimal? minSuccessRate,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        [FromQuery, Range(1, MaxExportPageSize)] int limit = MaxExportPageSize,
+        [FromQuery, Range(0, int.MaxValue)] int offset = 0)
     {
         var normalizedFormat = format.ToLowerInvariant();
         var contentType = normalizedFormat switch
@@ -97,12 +99,25 @@ public sealed class ProxiesController(
             var freshAfter = DateTimeOffset.UtcNow.AddMinutes(-collectorOptions.Value.PublicFreshnessMinutes);
             var query = ApplyFilters(db.Proxies.AsNoTracking().Where(x =>
                 x.Status == ProxyStatus.Alive && x.LastCheckedAt >= freshAfter), protocol, maxLatencyMs, minSuccessRate);
-            var proxies = query.OrderBy(x => x.LatencyMs).ThenBy(x => x.Id).Take(ExportLimit)
+            var ordered = query.OrderBy(x => x.LatencyMs).ThenBy(x => x.Id);
+            var nextOffset = (long)offset + limit;
+            // Предварительный EXISTS не материализует страницу и позволяет выставить
+            // continuation headers до первой записи потокового HTTP body.
+            var hasMore = nextOffset <= int.MaxValue &&
+                await ordered.Skip((int)nextOffset).AnyAsync(cancellationToken);
+            var proxies = ordered.Skip(offset).Take(limit)
                 .AsAsyncEnumerable().Select(ProxyDto.From);
             var suffix = protocol?.ToString().ToLowerInvariant() ?? "all";
             Response.ContentType = contentType;
-            Response.Headers.ContentDisposition = $"attachment; filename=\"proxies-{suffix}.{normalizedFormat}\"";
+            var pageSuffix = offset == 0 ? string.Empty : $"-offset-{offset}";
+            Response.Headers.ContentDisposition =
+                $"attachment; filename=\"proxies-{suffix}{pageSuffix}.{normalizedFormat}\"";
             Response.Headers.CacheControl = "no-store";
+            Response.Headers["X-Export-Limit"] = limit.ToString(CultureInfo.InvariantCulture);
+            Response.Headers["X-Export-Offset"] = offset.ToString(CultureInfo.InvariantCulture);
+            Response.Headers["X-Export-Truncated"] = hasMore ? "true" : "false";
+            if (hasMore)
+                Response.Headers["X-Next-Offset"] = nextOffset.ToString(CultureInfo.InvariantCulture);
 
             switch (normalizedFormat)
             {

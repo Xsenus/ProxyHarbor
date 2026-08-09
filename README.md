@@ -73,14 +73,14 @@ API автоматически применяет EF Core migrations и синх
 
 ```text
 GET  /api/v1/proxies?protocol=Socks5&maxLatencyMs=1000&page=1&pageSize=100
-GET  /api/v1/export/json?maxLatencyMs=1500&minSuccessRate=80
+GET  /api/v1/export/json?maxLatencyMs=1500&minSuccessRate=80&limit=50000&offset=0
 GET  /api/v1/export/xml?protocol=Socks5
 GET  /api/v1/export/txt?protocol=Http&maxLatencyMs=1000
 GET  /api/v1/export/csv?minSuccessRate=90
 GET  /api/v1/stats
 ```
 
-Экспорт потоково отдаёт до 50 000 свежих проверенных записей, не собирая многомегабайтный ответ в памяти API, и поддерживает те же `protocol`, `maxLatencyMs` и `minSuccessRate`, что публичный список. JSON, XML и CSV содержат стабильные поля protocol/host/port/url/latency/success/exit IP/time; TXT содержит по одному готовому proxy URL на строку. CSV кавычит строки и нейтрализует spreadsheet formula injection. На один IP разрешено 120 обычных публичных запросов, 20 административных и 5 тяжёлых экспортов в минуту; один экземпляр API одновременно формирует не более двух экспортов. При превышении лимита сервис отвечает `429` или `503` и `Retry-After`. Короткий server-side cache сводки и страниц игнорирует неизвестные query-параметры, чтобы ими нельзя было раздувать число cache keys.
+Экспорт потоково отдаёт до 50 000 свежих проверенных записей за запрос, не собирая многомегабайтный ответ в памяти API, и поддерживает те же `protocol`, `maxLatencyMs` и `minSuccessRate`, что публичный список. Размер страницы задаётся `limit=1..50000`, продолжение — неотрицательным `offset`. Заголовки `X-Export-Limit`, `X-Export-Offset` и `X-Export-Truncated` описывают страницу; при наличии продолжения `X-Next-Offset` содержит значение следующего запроса. Эти заголовки доступны browser-клиентам через CORS. JSON, XML и CSV содержат стабильные поля protocol/host/port/url/latency/success/exit IP/time; TXT содержит по одному готовому proxy URL на строку. CSV кавычит строки и нейтрализует spreadsheet formula injection. На один IP разрешено 120 обычных публичных запросов, 20 административных и 5 тяжёлых экспортов в минуту; один экземпляр API одновременно формирует не более двух экспортов. При превышении лимита сервис отвечает `429` или `503` и `Retry-After`. Короткий server-side cache сводки и страниц игнорирует неизвестные query-параметры, чтобы ими нельзя было раздувать число cache keys.
 
 Административные запросы требуют `X-Admin-Key`:
 
