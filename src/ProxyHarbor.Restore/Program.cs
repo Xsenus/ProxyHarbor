@@ -1,4 +1,5 @@
 using System.IO.Compression;
+using System.Net;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
@@ -85,6 +86,7 @@ internal static class RestoreApplication
                 "database/proxies.json",
                 connection,
                 """COPY "Proxies" ("Id", "Host", "Port", "Protocol", "Status", "LatencyMs", "ExitIp", "CountryCode", "IsAnonymous", "FirstSeenAt", "LastSeenAt", "LastCheckedAt", "LastValidationAttemptAt", "LastValidationDeferred", "NextCheckAt", "CheckLeaseUntil", "CheckLeaseId", "SuccessfulChecks", "FailedChecks", "ConsecutiveFailedChecks", "LastError") FROM STDIN (FORMAT BINARY)""",
+                RestoreEntityValidator.ValidateProxy,
                 WriteProxyAsync,
                 token);
             var sourceCount = await ImportAsync<ProxySource>(
@@ -92,6 +94,7 @@ internal static class RestoreApplication
                 "database/sources.json",
                 connection,
                 """COPY "Sources" ("Id", "Name", "Url", "DefaultProtocol", "Enabled", "Priority", "LastFetchedAt", "LastSucceededAt", "NextFetchAt", "LastItemCount", "LastResultTruncated", "ConsecutiveFailures", "LastError") FROM STDIN (FORMAT BINARY)""",
+                RestoreEntityValidator.ValidateSource,
                 WriteSourceAsync,
                 token);
             var runCount = await ImportAsync<CollectionRun>(
@@ -99,6 +102,7 @@ internal static class RestoreApplication
                 "database/runs.json",
                 connection,
                 """COPY "Runs" ("Id", "StartedAt", "FinishedAt", "SourcesProcessed", "SourcesSucceeded", "SourcesFailed", "SourcesSkipped", "SourcesTruncated", "CandidatesFound", "CandidateLimitReached", "NewProxies", "AliveProxies", "Status", "Error") FROM STDIN (FORMAT BINARY)""",
+                RestoreEntityValidator.ValidateCollectionRun,
                 WriteRunAsync,
                 token);
             var validationRunCount = archive.GetEntry("database/validation-runs.json") is null
@@ -108,6 +112,7 @@ internal static class RestoreApplication
                     "database/validation-runs.json",
                     connection,
                     """COPY "ValidationRuns" ("Id", "LeaseId", "StartedAt", "FinishedAt", "Claimed", "Checked", "Alive", "Deferred", "Status", "Error") FROM STDIN (FORMAT BINARY)""",
+                    RestoreEntityValidator.ValidateValidationRun,
                     WriteValidationRunAsync,
                     token);
             var backupRunCount = archive.GetEntry("database/backup-runs.json") is null
@@ -117,6 +122,7 @@ internal static class RestoreApplication
                     "database/backup-runs.json",
                     connection,
                     """COPY "BackupRuns" ("Id", "StartedAt", "FinishedAt", "Status", "FileName", "SizeBytes", "TelegramConfigured", "SentToTelegram", "Error") FROM STDIN (FORMAT BINARY)""",
+                    RestoreEntityValidator.ValidateBackupRun,
                     WriteBackupRunAsync,
                     token);
             await transaction.CommitAsync(token);
@@ -129,6 +135,7 @@ internal static class RestoreApplication
         string entryName,
         NpgsqlConnection connection,
         string copyCommand,
+        Action<TEntity> validateEntity,
         Func<NpgsqlBinaryImporter, TEntity, CancellationToken, ValueTask> writeEntity,
         CancellationToken token)
     {
@@ -138,6 +145,7 @@ internal static class RestoreApplication
         await foreach (var entity in JsonSerializer.DeserializeAsyncEnumerable<TEntity>(stream, JsonOptions, token))
         {
             if (entity is null) throw new InvalidDataException($"Файл {entryName} содержит пустой объект.");
+            validateEntity(entity);
             await writeEntity(importer, entity, token);
             count = checked(count + 1);
         }
@@ -255,6 +263,169 @@ internal static class RestoreApplication
     }
 
     private sealed record RestoreCounts(int Proxies, int Sources, int Runs, int ValidationRuns, int BackupRuns);
+}
+
+/// <summary>Проверяет семантические инварианты backup-строк до записи очередной COPY row.</summary>
+internal static class RestoreEntityValidator
+{
+    private static readonly HashSet<string> RunStatuses = ["running", "completed", "failed"];
+
+    internal static void ValidateProxy(ProxyEndpoint entity)
+    {
+        RequireId(entity.Id, "proxy.id");
+        if (!IPAddress.TryParse(entity.Host, out var host) || !NetworkSafety.IsPublicAddress(host) ||
+            !string.Equals(host.ToString(), entity.Host, StringComparison.OrdinalIgnoreCase))
+            Invalid("proxy.host должен быть каноническим публичным IP.");
+        if (entity.Port is < 1 or > 65_535) Invalid("proxy.port должен находиться в диапазоне 1..65535.");
+        RequireEnum(entity.Protocol, "proxy.protocol");
+        RequireEnum(entity.Status, "proxy.status");
+        if (entity.LatencyMs is < 0) Invalid("proxy.latencyMs не может быть отрицательным.");
+        if (entity.ExitIp is not null &&
+            (!IPAddress.TryParse(entity.ExitIp, out var exitIp) || !NetworkSafety.IsPublicAddress(exitIp) ||
+                !string.Equals(exitIp.ToString(), entity.ExitIp, StringComparison.OrdinalIgnoreCase)))
+            Invalid("proxy.exitIp должен быть каноническим публичным IP.");
+        RequireOptionalText(entity.ExitIp, 64, "proxy.exitIp");
+        RequireOptionalText(entity.CountryCode, 2, "proxy.countryCode");
+        RequireOptionalText(entity.LastError, 500, "proxy.lastError", allowControlCharacters: true);
+        if (entity.FirstSeenAt == default || entity.LastSeenAt < entity.FirstSeenAt)
+            Invalid("proxy firstSeenAt/lastSeenAt имеют некорректный порядок.");
+        if (entity.CheckLeaseUntil.HasValue != entity.CheckLeaseId.HasValue)
+            Invalid("proxy check lease должен содержать одновременно время и token.");
+        if (entity.LastValidationDeferred && entity.LastValidationAttemptAt is null)
+            Invalid("deferred proxy должен содержать lastValidationAttemptAt.");
+        RequireNonNegative(entity.SuccessfulChecks, "proxy.successfulChecks");
+        RequireNonNegative(entity.FailedChecks, "proxy.failedChecks");
+        RequireNonNegative(entity.ConsecutiveFailedChecks, "proxy.consecutiveFailedChecks");
+        if ((long)entity.SuccessfulChecks + entity.FailedChecks > int.MaxValue)
+            Invalid("proxy check counters переполняют вычисление successRate.");
+        if (entity.ConsecutiveFailedChecks > entity.FailedChecks)
+            Invalid("proxy.consecutiveFailedChecks не может превышать failedChecks.");
+    }
+
+    internal static void ValidateSource(ProxySource entity)
+    {
+        RequireId(entity.Id, "source.id");
+        RequireText(entity.Name, 120, "source.name", minimumLength: 2);
+        RequireText(entity.Url, 2048, "source.url");
+        if (!Uri.TryCreate(entity.Url, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps ||
+            (!uri.IsDefaultPort && uri.Port != 443) || !string.IsNullOrEmpty(uri.UserInfo) ||
+            !string.IsNullOrEmpty(uri.Fragment))
+            Invalid("source.url должен иметь допустимую HTTPS-форму без credentials/fragment.");
+        RequireEnum(entity.DefaultProtocol, "source.defaultProtocol");
+        if (entity.Priority is < -10_000 or > 10_000) Invalid("source.priority выходит за диапазон -10000..10000.");
+        RequireNonNegative(entity.LastItemCount, "source.lastItemCount");
+        RequireNonNegative(entity.ConsecutiveFailures, "source.consecutiveFailures");
+        RequireOptionalText(entity.LastError, 500, "source.lastError", allowControlCharacters: true);
+        if (entity.LastSucceededAt is not null &&
+            (entity.LastFetchedAt is null || entity.LastSucceededAt > entity.LastFetchedAt))
+            Invalid("source.lastSucceededAt не может быть новее lastFetchedAt.");
+    }
+
+    internal static void ValidateCollectionRun(CollectionRun entity)
+    {
+        RequireId(entity.Id, "collectionRun.id");
+        RequireRunState(entity.Status, entity.StartedAt, entity.FinishedAt, "collectionRun");
+        RequireNonNegative(entity.SourcesProcessed, "collectionRun.sourcesProcessed");
+        RequireNonNegative(entity.SourcesSucceeded, "collectionRun.sourcesSucceeded");
+        RequireNonNegative(entity.SourcesFailed, "collectionRun.sourcesFailed");
+        RequireNonNegative(entity.SourcesSkipped, "collectionRun.sourcesSkipped");
+        RequireNonNegative(entity.SourcesTruncated, "collectionRun.sourcesTruncated");
+        RequireNonNegative(entity.CandidatesFound, "collectionRun.candidatesFound");
+        RequireNonNegative(entity.NewProxies, "collectionRun.newProxies");
+        RequireNonNegative(entity.AliveProxies, "collectionRun.aliveProxies");
+        RequireOptionalText(entity.Error, 2000, "collectionRun.error", allowControlCharacters: true);
+        if ((long)entity.SourcesSucceeded + entity.SourcesFailed != entity.SourcesProcessed)
+            Invalid("collectionRun source counters не согласованы.");
+        if (entity.SourcesTruncated > entity.SourcesSucceeded)
+            Invalid("collectionRun.sourcesTruncated не может превышать sourcesSucceeded.");
+        if (entity.NewProxies > entity.CandidatesFound)
+            Invalid("collectionRun.newProxies не может превышать candidatesFound.");
+    }
+
+    internal static void ValidateValidationRun(ValidationRun entity)
+    {
+        RequireId(entity.Id, "validationRun.id");
+        RequireId(entity.LeaseId, "validationRun.leaseId");
+        RequireRunState(entity.Status, entity.StartedAt, entity.FinishedAt, "validationRun");
+        RequireNonNegative(entity.Claimed, "validationRun.claimed");
+        RequireNonNegative(entity.Checked, "validationRun.checked");
+        RequireNonNegative(entity.Alive, "validationRun.alive");
+        RequireNonNegative(entity.Deferred, "validationRun.deferred");
+        RequireOptionalText(entity.Error, 2000, "validationRun.error", allowControlCharacters: true);
+        if ((long)entity.Checked + entity.Deferred > entity.Claimed)
+            Invalid("validationRun checked/deferred превышают claimed.");
+        if (entity.Alive > entity.Checked)
+            Invalid("validationRun.alive не может превышать checked.");
+    }
+
+    internal static void ValidateBackupRun(BackupRun entity)
+    {
+        RequireId(entity.Id, "backupRun.id");
+        RequireRunState(entity.Status, entity.StartedAt, entity.FinishedAt, "backupRun");
+        RequireNonNegative(entity.SizeBytes, "backupRun.sizeBytes");
+        RequireOptionalText(entity.FileName, 255, "backupRun.fileName");
+        RequireOptionalText(entity.Error, 2000, "backupRun.error", allowControlCharacters: true);
+        if (entity.FileName is not null && entity.FileName.IndexOfAny(['/', '\\']) >= 0)
+            Invalid("backupRun.fileName не может содержать путь.");
+        if (entity.SentToTelegram && !entity.TelegramConfigured)
+            Invalid("backupRun не может быть доставлен без Telegram-конфигурации.");
+        if (entity.Status == "completed" && entity.TelegramConfigured && !entity.SentToTelegram)
+            Invalid("завершённый backup с Telegram должен иметь подтверждение доставки.");
+    }
+
+    private static void RequireRunState(
+        string status,
+        DateTimeOffset startedAt,
+        DateTimeOffset? finishedAt,
+        string field)
+    {
+        if (!RunStatuses.Contains(status)) Invalid($"{field}.status содержит неизвестное значение.");
+        if ((status == "running") != (finishedAt is null))
+            Invalid($"{field}.finishedAt не согласован со status.");
+        if (startedAt == default || finishedAt < startedAt)
+            Invalid($"{field} имеет некорректный порядок startedAt/finishedAt.");
+    }
+
+    private static void RequireEnum<T>(T value, string field) where T : struct, Enum
+    {
+        if (!Enum.IsDefined(value)) Invalid($"{field} содержит неизвестное enum-значение.");
+    }
+
+    private static void RequireId(Guid value, string field)
+    {
+        if (value == Guid.Empty) Invalid($"{field} не может быть пустым UUID.");
+    }
+
+    private static void RequireText(string? value, int maximumLength, string field, int minimumLength = 1)
+    {
+        if (string.IsNullOrWhiteSpace(value) || value.Length < minimumLength || value.Length > maximumLength ||
+            value.Any(char.IsControl))
+            Invalid($"{field} имеет недопустимое содержимое или длину.");
+    }
+
+    private static void RequireOptionalText(
+        string? value,
+        int maximumLength,
+        string field,
+        bool allowControlCharacters = false)
+    {
+        if (value is not null &&
+            (value.Length > maximumLength || !allowControlCharacters && value.Any(char.IsControl)))
+            Invalid($"{field} имеет недопустимое содержимое или длину.");
+    }
+
+    private static void RequireNonNegative(int value, string field)
+    {
+        if (value < 0) Invalid($"{field} не может быть отрицательным.");
+    }
+
+    private static void RequireNonNegative(long value, string field)
+    {
+        if (value < 0) Invalid($"{field} не может быть отрицательным.");
+    }
+
+    private static void Invalid(string message) =>
+        throw new InvalidDataException($"Backup содержит некорректную строку: {message}");
 }
 
 /// <summary>Минимальный разбор аргументов без дополнительных runtime-зависимостей.</summary>
