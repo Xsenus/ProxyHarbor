@@ -206,6 +206,7 @@ public sealed class ProxyCollector(
                 }
 
                 response.EnsureSuccessStatusCode();
+                SourceFeedParser.EnsureSupportedMediaType(response.Content.Headers.ContentType?.MediaType);
                 if (response.Content.Headers.ContentLength is > 10_000_000)
                     throw new InvalidOperationException("Источник превышает лимит 10 МБ.");
                 return await ReadLimitedAsync(response.Content, 10_000_000, timeout.Token);
@@ -319,6 +320,7 @@ internal static class SourceFeedParser
         ProxyProtocol defaultProtocol,
         int maxResults = int.MaxValue)
     {
+        EnsureNotHtmlEnvelope(content);
         var parsed = ProxyParser.Parse(content, defaultProtocol, maxResults);
         if (parsed.Count == 0)
             throw new InvalidDataException("Источник не содержит распознаваемых прокси.");
@@ -331,10 +333,29 @@ internal static class SourceFeedParser
         ProxyProtocol defaultProtocol,
         int maxResults)
     {
+        EnsureNotHtmlEnvelope(content);
         var parsed = ProxyParser.ParseWithLimitStatus(content, defaultProtocol, maxResults);
         if (parsed.Items.Count == 0)
             throw new InvalidDataException("Источник не содержит распознаваемых прокси.");
         return parsed;
+    }
+
+    /// <summary>HTTP 200 от login/WAF/error страницы не является proxy-feed.</summary>
+    internal static void EnsureSupportedMediaType(string? mediaType)
+    {
+        if (string.Equals(mediaType, "text/html", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(mediaType, "application/xhtml+xml", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("Источник вернул HTML вместо списка прокси.");
+    }
+
+    private static void EnsureNotHtmlEnvelope(string content)
+    {
+        var start = content.TrimStart('\uFEFF', ' ', '\t', '\r', '\n');
+        if (start.StartsWith("<!doctype html", StringComparison.OrdinalIgnoreCase) ||
+            start.StartsWith("<html", StringComparison.OrdinalIgnoreCase) ||
+            start.StartsWith("<head", StringComparison.OrdinalIgnoreCase) ||
+            start.StartsWith("<body", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("Источник вернул HTML вместо списка прокси.");
     }
 }
 
