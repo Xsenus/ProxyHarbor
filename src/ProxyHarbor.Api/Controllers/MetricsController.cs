@@ -44,6 +44,12 @@ public sealed class MetricsController(
         var lastSuccessfulRun = await db.Runs.AsNoTracking().Where(x => x.Status == "completed" && x.FinishedAt != null)
             .OrderByDescending(x => x.FinishedAt).FirstOrDefaultAsync(token);
         var activeRuns = await db.Runs.AsNoTracking().CountAsync(x => x.Status == "running" && x.FinishedAt == null, token);
+        var lastFinishedBackup = await db.BackupRuns.AsNoTracking().Where(x => x.FinishedAt != null)
+            .OrderByDescending(x => x.FinishedAt).FirstOrDefaultAsync(token);
+        var lastSuccessfulBackup = await db.BackupRuns.AsNoTracking().Where(x => x.Status == "completed" && x.FinishedAt != null)
+            .OrderByDescending(x => x.FinishedAt).FirstOrDefaultAsync(token);
+        var activeBackups = await db.BackupRuns.AsNoTracking()
+            .CountAsync(x => x.Status == "running" && x.FinishedAt == null, token);
 
         var output = new StringBuilder(1_024);
         output.AppendLine("# HELP proxyharbor_proxies Number of known proxies by status and protocol.");
@@ -75,6 +81,17 @@ public sealed class MetricsController(
             lastFinishedRun?.FinishedAt is { } finishedAt
                 ? Math.Max(0, (finishedAt - lastFinishedRun.StartedAt).TotalSeconds)
                 : 0);
+        Gauge(output, "proxyharbor_backup_runs_active", "Backup runs currently marked as active.", activeBackups);
+        Gauge(output, "proxyharbor_last_backup_success", "Whether the latest finished backup completed successfully.",
+            lastFinishedBackup?.Status == "completed" ? 1 : 0);
+        Gauge(output, "proxyharbor_last_backup_telegram_configured", "Whether Telegram was configured for the latest successful backup.",
+            lastSuccessfulBackup?.TelegramConfigured == true ? 1 : 0);
+        Gauge(output, "proxyharbor_last_backup_sent_to_telegram", "Whether the latest successful backup was delivered to Telegram.",
+            lastSuccessfulBackup?.SentToTelegram == true ? 1 : 0);
+        Gauge(output, "proxyharbor_last_backup_size_bytes", "Encrypted size of the latest successful backup.",
+            lastSuccessfulBackup?.SizeBytes ?? 0);
+        Gauge(output, "proxyharbor_last_backup_timestamp_seconds", "Unix timestamp of the latest successful backup completion.",
+            lastSuccessfulBackup?.FinishedAt?.ToUnixTimeSeconds() ?? 0);
         return Content(output.ToString(), "text/plain; version=0.0.4; charset=utf-8", Encoding.UTF8);
     }
 

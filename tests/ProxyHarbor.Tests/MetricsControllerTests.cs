@@ -30,6 +30,17 @@ public sealed class MetricsControllerTests
                     CandidatesFound = 42
                 },
                 new CollectionRun { StartedAt = finishedAt.AddMinutes(1), Status = "running", CandidatesFound = 999 });
+            seed.BackupRuns.AddRange(
+                new BackupRun
+                {
+                    StartedAt = finishedAt.AddMinutes(-2),
+                    FinishedAt = finishedAt.AddMinutes(-1),
+                    Status = "completed",
+                    TelegramConfigured = true,
+                    SentToTelegram = true,
+                    SizeBytes = 12_345
+                },
+                new BackupRun { StartedAt = finishedAt.AddMinutes(2), Status = "running" });
             await seed.SaveChangesAsync();
         }
 
@@ -46,6 +57,12 @@ public sealed class MetricsControllerTests
         Assert.Contains("proxyharbor_last_collection_timestamp_seconds 1700000100", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_last_collection_duration_seconds 12.5", metrics, StringComparison.Ordinal);
         Assert.DoesNotContain("proxyharbor_last_collection_candidates 999", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_backup_runs_active 1", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_last_backup_success 1", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_last_backup_telegram_configured 1", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_last_backup_sent_to_telegram 1", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_last_backup_size_bytes 12345", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_last_backup_timestamp_seconds 1700000040", metrics, StringComparison.Ordinal);
     }
 
     private sealed class TestDbFactory(DbContextOptions<ProxyHarborDbContext> options)

@@ -36,6 +36,7 @@ public sealed class BackupOptions
     public int IntervalHours { get; set; } = 24;
     public string Directory { get; set; } = "/app/backups";
     public int RetentionDays { get; set; } = 7;
+    public int HistoryRetentionDays { get; set; } = 365;
     public string? EncryptionKey { get; set; }
     public string? TelegramBotToken { get; set; }
     public string? TelegramChatId { get; set; }

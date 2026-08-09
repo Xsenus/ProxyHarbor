@@ -9,6 +9,7 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
     public DbSet<ProxyEndpoint> Proxies => Set<ProxyEndpoint>();
     public DbSet<ProxySource> Sources => Set<ProxySource>();
     public DbSet<CollectionRun> Runs => Set<CollectionRun>();
+    public DbSet<BackupRun> BackupRuns => Set<BackupRun>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -34,5 +35,12 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
         source.Property(x => x.LastError).HasMaxLength(500);
 
         modelBuilder.Entity<CollectionRun>().Property(x => x.Error).HasMaxLength(2000);
+
+        var backupRun = modelBuilder.Entity<BackupRun>();
+        backupRun.HasIndex(x => x.StartedAt);
+        backupRun.HasIndex(x => new { x.Status, x.FinishedAt });
+        backupRun.Property(x => x.Status).HasMaxLength(32);
+        backupRun.Property(x => x.FileName).HasMaxLength(255);
+        backupRun.Property(x => x.Error).HasMaxLength(2000);
     }
 }

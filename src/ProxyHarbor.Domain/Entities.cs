@@ -76,6 +76,20 @@ public sealed class CollectionRun
     public string? Error { get; set; }
 }
 
+/// <summary>Постоянный аудит создания и внешней доставки резервной копии.</summary>
+public sealed class BackupRun
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public DateTimeOffset StartedAt { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset? FinishedAt { get; set; }
+    public string Status { get; set; } = "running";
+    public string? FileName { get; set; }
+    public long SizeBytes { get; set; }
+    public bool TelegramConfigured { get; set; }
+    public bool SentToTelegram { get; set; }
+    public string? Error { get; set; }
+}
+
 /// <summary>Результат сетевой проверки, не привязанный к слою хранения.</summary>
 public sealed record ProxyCheckResult(
     Guid ProxyId,

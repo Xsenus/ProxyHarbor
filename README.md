@@ -14,6 +14,7 @@
 - адаптивная React-панель и административные действия по ключу;
 - ограничение частоты запросов, SSRF-защита источников, контейнеры без root и с read-only ФС;
 - потоковые зашифрованные AES-256-GCM снимки БД и настроек с отправкой в Telegram;
+- постоянный аудит создания, размера и подтверждённой Telegram-доставки каждого backup;
 - CI для backend, frontend, тестов и проверки Docker Compose.
 
 ## Быстрый запуск в Docker
@@ -55,6 +56,7 @@ docker compose up -d --build
 | `Collector__LastSeenRefreshMinutes` | Минимальный интервал записи повторного обнаружения, по умолчанию 360 минут |
 | `Collector__RunRetentionDays` | Срок хранения истории циклов, по умолчанию 30 дней |
 | `Backup__Enabled` | Включает резервное копирование по расписанию |
+| `Backup__HistoryRetentionDays` | Срок хранения аудита backup-запусков, по умолчанию 365 дней |
 | `Backup__EncryptionKey` | Пароль шифрования, минимум 16, рекомендуется 32+ случайных символа |
 | `Backup__TelegramBotToken` | Токен Telegram-бота |
 | `Backup__TelegramChatId` | ID администратора/чата, куда отправлять архив |
@@ -88,6 +90,8 @@ POST   /api/v1/admin/validate
 POST   /api/v1/admin/backup
 ```
 
+`diagnostics` возвращает очередь проверки, последние циклы сбора и последние backup-запуски, включая итоговый статус, размер файла и подтверждённый факт Telegram-доставки. Те же сигналы доступны в `/metrics` как `proxyharbor_last_backup_success`, `proxyharbor_last_backup_sent_to_telegram`, `proxyharbor_last_backup_timestamp_seconds` и `proxyharbor_backup_runs_active`.
+
 Повторный запуск `collect` или `backup`, пока операция уже выполняется этой или другой репликой, немедленно получает HTTP `409`. Для `validate` тот же ответ действует внутри одной реплики; разные реплики безопасно арендуют непересекающиеся пакеты PostgreSQL. Долгие административные запросы поэтому не накапливаются в локальной очереди.
 
 Background collector применяет bounded exponential backoff только к feed’ам с последовательными ошибками; `NextFetchAt` виден в admin API и панели. Ручной `POST /api/v1/admin/collect` всегда принудительно проверяет все включённые источники, поэтому используется для полного аудита 81 endpoint. HTTP 404 и другие постоянные 4xx не повторяются, а ответ 2xx без единого распознаваемого прокси считается сбоем, а не ложным успехом.
@@ -118,7 +122,7 @@ npm run build
 
 ## Резервные копии и восстановление
 
-Backup хранится в volume `backups` и удаляется по истечении `Backup__RetentionDays`. Чтобы расшифровать файл на доверенной машине:
+Backup хранится в volume `backups` и удаляется по истечении `Backup__RetentionDays`. История попыток, размер созданного файла и факт успешной Telegram-доставки сохраняются в `BackupRuns`, доступны через admin diagnostics и Prometheus-метрики и очищаются по `Backup__HistoryRetentionDays`. Чтобы расшифровать файл на доверенной машине:
 
 ```powershell
 ./tools/Decrypt-Backup.ps1 -InputFile ./proxyharbor.phbackup -OutputZip ./proxyharbor.zip -EncryptionKey 'ваш ключ'
@@ -134,7 +138,7 @@ $env:Backup__EncryptionKey='ваш ключ'
 dotnet run -c Release --project src/ProxyHarbor.Restore -- --input ./proxyharbor.phbackup --replace-existing-data
 ```
 
-Restore сначала проверяет аутентификацию backup, manifest, отсутствие секретов и дублирующихся ZIP-записей, применяет миграции, затем заменяет три таблицы в одной транзакции. Потоковый PostgreSQL binary COPY ускоряет импорт больших снимков; при любой ошибке исходные данные целевой БД сохраняются. Готовый `.phbackup` публикуется в каталоге атомарно, поэтому внешние задачи не увидят недописанный архив.
+Restore сначала проверяет аутентификацию backup, manifest, отсутствие секретов и дублирующихся ZIP-записей, применяет миграции, затем заменяет таблицы прокси, источников, циклов сбора и аудита backup в одной транзакции. Формат manifest v3 сохраняет историю backup, а restore продолжает принимать прежние архивы v2. Потоковый PostgreSQL binary COPY ускоряет импорт больших снимков; при любой ошибке исходные данные целевой БД сохраняются. Готовый `.phbackup` публикуется в каталоге атомарно, поэтому внешние задачи не увидят недописанный архив.
 
 Если архив превышает Telegram-лимит, сервис отправляет нумерованные части. Сначала объедините их, затем расшифруйте:
 

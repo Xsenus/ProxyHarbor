@@ -109,7 +109,8 @@ public sealed class AdminController(
             repeatedlyFailing = x.Count(proxy => proxy.ConsecutiveFailedChecks >= 3)
         }).FirstOrDefaultAsync(token);
         var recentRuns = await db.Runs.AsNoTracking().OrderByDescending(x => x.StartedAt).Take(10).ToListAsync(token);
-        return Ok(new { serverTime = now, databaseBytes, validationQueue = queue, recentRuns });
+        var recentBackups = await db.BackupRuns.AsNoTracking().OrderByDescending(x => x.StartedAt).Take(10).ToListAsync(token);
+        return Ok(new { serverTime = now, databaseBytes, validationQueue = queue, recentRuns, recentBackups });
     }
 
     [HttpPost("collect")]

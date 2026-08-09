@@ -36,7 +36,7 @@ public static class BackupArchiveValidator
             !root.TryGetProperty("version", out var version) ||
             version.ValueKind != JsonValueKind.Number ||
             !version.TryGetInt32(out var versionNumber) ||
-            versionNumber != 2)
+            versionNumber is not (2 or 3))
             throw new InvalidDataException("Версия manifest backup не поддерживается.");
         if (!root.TryGetProperty("secretsIncluded", out var secretsIncluded) ||
             secretsIncluded.ValueKind is not (JsonValueKind.True or JsonValueKind.False) ||
@@ -45,6 +45,8 @@ public static class BackupArchiveValidator
 
         foreach (var name in RequiredDatabaseEntries)
             _ = RequiredEntry(archive, name);
+        if (versionNumber >= 3)
+            _ = RequiredEntry(archive, "database/backup-runs.json");
     }
 
     /// <summary>Возвращает единственную обязательную запись с точным именем.</summary>

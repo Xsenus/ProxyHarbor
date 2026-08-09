@@ -6,6 +6,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using ProxyHarbor.Domain;
 
 namespace ProxyHarbor.Infrastructure;
 
@@ -21,6 +22,8 @@ public sealed class BackupService(
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private static readonly Action<ILogger, string, Exception?> BackupCreated =
         LoggerMessage.Define<string>(LogLevel.Information, new EventId(1201, "BackupCreated"), "Резервная копия создана: {BackupFile}");
+    private static readonly Action<ILogger, Exception?> BackupAuditFailed =
+        LoggerMessage.Define(LogLevel.Error, new EventId(1203, "BackupAuditFailed"), "Не удалось сохранить аудит резервного копирования.");
     private readonly SemaphoreSlim _runGate = new(1, 1);
 
     /// <summary>Создаёт один снимок; секреты намеренно не сериализуются.</summary>
@@ -37,7 +40,25 @@ public sealed class BackupService(
             if (string.IsNullOrWhiteSpace(options.EncryptionKey) || options.EncryptionKey.Length < 16)
                 throw new InvalidOperationException("Backup__EncryptionKey должен содержать не менее 16 символов.");
 
-            Directory.CreateDirectory(options.Directory);
+            var telegramConfigured = !string.IsNullOrWhiteSpace(options.TelegramBotToken) &&
+                !string.IsNullOrWhiteSpace(options.TelegramChatId);
+            var backupRun = new BackupRun { TelegramConfigured = telegramConfigured };
+            await using (var auditDb = await dbFactory.CreateDbContextAsync(cancellationToken))
+            {
+                // Advisory lock уже гарантирует отсутствие живого backup в кластере:
+                // оставшиеся running-записи могли появиться только после аварийного завершения процесса.
+                var recoveredAt = DateTimeOffset.UtcNow;
+                await auditDb.BackupRuns
+                    .Where(x => x.Status == "running" && x.FinishedAt == null)
+                    .ExecuteUpdateAsync(setters => setters
+                        .SetProperty(x => x.FinishedAt, recoveredAt)
+                        .SetProperty(x => x.Status, "failed")
+                        .SetProperty(x => x.Error, "Backup был прерван аварийным завершением предыдущего процесса."),
+                        cancellationToken);
+                auditDb.BackupRuns.Add(backupRun);
+                await auditDb.SaveChangesAsync(cancellationToken);
+            }
+
             var stamp = DateTimeOffset.UtcNow.ToString("yyyyMMdd-HHmmss-ffff", CultureInfo.InvariantCulture);
             var zipPath = Path.Combine(options.Directory, $"proxyharbor-{stamp}.zip");
             var encryptedPath = zipPath + ".phbackup";
@@ -45,6 +66,7 @@ public sealed class BackupService(
 
             try
             {
+                Directory.CreateDirectory(options.Directory);
                 await using var strategyDb = await dbFactory.CreateDbContextAsync(cancellationToken);
                 var strategy = strategyDb.Database.CreateExecutionStrategy();
                 await strategy.ExecuteAsync(async () =>
@@ -57,19 +79,24 @@ public sealed class BackupService(
                     await WriteJsonAsync(archive, "database/proxies.json", db.Proxies.AsNoTracking().AsAsyncEnumerable(), cancellationToken);
                     await WriteJsonAsync(archive, "database/sources.json", db.Sources.AsNoTracking().AsAsyncEnumerable(), cancellationToken);
                     await WriteJsonAsync(archive, "database/runs.json", db.Runs.AsNoTracking().AsAsyncEnumerable(), cancellationToken);
+                    // Текущий аудит завершается только после шифрования и Telegram-доставки,
+                    // поэтому в снимок входят лишь полностью определённые предыдущие попытки.
+                    await WriteJsonAsync(archive, "database/backup-runs.json",
+                        db.BackupRuns.AsNoTracking().Where(x => x.Id != backupRun.Id).AsAsyncEnumerable(), cancellationToken);
                     await WriteJsonAsync(archive, "settings/collector.json", collectorOptions.Value, cancellationToken);
                     await WriteJsonAsync(archive, "settings/backup.json", new
                     {
                         options.Enabled,
                         options.IntervalHours,
                         options.RetentionDays,
+                        options.HistoryRetentionDays,
                         options.MaxTelegramFileSizeMb,
-                        telegramConfigured = !string.IsNullOrWhiteSpace(options.TelegramBotToken),
+                        telegramConfigured,
                         secretsIncluded = false
                     }, cancellationToken);
                     await WriteJsonAsync(archive, "settings/runtime.json",
                         BackupRuntimeSettings.FromConfiguration(configuration), cancellationToken);
-                    await WriteJsonAsync(archive, "manifest.json", new { version = 2, createdAt = DateTimeOffset.UtcNow, secretsIncluded = false }, cancellationToken);
+                    await WriteJsonAsync(archive, "manifest.json", new { version = 3, createdAt = DateTimeOffset.UtcNow, secretsIncluded = false }, cancellationToken);
                     await snapshot.CommitAsync(cancellationToken);
                 });
 
@@ -78,12 +105,18 @@ public sealed class BackupService(
                 await BackupEncryption.EncryptAsync(zipPath, partialEncryptedPath, options.EncryptionKey, cancellationToken);
                 File.Move(partialEncryptedPath, encryptedPath);
                 File.Delete(zipPath);
-                if (!string.IsNullOrWhiteSpace(options.TelegramBotToken) && !string.IsNullOrWhiteSpace(options.TelegramChatId))
+                if (telegramConfigured)
                     await SendToTelegramAsync(encryptedPath, options, cancellationToken);
 
                 DeleteExpired(options.Directory, options.RetentionDays);
+                await CompleteAuditAsync(backupRun.Id, encryptedPath, telegramConfigured, options.HistoryRetentionDays);
                 BackupCreated(logger, encryptedPath, null);
                 return encryptedPath;
+            }
+            catch (Exception exception)
+            {
+                await FailAuditAsync(backupRun.Id, encryptedPath, exception);
+                throw;
             }
             finally
             {
@@ -92,6 +125,48 @@ public sealed class BackupService(
             }
         }
         finally { _runGate.Release(); }
+    }
+
+    private async Task CompleteAuditAsync(
+        Guid id,
+        string path,
+        bool sentToTelegram,
+        int historyRetentionDays)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(CancellationToken.None);
+        var finishedAt = DateTimeOffset.UtcNow;
+        var file = new FileInfo(path);
+        await db.BackupRuns.Where(x => x.Id == id).ExecuteUpdateAsync(setters => setters
+            .SetProperty(x => x.FinishedAt, finishedAt)
+            .SetProperty(x => x.Status, "completed")
+            .SetProperty(x => x.FileName, file.Name)
+            .SetProperty(x => x.SizeBytes, file.Length)
+            .SetProperty(x => x.SentToTelegram, sentToTelegram)
+            .SetProperty(x => x.Error, (string?)null), CancellationToken.None);
+
+        var cutoff = finishedAt.AddDays(-historyRetentionDays);
+        await db.BackupRuns.Where(x => x.StartedAt < cutoff).ExecuteDeleteAsync(CancellationToken.None);
+    }
+
+    private async Task FailAuditAsync(Guid id, string encryptedPath, Exception exception)
+    {
+        try
+        {
+            await using var db = await dbFactory.CreateDbContextAsync(CancellationToken.None);
+            var error = exception.ToString();
+            var file = File.Exists(encryptedPath) ? new FileInfo(encryptedPath) : null;
+            await db.BackupRuns.Where(x => x.Id == id).ExecuteUpdateAsync(setters => setters
+                .SetProperty(x => x.FinishedAt, DateTimeOffset.UtcNow)
+                .SetProperty(x => x.Status, "failed")
+                .SetProperty(x => x.FileName, file == null ? null : file.Name)
+                .SetProperty(x => x.SizeBytes, file == null ? 0 : file.Length)
+                .SetProperty(x => x.Error, error[..Math.Min(2000, error.Length)]), CancellationToken.None);
+        }
+        catch (Exception auditException)
+        {
+            // Сбой вторичного аудита не должен скрывать исходную причину отказа backup.
+            BackupAuditFailed(logger, auditException);
+        }
     }
 
     private static async Task WriteJsonAsync<T>(ZipArchive archive, string name, T value, CancellationToken token)

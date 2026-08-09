@@ -35,7 +35,8 @@ internal static class RestoreApplication
                 Console.WriteLine("Проверка целостности и расшифровка backup...");
                 await BackupEncryption.DecryptAsync(options.InputFile!, zipPath, options.EncryptionKey!, CancellationToken.None);
                 var counts = await RestoreDatabaseAsync(zipPath, options.ConnectionString!, CancellationToken.None);
-                Console.WriteLine($"Восстановление завершено: {counts.Proxies:N0} прокси, {counts.Sources:N0} источников, {counts.Runs:N0} циклов.");
+                Console.WriteLine($"Восстановление завершено: {counts.Proxies:N0} прокси, {counts.Sources:N0} источников, " +
+                    $"{counts.Runs:N0} циклов сбора, {counts.BackupRuns:N0} циклов backup.");
                 return 0;
             }
             finally
@@ -67,6 +68,7 @@ internal static class RestoreApplication
             await using var transaction = await db.Database.BeginTransactionAsync(token);
 
             // Замена выполняется в одной транзакции: при любой ошибке старая БД остаётся целой.
+            await db.BackupRuns.ExecuteDeleteAsync(token);
             await db.Runs.ExecuteDeleteAsync(token);
             await db.Proxies.ExecuteDeleteAsync(token);
             await db.Sources.ExecuteDeleteAsync(token);
@@ -95,8 +97,17 @@ internal static class RestoreApplication
                 """COPY "Runs" ("Id", "StartedAt", "FinishedAt", "SourcesProcessed", "SourcesSucceeded", "SourcesFailed", "SourcesSkipped", "CandidatesFound", "NewProxies", "AliveProxies", "Status", "Error") FROM STDIN (FORMAT BINARY)""",
                 WriteRunAsync,
                 token);
+            var backupRunCount = archive.GetEntry("database/backup-runs.json") is null
+                ? 0
+                : await ImportAsync<BackupRun>(
+                    archive,
+                    "database/backup-runs.json",
+                    connection,
+                    """COPY "BackupRuns" ("Id", "StartedAt", "FinishedAt", "Status", "FileName", "SizeBytes", "TelegramConfigured", "SentToTelegram", "Error") FROM STDIN (FORMAT BINARY)""",
+                    WriteBackupRunAsync,
+                    token);
             await transaction.CommitAsync(token);
-            return new RestoreCounts(proxyCount, sourceCount, runCount);
+            return new RestoreCounts(proxyCount, sourceCount, runCount, backupRunCount);
         });
     }
 
@@ -179,6 +190,20 @@ internal static class RestoreApplication
         await WriteNullableReferenceAsync(writer, entity.Error, token);
     }
 
+    private static async ValueTask WriteBackupRunAsync(NpgsqlBinaryImporter writer, BackupRun entity, CancellationToken token)
+    {
+        await writer.StartRowAsync(token);
+        await writer.WriteAsync(entity.Id, token);
+        await writer.WriteAsync(entity.StartedAt, token);
+        await WriteNullableValueAsync(writer, entity.FinishedAt, token);
+        await writer.WriteAsync(entity.Status, token);
+        await WriteNullableReferenceAsync(writer, entity.FileName, token);
+        await writer.WriteAsync(entity.SizeBytes, token);
+        await writer.WriteAsync(entity.TelegramConfigured, token);
+        await writer.WriteAsync(entity.SentToTelegram, token);
+        await WriteNullableReferenceAsync(writer, entity.Error, token);
+    }
+
     private static async ValueTask WriteNullableValueAsync<T>(NpgsqlBinaryImporter writer, T? value, CancellationToken token)
         where T : struct
     {
@@ -193,7 +218,7 @@ internal static class RestoreApplication
         else await writer.WriteAsync(value, token);
     }
 
-    private sealed record RestoreCounts(int Proxies, int Sources, int Runs);
+    private sealed record RestoreCounts(int Proxies, int Sources, int Runs, int BackupRuns);
 }
 
 /// <summary>Минимальный разбор аргументов без дополнительных runtime-зависимостей.</summary>

@@ -45,6 +45,7 @@ public static class ServiceCollectionExtensions
         services.AddOptions<BackupOptions>().Bind(configuration.GetSection(BackupOptions.Section))
             .Validate(x => x.IntervalHours is >= 1 and <= 8_760, "IntervalHours: 1..8760")
             .Validate(x => x.RetentionDays is >= 1 and <= 3_650, "RetentionDays: 1..3650")
+            .Validate(x => x.HistoryRetentionDays is >= 1 and <= 3_650, "HistoryRetentionDays: 1..3650")
             .Validate(x => x.MaxTelegramFileSizeMb is >= 1 and <= 49, "MaxTelegramFileSizeMb: 1..49")
             .Validate(x => !x.Enabled || x.EncryptionKey?.Length >= 16, "Для резервного копирования нужен EncryptionKey длиной не менее 16 символов")
             .Validate(x => string.IsNullOrWhiteSpace(x.TelegramBotToken) == string.IsNullOrWhiteSpace(x.TelegramChatId), "TelegramBotToken и TelegramChatId задаются только вместе")

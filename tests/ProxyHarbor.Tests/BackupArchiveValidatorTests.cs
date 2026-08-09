@@ -8,11 +8,29 @@ namespace ProxyHarbor.Tests;
 public sealed class BackupArchiveValidatorTests
 {
     [Fact]
-    public void AcceptsCurrentBackupManifest()
+    public void AcceptsLegacyBackupManifest()
     {
         using var archive = CreateArchive("""{"version":2,"secretsIncluded":false}""");
 
         BackupArchiveValidator.Validate(archive);
+    }
+
+    [Fact]
+    public void AcceptsCurrentBackupManifestWithAuditHistory()
+    {
+        using var archive = CreateArchive("""{"version":3,"secretsIncluded":false}""", includeBackupRuns: true);
+
+        BackupArchiveValidator.Validate(archive);
+    }
+
+    [Fact]
+    public void CurrentManifestRequiresBackupAuditHistory()
+    {
+        using var archive = CreateArchive("""{"version":3,"secretsIncluded":false}""");
+
+        var exception = Assert.Throws<InvalidDataException>(() => BackupArchiveValidator.Validate(archive));
+
+        Assert.Contains("database/backup-runs.json", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -38,7 +56,7 @@ public sealed class BackupArchiveValidatorTests
     [Theory]
     [InlineData("""{"version":2}""")]
     [InlineData("""{"version":2,"secretsIncluded":true}""")]
-    [InlineData("""{"version":3,"secretsIncluded":false}""")]
+    [InlineData("""{"version":4,"secretsIncluded":false}""")]
     public void RejectsUnsafeOrUnsupportedManifest(string manifest)
     {
         using var archive = CreateArchive(manifest);
@@ -46,7 +64,7 @@ public sealed class BackupArchiveValidatorTests
         Assert.Throws<InvalidDataException>(() => BackupArchiveValidator.Validate(archive));
     }
 
-    private static ZipArchive CreateArchive(string manifest)
+    private static ZipArchive CreateArchive(string manifest, bool includeBackupRuns = false)
     {
         var stream = new MemoryStream();
         using (var writer = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true))
@@ -55,6 +73,7 @@ public sealed class BackupArchiveValidatorTests
             AddEntry(writer, "database/proxies.json", "[]");
             AddEntry(writer, "database/sources.json", "[]");
             AddEntry(writer, "database/runs.json", "[]");
+            if (includeBackupRuns) AddEntry(writer, "database/backup-runs.json", "[]");
         }
         stream.Position = 0;
         return new ZipArchive(stream, ZipArchiveMode.Read);

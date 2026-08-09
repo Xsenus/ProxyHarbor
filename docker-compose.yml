@@ -32,6 +32,7 @@ services:
       Collector__BackgroundWorkersEnabled: ${BACKGROUND_WORKERS_ENABLED:-true}
       Backup__Enabled: ${BACKUP_ENABLED:-false}
       Backup__Directory: /app/backups
+      Backup__HistoryRetentionDays: ${BACKUP_HISTORY_RETENTION_DAYS:-365}
       Backup__EncryptionKey: ${BACKUP_ENCRYPTION_KEY}
       Backup__TelegramBotToken: ${TELEGRAM_BOT_TOKEN:-}
       Backup__TelegramChatId: ${TELEGRAM_CHAT_ID:-}
