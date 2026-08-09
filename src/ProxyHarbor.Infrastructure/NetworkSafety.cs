@@ -33,8 +33,15 @@ public static class NetworkSafety
         if (address.AddressFamily == AddressFamily.InterNetworkV6)
         {
             var globalUnicast = (bytes[0] & 0xe0) == 0x20; // 2000::/3.
-            var documentation = bytes[0] == 0x20 && bytes[1] == 0x01 && bytes[2] == 0x0d && bytes[3] == 0xb8;
-            return globalUnicast && !documentation;
+            // IANA special-purpose ranges внутри 2000::/3 не являются обычными публичными
+            // endpoint'ами. В частности, 6to4 способен скрыть вложенный IPv4 destination.
+            var ietfAssignments = bytes[0] == 0x20 && bytes[1] == 0x01 && (bytes[2] & 0xfe) == 0; // 2001::/23.
+            var documentation2001 = bytes[0] == 0x20 && bytes[1] == 0x01 && bytes[2] == 0x0d && bytes[3] == 0xb8; // 2001:db8::/32.
+            var sixToFour = bytes[0] == 0x20 && bytes[1] == 0x02; // 2002::/16.
+            var formerSixBone = bytes[0] == 0x3f && bytes[1] == 0xfe; // 3ffe::/16.
+            var documentation3fff = bytes[0] == 0x3f && bytes[1] == 0xff && (bytes[2] & 0xf0) == 0; // 3fff::/20.
+            return globalUnicast && !ietfAssignments && !documentation2001 && !sixToFour &&
+                !formerSixBone && !documentation3fff;
         }
 
         if (address.AddressFamily != AddressFamily.InterNetwork) return false;
@@ -44,8 +51,8 @@ public static class NetworkSafety
             100 when bytes[1] is >= 64 and <= 127 => false, // CGNAT 100.64.0.0/10.
             169 when bytes[1] == 254 => false,
             172 when bytes[1] is >= 16 and <= 31 => false,
-            192 when bytes[1] == 0 => false,
-            192 when bytes[1] == 2 => false, // TEST-NET-1.
+            192 when bytes[1] == 0 && bytes[2] is 0 or 2 => false, // IETF assignments и TEST-NET-1.
+            192 when bytes[1] == 88 && bytes[2] == 99 => false, // Deprecated 6to4 relay anycast.
             192 when bytes[1] == 168 => false,
             198 when bytes[1] is 18 or 19 => false, // Benchmark network.
             198 when bytes[1] == 51 && bytes[2] == 100 => false, // TEST-NET-2.
