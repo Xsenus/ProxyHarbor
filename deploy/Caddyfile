@@ -49,6 +49,6 @@ https://{$PUBLIC_HOST} {
 
 	# React и статические ресурсы продолжает обслуживать hardened nginx.
 	handle {
-		reverse_proxy web:80
+		reverse_proxy web:8080
 	}
 }
