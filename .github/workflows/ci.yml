@@ -11,15 +11,19 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v5
-        with: { dotnet-version: '10.0.x' }
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with: { dotnet-version: '10.0.302' }
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with: { node-version: '22', cache: npm, cache-dependency-path: src/proxyharbor-web/package-lock.json }
-      - run: dotnet restore ProxyHarbor.slnx
+      - run: dotnet restore ProxyHarbor.slnx --locked-mode
+      - name: Audit NuGet dependency graph
+        run: dotnet list ProxyHarbor.slnx package --vulnerable --include-transitive --no-restore
       - run: dotnet build ProxyHarbor.slnx -c Release --no-restore
       - run: dotnet test ProxyHarbor.slnx -c Release --no-build --logger trx
       - run: npm ci
+        working-directory: src/proxyharbor-web
+      - run: npm audit --audit-level=moderate
         working-directory: src/proxyharbor-web
       - run: npm run lint
         working-directory: src/proxyharbor-web
@@ -43,7 +47,12 @@ jobs:
           FROM alpine:3.23
           COPY . /context
           RUN test -f /context/Directory.Build.props && \
+              test -f /context/NuGet.Config && \
+              test -f /context/global.json && \
               test -f /context/src/ProxyHarbor.Api/ProxyHarbor.Api.csproj && \
+              test -f /context/src/ProxyHarbor.Api/packages.lock.json && \
+              test -f /context/src/ProxyHarbor.Infrastructure/packages.lock.json && \
+              test -f /context/src/ProxyHarbor.Domain/packages.lock.json && \
               test -f /context/src/proxyharbor-web/package-lock.json && \
               test ! -e /context/.env && \
               test ! -e /context/.tmp-postgres && \
@@ -143,10 +152,11 @@ jobs:
           --health-timeout 5s
           --health-retries 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v5
-        with: { dotnet-version: '10.0.x' }
-      - run: dotnet build ProxyHarbor.slnx -c Release
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with: { dotnet-version: '10.0.302' }
+      - run: dotnet restore ProxyHarbor.slnx --locked-mode
+      - run: dotnet build ProxyHarbor.slnx -c Release --no-restore
       - name: PostgreSQL and encrypted backup/restore integration tests
         env:
           PROXYHARBOR_INTEGRATION_POSTGRES: Host=127.0.0.1;Port=5432;Database=proxyharbor;Username=proxyharbor;Password=integration-password

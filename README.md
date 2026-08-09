@@ -121,13 +121,17 @@ npm run dev
 Vite проксирует API на `http://localhost:8080`. Для проверки репозитория:
 
 ```powershell
-dotnet build ProxyHarbor.slnx -c Release
-dotnet test ProxyHarbor.slnx -c Release
+dotnet restore ProxyHarbor.slnx --locked-mode
+dotnet build ProxyHarbor.slnx -c Release --no-restore
+dotnet test ProxyHarbor.slnx -c Release --no-build
 cd src/proxyharbor-web
+npm ci
 npm run lint
 npm test
 npm run build
 ```
+
+Репозиторий ограничивает разработку совместимыми feature band .NET 10 через `global.json`, а release CI и Docker закреплены на security SDK `10.0.302` и runtime `10.0.10`. NuGet restore разрешён только с официального `nuget.org`, полный transitive graph хранится в `packages.lock.json` каждого проекта. При намеренном обновлении пакетов выполните `dotnet restore ProxyHarbor.slnx --force-evaluate`, проверьте изменения lock-файлов и повторите vulnerability-аудит; обычные CI/Docker-сборки используют `--locked-mode`.
 
 ## Резервные копии и восстановление
 

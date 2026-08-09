@@ -22,4 +22,6 @@ Control endpoint validator также не следует redirect и испол
 
 Docker build context использует allowlist проектов: `.env`, backup, локальные PostgreSQL data directories, `.git`, `node_modules`, `bin/obj` и другие непредназначенные для образа данные исключены до отправки Docker daemon. CI создаёт секретные sentinel-файлы и прерывает сборку, если хотя бы один оказывается внутри тестового context image.
 
+NuGet restore использует репозиторный `NuGet.Config` с единственным источником `nuget.org`, а полный transitive graph фиксируется в `packages.lock.json`. CI и Docker применяют только locked restore, выполняют NuGet/npm vulnerability audit и не принимают незаявленное изменение графа зависимостей. Сторонние GitHub Actions закреплены на полных commit SHA. Dependabot еженедельно готовит отдельные обновления NuGet, npm, GitHub Actions и container images; такие PR проходят те же тесты, PostgreSQL integration и container smoke-gates.
+
 В Production browser CORS закрыт по умолчанию; добавляйте только точные HTTP(S) origins без пути. Доверенные `X-Forwarded-For` и `X-Forwarded-Proto` ограничиваются одним переходом и CIDR reverse proxy. Не расширяйте доверие до общей private-сети: синхронно задавайте `BACKEND_SUBNET` в Docker Compose либо `ForwardedHeaders__KnownNetworks__N` в собственной инфраструктуре.

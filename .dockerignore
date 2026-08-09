@@ -1,6 +1,8 @@
 # Контекст формируется по allowlist: локальные секреты, БД и backup не могут попасть в daemon/cache.
 **
 !Directory.Build.*
+!NuGet.Config
+!global.json
 !src/
 !src/ProxyHarbor.Domain/
 !src/ProxyHarbor.Domain/**
