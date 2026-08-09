@@ -108,6 +108,8 @@ public sealed class MetricsController(
             collectorOptions.Value.BackgroundWorkersEnabled ? 1 : 0);
         Gauge(output, "proxyharbor_collection_interval_seconds", "Configured interval between collection cycles in seconds.",
             collectorOptions.Value.CollectionIntervalMinutes * 60L);
+        Gauge(output, "proxyharbor_public_freshness_seconds", "Maximum validation age accepted by public API and exports.",
+            collectorOptions.Value.PublicFreshnessMinutes * 60L);
         Gauge(output, "proxyharbor_validation_concurrency_limit", "Configured maximum concurrent validation probes.",
             collectorOptions.Value.ValidationConcurrency);
         Gauge(output, "proxyharbor_validation_batch_size", "Configured maximum proxies claimed by one validation batch.",

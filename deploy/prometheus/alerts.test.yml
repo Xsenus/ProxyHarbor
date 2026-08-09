@@ -147,3 +147,43 @@ tests:
             exp_annotations:
               summary: Очередь проверки не обрабатывается
               description: Есть due-прокси и доступный control endpoint, но попыток проверки нет.
+
+  - name: Validation capacity warns before published proxies become stale
+    interval: 1m
+    input_series:
+      - series: proxyharbor_validation_due
+        values: '50000x12'
+      - series: proxyharbor_background_workers_enabled
+        values: '1x12'
+      - series: proxyharbor_validation_estimated_drain_seconds
+        values: '1200x12'
+      - series: proxyharbor_public_freshness_seconds
+        values: '900x12'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: ProxyHarborValidationBacklogAtRisk
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: ProxyHarborValidationBacklogAtRisk
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Validator не успевает сохранить свежесть каталога
+              description: Расчётное время обработки due-очереди превышает максимальный возраст прокси в публичной выдаче.
+
+  - name: Validation capacity ignores a drain inside freshness budget
+    interval: 1m
+    input_series:
+      - series: proxyharbor_validation_due
+        values: '50000x12'
+      - series: proxyharbor_background_workers_enabled
+        values: '1x12'
+      - series: proxyharbor_validation_estimated_drain_seconds
+        values: '600x12'
+      - series: proxyharbor_public_freshness_seconds
+        values: '900x12'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: ProxyHarborValidationBacklogAtRisk
+        exp_alerts: []

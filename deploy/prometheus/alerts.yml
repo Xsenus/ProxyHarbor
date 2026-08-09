@@ -135,6 +135,19 @@ groups:
           summary: Validation-партии завершаются ошибкой
           description: За последние пять минут зафиксированы failed validation runs.
 
+      - alert: ProxyHarborValidationBacklogAtRisk
+        expr: |
+          proxyharbor_validation_due > 0
+          and on() proxyharbor_background_workers_enabled == 1
+          and on() proxyharbor_validation_estimated_drain_seconds
+            > proxyharbor_public_freshness_seconds
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Validator не успевает сохранить свежесть каталога
+          description: Расчётное время обработки due-очереди превышает максимальный возраст прокси в публичной выдаче.
+
   - name: proxyharbor.backup
     rules:
       - alert: ProxyHarborBackupFailed

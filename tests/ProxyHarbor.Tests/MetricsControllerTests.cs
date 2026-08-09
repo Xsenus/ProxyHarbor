@@ -43,6 +43,7 @@ public sealed class MetricsControllerTests
         Assert.Contains("proxyharbor_builtin_sources_stale 1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_background_workers_enabled 1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_collection_interval_seconds 900", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_public_freshness_seconds 900", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_backup_enabled 0", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_backup_interval_seconds 86400", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_backup_telegram_configured 0", metrics, StringComparison.Ordinal);
@@ -179,6 +180,7 @@ public sealed class MetricsControllerTests
         Assert.Contains("proxyharbor_validation_runs_active 1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_background_workers_enabled 1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_collection_interval_seconds 1200", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_public_freshness_seconds 900", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_validation_concurrency_limit 800", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_validation_batch_size 1600", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_validation_checks_per_second 2", metrics, StringComparison.Ordinal);
