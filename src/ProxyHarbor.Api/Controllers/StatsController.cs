@@ -15,42 +15,63 @@ public sealed class StatsController(
     IOptions<CollectorOptions> collectorOptions) : ControllerBase
 {
     [HttpGet]
-    [OutputCache(PolicyName = "public-short")]
+    [OutputCache(PolicyName = "public-summary")]
     public async Task<IActionResult> Get(CancellationToken cancellationToken)
     {
-        await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+        await using var proxyDb = await dbFactory.CreateDbContextAsync(cancellationToken);
+        await using var sourceDb = await dbFactory.CreateDbContextAsync(cancellationToken);
+        await using var runDb = await dbFactory.CreateDbContextAsync(cancellationToken);
         var freshAfter = DateTimeOffset.UtcNow.AddMinutes(-collectorOptions.Value.PublicFreshnessMinutes);
-        var alive = db.Proxies.AsNoTracking().Where(x =>
-            x.Status == ProxyStatus.Alive && x.LastCheckedAt >= freshAfter);
-        var statusCounts = await db.Proxies.AsNoTracking().GroupBy(x => x.Status)
-            .Select(x => new { status = x.Key, count = x.Count() }).ToDictionaryAsync(x => x.status, x => x.count, cancellationToken);
-        var byProtocol = await alive.GroupBy(x => x.Protocol).Select(x => new { protocol = x.Key, count = x.Count() }).ToListAsync(cancellationToken);
         var now = DateTimeOffset.UtcNow;
-        var schedule = await db.Proxies.AsNoTracking().GroupBy(_ => 1).Select(x => new
+        // Один агрегирующий проход заменяет семь отдельных сканирований большой таблицы Proxies.
+        var proxyTask = proxyDb.Proxies.AsNoTracking().GroupBy(x => new { x.Status, x.Protocol }).Select(group => new
         {
-            due = x.Count(proxy => proxy.NextCheckAt == null || proxy.NextCheckAt <= now),
-            scheduled = x.Count(proxy => proxy.NextCheckAt > now)
-        }).FirstOrDefaultAsync(cancellationToken);
-        var lastRun = await db.Runs.AsNoTracking().OrderByDescending(x => x.StartedAt).FirstOrDefaultAsync(cancellationToken);
-        var sourceHealth = await db.Sources.AsNoTracking().Where(x => x.Enabled).GroupBy(_ => 1).Select(x => new
+            group.Key.Status,
+            group.Key.Protocol,
+            Total = group.Count(),
+            FreshAlive = group.Count(proxy => proxy.Status == ProxyStatus.Alive && proxy.LastCheckedAt >= freshAfter),
+            StaleAlive = group.Count(proxy => proxy.Status == ProxyStatus.Alive &&
+                (proxy.LastCheckedAt == null || proxy.LastCheckedAt < freshAfter)),
+            Due = group.Count(proxy => proxy.NextCheckAt == null || proxy.NextCheckAt <= now),
+            Scheduled = group.Count(proxy => proxy.NextCheckAt > now),
+            FreshLatencyTotal = group.Where(proxy => proxy.Status == ProxyStatus.Alive &&
+                proxy.LastCheckedAt >= freshAfter && proxy.LatencyMs != null).Sum(proxy => (long?)proxy.LatencyMs) ?? 0,
+            FreshLatencySamples = group.Count(proxy => proxy.Status == ProxyStatus.Alive &&
+                proxy.LastCheckedAt >= freshAfter && proxy.LatencyMs != null)
+        }).ToListAsync(cancellationToken);
+        var sourceTask = sourceDb.Sources.AsNoTracking().Where(x => x.Enabled).GroupBy(_ => 1).Select(x => new
         {
-            enabled = x.Count(),
-            failing = x.Count(source => source.ConsecutiveFailures > 0),
-            repeatedlyFailing = x.Count(source => source.ConsecutiveFailures >= 3)
+            Enabled = x.Count(),
+            Failing = x.Count(source => source.ConsecutiveFailures > 0),
+            RepeatedlyFailing = x.Count(source => source.ConsecutiveFailures >= 3)
         }).FirstOrDefaultAsync(cancellationToken);
+        var lastRunTask = runDb.Runs.AsNoTracking().OrderByDescending(x => x.StartedAt)
+            .FirstOrDefaultAsync(cancellationToken);
+        await Task.WhenAll(proxyTask, sourceTask, lastRunTask);
+
+        var proxyRows = await proxyTask;
+        var sourceHealth = await sourceTask;
+        var lastRun = await lastRunTask;
+        var alive = proxyRows.Sum(row => row.FreshAlive);
+        var latencySamples = proxyRows.Sum(row => row.FreshLatencySamples);
+        var latencyTotal = proxyRows.Sum(row => row.FreshLatencyTotal);
+        var byProtocol = proxyRows.GroupBy(row => row.Protocol).Select(group => new
+        {
+            protocol = group.Key,
+            count = group.Sum(row => row.FreshAlive)
+        }).Where(row => row.count > 0).ToList();
         return Ok(new
         {
-            alive = await alive.CountAsync(cancellationToken),
-            staleAlive = await db.Proxies.AsNoTracking().CountAsync(x =>
-                x.Status == ProxyStatus.Alive && (x.LastCheckedAt == null || x.LastCheckedAt < freshAfter), cancellationToken),
-            pending = statusCounts.GetValueOrDefault(ProxyStatus.Pending),
-            dead = statusCounts.GetValueOrDefault(ProxyStatus.Dead),
-            dueForCheck = schedule?.due ?? 0,
-            scheduledChecks = schedule?.scheduled ?? 0,
-            averageLatencyMs = await alive.AverageAsync(x => (double?)x.LatencyMs, cancellationToken),
-            sources = sourceHealth?.enabled ?? 0,
-            failingSources = sourceHealth?.failing ?? 0,
-            repeatedlyFailingSources = sourceHealth?.repeatedlyFailing ?? 0,
+            alive,
+            staleAlive = proxyRows.Sum(row => row.StaleAlive),
+            pending = proxyRows.Where(row => row.Status == ProxyStatus.Pending).Sum(row => row.Total),
+            dead = proxyRows.Where(row => row.Status == ProxyStatus.Dead).Sum(row => row.Total),
+            dueForCheck = proxyRows.Sum(row => row.Due),
+            scheduledChecks = proxyRows.Sum(row => row.Scheduled),
+            averageLatencyMs = latencySamples == 0 ? (double?)null : (double)latencyTotal / latencySamples,
+            sources = sourceHealth?.Enabled ?? 0,
+            failingSources = sourceHealth?.Failing ?? 0,
+            repeatedlyFailingSources = sourceHealth?.RepeatedlyFailing ?? 0,
             byProtocol,
             lastRun
         });

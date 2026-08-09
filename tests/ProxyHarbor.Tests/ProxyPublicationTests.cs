@@ -1,4 +1,6 @@
 using System.Text;
+using System.Text.Json;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
@@ -49,10 +51,45 @@ public sealed class ProxyPublicationTests
         Assert.Single(page.Items);
         Assert.Equal("8.8.8.8", page.Items[0].Host);
 
-        var export = Assert.IsType<FileContentResult>(await controller.Export("txt", null, CancellationToken.None));
-        var text = Encoding.UTF8.GetString(export.FileContents);
+        await using var output = new AsyncOnlyMemoryStream();
+        controller.ControllerContext = new ControllerContext
+        {
+            HttpContext = new DefaultHttpContext { Response = { Body = output } }
+        };
+        Assert.IsType<EmptyResult>(await controller.Export("txt", null, CancellationToken.None));
+        var text = Encoding.UTF8.GetString(output.ToArray());
         Assert.Contains("8.8.8.8", text);
         Assert.DoesNotContain("1.1.1.1", text);
+        Assert.Equal("no-store", controller.Response.Headers.CacheControl);
+    }
+
+    [Fact]
+    public async Task JsonExportStreamsCamelCaseContractWithStringProtocol()
+    {
+        var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+            .UseInMemoryDatabase($"json-export-{Guid.NewGuid():N}")
+            .Options;
+        await using (var seed = new ProxyHarborDbContext(options))
+        {
+            seed.Proxies.Add(Endpoint("2001:4860:4860::8888", ProxyStatus.Alive, DateTimeOffset.UtcNow));
+            await seed.SaveChangesAsync();
+        }
+        var controller = new ProxiesController(
+            new TestDbFactory(options),
+            Options.Create(new CollectorOptions { PublicFreshnessMinutes = 15 }));
+        await using var output = new AsyncOnlyMemoryStream();
+        controller.ControllerContext = new ControllerContext
+        {
+            HttpContext = new DefaultHttpContext { Response = { Body = output } }
+        };
+
+        Assert.IsType<EmptyResult>(await controller.Export("json", ProxyProtocol.Http, CancellationToken.None));
+
+        using var json = JsonDocument.Parse(output.ToArray());
+        var item = Assert.Single(json.RootElement.EnumerateArray());
+        Assert.Equal("Http", item.GetProperty("protocol").GetString());
+        Assert.Equal("http://[2001:4860:4860::8888]:8080", item.GetProperty("url").GetString());
+        Assert.Contains("proxies-http.json", controller.Response.Headers.ContentDisposition.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -89,5 +126,35 @@ public sealed class ProxyPublicationTests
         public ProxyHarborDbContext CreateDbContext() => new(options);
         public Task<ProxyHarborDbContext> CreateDbContextAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult(CreateDbContext());
+    }
+
+    /// <summary>Имитирует Kestrel с AllowSynchronousIO=false.</summary>
+    private sealed class AsyncOnlyMemoryStream : MemoryStream
+    {
+        public override void Flush() => throw new InvalidOperationException("Synchronous flush is forbidden.");
+        public override Task FlushAsync(CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+        public override void Write(byte[] buffer, int offset, int count) =>
+            throw new InvalidOperationException("Synchronous write is forbidden.");
+        public override void Write(ReadOnlySpan<byte> buffer) =>
+            throw new InvalidOperationException("Synchronous write is forbidden.");
+        public override void WriteByte(byte value) =>
+            throw new InvalidOperationException("Synchronous write is forbidden.");
+        public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            base.Write(buffer, offset, count);
+            return Task.CompletedTask;
+        }
+        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var copy = buffer.ToArray();
+            base.Write(copy, 0, copy.Length);
+            return ValueTask.CompletedTask;
+        }
     }
 }

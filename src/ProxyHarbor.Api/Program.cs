@@ -26,13 +26,36 @@ builder.Services.AddResponseCompression(x =>
     x.MimeTypes = ResponseCompressionDefaults.MimeTypes.Concat(["application/xml", "text/csv"]);
 });
 builder.Services.Configure<BrotliCompressionProviderOptions>(x => x.Level = System.IO.Compression.CompressionLevel.Fastest);
-builder.Services.AddOutputCache(x => x.AddPolicy("public-short", policy => policy.Expire(TimeSpan.FromSeconds(10))));
+builder.Services.AddOutputCache(options =>
+{
+    options.SizeLimit = 32 * 1024 * 1024;
+    options.MaximumBodySize = 2 * 1024 * 1024;
+    options.AddPolicy("public-list", policy => policy
+        .Expire(TimeSpan.FromSeconds(10))
+        .SetVaryByQuery("protocol", "maxLatencyMs", "minSuccessRate", "page", "pageSize"));
+    options.AddPolicy("public-summary", policy => policy
+        .Expire(TimeSpan.FromSeconds(15))
+        // Неизвестные query-параметры не должны создавать неограниченное число cache keys.
+        .SetVaryByQuery([]));
+});
 builder.Services.AddCors(x => x.AddPolicy("frontend", policy => policy
     .WithOrigins(builder.Configuration.GetSection("Cors:Origins").Get<string[]>() ?? ["http://localhost:5173"])
     .AllowAnyHeader().AllowAnyMethod()));
 builder.Services.AddRateLimiter(x =>
 {
     x.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    x.OnRejected = async (context, token) =>
+    {
+        if (context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var retryAfter))
+            context.HttpContext.Response.Headers.RetryAfter =
+                Math.Max(1, (int)Math.Ceiling(retryAfter.TotalSeconds)).ToString(CultureInfo.InvariantCulture);
+        await context.HttpContext.Response.WriteAsJsonAsync(new ProblemDetails
+        {
+            Title = "Слишком много запросов",
+            Detail = "Повторите запрос после указанного в Retry-After интервала.",
+            Status = StatusCodes.Status429TooManyRequests
+        }, token);
+    };
     x.AddPolicy("public", context => RateLimitPartition.GetSlidingWindowLimiter(
         context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
         _ => new SlidingWindowRateLimiterOptions
@@ -45,6 +68,16 @@ builder.Services.AddRateLimiter(x =>
     x.AddPolicy("admin", context => RateLimitPartition.GetFixedWindowLimiter(
         context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
         _ => new FixedWindowRateLimiterOptions { PermitLimit = 20, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
+    x.AddPolicy("export", context => RateLimitPartition.GetTokenBucketLimiter(
+        context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        _ => new TokenBucketRateLimiterOptions
+        {
+            TokenLimit = 5,
+            TokensPerPeriod = 5,
+            ReplenishmentPeriod = TimeSpan.FromMinutes(1),
+            AutoReplenishment = true,
+            QueueLimit = 0
+        }));
 });
 builder.Services.Configure<ApiBehaviorOptions>(x => x.SuppressMapClientErrors = false);
 

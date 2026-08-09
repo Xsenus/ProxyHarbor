@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.OutputCaching;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -17,6 +18,7 @@ public sealed class MetricsController(
 {
     [HttpGet]
     [Produces("text/plain")]
+    [OutputCache(PolicyName = "public-summary")]
     public async Task<IActionResult> Get(CancellationToken token)
     {
         await using var db = await dbFactory.CreateDbContextAsync(token);

@@ -117,6 +117,17 @@ jobs:
             http://127.0.0.1:5080/api/v1/admin/backup)
           backup_file=$(echo "$backup_json" | jq -r '.created')
           test -f "/tmp/proxyharbor-backups/$backup_file"
+          for attempt in {1..5}; do
+            export_status=$(curl --silent --output /dev/null --write-out '%{http_code}' \
+              http://127.0.0.1:5080/api/v1/export/unsupported)
+            test "$export_status" -eq 400
+          done
+          rate_headers=$(mktemp)
+          export_status=$(curl --silent --dump-header "$rate_headers" --output /dev/null --write-out '%{http_code}' \
+            http://127.0.0.1:5080/api/v1/export/unsupported)
+          test "$export_status" -eq 429
+          grep --ignore-case '^Retry-After:' "$rate_headers"
+          rm "$rate_headers"
           kill "$api_pid"
           wait "$api_pid" || true
           dotnet run --no-build -c Release --project src/ProxyHarbor.Restore -- \
