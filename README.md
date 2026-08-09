@@ -19,7 +19,7 @@
 
 ## Быстрый запуск в Docker
 
-Требуются Docker Engine 26+ и Docker Compose v2. Build context формируется по allowlist: `.env`, локальная PostgreSQL, backup, Git-метаданные и dependency/build-каталоги никогда не отправляются Docker daemon и не попадают в build cache. Compose ограничивает размер/ротацию логов и PID, запускает API без Linux capabilities и даёт процессу до двух минут на корректную отмену операций, очистку partial backup и запись итогового аудита при остановке.
+Требуются Docker Engine 26+ и Docker Compose 2.24.4+. Build context формируется по allowlist: `.env`, локальная PostgreSQL, backup, Git-метаданные и dependency/build-каталоги никогда не отправляются Docker daemon и не попадают в build cache. Compose ограничивает размер/ротацию логов и PID, запускает API без Linux capabilities и даёт процессу до двух минут на корректную отмену операций, очистку partial backup и запись итогового аудита при остановке.
 
 ```bash
 cp .env.example .env
@@ -33,6 +33,17 @@ API автоматически применяет EF Core migrations и синх
 
 Первый полезный список появляется не мгновенно: сервис сначала загружает кандидатов, затем непрерывно проверяет их пакетами. Скорость регулируется `Collector__ValidationConcurrency`; Docker-профиль гарантирует `nofile=8192` для настроенных 800 параллельных probes, но при ручном запуске лимит файловых дескрипторов и пропускную способность сети контролирует оператор. Методика и результаты live-тюнинга приведены в [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
 
+## Production HTTPS
+
+Создайте DNS A/AAAA-запись на сервер, откройте входящие TCP 80/443 и UDP 443, затем задайте в `.env` bare hostname `PUBLIC_HOST` (без `https://` и пути) и контактный `ACME_EMAIL`:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.production.yml up -d --build
+curl https://proxy.example.com/health/ready
+```
+
+Production override убирает прямой порт `8080` у frontend и публикует только Caddy на 80/443. Caddy автоматически получает и продлевает сертификат, перенаправляет HTTP на HTTPS, сохраняет ACME-состояние в volumes и работает без root, capabilities и writable root filesystem. Базовый `docker compose up` предназначен для локальной проверки по HTTP, а не для публичного сервера. Подробный checklist: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+
 ## Конфигурация
 
 Настройки задаются стандартным способом ASP.NET Core: значения окружения с `__` заменяют секции JSON.
@@ -43,6 +54,8 @@ API автоматически применяет EF Core migrations и синх
 | `Security__AdminApiKey` | Ключ заголовка `X-Admin-Key` для `/api/v1/admin/*` |
 | `Cors__Origins__0...N` | Явный список доверенных browser origins; в Production по умолчанию пуст |
 | `ForwardedHeaders__KnownNetworks__0...N` | CIDR только доверенных reverse proxy; Docker Compose задаёт изолированную `/24` сеть |
+| `PUBLIC_HOST` | Публичное DNS-имя production без схемы и пути |
+| `ACME_EMAIL` | Контакт для автоматического выпуска TLS-сертификата |
 | `Collector__BackgroundWorkersEnabled` | Позволяет отключить workers для миграций, CI или отдельной API-реплики |
 | `VALIDATION_CONCURRENCY` / `Collector__ValidationConcurrency` | Параллельность сетевых проверок, по умолчанию 800 |
 | `VALIDATION_BATCH_SIZE` / `Collector__ValidationBatchSize` | Размер одной очереди, по умолчанию 1600 |
@@ -200,7 +213,7 @@ Restore сначала проверяет аутентификацию backup, m
 
 1. Проверьте лицензии и условия каждого включённого источника.
 2. Ограничьте внешний доступ к административным маршрутам на reverse proxy/firewall.
-3. Подключите HTTPS, внешнюю наблюдаемость и оповещения для production.
+3. Запустите production override, проверьте TLS-сертификат, внешнюю наблюдаемость и оповещения.
 4. Выполните тестовый backup, Telegram-доставку и расшифровку.
 
 Лицензия: MIT. Встроенные списки принадлежат их авторам и загружаются во время работы; данные прокси в репозиторий не включены.

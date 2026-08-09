@@ -1,0 +1,47 @@
+{
+	# Контакт используется центром сертификации для важных уведомлений.
+	email {$ACME_EMAIL}
+
+	# Контейнер работает без root и Linux capabilities, поэтому Caddy слушает
+	# непривилегированные порты. Docker публикует их как стандартные 80/443.
+	http_port 8080
+	https_port 8443
+	admin localhost:2019
+	# Redirect задаётся ниже явно, чтобы наружу не просочился внутренний :8443.
+	auto_https disable_redirects
+}
+
+http://{$PUBLIC_HOST} {
+	redir https://{$PUBLIC_HOST}{uri} permanent
+}
+
+# Явная HTTPS-схема не позволяет случайно опубликовать production по HTTP.
+https://{$PUBLIC_HOST} {
+	log {
+		output stdout
+		format json
+	}
+
+	encode zstd gzip
+
+	# API принимает только небольшие JSON-команды. Ограничение действует до
+	# буферизации тела downstream-сервисами и защищает все admin endpoints.
+	request_body {
+		max_size 64KB
+	}
+
+	@api path /api/* /openapi/* /health/* /healthz /metrics
+	handle @api {
+		reverse_proxy api:8080 {
+			transport http {
+				dial_timeout 5s
+				response_header_timeout 300s
+			}
+		}
+	}
+
+	# React и статические ресурсы продолжает обслуживать hardened nginx.
+	handle {
+		reverse_proxy web:80
+	}
+}

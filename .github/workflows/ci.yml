@@ -97,13 +97,31 @@ jobs:
               test ! -e /context/backups && \
               test ! -e /context/src/proxyharbor-web/node_modules
           DOCKERFILE
-      - run: docker compose config
+      - name: Validate local and production container configuration
         env:
           POSTGRES_DB: proxyharbor
           POSTGRES_USER: proxyharbor
           POSTGRES_PASSWORD: ci-password
           ADMIN_API_KEY: ci-admin-key
           BACKUP_ENCRYPTION_KEY: ci-encryption-key-at-least-32-chars
+          PUBLIC_HOST: localhost
+          ACME_EMAIL: ci@example.com
+        run: |
+          docker compose config
+          production_config=$(docker compose \
+            -f docker-compose.yml -f docker-compose.production.yml config --format json)
+          echo "$production_config" | jq --exit-status '
+            ((.services.web.ports // []) | length == 0) and
+            .services.caddy.image == "caddy:2.11.4-alpine" and
+            .services.caddy.user == "65532:65532" and
+            .services.caddy.read_only == true and
+            ((.services.caddy.cap_drop // []) | index("ALL") != null) and
+            ([.services.caddy.ports[].published | tostring] | sort) == ["443", "443", "80"]'
+          docker run --rm \
+            --env PUBLIC_HOST=localhost --env ACME_EMAIL=ci@example.com \
+            --volume "$PWD/deploy/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            caddy:2.11.4-alpine \
+            caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
       - name: Container smoke test
         env:
           POSTGRES_DB: proxyharbor
@@ -112,11 +130,17 @@ jobs:
           ADMIN_API_KEY: ci-admin-key-at-least-24-chars
           BACKUP_ENCRYPTION_KEY: ci-encryption-key-at-least-32-chars
           BACKGROUND_WORKERS_ENABLED: false
+          PUBLIC_HOST: localhost
+          ACME_EMAIL: ci@example.com
         run: |
           cleanup() {
             status=$?
-            if [ "$status" -ne 0 ]; then docker compose logs --no-color; fi
-            docker compose down --volumes
+            if [ "$status" -ne 0 ]; then
+              docker compose -f docker-compose.yml -f docker-compose.production.yml logs --no-color || true
+            fi
+            docker compose -f docker-compose.yml -f docker-compose.production.yml \
+              down --volumes --remove-orphans || true
+            docker compose down --volumes --remove-orphans || true
             exit "$status"
           }
           trap cleanup EXIT
@@ -194,6 +218,7 @@ jobs:
             if [ "$attempt" -eq 60 ]; then exit 1; fi
             sleep 1
           done
+
           backup_response=$(curl --fail --silent --request POST \
             --header 'X-Admin-Key: ci-admin-key-at-least-24-chars' \
             http://127.0.0.1:8080/api/v1/admin/backup)
@@ -215,6 +240,51 @@ jobs:
             if [ "$attempt" -eq 60 ]; then exit 1; fi
             sleep 1
           done
+
+          # Повторяем запуск через production override и проверяем не только
+          # доступность TLS, но и фактическое container hardening.
+          docker compose down --volumes
+          docker compose -f docker-compose.yml -f docker-compose.production.yml \
+            up --detach --build
+          caddy_id=$(docker compose -f docker-compose.yml -f docker-compose.production.yml \
+            ps --quiet caddy)
+          test "$(docker inspect --format '{{.Config.User}}' "$caddy_id")" = '65532:65532'
+          test "$(docker inspect --format '{{.HostConfig.ReadonlyRootfs}}' "$caddy_id")" = 'true'
+          test "$(docker inspect --format '{{.HostConfig.PidsLimit}}' "$caddy_id")" = '128'
+          test "$(docker inspect --format '{{.HostConfig.Init}}' "$caddy_id")" = 'true'
+          docker inspect --format '{{json .HostConfig.CapDrop}}' "$caddy_id" | grep --ignore-case 'ALL'
+          web_port=$(docker compose -f docker-compose.yml -f docker-compose.production.yml \
+            port web 80 2>/dev/null || true)
+          test -z "$web_port"
+          for attempt in {1..90}; do
+            if curl --fail --silent --insecure --resolve localhost:443:127.0.0.1 \
+              https://localhost/health/ready; then break; fi
+            if [ "$attempt" -eq 90 ]; then exit 1; fi
+            sleep 2
+          done
+          tls_headers=$(mktemp)
+          curl --fail --silent --insecure --resolve localhost:443:127.0.0.1 \
+            --dump-header "$tls_headers" \
+            --output /dev/null https://localhost/
+          grep --ignore-case '^Content-Security-Policy:' "$tls_headers"
+          grep --ignore-case '^Strict-Transport-Security:' "$tls_headers"
+          rm "$tls_headers"
+          redirect_headers=$(mktemp)
+          redirect_status=$(curl --silent --resolve localhost:80:127.0.0.1 \
+            --dump-header "$redirect_headers" \
+            --output /dev/null --write-out '%{http_code}' http://localhost/)
+          test "$redirect_status" -eq 308
+          grep --ignore-case '^Location: https://localhost/' "$redirect_headers"
+          rm "$redirect_headers"
+          oversized_body=$(mktemp)
+          head --bytes 70000 /dev/zero | tr '\0' a > "$oversized_body"
+          oversized_status=$(curl --silent --insecure --resolve localhost:443:127.0.0.1 \
+            --output /dev/null --write-out '%{http_code}' \
+            --request POST --header 'Content-Type: application/json' \
+            --header 'X-Admin-Key: ci-admin-key-at-least-24-chars' \
+            --data-binary "@$oversized_body" https://localhost/api/v1/admin/sources)
+          rm "$oversized_body"
+          test "$oversized_status" -eq 413
 
   postgres-integration:
     runs-on: ubuntu-latest
