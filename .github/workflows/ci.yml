@@ -20,7 +20,13 @@ jobs:
       - name: Audit NuGet dependency graph
         run: dotnet list ProxyHarbor.slnx package --vulnerable --include-transitive --no-restore
       - run: dotnet build ProxyHarbor.slnx -c Release --no-restore
-      - run: dotnet test ProxyHarbor.slnx -c Release --no-build --logger trx
+      - run: dotnet test ProxyHarbor.slnx -c Release --no-build --logger trx --collect:'XPlat Code Coverage' --results-directory TestResults
+      - name: Enforce meaningful coverage floor
+        shell: pwsh
+        run: |
+          $report = Get-ChildItem TestResults -Recurse -Filter coverage.cobertura.xml | Select-Object -First 1
+          if (-not $report) { throw 'Coverage report was not created.' }
+          ./tools/Assert-Coverage.ps1 -ReportPath $report.FullName
       - run: npm ci
         working-directory: src/proxyharbor-web
       - run: npm audit --audit-level=moderate

@@ -86,6 +86,7 @@ GET  /api/v1/stats
 
 ```text
 GET    /api/v1/admin/sources
+GET    /api/v1/admin/sources/{id}
 GET    /api/v1/admin/diagnostics
 POST   /api/v1/admin/sources
 PUT    /api/v1/admin/sources/{id}
@@ -132,6 +133,8 @@ npm run build
 ```
 
 Репозиторий ограничивает разработку совместимыми feature band .NET 10 через `global.json`, а release CI и Docker закреплены на security SDK `10.0.302` и runtime `10.0.10`. NuGet restore разрешён только с официального `nuget.org`, полный transitive graph хранится в `packages.lock.json` каждого проекта. При намеренном обновлении пакетов выполните `dotnet restore ProxyHarbor.slnx --force-evaluate`, проверьте изменения lock-файлов и повторите vulnerability-аудит; обычные CI/Docker-сборки используют `--locked-mode`.
+
+CI собирает Cobertura coverage и через `tools/Assert-Coverage.ps1` запрещает опускаться ниже 55% уникальных строк и ветвей рукописного кода. Generated `obj` и EF migrations в знаменатель не входят; порог является только regression-floor и должен повышаться вместе с тестами критических orchestration-ветвей.
 
 ## Резервные копии и восстановление
 

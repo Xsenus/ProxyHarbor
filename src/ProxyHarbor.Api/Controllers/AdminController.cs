@@ -27,8 +27,16 @@ public sealed class AdminController(
         return Ok(sources.Select(SourceResponse.From).ToArray());
     }
 
+    [HttpGet("sources/{id:guid}")]
+    public async Task<ActionResult<SourceResponse>> GetSource(Guid id, CancellationToken token)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(token);
+        var source = await db.Sources.AsNoTracking().SingleOrDefaultAsync(item => item.Id == id, token);
+        return source is null ? NotFound() : Ok(SourceResponse.From(source));
+    }
+
     [HttpPost("sources")]
-    public async Task<ActionResult<ProxySource>> CreateSource([FromBody] SourceRequest request, CancellationToken token)
+    public async Task<ActionResult<SourceResponse>> CreateSource([FromBody] SourceRequest request, CancellationToken token)
     {
         if (!await NetworkSafety.IsSafePublicHttpsUrlAsync(request.Url, token))
             return Problem("Разрешены только публичные HTTPS-адреса источников без fragment.", statusCode: 400);
@@ -43,7 +51,8 @@ public sealed class AdminController(
         {
             return Conflict(new ProblemDetails { Title = "Источник с таким URL уже существует", Status = 409 });
         }
-        return CreatedAtAction(nameof(Sources), new { id = source.Id }, source);
+        var response = SourceResponse.From(source);
+        return CreatedAtAction(nameof(GetSource), new { id = source.Id }, response);
     }
 
     [HttpPut("sources/{id:guid}")]
