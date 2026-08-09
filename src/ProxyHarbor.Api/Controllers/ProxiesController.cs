@@ -33,7 +33,7 @@ public sealed class ProxiesController(
     [HttpGet("proxies")]
     [OutputCache(PolicyName = "public-list")]
     public async Task<ActionResult<PagedResult<ProxyDto>>> Get(
-        [FromQuery] ProxyProtocol? protocol,
+        [FromQuery, EnumDataType(typeof(ProxyProtocol))] ProxyProtocol? protocol,
         [FromQuery, Range(1, int.MaxValue)] int? maxLatencyMs,
         [FromQuery, Range(typeof(decimal), "0", "100")] decimal? minSuccessRate,
         [FromQuery] int page = 1,
@@ -69,7 +69,7 @@ public sealed class ProxiesController(
     [HttpGet("proxies/seek")]
     [OutputCache(PolicyName = PublicOutputCachePolicies.SeekFirstPage)]
     public async Task<ActionResult<CursorPagedResult<ProxyDto>>> Seek(
-        [FromQuery] ProxyProtocol? protocol,
+        [FromQuery, EnumDataType(typeof(ProxyProtocol))] ProxyProtocol? protocol,
         [FromQuery, Range(1, int.MaxValue)] int? maxLatencyMs,
         [FromQuery, Range(typeof(decimal), "0", "100")] decimal? minSuccessRate,
         [FromQuery, StringLength(PublicationCursor.EncodedLength)] string? after,
@@ -105,7 +105,7 @@ public sealed class ProxiesController(
     [EnableRateLimiting("export")]
     public async Task<IActionResult> Export(
         string format,
-        [FromQuery] ProxyProtocol? protocol,
+        [FromQuery, EnumDataType(typeof(ProxyProtocol))] ProxyProtocol? protocol,
         [FromQuery, Range(1, int.MaxValue)] int? maxLatencyMs,
         [FromQuery, Range(typeof(decimal), "0", "100")] decimal? minSuccessRate,
         CancellationToken cancellationToken,
@@ -119,7 +119,7 @@ public sealed class ProxiesController(
     [EnableRateLimiting("export")]
     public async Task<IActionResult> ExportSeek(
         string format,
-        [FromQuery] ProxyProtocol? protocol,
+        [FromQuery, EnumDataType(typeof(ProxyProtocol))] ProxyProtocol? protocol,
         [FromQuery, Range(1, int.MaxValue)] int? maxLatencyMs,
         [FromQuery, Range(typeof(decimal), "0", "100")] decimal? minSuccessRate,
         CancellationToken cancellationToken,
