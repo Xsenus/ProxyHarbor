@@ -1,0 +1,17 @@
+bin/
+obj/
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+backups/
+*.phbackup
+*.user
+*.suo
+.vs/
+.vscode/
+coverage/
+TestResults/
+.tmp-postgres/
+src/proxyharbor-web/src/assets/

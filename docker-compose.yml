@@ -1,0 +1,62 @@
+name: proxyharbor
+services:
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks: [backend]
+    security_opt: [no-new-privileges:true]
+
+  api:
+    build:
+      context: .
+      dockerfile: src/ProxyHarbor.Api/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres: { condition: service_healthy }
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ConnectionStrings__Postgres: Host=postgres;Port=5432;Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}
+      Security__AdminApiKey: ${ADMIN_API_KEY}
+      Collector__BackgroundWorkersEnabled: ${BACKGROUND_WORKERS_ENABLED:-true}
+      Backup__Enabled: ${BACKUP_ENABLED:-false}
+      Backup__Directory: /app/backups
+      Backup__EncryptionKey: ${BACKUP_ENCRYPTION_KEY}
+      Backup__TelegramBotToken: ${TELEGRAM_BOT_TOKEN:-}
+      Backup__TelegramChatId: ${TELEGRAM_CHAT_ID:-}
+    volumes:
+      - backups:/app/backups
+    networks: [backend]
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: [no-new-privileges:true]
+
+  web:
+    build:
+      context: .
+      dockerfile: src/proxyharbor-web/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      api: { condition: service_healthy }
+    ports: ["8080:80"]
+    networks: [backend]
+    read_only: true
+    tmpfs: [/var/cache/nginx, /var/run]
+    security_opt: [no-new-privileges:true]
+
+volumes:
+  postgres-data:
+  backups:
+networks:
+  backend:
+    driver: bridge

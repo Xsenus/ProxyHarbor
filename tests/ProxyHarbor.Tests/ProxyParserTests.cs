@@ -1,0 +1,69 @@
+using ProxyHarbor.Domain;
+using ProxyHarbor.Infrastructure;
+
+namespace ProxyHarbor.Tests;
+
+/// <summary>Фиксирует правила нормализации данных из недоверенных источников.</summary>
+public sealed class ProxyParserTests
+{
+    [Fact]
+    public void ParseRecognizesSchemesAndFallbackProtocol()
+    {
+        var result = ProxyParser.Parse("http://8.8.8.8:8080\n1.1.1.1:1080\nsocks5://example.com:9000", ProxyProtocol.Socks4);
+
+        Assert.Contains(result, x => x == ("8.8.8.8", 8080, ProxyProtocol.Http));
+        Assert.Contains(result, x => x == ("1.1.1.1", 1080, ProxyProtocol.Socks4));
+        Assert.DoesNotContain(result, x => x.Host == "example.com");
+    }
+
+    [Theory]
+    [InlineData("0.0.0.0")]
+    [InlineData("10.0.0.1")]
+    [InlineData("100.64.0.1")]
+    [InlineData("172.16.0.1")]
+    [InlineData("192.168.1.1")]
+    [InlineData("192.0.2.1")]
+    [InlineData("198.51.100.1")]
+    [InlineData("203.0.113.1")]
+    [InlineData("224.0.0.1")]
+    [InlineData("::1")]
+    [InlineData("fc00::1")]
+    [InlineData("2001:db8::1")]
+    [InlineData("::2")]
+    public void NetworkSafetyRejectsNonPublicAddresses(string value) =>
+        Assert.False(NetworkSafety.IsPublicAddress(System.Net.IPAddress.Parse(value)));
+
+    [Theory]
+    [InlineData("1.1.1.1")]
+    [InlineData("8.8.8.8")]
+    [InlineData("2606:4700:4700::1111")]
+    public void NetworkSafetyAcceptsPublicAddresses(string value) =>
+        Assert.True(NetworkSafety.IsPublicAddress(System.Net.IPAddress.Parse(value)));
+
+    [Fact]
+    public void ParseRemovesDuplicatesAndUnsafeAddresses()
+    {
+        var result = ProxyParser.Parse("8.8.8.8:80\n8.8.8.8:80\n127.0.0.1:90\n192.168.1.2:80\n999.1.1.1:80\n8.8.8.8:99999", ProxyProtocol.Http);
+
+        Assert.Single(result);
+        Assert.Equal(("8.8.8.8", 80, ProxyProtocol.Http), result.Single());
+    }
+
+    [Fact]
+    public void ParseHandlesNoiseWithoutThrowing()
+    {
+        var result = ProxyParser.Parse("<html>nothing useful</html>\n:// bad : abc", ProxyProtocol.Http);
+        Assert.Empty(result);
+    }
+
+    [Fact]
+    public void ParseCanonicalizesEquivalentIpv6Addresses()
+    {
+        var result = ProxyParser.Parse("[2606:4700:4700:0:0:0:0:1111]:443\n[2606:4700:4700::1111]:443", ProxyProtocol.Https);
+
+        var proxy = Assert.Single(result);
+        Assert.Equal("2606:4700:4700::1111", proxy.Host);
+        var entity = new ProxyEndpoint { Host = proxy.Host, Port = proxy.Port, Protocol = proxy.Protocol };
+        Assert.Equal("https://[2606:4700:4700::1111]:443", entity.Key);
+    }
+}

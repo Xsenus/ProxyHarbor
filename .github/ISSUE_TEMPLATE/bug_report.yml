@@ -1,0 +1,29 @@
+name: Ошибка
+description: Воспроизводимая проблема ProxyHarbor
+title: "[bug]: "
+labels: [bug]
+body:
+  - type: textarea
+    id: observed
+    attributes:
+      label: Что произошло
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Шаги воспроизведения
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Окружение
+      description: Версия/commit, ОС, Docker/.NET/Node и релевантная конфигурация без секретов.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Логи
+      render: shell

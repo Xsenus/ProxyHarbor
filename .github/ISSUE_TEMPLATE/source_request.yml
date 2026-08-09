@@ -1,0 +1,38 @@
+name: Новый proxy-feed
+description: Предложить публичный HTTPS-источник для встроенного каталога
+title: "[source]: "
+labels: [source]
+body:
+  - type: input
+    id: provider
+    attributes:
+      label: Провайдер
+    validations:
+      required: true
+  - type: input
+    id: url
+    attributes:
+      label: HTTPS feed URL
+      placeholder: https://example.org/proxies.txt
+    validations:
+      required: true
+  - type: dropdown
+    id: protocol
+    attributes:
+      label: Протокол строк без схемы
+      options: [HTTP, HTTPS, SOCKS4, SOCKS5]
+    validations:
+      required: true
+  - type: input
+    id: terms
+    attributes:
+      label: Условия использования или лицензия
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Свежесть и результат проверки
+      description: Укажите частоту обновления, пример строки и дату живой проверки.
+    validations:
+      required: true

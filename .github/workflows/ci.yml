@@ -1,0 +1,122 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v5
+        with: { dotnet-version: '10.0.x' }
+      - uses: actions/setup-node@v4
+        with: { node-version: '22', cache: npm, cache-dependency-path: src/proxyharbor-web/package-lock.json }
+      - run: dotnet restore ProxyHarbor.slnx
+      - run: dotnet build ProxyHarbor.slnx -c Release --no-restore
+      - run: dotnet test ProxyHarbor.slnx -c Release --no-build --logger trx
+      - run: npm ci
+        working-directory: src/proxyharbor-web
+      - run: npm run lint
+        working-directory: src/proxyharbor-web
+      - run: npm run build
+        working-directory: src/proxyharbor-web
+      - run: docker compose config
+        env:
+          POSTGRES_DB: proxyharbor
+          POSTGRES_USER: proxyharbor
+          POSTGRES_PASSWORD: ci-password
+          ADMIN_API_KEY: ci-admin-key
+          BACKUP_ENCRYPTION_KEY: ci-encryption-key-at-least-32-chars
+      - name: Container smoke test
+        env:
+          POSTGRES_DB: proxyharbor
+          POSTGRES_USER: proxyharbor
+          POSTGRES_PASSWORD: ci-password
+          ADMIN_API_KEY: ci-admin-key-at-least-24-chars
+          BACKUP_ENCRYPTION_KEY: ci-encryption-key-at-least-32-chars
+          BACKGROUND_WORKERS_ENABLED: false
+        run: |
+          cleanup() {
+            status=$?
+            if [ "$status" -ne 0 ]; then docker compose logs --no-color; fi
+            docker compose down --volumes
+            exit "$status"
+          }
+          trap cleanup EXIT
+          docker compose up --detach --build
+          for attempt in {1..90}; do
+            if curl --fail --silent http://127.0.0.1:8080/health/ready; then break; fi
+            if [ "$attempt" -eq 90 ]; then exit 1; fi
+            sleep 2
+          done
+          curl --fail --silent http://127.0.0.1:8080/api/v1/stats
+
+  postgres-integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_DB: proxyharbor
+          POSTGRES_USER: proxyharbor
+          POSTGRES_PASSWORD: integration-password
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U proxyharbor -d proxyharbor"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v5
+        with: { dotnet-version: '10.0.x' }
+      - run: dotnet build ProxyHarbor.slnx -c Release
+      - name: Migrations and API smoke test
+        env:
+          ASPNETCORE_ENVIRONMENT: Production
+          ASPNETCORE_URLS: http://127.0.0.1:5080
+          ConnectionStrings__Postgres: Host=127.0.0.1;Port=5432;Database=proxyharbor;Username=proxyharbor;Password=integration-password
+          Security__AdminApiKey: integration-admin-key-at-least-24-chars
+          Collector__BackgroundWorkersEnabled: false
+          Backup__Enabled: false
+          Backup__Directory: /tmp/proxyharbor-backups
+          Backup__EncryptionKey: integration-backup-key-at-least-32-chars
+        run: |
+          dotnet run --no-build -c Release --no-launch-profile --project src/ProxyHarbor.Api/ProxyHarbor.Api.csproj > api.log 2>&1 &
+          api_pid=$!
+          trap 'kill $api_pid || true; cat api.log' EXIT
+          for attempt in {1..60}; do
+            curl --fail --silent http://127.0.0.1:5080/health/ready && break
+            sleep 1
+          done
+          curl --fail --silent http://127.0.0.1:5080/api/v1/stats
+          curl --fail --silent http://127.0.0.1:5080/metrics | grep 'proxyharbor_sources_enabled 81'
+          sources=$(curl --fail --silent -H 'X-Admin-Key: integration-admin-key-at-least-24-chars' http://127.0.0.1:5080/api/v1/admin/sources)
+          test "$(echo "$sources" | jq length)" -eq 81
+          invalid_status=$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            -X POST -H 'Content-Type: application/json' -H 'X-Admin-Key: integration-admin-key-at-least-24-chars' \
+            --data '{"name":"x","url":"http://127.0.0.1/list.txt","protocol":"Http"}' \
+            http://127.0.0.1:5080/api/v1/admin/sources)
+          test "$invalid_status" -eq 400
+          backup_json=$(curl --fail --silent -X POST \
+            -H 'X-Admin-Key: integration-admin-key-at-least-24-chars' \
+            http://127.0.0.1:5080/api/v1/admin/backup)
+          backup_file=$(echo "$backup_json" | jq -r '.created')
+          test -f "/tmp/proxyharbor-backups/$backup_file"
+          kill "$api_pid"
+          wait "$api_pid" || true
+          dotnet run --no-build -c Release --project src/ProxyHarbor.Restore -- \
+            --input "/tmp/proxyharbor-backups/$backup_file" --replace-existing-data
+          dotnet run --no-build -c Release --no-launch-profile --project src/ProxyHarbor.Api/ProxyHarbor.Api.csproj >> api.log 2>&1 &
+          api_pid=$!
+          for attempt in {1..60}; do
+            curl --fail --silent http://127.0.0.1:5080/health/ready && break
+            sleep 1
+          done
+          restored_sources=$(curl --fail --silent -H 'X-Admin-Key: integration-admin-key-at-least-24-chars' http://127.0.0.1:5080/api/v1/admin/sources)
+          test "$(echo "$restored_sources" | jq length)" -eq 81

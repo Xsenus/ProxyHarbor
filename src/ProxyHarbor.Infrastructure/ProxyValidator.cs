@@ -1,0 +1,227 @@
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
+using Npgsql;
+using NpgsqlTypes;
+using ProxyHarbor.Domain;
+
+namespace ProxyHarbor.Infrastructure;
+
+/// <summary>Арендует готовые к проверке записи, проверяет параллельно и сохраняет результат одним SQL-пакетом.</summary>
+public sealed class ProxyValidator(
+    IDbContextFactory<ProxyHarborDbContext> dbFactory,
+    ProxyProbeService probe,
+    IOptions<CollectorOptions> options) : IDisposable
+{
+    private readonly SemaphoreSlim _runGate = new(1, 1);
+
+    /// <summary>Проверяет приоритетный пакет и возвращает число фактически сохранённых результатов.</summary>
+    public async Task<(int Checked, int Alive)> ValidateBatchAsync(CancellationToken cancellationToken)
+    {
+        await _runGate.WaitAsync(cancellationToken);
+        try
+        {
+            var settings = options.Value;
+            var now = DateTimeOffset.UtcNow;
+            var concurrency = Math.Clamp(settings.ValidationConcurrency, 1, 1000);
+            var batchSize = Math.Clamp(settings.ValidationBatchSize, 1, 100_000);
+            var waves = (int)Math.Ceiling((double)batchSize / concurrency);
+            var leaseDuration = TimeSpan.FromSeconds(Math.Max(120, waves * settings.ProbeTimeoutSeconds + 60));
+            var leaseUntil = now.Add(leaseDuration);
+            var leaseId = Guid.NewGuid();
+
+            var proxies = await ClaimBatchAsync(batchSize, now, leaseUntil, leaseId, cancellationToken);
+            if (proxies.Count == 0) return (0, 0);
+
+            var results = new System.Collections.Concurrent.ConcurrentBag<ProxyCheckResult>();
+            await Parallel.ForEachAsync(proxies, new ParallelOptions
+            {
+                MaxDegreeOfParallelism = concurrency,
+                CancellationToken = cancellationToken
+            }, async (proxy, token) => results.Add(await probe.CheckAsync(proxy, token)));
+
+            now = DateTimeOffset.UtcNow;
+            var proxiesById = proxies.ToDictionary(x => x.Id);
+            var updates = results.Select(result => ProxyCheckScheduler.Create(
+                result,
+                proxiesById[result.ProxyId].ConsecutiveFailedChecks,
+                leaseId,
+                now,
+                settings)).ToArray();
+            return await PersistResultsAsync(updates, cancellationToken);
+        }
+        finally
+        {
+            _runGate.Release();
+        }
+    }
+
+    private async Task<List<ProxyEndpoint>> ClaimBatchAsync(
+        int batchSize,
+        DateTimeOffset now,
+        DateTimeOffset leaseUntil,
+        Guid leaseId,
+        CancellationToken token)
+    {
+        var proxies = new List<ProxyEndpoint>();
+        await using var strategyDb = await dbFactory.CreateDbContextAsync(token);
+        var strategy = strategyDb.Database.CreateExecutionStrategy();
+        await strategy.ExecuteAsync(async () =>
+        {
+            proxies.Clear();
+            await using var claimDb = await dbFactory.CreateDbContextAsync(token);
+            await using var transaction = await claimDb.Database.BeginTransactionAsync(token);
+            proxies.AddRange(await claimDb.Proxies.FromSqlInterpolated($"""
+                SELECT * FROM "Proxies"
+                WHERE ("NextCheckAt" IS NULL OR "NextCheckAt" <= {now})
+                  AND ("CheckLeaseUntil" IS NULL OR "CheckLeaseUntil" < {now})
+                ORDER BY
+                    CASE "Status" WHEN 1 THEN 0 WHEN 0 THEN 1 ELSE 2 END,
+                    "NextCheckAt" NULLS FIRST,
+                    "LastCheckedAt" NULLS FIRST
+                LIMIT {batchSize}
+                FOR UPDATE SKIP LOCKED
+                """).AsNoTracking().ToListAsync(token));
+            var ids = proxies.Select(x => x.Id).ToArray();
+            if (ids.Length > 0)
+                await claimDb.Proxies.Where(x => ids.Contains(x.Id)).ExecuteUpdateAsync(setters => setters
+                    .SetProperty(x => x.CheckLeaseUntil, leaseUntil)
+                    .SetProperty(x => x.CheckLeaseId, leaseId), token);
+            await transaction.CommitAsync(token);
+        });
+        return proxies;
+    }
+
+    private async Task<(int Checked, int Alive)> PersistResultsAsync(
+        ScheduledProxyCheck[] updates,
+        CancellationToken token)
+    {
+        if (updates.Length == 0) return (0, 0);
+        await using var strategyDb = await dbFactory.CreateDbContextAsync(token);
+        var strategy = strategyDb.Database.CreateExecutionStrategy();
+        return await strategy.ExecuteAsync(async () =>
+        {
+            await using var db = await dbFactory.CreateDbContextAsync(token);
+            var connection = (NpgsqlConnection)db.Database.GetDbConnection();
+            await connection.OpenAsync(token);
+            await using var transaction = await connection.BeginTransactionAsync(token);
+            await using (var create = new NpgsqlCommand("""
+                CREATE TEMP TABLE proxy_check_update (
+                    id uuid NOT NULL, lease_id uuid NOT NULL, alive boolean NOT NULL,
+                    latency_ms integer NULL, exit_ip text NULL, is_anonymous boolean NOT NULL,
+                    error text NULL, checked_at timestamptz NOT NULL, next_check_at timestamptz NOT NULL,
+                    failure_streak integer NOT NULL
+                ) ON COMMIT DROP
+                """, connection, transaction))
+                await create.ExecuteNonQueryAsync(token);
+
+            await using (var writer = await connection.BeginBinaryImportAsync("""
+                COPY proxy_check_update
+                    (id, lease_id, alive, latency_ms, exit_ip, is_anonymous, error, checked_at, next_check_at, failure_streak)
+                FROM STDIN (FORMAT BINARY)
+                """, token))
+            {
+                foreach (var update in updates)
+                {
+                    await writer.StartRowAsync(token);
+                    await writer.WriteAsync(update.ProxyId, NpgsqlDbType.Uuid, token);
+                    await writer.WriteAsync(update.LeaseId, NpgsqlDbType.Uuid, token);
+                    await writer.WriteAsync(update.IsAlive, NpgsqlDbType.Boolean, token);
+                    if (update.LatencyMs.HasValue) await writer.WriteAsync(update.LatencyMs.Value, NpgsqlDbType.Integer, token); else await writer.WriteNullAsync(token);
+                    if (update.ExitIp is not null) await writer.WriteAsync(update.ExitIp, NpgsqlDbType.Text, token); else await writer.WriteNullAsync(token);
+                    await writer.WriteAsync(update.IsAnonymous, NpgsqlDbType.Boolean, token);
+                    if (update.Error is not null) await writer.WriteAsync(update.Error, NpgsqlDbType.Text, token); else await writer.WriteNullAsync(token);
+                    await writer.WriteAsync(update.CheckedAt, NpgsqlDbType.TimestampTz, token);
+                    await writer.WriteAsync(update.NextCheckAt, NpgsqlDbType.TimestampTz, token);
+                    await writer.WriteAsync(update.FailureStreak, NpgsqlDbType.Integer, token);
+                }
+                await writer.CompleteAsync(token);
+            }
+
+            await using var merge = new NpgsqlCommand("""
+                UPDATE "Proxies" AS proxy SET
+                    "LastCheckedAt" = incoming.checked_at,
+                    "NextCheckAt" = incoming.next_check_at,
+                    "CheckLeaseUntil" = NULL,
+                    "CheckLeaseId" = NULL,
+                    "Status" = CASE WHEN incoming.alive THEN 1 ELSE 2 END,
+                    "LatencyMs" = incoming.latency_ms,
+                    "ExitIp" = incoming.exit_ip,
+                    "IsAnonymous" = incoming.is_anonymous,
+                    "LastError" = incoming.error,
+                    "SuccessfulChecks" = proxy."SuccessfulChecks" + CASE WHEN incoming.alive THEN 1 ELSE 0 END,
+                    "FailedChecks" = proxy."FailedChecks" + CASE WHEN incoming.alive THEN 0 ELSE 1 END,
+                    "ConsecutiveFailedChecks" = incoming.failure_streak
+                FROM proxy_check_update AS incoming
+                WHERE proxy."Id" = incoming.id AND proxy."CheckLeaseId" = incoming.lease_id
+                RETURNING incoming.alive
+                """, connection, transaction);
+            var checkedCount = 0;
+            var aliveCount = 0;
+            await using (var reader = await merge.ExecuteReaderAsync(token))
+            {
+                while (await reader.ReadAsync(token))
+                {
+                    checkedCount++;
+                    if (reader.GetBoolean(0)) aliveCount++;
+                }
+            }
+            await transaction.CommitAsync(token);
+            return (checkedCount, aliveCount);
+        });
+    }
+
+    /// <summary>Освобождает синхронизатор конкурентных ручных и фоновых запусков.</summary>
+    public void Dispose() => _runGate.Dispose();
+}
+
+/// <summary>Чистая функция адаптивного расписания, удобная для строгих unit-тестов.</summary>
+internal static class ProxyCheckScheduler
+{
+    internal static ScheduledProxyCheck Create(
+        ProxyCheckResult result,
+        int previousFailureStreak,
+        Guid leaseId,
+        DateTimeOffset now,
+        CollectorOptions options)
+    {
+        var failureStreak = result.IsAlive ? 0 : checked(previousFailureStreak + 1);
+        TimeSpan delay;
+        if (result.IsAlive)
+        {
+            delay = TimeSpan.FromMinutes(options.ValidationIntervalMinutes);
+        }
+        else
+        {
+            var exponent = Math.Min(Math.Max(0, failureStreak - 1), 20);
+            var minutes = Math.Min(
+                (long)options.DeadRetryMaxHours * 60,
+                (long)options.DeadRetryBaseMinutes * (1L << exponent));
+            delay = TimeSpan.FromMinutes(minutes);
+        }
+
+        return new ScheduledProxyCheck(
+            result.ProxyId,
+            leaseId,
+            result.IsAlive,
+            result.LatencyMs,
+            result.ExitIp?[..Math.Min(64, result.ExitIp.Length)],
+            result.IsAnonymous,
+            result.Error?[..Math.Min(500, result.Error.Length)],
+            now,
+            now.Add(delay),
+            failureStreak);
+    }
+}
+
+/// <summary>Нормализованный результат, готовый для PostgreSQL binary COPY.</summary>
+internal sealed record ScheduledProxyCheck(
+    Guid ProxyId,
+    Guid LeaseId,
+    bool IsAlive,
+    int? LatencyMs,
+    string? ExitIp,
+    bool IsAnonymous,
+    string? Error,
+    DateTimeOffset CheckedAt,
+    DateTimeOffset NextCheckAt,
+    int FailureStreak);

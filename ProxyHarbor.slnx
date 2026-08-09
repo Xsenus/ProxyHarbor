@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/ProxyHarbor.Api/ProxyHarbor.Api.csproj" />
+    <Project Path="src/ProxyHarbor.Domain/ProxyHarbor.Domain.csproj" />
+    <Project Path="src/ProxyHarbor.Infrastructure/ProxyHarbor.Infrastructure.csproj" />
+    <Project Path="src/ProxyHarbor.Restore/ProxyHarbor.Restore.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/ProxyHarbor.Tests/ProxyHarbor.Tests.csproj" />
+  </Folder>
+</Solution>

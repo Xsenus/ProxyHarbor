@@ -1,0 +1,88 @@
+using System.Net;
+using System.Net.Sockets;
+
+namespace ProxyHarbor.Infrastructure;
+
+/// <summary>Единые правила, запрещающие обращения сборщика к локальным и служебным сетям.</summary>
+public static class NetworkSafety
+{
+    /// <summary>Проверяет HTTPS URL и все его текущие DNS-адреса.</summary>
+    public static async Task<bool> IsSafePublicHttpsUrlAsync(string value, CancellationToken token)
+    {
+        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps ||
+            (!uri.IsDefaultPort && uri.Port != 443) || !string.IsNullOrEmpty(uri.UserInfo))
+            return false;
+
+        try
+        {
+            var addresses = await Dns.GetHostAddressesAsync(uri.Host, token);
+            return addresses.Length > 0 && addresses.All(IsPublicAddress);
+        }
+        catch (SocketException) { return false; }
+    }
+
+    /// <summary>Разрешает только глобально маршрутизируемые IPv4/IPv6 адреса.</summary>
+    public static bool IsPublicAddress(IPAddress address)
+    {
+        if (address.IsIPv4MappedToIPv6) return IsPublicAddress(address.MapToIPv4());
+        if (IPAddress.IsLoopback(address) || address.Equals(IPAddress.Any) || address.Equals(IPAddress.IPv6Any) ||
+            address.IsIPv6LinkLocal || address.IsIPv6SiteLocal || address.IsIPv6Multicast)
+            return false;
+
+        var bytes = address.GetAddressBytes();
+        if (address.AddressFamily == AddressFamily.InterNetworkV6)
+        {
+            var globalUnicast = (bytes[0] & 0xe0) == 0x20; // 2000::/3.
+            var documentation = bytes[0] == 0x20 && bytes[1] == 0x01 && bytes[2] == 0x0d && bytes[3] == 0xb8;
+            return globalUnicast && !documentation;
+        }
+
+        if (address.AddressFamily != AddressFamily.InterNetwork) return false;
+        return bytes[0] switch
+        {
+            0 or 10 or 127 => false,
+            100 when bytes[1] is >= 64 and <= 127 => false, // CGNAT 100.64.0.0/10.
+            169 when bytes[1] == 254 => false,
+            172 when bytes[1] is >= 16 and <= 31 => false,
+            192 when bytes[1] == 0 => false,
+            192 when bytes[1] == 2 => false, // TEST-NET-1.
+            192 when bytes[1] == 168 => false,
+            198 when bytes[1] is 18 or 19 => false, // Benchmark network.
+            198 when bytes[1] == 51 && bytes[2] == 100 => false, // TEST-NET-2.
+            203 when bytes[1] == 0 && bytes[2] == 113 => false, // TEST-NET-3.
+            >= 224 => false, // Multicast, reserved and broadcast ranges.
+            _ => true
+        };
+    }
+}
+
+/// <summary>Повторно проверяет DNS прямо в момент TCP-соединения и тем самым блокирует DNS rebinding.</summary>
+public static class PublicNetworkConnector
+{
+    public static async ValueTask<Stream> ConnectAsync(SocketsHttpConnectionContext context, CancellationToken token)
+    {
+        var addresses = await Dns.GetHostAddressesAsync(context.DnsEndPoint.Host, token);
+        var publicAddresses = addresses.Where(NetworkSafety.IsPublicAddress).ToArray();
+        if (publicAddresses.Length == 0 || publicAddresses.Length != addresses.Length)
+            throw new HttpRequestException("DNS источника содержит локальный или служебный адрес.");
+
+        Exception? lastError = null;
+        foreach (var address in publicAddresses)
+        {
+            var socket = new Socket(address.AddressFamily, SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
+            try
+            {
+                await socket.ConnectAsync(new IPEndPoint(address, context.DnsEndPoint.Port), token);
+                return new NetworkStream(socket, ownsSocket: true);
+            }
+            catch (Exception ex) when (ex is SocketException or OperationCanceledException)
+            {
+                socket.Dispose();
+                if (ex is OperationCanceledException) throw;
+                lastError = ex;
+            }
+        }
+
+        throw new HttpRequestException("Не удалось соединиться ни с одним публичным адресом источника.", lastError);
+    }
+}
