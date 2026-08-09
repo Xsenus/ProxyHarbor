@@ -101,7 +101,10 @@ Vite проксирует API на `http://localhost:8080`. Для провер�
 ```powershell
 dotnet build ProxyHarbor.slnx -c Release
 dotnet test ProxyHarbor.slnx -c Release
-cd src/proxyharbor-web; npm run build
+cd src/proxyharbor-web
+npm run lint
+npm test
+npm run build
 ```
 
 ## Резервные копии и восстановление

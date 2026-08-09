@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Activity, ArrowDownToLine, Check, Clock3, Database, Gauge, KeyRound, Network, Play, RefreshCw, Server, ShieldCheck, Wifi, X } from 'lucide-react'
 
 type Protocol = 'Http' | 'Https' | 'Socks4' | 'Socks5'
@@ -16,13 +16,19 @@ export default function App() {
   const [protocol, setProtocol] = useState<Protocol | 'All'>('All')
   const [maxLatency, setMaxLatency] = useState(2000)
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
+  const [apiError, setApiError] = useState('')
   const [adminOpen, setAdminOpen] = useState(false)
   const [adminKey, setAdminKey] = useState(() => sessionStorage.getItem('proxyharbor-admin-key') ?? '')
+  const [adminAuthenticated, setAdminAuthenticated] = useState(false)
+  const [adminError, setAdminError] = useState('')
   const [sources, setSources] = useState<Source[]>([])
   const [action, setAction] = useState('')
   const [sourceBusy, setSourceBusy] = useState('')
   const [sourceDraft, setSourceDraft] = useState<{name: string; url: string; protocol: Protocol; priority: number}>({ name: '', url: '', protocol: 'Http', priority: 100 })
+  const lastAdminTriggerRef = useRef<HTMLButtonElement>(null)
+  const adminDialogRef = useRef<HTMLElement>(null)
+  const adminKeyRef = useRef<HTMLInputElement>(null)
+  const autoLoginAttemptedRef = useRef(false)
 
   const load = useCallback(async () => {
     try {
@@ -34,8 +40,8 @@ export default function App() {
       if (!statsResponse.ok || !proxyResponse.ok) throw new Error('API пока недоступен')
       setStats(await statsResponse.json())
       setProxies((await proxyResponse.json()).items)
-      setError('')
-    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Ошибка загрузки') }
+      setApiError('')
+    } catch (reason) { setApiError(reason instanceof Error ? reason.message : 'Ошибка загрузки') }
     finally { setLoading(false) }
   }, [protocol, maxLatency])
 
@@ -49,64 +55,144 @@ export default function App() {
   }, [load])
 
   const loadSources = useCallback(async () => {
-    if (!adminKey) return
-    sessionStorage.setItem('proxyharbor-admin-key', adminKey)
-    const response = await fetch(`${API}/api/v1/admin/sources`, { headers: { 'X-Admin-Key': adminKey } })
-    if (response.ok) setSources(await response.json()); else setError('Неверный ключ администратора')
+    if (!adminKey) {
+      setAdminAuthenticated(false)
+      return
+    }
+    try {
+      const response = await fetch(`${API}/api/v1/admin/sources`, { headers: { 'X-Admin-Key': adminKey } })
+      if (!response.ok) throw new Error(await responseMessage(response, 'Неверный ключ администратора'))
+      sessionStorage.setItem('proxyharbor-admin-key', adminKey)
+      setSources(await response.json())
+      setAdminAuthenticated(true)
+      setAdminError('')
+    } catch (reason) {
+      sessionStorage.removeItem('proxyharbor-admin-key')
+      setAdminAuthenticated(false)
+      setSources([])
+      setAdminError(reason instanceof Error ? reason.message : 'Не удалось открыть административную консоль')
+    }
   }, [adminKey])
 
   useEffect(() => {
-    if (!adminOpen) return
+    if (!adminOpen) {
+      autoLoginAttemptedRef.current = false
+      return
+    }
+    if (autoLoginAttemptedRef.current) return
+    autoLoginAttemptedRef.current = true
+    if (!adminKey) return
     const initialLoad = window.setTimeout(() => void loadSources(), 0)
     return () => window.clearTimeout(initialLoad)
-  }, [adminOpen, loadSources])
+  }, [adminOpen, adminKey, loadSources])
+
+  const openAdmin = (event: React.MouseEvent<HTMLButtonElement>) => {
+    lastAdminTriggerRef.current = event.currentTarget
+    setAdminOpen(true)
+  }
+  const closeAdmin = useCallback(() => setAdminOpen(false), [])
+
+  useEffect(() => {
+    if (!adminOpen) return
+    const previousFocus = document.activeElement instanceof HTMLElement && document.activeElement !== document.body
+      ? document.activeElement
+      : lastAdminTriggerRef.current
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    window.requestAnimationFrame(() => adminKeyRef.current?.focus())
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        closeAdmin()
+        return
+      }
+      if (event.key !== 'Tab' || !adminDialogRef.current) return
+      const focusable = [...adminDialogRef.current.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), select:not([disabled]), a[href]')]
+        .filter(element => !element.hidden && element.getAttribute('aria-hidden') !== 'true')
+      if (focusable.length === 0) return
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown)
+      document.body.style.overflow = previousOverflow
+      previousFocus?.focus()
+    }
+  }, [adminOpen, closeAdmin])
 
   const runAdminAction = async (name: 'collect' | 'validate' | 'backup') => {
+    if (!adminAuthenticated) return
     setAction(name)
+    setAdminError('')
     try {
       const response = await fetch(`${API}/api/v1/admin/${name}`, { method: 'POST', headers: { 'X-Admin-Key': adminKey } })
-      if (!response.ok) throw new Error(await response.text())
+      if (!response.ok) {
+        if (response.status === 401) { sessionStorage.removeItem('proxyharbor-admin-key'); setAdminAuthenticated(false) }
+        throw new Error(await responseMessage(response, 'Административная операция не выполнена'))
+      }
       await Promise.all([load(), loadSources()])
-    } catch { setError('Административная операция не выполнена') }
+    } catch (reason) { setAdminError(reason instanceof Error ? reason.message : 'Административная операция не выполнена') }
     finally { setAction('') }
   }
 
   const saveSource = async (event: React.FormEvent) => {
     event.preventDefault()
+    if (!adminAuthenticated) return
     setSourceBusy('new')
+    setAdminError('')
     try {
       const response = await fetch(`${API}/api/v1/admin/sources`, {
         method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Admin-Key': adminKey },
         body: JSON.stringify({ ...sourceDraft, enabled: true }),
       })
-      if (!response.ok) throw new Error(await response.text())
+      if (!response.ok) {
+        if (response.status === 401) { sessionStorage.removeItem('proxyharbor-admin-key'); setAdminAuthenticated(false) }
+        throw new Error(await responseMessage(response, 'Не удалось добавить источник'))
+      }
       setSourceDraft({ name: '', url: '', protocol: 'Http', priority: 100 })
       await loadSources()
-    } catch { setError('Не удалось добавить источник: проверьте HTTPS URL и уникальность') }
+    } catch (reason) { setAdminError(reason instanceof Error ? reason.message : 'Не удалось добавить источник') }
     finally { setSourceBusy('') }
   }
 
   const toggleSource = async (source: Source) => {
+    if (!adminAuthenticated) return
     setSourceBusy(source.id)
+    setAdminError('')
     try {
       const response = await fetch(`${API}/api/v1/admin/sources/${source.id}`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json', 'X-Admin-Key': adminKey },
         body: JSON.stringify({ name: source.name, url: source.url, protocol: source.defaultProtocol, priority: source.priority, enabled: !source.enabled }),
       })
-      if (!response.ok) throw new Error(await response.text())
+      if (!response.ok) {
+        if (response.status === 401) { sessionStorage.removeItem('proxyharbor-admin-key'); setAdminAuthenticated(false) }
+        throw new Error(await responseMessage(response, 'Не удалось изменить состояние источника'))
+      }
       await loadSources()
-    } catch { setError('Не удалось изменить состояние источника') }
+    } catch (reason) { setAdminError(reason instanceof Error ? reason.message : 'Не удалось изменить состояние источника') }
     finally { setSourceBusy('') }
   }
 
   const removeSource = async (source: Source) => {
+    if (!adminAuthenticated) return
     if (!window.confirm(`Удалить или отключить источник «${source.name}»?`)) return
     setSourceBusy(source.id)
     try {
       const response = await fetch(`${API}/api/v1/admin/sources/${source.id}`, { method: 'DELETE', headers: { 'X-Admin-Key': adminKey } })
-      if (!response.ok) throw new Error(await response.text())
+      if (!response.ok) {
+        if (response.status === 401) { sessionStorage.removeItem('proxyharbor-admin-key'); setAdminAuthenticated(false) }
+        throw new Error(await responseMessage(response, 'Не удалось удалить источник'))
+      }
       await loadSources()
-    } catch { setError('Не удалось удалить источник') }
+    } catch (reason) { setAdminError(reason instanceof Error ? reason.message : 'Не удалось удалить источник') }
     finally { setSourceBusy('') }
   }
 
@@ -114,13 +200,14 @@ export default function App() {
   const freshness = stats?.lastRun?.startedAt ? timeAgo(stats.lastRun.startedAt) : 'ожидается'
 
   return <div className="app-shell">
-    <header>
+    <header aria-hidden={adminOpen || undefined}>
       <a className="brand" href="#top" aria-label="ProxyHarbor — наверх"><span className="brand-mark"><Network size={20}/></span><span>Proxy<span>Harbor</span></span></a>
-      <nav><a href="#catalog">Каталог</a><a href="#api">API</a><button className="admin-link" onClick={() => setAdminOpen(true)}><KeyRound size={15}/> Управление</button></nav>
-      <div className={`live-pill ${error ? 'offline' : ''}`} aria-live="polite"><span/> {error ? 'API недоступен' : 'система активна'}</div>
+      <nav><a href="#catalog">Каталог</a><a href="#api">API</a><button className="admin-link" onClick={openAdmin}><KeyRound size={15}/> Управление</button></nav>
+      <button className="mobile-admin" aria-label="Открыть управление" onClick={openAdmin}><KeyRound size={17}/></button>
+      <div className={`live-pill ${apiError ? 'offline' : ''}`} aria-live="polite"><span/> {loading ? 'проверка…' : apiError ? 'API недоступен' : 'система активна'}</div>
     </header>
 
-    <main id="top">
+    <main id="top" aria-hidden={adminOpen || undefined}>
       <section className="hero">
         <div className="eyebrow"><ShieldCheck size={15}/> Проверено в реальном времени</div>
         <h1>Чистый поток<br/><em>рабочих прокси.</em></h1>
@@ -143,7 +230,7 @@ export default function App() {
       <section id="catalog" className="catalog">
         <div className="section-heading"><div><span className="kicker">LIVE CATALOG</span><h2>Лучшие прямо сейчас</h2></div><p>Автообновление каждые 15 секунд</p></div>
         <div className="filters"><div className="tabs"><button className={protocol === 'All' ? 'active' : ''} onClick={() => setProtocol('All')}>Все</button>{protocols.map(x => <button key={x} className={protocol === x ? 'active' : ''} onClick={() => setProtocol(x)}>{label(x)}</button>)}</div><label>до <b>{maxLatency} мс</b><input type="range" min="200" max="5000" step="100" value={maxLatency} onChange={e => setMaxLatency(Number(e.target.value))}/></label></div>
-        {error && <div className="error-banner"><X size={17}/>{error}<button onClick={() => { setError(''); void load() }}>повторить</button></div>}
+        {apiError && <div className="error-banner" role="alert"><X size={17}/>{apiError}<button onClick={() => { setApiError(''); setLoading(true); void load() }}>повторить</button></div>}
         <div className="proxy-table" aria-busy={loading}>
           <div className="table-row table-head"><span>Адрес</span><span>Протокол</span><span>Задержка</span><span>Надёжность</span><span>Проверен</span></div>
           {loading ? <div className="empty"><RefreshCw className="spin"/> Загружаем свежий каталог…</div> : proxies.length === 0 ? <div className="empty"><Server/> Живые прокси появятся после первого цикла проверки.</div> : proxies.map(proxy => <div className="table-row" key={proxy.url}><code>{proxy.host}<i>:</i>{proxy.port}</code><span className={`badge ${proxy.protocol.toLowerCase()}`}>{label(proxy.protocol)}</span><span className="latency"><i className={proxy.latencyMs < 800 ? 'fast' : proxy.latencyMs < 1800 ? 'medium' : 'slow'}/>{proxy.latencyMs} мс</span><span>{proxy.successRate}%</span><span>{timeAgo(proxy.lastCheckedAt)}</span></div>)}
@@ -153,17 +240,18 @@ export default function App() {
       <section id="api" className="api-panel"><div><span className="kicker">ONE-CLICK EXPORT</span><h2>Забирайте как удобно</h2><p>Фильтруйте через API или скачивайте готовый список. Выдача содержит только прокси со статусом Alive.</p></div><div className="export-grid">{['json','xml','txt','csv'].map(format => <a key={format} href={`${API}/api/v1/export/${format}`}><span>.{format}</span><ArrowDownToLine size={18}/></a>)}</div><div className="endpoint"><span>GET</span><code>/api/v1/proxies?protocol=Socks5&amp;maxLatencyMs=1000</code></div></section>
     </main>
 
-    <footer><div className="brand"><span className="brand-mark"><Network size={18}/></span><span>Proxy<span>Harbor</span></span></div><p>Используйте публичные прокси ответственно и в рамках закона.</p><span>© {new Date().getFullYear()}</span></footer>
+    <footer aria-hidden={adminOpen || undefined}><div className="brand"><span className="brand-mark"><Network size={18}/></span><span>Proxy<span>Harbor</span></span></div><p>Используйте публичные прокси ответственно и в рамках закона.</p><span>© {new Date().getFullYear()}</span></footer>
 
-    {adminOpen && <div className="modal-backdrop" onMouseDown={e => e.target === e.currentTarget && setAdminOpen(false)}>
-      <section className="admin-modal" role="dialog" aria-modal="true" aria-label="Управление ProxyHarbor">
-        <button className="close" aria-label="Закрыть" onClick={() => setAdminOpen(false)}><X/></button>
-        <span className="kicker">ADMIN CONSOLE</span><h2>Управление сбором</h2><p>Ключ хранится только до закрытия вкладки.</p>
-        <div className="key-input"><KeyRound size={18}/><input type="password" aria-label="Ключ администратора" placeholder="X-Admin-Key" value={adminKey} onChange={e => setAdminKey(e.target.value)}/><button onClick={loadSources}>Войти</button></div>
+    {adminOpen && <div className="modal-backdrop" onMouseDown={e => e.target === e.currentTarget && closeAdmin()}>
+      <section ref={adminDialogRef} className="admin-modal" role="dialog" aria-modal="true" aria-labelledby="admin-title">
+        <button className="close" aria-label="Закрыть" onClick={closeAdmin}><X/></button>
+        <span className="kicker">ADMIN CONSOLE</span><h2 id="admin-title">Управление сбором</h2><p>Ключ хранится только до закрытия вкладки.</p>
+        <div className="key-input"><KeyRound size={18}/><input ref={adminKeyRef} type="password" aria-label="Ключ администратора" placeholder="X-Admin-Key" value={adminKey} onChange={e => { setAdminKey(e.target.value); setAdminAuthenticated(false); setAdminError(''); setSources([]) }}/><button onClick={loadSources}>Войти</button></div>
+        {adminError && <div className="admin-notice" role="alert"><X size={16}/>{adminError}</div>}
         <div className="admin-actions">
-          <button onClick={() => runAdminAction('collect')} disabled={!adminKey || !!action}><Play/> {action === 'collect' ? 'Собираем…' : 'Запустить сбор'}</button>
-          <button onClick={() => runAdminAction('validate')} disabled={!adminKey || !!action}><Check/> {action === 'validate' ? 'Проверяем…' : 'Проверить пакет'}</button>
-          <button onClick={() => runAdminAction('backup')} disabled={!adminKey || !!action}><Database/> {action === 'backup' ? 'Копируем…' : 'Создать backup'}</button>
+          <button onClick={() => runAdminAction('collect')} disabled={!adminAuthenticated || !!action}><Play/> {action === 'collect' ? 'Собираем…' : 'Запустить сбор'}</button>
+          <button onClick={() => runAdminAction('validate')} disabled={!adminAuthenticated || !!action}><Check/> {action === 'validate' ? 'Проверяем…' : 'Проверить пакет'}</button>
+          <button onClick={() => runAdminAction('backup')} disabled={!adminAuthenticated || !!action}><Database/> {action === 'backup' ? 'Копируем…' : 'Создать backup'}</button>
         </div>
         <h3>Добавить источник</h3>
         <form className="source-form" onSubmit={saveSource}>
@@ -171,7 +259,7 @@ export default function App() {
           <input required type="url" maxLength={2048} pattern="https://.*" aria-label="HTTPS URL источника" placeholder="https://example.org/proxies.txt" value={sourceDraft.url} onChange={e => setSourceDraft({...sourceDraft, url: e.target.value})}/>
           <select aria-label="Протокол источника" value={sourceDraft.protocol} onChange={e => setSourceDraft({...sourceDraft, protocol: e.target.value as Protocol})}>{protocols.map(item => <option key={item} value={item}>{label(item)}</option>)}</select>
           <input type="number" min={-10000} max={10000} aria-label="Приоритет источника" value={sourceDraft.priority} onChange={e => setSourceDraft({...sourceDraft, priority: Number(e.target.value)})}/>
-          <button type="submit" disabled={!adminKey || !!sourceBusy}>{sourceBusy === 'new' ? 'Добавляем…' : 'Добавить'}</button>
+          <button type="submit" disabled={!adminAuthenticated || !!sourceBusy}>{sourceBusy === 'new' ? 'Добавляем…' : 'Добавить'}</button>
         </form>
         <h3>Источники <span>{sources.length}</span></h3>
         <div className="source-list">{sources.map(source => <article key={source.id}>
@@ -187,3 +275,10 @@ function Metric({icon, label, value, note}: {icon: React.ReactNode; label: strin
 function formatNumber(value?: number) { return value === undefined ? '—' : value.toLocaleString('ru-RU') }
 function label(protocol: Protocol) { return ({Http: 'HTTP', Https: 'HTTPS', Socks4: 'SOCKS4', Socks5: 'SOCKS5'})[protocol] }
 function timeAgo(value: string) { const sec = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 1000)); if (sec < 10) return 'только что'; if (sec < 60) return `${sec} сек назад`; if (sec < 3600) return `${Math.floor(sec / 60)} мин назад`; return `${Math.floor(sec / 3600)} ч назад` }
+
+async function responseMessage(response: Response, fallback: string) {
+  try {
+    const problem = await response.json() as { title?: string; detail?: string }
+    return problem.detail || problem.title || fallback
+  } catch { return fallback }
+}
