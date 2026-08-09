@@ -52,6 +52,20 @@ public sealed class BackupEncryptionTests
     }
 
     [Fact]
+    public async Task EncryptionCancellationDeletesPartialCiphertext()
+    {
+        using var files = new TemporaryFiles();
+        await File.WriteAllBytesAsync(files.Source, RandomNumberGenerator.GetBytes(128));
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            BackupEncryption.EncryptAsync(files.Source, files.Encrypted, Password, cancellation.Token));
+
+        Assert.False(File.Exists(files.Encrypted));
+    }
+
+    [Fact]
     public async Task LegacyPhb2RemainsDecryptable()
     {
         using var files = new TemporaryFiles();

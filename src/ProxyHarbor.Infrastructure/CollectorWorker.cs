@@ -39,6 +39,11 @@ public sealed class ValidatorWorker(ProxyValidator validator, IOptions<Collector
                 var result = await validator.ValidateBatchAsync(stoppingToken);
                 await Task.Delay(result.Checked == 0 ? TimeSpan.FromSeconds(30) : TimeSpan.FromSeconds(1), stoppingToken);
             }
+            catch (OperationAlreadyRunningException)
+            {
+                // Ручной запуск уже использует локальный validator; повторим цикл после короткой паузы.
+                await Task.Delay(TimeSpan.FromSeconds(1), stoppingToken);
+            }
             catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
             {
                 ValidationFailed(logger, ex);

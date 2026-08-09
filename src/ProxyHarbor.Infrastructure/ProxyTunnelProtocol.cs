@@ -1,3 +1,5 @@
+using System.Net;
+using System.Net.Sockets;
 using System.Text;
 
 namespace ProxyHarbor.Infrastructure;
@@ -8,7 +10,12 @@ internal static class ProxyTunnelProtocol
     internal static async Task EstablishHttpConnectAsync(
         Stream stream, string targetHost, int targetPort, CancellationToken token)
     {
-        var authority = $"{targetHost}:{targetPort}";
+        ValidateTarget(targetHost, targetPort);
+        var authorityHost = IPAddress.TryParse(targetHost, out var address) &&
+            address.AddressFamily == AddressFamily.InterNetworkV6
+            ? $"[{address}]"
+            : targetHost;
+        var authority = $"{authorityHost}:{targetPort}";
         var request = $"CONNECT {authority} HTTP/1.1\r\nHost: {authority}\r\nProxy-Connection: keep-alive\r\n\r\n";
         await stream.WriteAsync(Encoding.ASCII.GetBytes(request), token);
         var response = await ReadHeadersAsync(stream, token);
@@ -23,6 +30,7 @@ internal static class ProxyTunnelProtocol
     internal static async Task EstablishSocks4aAsync(
         Stream stream, string targetHost, int targetPort, CancellationToken token)
     {
+        ValidateTarget(targetHost, targetPort);
         var host = EncodeHost(targetHost);
         var request = new byte[10 + host.Length];
         request[0] = 4;
@@ -41,6 +49,7 @@ internal static class ProxyTunnelProtocol
     internal static async Task EstablishSocks5Async(
         Stream stream, string targetHost, int targetPort, CancellationToken token)
     {
+        ValidateTarget(targetHost, targetPort);
         await stream.WriteAsync(new byte[] { 5, 1, 0 }, token);
         var greeting = new byte[2];
         await ReadExactlyAsync(stream, greeting, token);
@@ -77,9 +86,15 @@ internal static class ProxyTunnelProtocol
 
     private static byte[] EncodeHost(string host)
     {
-        if (string.IsNullOrWhiteSpace(host) || host.Any(character => character is '\0' or > '\x7f'))
-            throw new IOException("Proxy-протокол поддерживает только корректное ASCII DNS-имя назначения.");
         return Encoding.ASCII.GetBytes(host);
+    }
+
+    private static void ValidateTarget(string host, int port)
+    {
+        if (port is < 1 or > 65_535 || string.IsNullOrWhiteSpace(host) ||
+            host.Any(character => char.IsControl(character) || character > '\x7f') ||
+            Uri.CheckHostName(host) == UriHostNameType.Unknown)
+            throw new IOException("Некорректное назначение proxy-туннеля.");
     }
 
     private static async Task<string> ReadHeadersAsync(Stream stream, CancellationToken token)

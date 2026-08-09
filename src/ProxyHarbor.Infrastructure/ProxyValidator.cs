@@ -22,7 +22,8 @@ public sealed class ProxyValidator(
     /// <summary>Проверяет приоритетный пакет и возвращает число фактически сохранённых результатов.</summary>
     public async Task<(int Checked, int Alive)> ValidateBatchAsync(CancellationToken cancellationToken)
     {
-        await _runGate.WaitAsync(cancellationToken);
+        if (!await _runGate.WaitAsync(0, cancellationToken))
+            throw new OperationAlreadyRunningException("проверка прокси");
         try
         {
             var settings = options.Value;

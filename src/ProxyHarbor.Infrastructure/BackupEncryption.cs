@@ -20,6 +20,7 @@ public static class BackupEncryption
     public static async Task EncryptAsync(string source, string destination, string password, CancellationToken token)
     {
         ValidatePassword(password);
+        if (File.Exists(destination)) throw new IOException("Файл назначения уже существует.");
         var salt = RandomNumberGenerator.GetBytes(SaltSize);
         var key = Rfc2898DeriveBytes.Pbkdf2(password, salt, Iterations, HashAlgorithmName.SHA256, 32);
         var plaintext = new byte[DefaultChunkSize];
@@ -28,7 +29,7 @@ public static class BackupEncryption
             using var aes = new AesGcm(key, TagSize);
             await using var input = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.Read,
                 128 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
-            await using var output = new FileStream(destination, FileMode.Create, FileAccess.Write, FileShare.None,
+            await using var output = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None,
                 128 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
             await output.WriteAsync(CurrentMagic.ToArray(), token);
             await output.WriteAsync(salt, token);
@@ -59,6 +60,12 @@ public static class BackupEncryption
             await WriteInt32Async(output, 0, token);
             await output.WriteAsync(finalNonce, token);
             await output.WriteAsync(finalTag, token);
+        }
+        catch
+        {
+            // Частичный ciphertext никогда не должен выглядеть как готовая резервная копия.
+            if (File.Exists(destination)) File.Delete(destination);
+            throw;
         }
         finally
         {

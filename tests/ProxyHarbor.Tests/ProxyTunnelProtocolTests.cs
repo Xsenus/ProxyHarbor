@@ -31,6 +31,31 @@ public sealed class ProxyTunnelProtocolTests
     }
 
     [Fact]
+    public async Task HttpConnectBracketsIpv6Authority()
+    {
+        await using var stream = new ScriptedDuplexStream(
+            Encoding.ASCII.GetBytes("HTTP/1.1 200 Connection established\r\n\r\n"));
+
+        await ProxyTunnelProtocol.EstablishHttpConnectAsync(
+            stream, "2606:4700:4700::1111", 443, CancellationToken.None);
+
+        Assert.StartsWith("CONNECT [2606:4700:4700::1111]:443 HTTP/1.1\r\n",
+            Encoding.ASCII.GetString(stream.Written), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("example.com\r\nX-Injected: true")]
+    [InlineData("")]
+    public async Task HttpConnectRejectsUnsafeTarget(string host)
+    {
+        await using var stream = new ScriptedDuplexStream([]);
+
+        await Assert.ThrowsAsync<IOException>(() => ProxyTunnelProtocol.EstablishHttpConnectAsync(
+            stream, host, 443, CancellationToken.None));
+        Assert.Empty(stream.Written);
+    }
+
+    [Fact]
     public async Task Socks4aWritesDnsTargetAndValidatesReplyVersion()
     {
         await using var stream = new ScriptedDuplexStream([0, 90, 0, 0, 0, 0, 0, 0]);

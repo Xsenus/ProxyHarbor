@@ -29,6 +29,15 @@ public sealed class ProxiesController(
     {
         page = Math.Max(1, page);
         pageSize = Math.Clamp(pageSize, 1, 1000);
+        var requestedOffset = (long)(page - 1) * pageSize;
+        if (requestedOffset > 5_000_000)
+            return BadRequest(new ProblemDetails
+            {
+                Title = "Слишком глубокая страница",
+                Detail = "Используйте больший pageSize или экспорт; максимальное смещение — 5 000 000 записей.",
+                Status = 400
+            });
+        var skip = (int)requestedOffset;
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
         var freshAfter = DateTimeOffset.UtcNow.AddMinutes(-collectorOptions.Value.PublicFreshnessMinutes);
         var query = db.Proxies.AsNoTracking().Where(x =>
@@ -42,7 +51,7 @@ public sealed class ProxiesController(
                 100m * x.SuccessfulChecks >= threshold * (x.SuccessfulChecks + x.FailedChecks));
         }
         var entities = await query.OrderBy(x => x.LatencyMs).ThenByDescending(x => x.SuccessfulChecks)
-            .Skip((page - 1) * pageSize).Take(pageSize).ToListAsync(cancellationToken);
+            .Skip(skip).Take(pageSize).ToListAsync(cancellationToken);
         var items = entities.Select(ProxyDto.From).ToList();
         var total = await query.CountAsync(cancellationToken);
         return Ok(new PagedResult<ProxyDto>(items, page, pageSize, total));

@@ -55,6 +55,22 @@ public sealed class ProxyPublicationTests
         Assert.DoesNotContain("1.1.1.1", text);
     }
 
+    [Fact]
+    public async Task ExtremePageNumberIsRejectedBeforeDatabaseOffsetOverflows()
+    {
+        var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+            .UseInMemoryDatabase($"pagination-{Guid.NewGuid():N}")
+            .Options;
+        var controller = new ProxiesController(
+            new TestDbFactory(options),
+            Options.Create(new CollectorOptions { PublicFreshnessMinutes = 15 }));
+
+        var action = await controller.Get(null, null, null, int.MaxValue, 1000, CancellationToken.None);
+
+        var problem = Assert.IsType<ProblemDetails>(Assert.IsType<BadRequestObjectResult>(action.Result).Value);
+        Assert.Equal(400, problem.Status);
+    }
+
     private static ProxyEndpoint Endpoint(string host, ProxyStatus status, DateTimeOffset checkedAt) => new()
     {
         Host = host,
