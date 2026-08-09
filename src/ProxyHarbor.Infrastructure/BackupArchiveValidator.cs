@@ -7,12 +7,25 @@ namespace ProxyHarbor.Infrastructure;
 public static class BackupArchiveValidator
 {
     private const long MaxManifestBytes = 64 * 1024;
+    private const long MaxSettingsEntryBytes = 1024 * 1024;
     private static readonly string[] RequiredDatabaseEntries =
     [
         "database/proxies.json",
         "database/sources.json",
         "database/runs.json"
     ];
+    private static readonly string[] CurrentSettingsEntries =
+    [
+        "settings/collector.json",
+        "settings/backup.json",
+        "settings/runtime.json"
+    ];
+    private static readonly HashSet<string> AllowedEntries = new(
+        RequiredDatabaseEntries
+            .Concat(["database/backup-runs.json"])
+            .Concat(CurrentSettingsEntries)
+            .Append("manifest.json"),
+        StringComparer.Ordinal);
 
     /// <summary>Отклоняет неподдерживаемые, неоднозначные и потенциально опасные архивы.</summary>
     public static void Validate(ZipArchive archive)
@@ -24,6 +37,10 @@ public static class BackupArchiveValidator
             .FirstOrDefault(group => group.Count() > 1);
         if (duplicate is not null)
             throw new InvalidDataException($"Backup содержит повторяющийся файл {duplicate.Key}.");
+
+        var unexpected = archive.Entries.FirstOrDefault(entry => !AllowedEntries.Contains(entry.FullName));
+        if (unexpected is not null)
+            throw new InvalidDataException($"Backup содержит файл вне разрешённой схемы: {unexpected.FullName}.");
 
         var manifestEntry = RequiredEntry(archive, "manifest.json");
         if (manifestEntry.Length > MaxManifestBytes)
@@ -43,10 +60,27 @@ public static class BackupArchiveValidator
             secretsIncluded.GetBoolean())
             throw new InvalidDataException("Backup с секретами или без явной политики секретов не поддерживается.");
 
+        if (versionNumber >= 3 &&
+            (!root.TryGetProperty("createdAt", out var createdAt) ||
+                createdAt.ValueKind != JsonValueKind.String ||
+                !createdAt.TryGetDateTimeOffset(out _)))
+            throw new InvalidDataException("Manifest текущего backup не содержит корректный createdAt.");
+
         foreach (var name in RequiredDatabaseEntries)
             _ = RequiredEntry(archive, name);
         if (versionNumber >= 3)
+        {
             _ = RequiredEntry(archive, "database/backup-runs.json");
+            foreach (var name in CurrentSettingsEntries)
+                _ = RequiredEntry(archive, name);
+        }
+
+        foreach (var name in CurrentSettingsEntries)
+        {
+            var entry = archive.GetEntry(name);
+            if (entry?.Length > MaxSettingsEntryBytes)
+                throw new InvalidDataException($"Файл настроек {name} превышает допустимый размер.");
+        }
     }
 
     /// <summary>Возвращает единственную обязательную запись с точным именем.</summary>

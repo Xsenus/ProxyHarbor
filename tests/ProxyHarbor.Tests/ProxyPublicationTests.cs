@@ -100,7 +100,7 @@ public sealed class ProxyPublicationTests
         var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
             .UseInMemoryDatabase($"structured-export-{Guid.NewGuid():N}")
             .Options;
-        var checkedAt = new DateTimeOffset(2026, 8, 9, 10, 11, 12, TimeSpan.Zero);
+        var checkedAt = DateTimeOffset.UtcNow.AddMinutes(-1);
         var endpoint = Endpoint("2001:4860:4860::8888", ProxyStatus.Alive, checkedAt);
         endpoint.Protocol = ProxyProtocol.Socks5;
         endpoint.LatencyMs = 321;

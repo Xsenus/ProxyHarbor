@@ -18,6 +18,9 @@ public sealed class BackupRuntimeSettingsTests
         {
             ["Cors:Origins:0"] = "https://dashboard.example",
             ["ForwardedHeaders:KnownNetworks:0"] = "172.30.0.0/24",
+            ["AllowedHosts"] = "proxy.example;localhost",
+            ["Logging:LogLevel:Default"] = "Information",
+            ["Logging:LogLevel:Microsoft.AspNetCore"] = "Warning",
             ["Security:AdminApiKey"] = adminKey,
             ["ConnectionStrings:Postgres"] = connection
         }).Build();
@@ -27,6 +30,9 @@ public sealed class BackupRuntimeSettingsTests
 
         Assert.Equal(["https://dashboard.example"], snapshot.CorsOrigins);
         Assert.Equal(["172.30.0.0/24"], snapshot.ForwardedHeaderKnownNetworks);
+        Assert.Equal("proxy.example;localhost", snapshot.AllowedHosts);
+        Assert.Equal("Information", snapshot.LogLevels["Default"]);
+        Assert.Equal("Warning", snapshot.LogLevels["Microsoft.AspNetCore"]);
         Assert.True(snapshot.AdminApiKeyConfigured);
         Assert.False(snapshot.AdminApiKeyIncluded);
         Assert.False(snapshot.ConnectionStringIncluded);

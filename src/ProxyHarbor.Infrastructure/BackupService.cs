@@ -19,6 +19,7 @@ public sealed class BackupService(
     IConfiguration configuration,
     ILogger<BackupService> logger) : IDisposable
 {
+    private static readonly TimeSpan AuditWriteTimeout = TimeSpan.FromSeconds(15);
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private static readonly Action<ILogger, string, Exception?> BackupCreated =
         LoggerMessage.Define<string>(LogLevel.Information, new EventId(1201, "BackupCreated"), "Резервная копия создана: {BackupFile}");
@@ -67,6 +68,9 @@ public sealed class BackupService(
             try
             {
                 Directory.CreateDirectory(options.Directory);
+                // Advisory lock доказывает отсутствие другого backup этой БД: можно безопасно
+                // удалить plaintext/partial артефакты, оставшиеся после kill -9 или power loss.
+                DeleteOrphanArtifacts(options.Directory);
                 await using var strategyDb = await dbFactory.CreateDbContextAsync(cancellationToken);
                 var strategy = strategyDb.Database.CreateExecutionStrategy();
                 await strategy.ExecuteAsync(async () =>
@@ -88,6 +92,7 @@ public sealed class BackupService(
                     {
                         options.Enabled,
                         options.IntervalHours,
+                        options.Directory,
                         options.RetentionDays,
                         options.HistoryRetentionDays,
                         options.MaxTelegramFileSizeMb,
@@ -139,7 +144,9 @@ public sealed class BackupService(
         bool sentToTelegram,
         int historyRetentionDays)
     {
-        await using var db = await dbFactory.CreateDbContextAsync(CancellationToken.None);
+        using var timeout = new CancellationTokenSource(AuditWriteTimeout);
+        var token = timeout.Token;
+        await using var db = await dbFactory.CreateDbContextAsync(token);
         var finishedAt = DateTimeOffset.UtcNow;
         var file = new FileInfo(path);
         await db.BackupRuns.Where(x => x.Id == id).ExecuteUpdateAsync(setters => setters
@@ -148,17 +155,19 @@ public sealed class BackupService(
             .SetProperty(x => x.FileName, file.Name)
             .SetProperty(x => x.SizeBytes, file.Length)
             .SetProperty(x => x.SentToTelegram, sentToTelegram)
-            .SetProperty(x => x.Error, (string?)null), CancellationToken.None);
+            .SetProperty(x => x.Error, (string?)null), token);
 
         var cutoff = finishedAt.AddDays(-historyRetentionDays);
-        await db.BackupRuns.Where(x => x.StartedAt < cutoff).ExecuteDeleteAsync(CancellationToken.None);
+        await db.BackupRuns.Where(x => x.StartedAt < cutoff).ExecuteDeleteAsync(token);
     }
 
     private async Task FailAuditAsync(Guid id, string encryptedPath, Exception exception)
     {
         try
         {
-            await using var db = await dbFactory.CreateDbContextAsync(CancellationToken.None);
+            using var timeout = new CancellationTokenSource(AuditWriteTimeout);
+            var token = timeout.Token;
+            await using var db = await dbFactory.CreateDbContextAsync(token);
             var error = exception.ToString();
             var file = File.Exists(encryptedPath) ? new FileInfo(encryptedPath) : null;
             await db.BackupRuns.Where(x => x.Id == id).ExecuteUpdateAsync(setters => setters
@@ -166,7 +175,7 @@ public sealed class BackupService(
                 .SetProperty(x => x.Status, "failed")
                 .SetProperty(x => x.FileName, file == null ? null : file.Name)
                 .SetProperty(x => x.SizeBytes, file == null ? 0 : file.Length)
-                .SetProperty(x => x.Error, error[..Math.Min(2000, error.Length)]), CancellationToken.None);
+                .SetProperty(x => x.Error, error[..Math.Min(2000, error.Length)]), token);
         }
         catch (Exception auditException)
         {
@@ -210,6 +219,22 @@ public sealed class BackupService(
             if (File.GetLastWriteTimeUtc(file) < cutoff) File.Delete(file);
     }
 
+    /// <summary>Удаляет только незавершённые служебные файлы, никогда не затрагивая готовый encrypted backup.</summary>
+    internal static int DeleteOrphanArtifacts(string directory)
+    {
+        var removed = 0;
+        string[] patterns = ["proxyharbor-*.zip", "proxyharbor-*.phbackup.partial", "proxyharbor-*.phbackup.part*-of-*"];
+        foreach (var pattern in patterns)
+        {
+            foreach (var path in Directory.EnumerateFiles(directory, pattern, SearchOption.TopDirectoryOnly))
+            {
+                File.Delete(path);
+                removed++;
+            }
+        }
+        return removed;
+    }
+
     public void Dispose() => _runGate.Dispose();
 }
 
@@ -217,6 +242,8 @@ public sealed class BackupService(
 internal sealed record BackupRuntimeSettings(
     string[] CorsOrigins,
     string[] ForwardedHeaderKnownNetworks,
+    string? AllowedHosts,
+    IReadOnlyDictionary<string, string?> LogLevels,
     bool AdminApiKeyConfigured,
     bool AdminApiKeyIncluded,
     bool ConnectionStringIncluded)
@@ -224,6 +251,9 @@ internal sealed record BackupRuntimeSettings(
     internal static BackupRuntimeSettings FromConfiguration(IConfiguration configuration) => new(
         configuration.GetSection("Cors:Origins").Get<string[]>() ?? [],
         configuration.GetSection("ForwardedHeaders:KnownNetworks").Get<string[]>() ?? [],
+        configuration["AllowedHosts"],
+        configuration.GetSection("Logging:LogLevel").GetChildren()
+            .ToDictionary(child => child.Key, child => child.Value, StringComparer.OrdinalIgnoreCase),
         !string.IsNullOrWhiteSpace(configuration["Security:AdminApiKey"]),
         AdminApiKeyIncluded: false,
         ConnectionStringIncluded: false);

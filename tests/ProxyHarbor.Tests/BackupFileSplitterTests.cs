@@ -6,6 +6,38 @@ namespace ProxyHarbor.Tests;
 public sealed class BackupFileSplitterTests
 {
     [Fact]
+    public void OrphanCleanupRemovesOnlyIncompleteBackupArtifacts()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"proxyharbor-cleanup-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        var complete = Path.Combine(directory, "proxyharbor-20260809.phbackup");
+        var unrelated = Path.Combine(directory, "keep.zip");
+        var orphans = new[]
+        {
+            Path.Combine(directory, "proxyharbor-20260809.zip"),
+            Path.Combine(directory, "proxyharbor-20260809.phbackup.partial"),
+            Path.Combine(directory, "proxyharbor-20260809.phbackup.part001-of-003")
+        };
+        try
+        {
+            File.WriteAllText(complete, "encrypted");
+            File.WriteAllText(unrelated, "unrelated");
+            foreach (var orphan in orphans) File.WriteAllText(orphan, "incomplete");
+
+            var removed = BackupService.DeleteOrphanArtifacts(directory);
+
+            Assert.Equal(orphans.Length, removed);
+            Assert.All(orphans, path => Assert.False(File.Exists(path)));
+            Assert.True(File.Exists(complete));
+            Assert.True(File.Exists(unrelated));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task SplitAsyncProducesOrderedTemporaryPartsAndRemovesThem()
     {
         var directory = Path.Combine(Path.GetTempPath(), $"proxyharbor-split-{Guid.NewGuid():N}");

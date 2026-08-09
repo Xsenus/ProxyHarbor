@@ -15,6 +15,8 @@ namespace ProxyHarbor.Tests;
 public sealed class BackupRestoreRoundTripIntegrationTests
 {
     private const string EncryptionKey = "round-trip-integration-key-32-chars";
+    private const string AdminSecret = "round-trip-admin-secret-must-not-leak";
+    private const string ConnectionSecret = "Host=secret-db;Password=round-trip-db-secret";
 
     [Fact]
     [Trait("Category", "PostgresIntegration")]
@@ -59,12 +61,20 @@ public sealed class BackupRestoreRoundTripIntegrationTests
                 RetentionDays = 7,
                 HistoryRetentionDays = 365
             };
+            var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["AllowedHosts"] = "proxy.example;localhost",
+                ["Cors:Origins:0"] = "https://dashboard.example",
+                ["Logging:LogLevel:Default"] = "Information",
+                ["Security:AdminApiKey"] = AdminSecret,
+                ["ConnectionStrings:Postgres"] = ConnectionSecret
+            }).Build();
             using var backup = new BackupService(
                 sourceFactory,
                 new UnusedHttpClientFactory(),
                 Options.Create(backupOptions),
                 Options.Create(new CollectorOptions()),
-                new ConfigurationBuilder().Build(),
+                configuration,
                 NullLogger<BackupService>.Instance);
 
             var encryptedPath = await backup.CreateAndSendAsync(CancellationToken.None);
@@ -73,6 +83,7 @@ public sealed class BackupRestoreRoundTripIntegrationTests
             Assert.EndsWith(".phbackup", encryptedPath, StringComparison.Ordinal);
             Assert.Empty(Directory.EnumerateFiles(backupDirectory, "*.zip"));
             Assert.Empty(Directory.EnumerateFiles(backupDirectory, "*.partial"));
+            await VerifySettingsSnapshotAsync(encryptedPath, backupDirectory);
 
             var invalidBackup = await CreateSemanticallyInvalidBackupAsync(encryptedPath, backupDirectory);
             var failedExitCode = await RestoreApplication.RunAsync([
@@ -105,6 +116,49 @@ public sealed class BackupRestoreRoundTripIntegrationTests
             await DropSchemaAsync(admin, sourceSchema);
             await DropSchemaAsync(admin, targetSchema);
         }
+    }
+
+    private static async Task VerifySettingsSnapshotAsync(string encryptedPath, string directory)
+    {
+        var zipPath = Path.Combine(directory, "settings-verification.zip");
+        try
+        {
+            await BackupEncryption.DecryptAsync(encryptedPath, zipPath, EncryptionKey, CancellationToken.None);
+            using var archive = ZipFile.OpenRead(zipPath);
+            BackupArchiveValidator.Validate(archive);
+
+            using var backupSettings = JsonDocument.Parse(await ReadEntryAsync(archive, "settings/backup.json"));
+            Assert.Equal(directory, backupSettings.RootElement.GetProperty("directory").GetString());
+            Assert.False(backupSettings.RootElement.GetProperty("secretsIncluded").GetBoolean());
+
+            using var runtime = JsonDocument.Parse(await ReadEntryAsync(archive, "settings/runtime.json"));
+            Assert.Equal("proxy.example;localhost", runtime.RootElement.GetProperty("allowedHosts").GetString());
+            Assert.Equal("Information", runtime.RootElement.GetProperty("logLevels").GetProperty("Default").GetString());
+            Assert.Equal("https://dashboard.example", runtime.RootElement.GetProperty("corsOrigins")[0].GetString());
+
+            var entryContents = new List<string>();
+            foreach (var entry in archive.Entries)
+                entryContents.Add(await ReadEntryAsync(entry));
+            var allText = string.Join('\n', entryContents);
+            Assert.DoesNotContain(EncryptionKey, allText, StringComparison.Ordinal);
+            Assert.DoesNotContain(AdminSecret, allText, StringComparison.Ordinal);
+            Assert.DoesNotContain(ConnectionSecret, allText, StringComparison.Ordinal);
+            Assert.DoesNotContain("round-trip-db-secret", allText, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (File.Exists(zipPath)) File.Delete(zipPath);
+        }
+    }
+
+    private static async Task<string> ReadEntryAsync(ZipArchive archive, string name) =>
+        await ReadEntryAsync(BackupArchiveValidator.RequiredEntry(archive, name));
+
+    private static async Task<string> ReadEntryAsync(ZipArchiveEntry entry)
+    {
+        await using var stream = entry.Open();
+        using var reader = new StreamReader(stream);
+        return await reader.ReadToEndAsync();
     }
 
     private static async Task<string> CreateSemanticallyInvalidBackupAsync(
