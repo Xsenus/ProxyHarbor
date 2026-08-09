@@ -55,9 +55,7 @@ public sealed class ProxyCollector(
                     .OrderBy(x => x.Priority).ToListAsync(cancellationToken);
                 var sources = allSources.Where(source =>
                     SourceFetchSchedule.IsDue(source.NextFetchAt, collectionStartedAt, forceAllSources)).ToList();
-                var candidates = new ConcurrentDictionary<string, (string Host, int Port, ProxyProtocol Protocol)>();
-                var candidateCount = 0;
-                var candidateLimitReached = 0;
+                var candidates = new BoundedProxyCandidateSet(options.Value.MaxCandidatesPerRun);
                 var sourceResults = new ConcurrentBag<(Guid Id, int Count, bool Truncated, string? Error)>();
                 var client = httpClientFactory.CreateClient("sources");
 
@@ -76,21 +74,11 @@ public sealed class ProxyCollector(
                             content, source.DefaultProtocol, options.Value.MaxProxiesPerSource);
                         foreach (var item in parsed.Items)
                         {
-                            if (Volatile.Read(ref candidateCount) >= options.Value.MaxCandidatesPerRun)
-                            {
-                                Interlocked.Exchange(ref candidateLimitReached, 1);
-                                break;
-                            }
-                            var key = $"{item.Protocol}:{item.Host}:{item.Port}";
-                            if (!candidates.TryAdd(key, item)) continue;
-                            var count = Interlocked.Increment(ref candidateCount);
-                            if (count == options.Value.MaxCandidatesPerRun)
-                                Interlocked.Exchange(ref candidateLimitReached, 1);
-                            if (count <= options.Value.MaxCandidatesPerRun) continue;
-                            Interlocked.Exchange(ref candidateLimitReached, 1);
-                            candidates.TryRemove(key, out _);
-                            Interlocked.Decrement(ref candidateCount);
-                            break;
+                            _ = candidates.TryAdd(item);
+                            // После первого реально отброшенного unique endpoint полнота уже
+                            // доказанно потеряна: дальнейшее межисточниковое сканирование не
+                            // меняет аудит и только расходует CPU на больших feed'ах.
+                            if (candidates.LimitReached) break;
                         }
                         sourceResults.Add((source.Id, parsed.Items.Count, parsed.Truncated, null));
                     }
@@ -131,7 +119,7 @@ public sealed class ProxyCollector(
 
                 var now = DateTimeOffset.UtcNow;
                 var added = await BulkUpsertAsync(
-                    db, candidates.Values, now, options.Value.LastSeenRefreshMinutes, cancellationToken);
+                    db, candidates.Items, now, options.Value.LastSeenRefreshMinutes, cancellationToken);
 
                 run.FinishedAt = now;
                 run.SourcesProcessed = sourceResults.Count;
@@ -140,7 +128,7 @@ public sealed class ProxyCollector(
                 run.SourcesSkipped = allSources.Count - sources.Count;
                 run.SourcesTruncated = sourceResults.Count(x => x.Truncated);
                 run.CandidatesFound = candidates.Count;
-                run.CandidateLimitReached = Volatile.Read(ref candidateLimitReached) != 0;
+                run.CandidateLimitReached = candidates.LimitReached;
                 run.NewProxies = added;
                 run.AliveProxies = await db.Proxies.CountAsync(x => x.Status == ProxyStatus.Alive, cancellationToken);
                 run.Status = "completed";
