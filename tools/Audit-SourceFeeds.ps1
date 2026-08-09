@@ -9,14 +9,17 @@ param(
 
 # Полный сбор обновляет LastItemCount/LastError каждого feed'а тем же кодом, который работает в production.
 $headers = @{ 'X-Admin-Key' = $AdminKey }
+$collection = $null
 if (-not $SkipCollection) {
-    Invoke-RestMethod -Method Post -Uri "$ApiBaseUrl/api/v1/admin/collect" -Headers $headers | Out-Null
+    $collection = Invoke-RestMethod -Method Post -Uri "$ApiBaseUrl/api/v1/admin/collect" -Headers $headers
 }
 $sources = Invoke-RestMethod -Method Get -Uri "$ApiBaseUrl/api/v1/admin/sources" -Headers $headers
 $ordered = @($sources | Sort-Object Priority)
-$ordered | Select-Object Name, Provider, IsBuiltIn, DefaultProtocol, LastItemCount, ConsecutiveFailures, LastFetchedAt, NextFetchAt, LastError | Format-Table -AutoSize
+$ordered | Select-Object Name, Provider, IsBuiltIn, DefaultProtocol, LastItemCount, LastResultTruncated, ConsecutiveFailures, LastFetchedAt, NextFetchAt, LastError | Format-Table -AutoSize
 
 $failed = @($ordered | Where-Object { $_.Enabled -and ($_.LastItemCount -le 0 -or $_.LastError) })
+$truncated = @($ordered | Where-Object { $_.Enabled -and $_.LastResultTruncated })
+$candidateLimitReached = if ($null -eq $collection) { $null } else { [bool]$collection.CandidateLimitReached }
 $builtIn = @($ordered | Where-Object IsBuiltIn)
 $enabledBuiltIn = @($builtIn | Where-Object Enabled)
 $providers = @($builtIn | ForEach-Object Provider | Where-Object { $_ } | Sort-Object -Unique)
@@ -38,6 +41,8 @@ $report = [ordered]@{
     enabled = @($ordered | Where-Object Enabled).Count
     succeeded = @($ordered | Where-Object { $_.Enabled -and $_.LastItemCount -gt 0 -and -not $_.LastError }).Count
     failed = $failed.Count
+    truncated = $truncated.Count
+    candidateLimitReached = $candidateLimitReached
     parsedItems = ($ordered | Where-Object Enabled | Measure-Object -Property LastItemCount -Sum).Sum
     expectedBuiltInSources = $ExpectedBuiltInSources
     builtInSources = $builtIn.Count
@@ -54,11 +59,14 @@ if ($ReportPath) {
     $report | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $ReportPath -Encoding utf8NoBOM
     Write-Host "JSON-отчёт сохранён: $ReportPath"
 }
-if ($failed.Count -gt 0 -or $catalogErrors.Count -gt 0) {
+if ($failed.Count -gt 0 -or $truncated.Count -gt 0 -or $candidateLimitReached -eq $true -or $catalogErrors.Count -gt 0) {
     $catalogDetail = if ($catalogErrors.Count -gt 0) { " Нарушения каталога: $($catalogErrors -join '; ')." } else { '' }
-    Write-Error "$($failed.Count) активных источников не прошли аудит.$catalogDetail Подробности показаны выше."
+    $limitDetail = if ($truncated.Count -gt 0 -or $candidateLimitReached) {
+        " Достигнуты защитные лимиты: усечено feed'ов $($truncated.Count), общий лимит кандидатов: $candidateLimitReached."
+    } else { '' }
+    Write-Error "$($failed.Count) активных источников не прошли аудит.$limitDetail$catalogDetail Подробности показаны выше."
     exit 1
 }
 
-Write-Host "Аудит пройден: $($report.succeeded)/$($report.enabled) активных источников, $($report.builtInSources) встроенных feed'ов от $($report.providers) провайдеров вернули $($report.parsedItems) распознанных записей." -ForegroundColor Green
+Write-Host "Аудит пройден без усечения: $($report.succeeded)/$($report.enabled) активных источников, $($report.builtInSources) встроенных feed'ов от $($report.providers) провайдеров вернули $($report.parsedItems) распознанных записей." -ForegroundColor Green
 exit 0

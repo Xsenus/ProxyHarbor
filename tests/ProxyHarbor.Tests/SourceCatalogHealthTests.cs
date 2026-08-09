@@ -91,6 +91,21 @@ public sealed class SourceCatalogHealthTests
         Assert.False(snapshot.IsHealthy);
     }
 
+    [Fact]
+    public void FreshButTruncatedFeedMakesCatalogUnhealthyWithoutCallingItFailed()
+    {
+        var sources = HealthyCatalog();
+        sources[0].LastResultTruncated = true;
+
+        var snapshot = SourceCatalogHealth.Calculate(sources, AuditNow, FreshnessWindow);
+
+        Assert.True(snapshot.IsComplete);
+        Assert.Equal(1, snapshot.TruncatedSources);
+        Assert.Equal(80, snapshot.HealthySources);
+        Assert.Equal(0, snapshot.FailingSources);
+        Assert.False(snapshot.IsHealthy);
+    }
+
     private static List<ProxySource> HealthyCatalog()
     {
         var auditedAt = new DateTimeOffset(2026, 8, 9, 12, 0, 0, TimeSpan.Zero);

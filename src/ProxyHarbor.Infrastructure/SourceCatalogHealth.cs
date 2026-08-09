@@ -11,6 +11,7 @@ public sealed record SourceCatalogSnapshot(
     int FailingSources,
     int NeverAuditedSources,
     int StaleSources,
+    int TruncatedSources,
     int ExpectedProviders,
     int PresentProviders,
     int EnabledProviders,
@@ -44,6 +45,7 @@ public static class SourceCatalogHealth
             entry.Source.LastFetchedAt >= freshAfter &&
             entry.Source.LastSucceededAt >= freshAfter &&
             entry.Source.LastItemCount > 0 &&
+            !entry.Source.LastResultTruncated &&
             entry.Source.ConsecutiveFailures == 0 &&
             string.IsNullOrWhiteSpace(entry.Source.LastError));
         var failing = enabled.Count(entry =>
@@ -51,6 +53,7 @@ public static class SourceCatalogHealth
         var neverAudited = enabled.Count(entry => entry.Source.LastFetchedAt is null);
         var stale = enabled.Count(entry =>
             entry.Source.LastFetchedAt is not null && entry.Source.LastFetchedAt < freshAfter);
+        var truncated = enabled.Count(entry => entry.Source.LastResultTruncated);
         var presentProviders = entries.Select(entry => entry.Definition.Provider)
             .Distinct(StringComparer.Ordinal).Count();
         var enabledProviders = enabled.Select(entry => entry.Definition.Provider)
@@ -68,6 +71,7 @@ public static class SourceCatalogHealth
             failing,
             neverAudited,
             stale,
+            truncated,
             expectedProviders,
             presentProviders,
             enabledProviders,

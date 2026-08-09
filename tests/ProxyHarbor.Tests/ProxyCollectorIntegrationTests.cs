@@ -55,7 +55,13 @@ public sealed class ProxyCollectorIntegrationTests
                 await seed.SaveChangesAsync();
             }
 
-            var settings = new CollectorOptions { SourceRetryCount = 0, SourceTimeoutSeconds = 30 };
+            var settings = new CollectorOptions
+            {
+                SourceRetryCount = 0,
+                SourceTimeoutSeconds = 30,
+                MaxProxiesPerSource = 2,
+                MaxCandidatesPerRun = 1
+            };
             using (var clients = new TestHttpClientFactory(new StaticFeedHandler()))
             using (var collector = new ProxyCollector(
                 factory, clients, Options.Create(settings), NullLogger<ProxyCollector>.Instance))
@@ -66,8 +72,10 @@ public sealed class ProxyCollectorIntegrationTests
                 Assert.Equal(1, completed.SourcesProcessed);
                 Assert.Equal(1, completed.SourcesSucceeded);
                 Assert.Equal(0, completed.SourcesFailed);
-                Assert.Equal(2, completed.CandidatesFound);
-                Assert.Equal(2, completed.NewProxies);
+                Assert.Equal(1, completed.CandidatesFound);
+                Assert.Equal(1, completed.NewProxies);
+                Assert.Equal(1, completed.SourcesTruncated);
+                Assert.True(completed.CandidateLimitReached);
             }
 
             var hangingHandler = new HangingFeedHandler();
@@ -94,9 +102,10 @@ public sealed class ProxyCollectorIntegrationTests
             Assert.NotNull(failed.FinishedAt);
             Assert.Contains("CanceledException", failed.Error, StringComparison.Ordinal);
             Assert.DoesNotContain(runs, run => run.Status == "running" || run.FinishedAt == null);
-            Assert.Equal(2, await verify.Proxies.CountAsync());
+            Assert.Equal(1, await verify.Proxies.CountAsync());
             var source = await verify.Sources.AsNoTracking().SingleAsync(item => item.Id == sourceId);
             Assert.Equal(2, source.LastItemCount);
+            Assert.True(source.LastResultTruncated);
             Assert.Equal(0, source.ConsecutiveFailures);
             Assert.Null(source.LastError);
             Assert.NotNull(source.LastSucceededAt);
@@ -136,7 +145,7 @@ public sealed class ProxyCollectorIntegrationTests
             CancellationToken cancellationToken) =>
             Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent("1.1.1.1:80\n8.8.8.8:81\n1.1.1.1:80")
+                Content = new StringContent("1.1.1.1:80\n8.8.8.8:81\n1.1.1.1:80\n9.9.9.9:82")
             });
     }
 

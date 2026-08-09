@@ -43,10 +43,12 @@ public sealed class MetricsController(
                 (source.ConsecutiveFailures > 0 || source.LastError != null)),
             Healthy = group.Count(source => source.Enabled && source.LastSucceededAt != null &&
                 source.LastSucceededAt >= sourceFreshAfter && source.LastFetchedAt >= sourceFreshAfter &&
-                source.LastItemCount > 0 && source.ConsecutiveFailures == 0 && source.LastError == null),
+                source.LastItemCount > 0 && !source.LastResultTruncated &&
+                source.ConsecutiveFailures == 0 && source.LastError == null),
             NeverAudited = group.Count(source => source.Enabled && source.LastFetchedAt == null),
             Stale = group.Count(source => source.Enabled && source.LastFetchedAt != null &&
-                source.LastFetchedAt < sourceFreshAfter)
+                source.LastFetchedAt < sourceFreshAfter),
+            Truncated = group.Count(source => source.Enabled && source.LastResultTruncated)
         }).FirstOrDefaultAsync(token);
         // Пользователь может добавить сколько угодно собственных feed'ов. В память загружаются
         // только максимум 81 каноническая запись, нужная для catalog-specific расчёта.
@@ -90,6 +92,8 @@ public sealed class MetricsController(
         Gauge(output, "proxyharbor_sources_never_audited", "Enabled feeds not fetched yet.", sources?.NeverAudited ?? 0);
         Gauge(output, "proxyharbor_sources_stale", "Enabled feeds whose latest fetch is older than three collection intervals.",
             sources?.Stale ?? 0);
+        Gauge(output, "proxyharbor_sources_truncated", "Enabled feeds whose latest successful result exceeded the per-source limit.",
+            sources?.Truncated ?? 0);
         Gauge(output, "proxyharbor_source_catalog_complete", "Whether every built-in feed and provider is present and enabled.",
             sourceCatalog.IsComplete ? 1 : 0);
         Gauge(output, "proxyharbor_source_catalog_healthy", "Whether every built-in feed has a fresh successful non-empty audit.",
@@ -108,6 +112,8 @@ public sealed class MetricsController(
             sourceCatalog.NeverAuditedSources);
         Gauge(output, "proxyharbor_builtin_sources_stale", "Enabled built-in feeds older than three collection intervals.",
             sourceCatalog.StaleSources);
+        Gauge(output, "proxyharbor_builtin_sources_truncated", "Enabled built-in feeds whose latest result exceeded the per-source limit.",
+            sourceCatalog.TruncatedSources);
         Gauge(output, "proxyharbor_builtin_providers_expected", "Independent built-in providers expected by this release.",
             sourceCatalog.ExpectedProviders);
         Gauge(output, "proxyharbor_builtin_providers_present", "Independent built-in providers represented in the database.",
@@ -123,6 +129,10 @@ public sealed class MetricsController(
             lastFinishedRun?.CandidatesFound ?? 0);
         Gauge(output, "proxyharbor_last_collection_sources_skipped", "Feeds skipped by adaptive failure backoff in the latest finished run.",
             lastFinishedRun?.SourcesSkipped ?? 0);
+        Gauge(output, "proxyharbor_last_collection_sources_truncated", "Feeds truncated by the per-source limit in the latest finished run.",
+            lastFinishedRun?.SourcesTruncated ?? 0);
+        Gauge(output, "proxyharbor_last_collection_candidate_limit_reached", "Whether the latest finished run reached the global candidate limit.",
+            lastFinishedRun?.CandidateLimitReached == true ? 1 : 0);
         Gauge(output, "proxyharbor_last_collection_timestamp_seconds", "Unix timestamp of the last collection completion.",
             lastFinishedRun?.FinishedAt?.ToUnixTimeSeconds() ?? 0);
         Gauge(output, "proxyharbor_last_successful_collection_timestamp_seconds", "Unix timestamp of the latest successful collection.",

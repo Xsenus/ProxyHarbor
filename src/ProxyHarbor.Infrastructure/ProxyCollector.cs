@@ -57,7 +57,8 @@ public sealed class ProxyCollector(
                     SourceFetchSchedule.IsDue(source.NextFetchAt, collectionStartedAt, forceAllSources)).ToList();
                 var candidates = new ConcurrentDictionary<string, (string Host, int Port, ProxyProtocol Protocol)>();
                 var candidateCount = 0;
-                var sourceResults = new ConcurrentBag<(Guid Id, int Count, string? Error)>();
+                var candidateLimitReached = 0;
+                var sourceResults = new ConcurrentBag<(Guid Id, int Count, bool Truncated, string? Error)>();
                 var client = httpClientFactory.CreateClient("sources");
 
                 await Parallel.ForEachAsync(sources, new ParallelOptions
@@ -71,24 +72,32 @@ public sealed class ProxyCollector(
                         var content = await FetchSourceAsync(client, source.Url, token);
                         // Лимит применяется внутри parser: крупный недоверенный feed не может сначала
                         // построить неограниченную коллекцию, которая будет усечена только здесь.
-                        var parsed = SourceFeedParser.ParseRequired(
+                        var parsed = SourceFeedParser.ParseBoundedRequired(
                             content, source.DefaultProtocol, options.Value.MaxProxiesPerSource);
-                        foreach (var item in parsed)
+                        foreach (var item in parsed.Items)
                         {
-                            if (Volatile.Read(ref candidateCount) >= options.Value.MaxCandidatesPerRun) break;
+                            if (Volatile.Read(ref candidateCount) >= options.Value.MaxCandidatesPerRun)
+                            {
+                                Interlocked.Exchange(ref candidateLimitReached, 1);
+                                break;
+                            }
                             var key = $"{item.Protocol}:{item.Host}:{item.Port}";
                             if (!candidates.TryAdd(key, item)) continue;
-                            if (Interlocked.Increment(ref candidateCount) <= options.Value.MaxCandidatesPerRun) continue;
+                            var count = Interlocked.Increment(ref candidateCount);
+                            if (count == options.Value.MaxCandidatesPerRun)
+                                Interlocked.Exchange(ref candidateLimitReached, 1);
+                            if (count <= options.Value.MaxCandidatesPerRun) continue;
+                            Interlocked.Exchange(ref candidateLimitReached, 1);
                             candidates.TryRemove(key, out _);
                             Interlocked.Decrement(ref candidateCount);
                             break;
                         }
-                        sourceResults.Add((source.Id, parsed.Count, null));
+                        sourceResults.Add((source.Id, parsed.Items.Count, parsed.Truncated, null));
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException || !token.IsCancellationRequested)
                     {
                         SourceFailed(logger, source.Name, ex);
-                        sourceResults.Add((source.Id, 0, ex.Message));
+                        sourceResults.Add((source.Id, 0, false, ex.Message));
                     }
                 });
 
@@ -101,6 +110,7 @@ public sealed class ProxyCollector(
                     var fetchedAt = DateTimeOffset.UtcNow;
                     source.LastFetchedAt = fetchedAt;
                     source.LastItemCount = result.Count;
+                    source.LastResultTruncated = result.Truncated;
                     source.LastError = result.Error?[..Math.Min(500, result.Error.Length)];
                     if (result.Error is null)
                     {
@@ -128,7 +138,9 @@ public sealed class ProxyCollector(
                 run.SourcesSucceeded = sourceResults.Count(x => x.Error is null);
                 run.SourcesFailed = sourceResults.Count(x => x.Error is not null);
                 run.SourcesSkipped = allSources.Count - sources.Count;
+                run.SourcesTruncated = sourceResults.Count(x => x.Truncated);
                 run.CandidatesFound = candidates.Count;
+                run.CandidateLimitReached = Volatile.Read(ref candidateLimitReached) != 0;
                 run.NewProxies = added;
                 run.AliveProxies = await db.Proxies.CountAsync(x => x.Status == ProxyStatus.Alive, cancellationToken);
                 run.Status = "completed";
@@ -308,6 +320,18 @@ internal static class SourceFeedParser
     {
         var parsed = ProxyParser.Parse(content, defaultProtocol, maxResults);
         if (parsed.Count == 0)
+            throw new InvalidDataException("Источник не содержит распознаваемых прокси.");
+        return parsed;
+    }
+
+    /// <summary>Проверяет непустой feed и сохраняет точный сигнал индивидуального усечения.</summary>
+    internal static ProxyParseResult ParseBoundedRequired(
+        string content,
+        ProxyProtocol defaultProtocol,
+        int maxResults)
+    {
+        var parsed = ProxyParser.ParseWithLimitStatus(content, defaultProtocol, maxResults);
+        if (parsed.Items.Count == 0)
             throw new InvalidDataException("Источник не содержит распознаваемых прокси.");
         return parsed;
     }

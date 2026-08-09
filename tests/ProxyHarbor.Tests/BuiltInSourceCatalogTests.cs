@@ -44,7 +44,8 @@ public sealed class BuiltInSourceCatalogTests
             Name = "renamed locally",
             Url = definition.Url,
             DefaultProtocol = definition.Protocol,
-            Priority = 999
+            Priority = 999,
+            LastResultTruncated = true
         });
 
         Assert.True(response.IsBuiltIn);
@@ -52,6 +53,7 @@ public sealed class BuiltInSourceCatalogTests
         Assert.Equal(definition.Rank, response.CatalogRank);
         Assert.Equal("renamed locally", response.Name);
         Assert.Equal(999, response.Priority);
+        Assert.True(response.LastResultTruncated);
         Assert.Same(definition, BuiltInSourceCatalog.FindByUrl(definition.Url));
         Assert.Null(BuiltInSourceCatalog.FindByUrl(definition.Url.ToUpperInvariant()));
     }

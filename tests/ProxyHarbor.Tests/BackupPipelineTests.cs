@@ -37,7 +37,8 @@ public sealed class BackupPipelineTests
                     Name = "Pipeline source",
                     Url = "https://example.test/proxies.txt",
                     DefaultProtocol = ProxyProtocol.Http,
-                    Enabled = true
+                    Enabled = true,
+                    LastResultTruncated = true
                 });
                 await seed.SaveChangesAsync();
             }
@@ -86,6 +87,7 @@ public sealed class BackupPipelineTests
             await using var sourcesStream = sourcesEntry.Open();
             using var sources = await JsonDocument.ParseAsync(sourcesStream);
             Assert.Equal("Pipeline source", sources.RootElement[0].GetProperty("name").GetString());
+            Assert.True(sources.RootElement[0].GetProperty("lastResultTruncated").GetBoolean());
         }
         finally
         {

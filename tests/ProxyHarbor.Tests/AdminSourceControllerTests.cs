@@ -179,6 +179,7 @@ public sealed class AdminSourceControllerTests
             LastSucceededAt = DateTimeOffset.UtcNow,
             NextFetchAt = DateTimeOffset.UtcNow.AddHours(1),
             LastItemCount = 10,
+            LastResultTruncated = true,
             ConsecutiveFailures = 3,
             LastError = "old failure"
         };
@@ -197,6 +198,7 @@ public sealed class AdminSourceControllerTests
         Assert.Null(updated.LastSucceededAt);
         Assert.Null(updated.NextFetchAt);
         Assert.Equal(0, updated.LastItemCount);
+        Assert.False(updated.LastResultTruncated);
         Assert.Equal(0, updated.ConsecutiveFailures);
         Assert.Null(updated.LastError);
     }

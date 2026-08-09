@@ -74,6 +74,8 @@ jobs:
             "- Catalog complete: $($report.catalogComplete)" >> $env:GITHUB_STEP_SUMMARY
             "- Parsed entries: $($report.parsedItems)" >> $env:GITHUB_STEP_SUMMARY
             "- Failed: $($report.failed)" >> $env:GITHUB_STEP_SUMMARY
+            "- Truncated feeds: $($report.truncated)" >> $env:GITHUB_STEP_SUMMARY
+            "- Global candidate limit reached: $($report.candidateLimitReached)" >> $env:GITHUB_STEP_SUMMARY
           }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()

@@ -18,7 +18,7 @@ public sealed class CollectorOptions
     public int SourceRetryCount { get; set; } = 2;
     public int SourceFailureBackoffBaseMinutes { get; set; } = 15;
     public int SourceFailureBackoffMaxHours { get; set; } = 24;
-    public int MaxProxiesPerSource { get; set; } = 100_000;
+    public int MaxProxiesPerSource { get; set; } = 500_000;
     public int MaxCandidatesPerRun { get; set; } = 500_000;
     public int LastSeenRefreshMinutes { get; set; } = 360;
     public int DeadRetentionDays { get; set; } = 3;

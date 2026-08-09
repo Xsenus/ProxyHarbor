@@ -187,6 +187,7 @@ public sealed class BackupRestoreRoundTripIntegrationTests
         builtIn.LastSucceededAt = SnapshotTime.AddMinutes(-1);
         builtIn.NextFetchAt = SnapshotTime.AddHours(1);
         builtIn.LastItemCount = 321;
+        builtIn.LastResultTruncated = true;
         builtIn.ConsecutiveFailures = 2;
         builtIn.LastError = "representative source error";
         db.Sources.Add(ExpectedCustomSource());
@@ -213,6 +214,7 @@ public sealed class BackupRestoreRoundTripIntegrationTests
         Assert.Equal(SnapshotTime.AddMinutes(-1), builtIn.LastSucceededAt);
         Assert.Equal(SnapshotTime.AddHours(1), builtIn.NextFetchAt);
         Assert.Equal(321, builtIn.LastItemCount);
+        Assert.True(builtIn.LastResultTruncated);
         Assert.Equal(2, builtIn.ConsecutiveFailures);
         Assert.Equal("representative source error", builtIn.LastError);
 
@@ -258,6 +260,7 @@ public sealed class BackupRestoreRoundTripIntegrationTests
         LastSucceededAt = SnapshotTime.AddMinutes(-2),
         NextFetchAt = SnapshotTime.AddHours(2),
         LastItemCount = 17,
+        LastResultTruncated = true,
         ConsecutiveFailures = 3,
         LastError = "custom source error"
     };
@@ -271,7 +274,9 @@ public sealed class BackupRestoreRoundTripIntegrationTests
         SourcesSucceeded = 79,
         SourcesFailed = 2,
         SourcesSkipped = 3,
+        SourcesTruncated = 4,
         CandidatesFound = 12_345,
+        CandidateLimitReached = true,
         NewProxies = 2_345,
         AliveProxies = 1_234,
         Status = "completed",

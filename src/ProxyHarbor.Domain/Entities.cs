@@ -55,6 +55,8 @@ public sealed class ProxySource
     /// <summary>Неудачный источник не опрашивается background worker до этого момента; admin-аудит игнорирует паузу.</summary>
     public DateTimeOffset? NextFetchAt { get; set; }
     public int LastItemCount { get; set; }
+    /// <summary>Последний успешный ответ содержал больше уникальных адресов, чем разрешено сохранить из одного feed.</summary>
+    public bool LastResultTruncated { get; set; }
     public int ConsecutiveFailures { get; set; }
     public string? LastError { get; set; }
 }
@@ -69,7 +71,11 @@ public sealed class CollectionRun
     public int SourcesSucceeded { get; set; }
     public int SourcesFailed { get; set; }
     public int SourcesSkipped { get; set; }
+    /// <summary>Число успешно загруженных feed'ов, усечённых индивидуальным защитным лимитом.</summary>
+    public int SourcesTruncated { get; set; }
     public int CandidatesFound { get; set; }
+    /// <summary>Общий набор кандидатов достиг защитного лимита цикла и мог быть усечён.</summary>
+    public bool CandidateLimitReached { get; set; }
     public int NewProxies { get; set; }
     public int AliveProxies { get; set; }
     public string Status { get; set; } = "running";

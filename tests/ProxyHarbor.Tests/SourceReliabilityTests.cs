@@ -28,12 +28,25 @@ public sealed class SourceReliabilityTests
     [Fact]
     public void FeedParserAppliesLimitBeforeReturningCandidates()
     {
-        var parsed = SourceFeedParser.ParseRequired(
+        var parsed = SourceFeedParser.ParseBoundedRequired(
             "1.1.1.1:80\n8.8.8.8:81\n9.9.9.9:82",
             ProxyProtocol.Http,
             maxResults: 2);
 
-        Assert.Equal(2, parsed.Count);
+        Assert.Equal(2, parsed.Items.Count);
+        Assert.True(parsed.Truncated);
+    }
+
+    [Fact]
+    public void FeedParserDoesNotCallDuplicateTailTruncation()
+    {
+        var parsed = SourceFeedParser.ParseBoundedRequired(
+            "1.1.1.1:80\n8.8.8.8:81\n1.1.1.1:80\n8.8.8.8:81",
+            ProxyProtocol.Http,
+            maxResults: 2);
+
+        Assert.Equal(2, parsed.Items.Count);
+        Assert.False(parsed.Truncated);
     }
 
     [Fact]

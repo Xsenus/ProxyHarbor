@@ -15,13 +15,22 @@ public static partial class ProxyParser
     /// <summary>Разбирает содержимое источника и возвращает только синтаксически допустимые уникальные адреса.</summary>
     public static IReadOnlyCollection<(string Host, int Port, ProxyProtocol Protocol)> Parse(
         string content,
-        ProxyProtocol defaultProtocol) => Parse(content, defaultProtocol, int.MaxValue);
+        ProxyProtocol defaultProtocol) => ParseWithLimitStatus(content, defaultProtocol, int.MaxValue).Items;
 
     /// <summary>
     /// Разбирает не более <paramref name="maxResults"/> уникальных адресов, не создавая полный
     /// промежуточный список для потенциально многомиллионного недоверенного feed'а.
     /// </summary>
     public static IReadOnlyCollection<(string Host, int Port, ProxyProtocol Protocol)> Parse(
+        string content,
+        ProxyProtocol defaultProtocol,
+        int maxResults) => ParseWithLimitStatus(content, defaultProtocol, maxResults).Items;
+
+    /// <summary>
+    /// Возвращает не только bounded-набор, но и точный признак наличия следующего уникального
+    /// адреса. После обнаружения первого адреса сверх лимита разбор немедленно прекращается.
+    /// </summary>
+    internal static ProxyParseResult ParseWithLimitStatus(
         string content,
         ProxyProtocol defaultProtocol,
         int maxResults)
@@ -47,12 +56,19 @@ public static partial class ProxyParser
             var protocol = ParseProtocolBefore(content.AsSpan(0, match.Index), defaultProtocol);
             var normalizedHost = ip.ToString();
             var endpoint = (normalizedHost, port, protocol);
-            if (!unique.Add(endpoint)) continue;
-            result.Add(endpoint);
-            if (result.Count == maxResults) break;
+            if (result.Count < maxResults)
+            {
+                if (!unique.Add(endpoint)) continue;
+                result.Add(endpoint);
+                continue;
+            }
+
+            // После заполнения коллекции lookup нужен только для различения безопасного
+            // duplicate-tail и первого действительно потерянного уникального адреса.
+            if (!unique.Contains(endpoint)) return new ProxyParseResult(result, Truncated: true);
         }
 
-        return result;
+        return new ProxyParseResult(result, Truncated: false);
     }
 
     private static ProxyProtocol ParseProtocolBefore(ReadOnlySpan<char> prefix, ProxyProtocol fallback) =>
@@ -62,3 +78,8 @@ public static partial class ProxyParser
         prefix.EndsWith("socks5://", StringComparison.OrdinalIgnoreCase) ? ProxyProtocol.Socks5 :
         fallback;
 }
+
+/// <summary>Bounded-результат parser с явным сигналом, что вход содержал ещё уникальные адреса.</summary>
+internal sealed record ProxyParseResult(
+    IReadOnlyCollection<(string Host, int Port, ProxyProtocol Protocol)> Items,
+    bool Truncated);

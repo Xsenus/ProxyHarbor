@@ -26,7 +26,12 @@ public sealed class StatsControllerTests
                 Endpoint("8.8.8.8", ProxyProtocol.Https, ProxyStatus.Alive, now.AddHours(-1), now.AddMinutes(-1), 900),
                 Endpoint("9.9.9.9", ProxyProtocol.Http, ProxyStatus.Pending, null, null, null),
                 Endpoint("4.4.4.4", ProxyProtocol.Socks5, ProxyStatus.Dead, now, now.AddMinutes(5), null));
-            seed.Sources.Add(new ProxySource { Name = "source", Url = "https://example.com/list" });
+            seed.Sources.Add(new ProxySource
+            {
+                Name = "source",
+                Url = "https://example.com/list",
+                LastResultTruncated = true
+            });
             seed.Runs.Add(new CollectionRun { StartedAt = now, Status = "completed", FinishedAt = now });
             await seed.SaveChangesAsync();
         }
@@ -45,6 +50,7 @@ public sealed class StatsControllerTests
         Assert.Equal(2, rootElement.GetProperty("scheduledChecks").GetInt32());
         Assert.Equal(100, rootElement.GetProperty("averageLatencyMs").GetDouble());
         Assert.Equal(1, rootElement.GetProperty("sources").GetInt32());
+        Assert.Equal(1, rootElement.GetProperty("truncatedSources").GetInt32());
         var protocol = Assert.Single(rootElement.GetProperty("byProtocol").EnumerateArray());
         Assert.Equal(1, protocol.GetProperty("count").GetInt32());
     }

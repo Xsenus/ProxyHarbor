@@ -43,7 +43,8 @@ public sealed class StatsController(
         {
             Enabled = x.Count(),
             Failing = x.Count(source => source.ConsecutiveFailures > 0),
-            RepeatedlyFailing = x.Count(source => source.ConsecutiveFailures >= 3)
+            RepeatedlyFailing = x.Count(source => source.ConsecutiveFailures >= 3),
+            Truncated = x.Count(source => source.LastResultTruncated)
         }).FirstOrDefaultAsync(cancellationToken);
         var lastRunTask = runDb.Runs.AsNoTracking().OrderByDescending(x => x.StartedAt)
             .FirstOrDefaultAsync(cancellationToken);
@@ -72,6 +73,7 @@ public sealed class StatsController(
             sources = sourceHealth?.Enabled ?? 0,
             failingSources = sourceHealth?.Failing ?? 0,
             repeatedlyFailingSources = sourceHealth?.RepeatedlyFailing ?? 0,
+            truncatedSources = sourceHealth?.Truncated ?? 0,
             byProtocol,
             lastRun
         });
