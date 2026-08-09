@@ -67,6 +67,7 @@ public sealed class ProxiesController(
     /// Следующий запрос передаёт непрозрачный NextCursor в параметре after.
     /// </summary>
     [HttpGet("proxies/seek")]
+    [OutputCache(PolicyName = PublicOutputCachePolicies.SeekFirstPage)]
     public async Task<ActionResult<CursorPagedResult<ProxyDto>>> Seek(
         [FromQuery] ProxyProtocol? protocol,
         [FromQuery, Range(1, int.MaxValue)] int? maxLatencyMs,
