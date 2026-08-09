@@ -27,6 +27,29 @@ jobs:
         working-directory: src/proxyharbor-web
       - run: npm run build
         working-directory: src/proxyharbor-web
+      - name: Docker build-context secret gate
+        run: |
+          cleanup_context() {
+            rm -f .env src/proxyharbor-web/node_modules/proxyharbor-context-secret
+            rm -rf .tmp-postgres backups
+          }
+          trap cleanup_context EXIT
+          mkdir -p .tmp-postgres backups src/proxyharbor-web/node_modules
+          printf 'DO_NOT_LEAK=super-secret-context-value\n' > .env
+          printf 'database secret\n' > .tmp-postgres/context-secret
+          printf 'backup secret\n' > backups/context-secret.phbackup
+          printf 'dependency secret\n' > src/proxyharbor-web/node_modules/proxyharbor-context-secret
+          docker build --no-cache --file - . <<'DOCKERFILE'
+          FROM alpine:3.23
+          COPY . /context
+          RUN test -f /context/Directory.Build.props && \
+              test -f /context/src/ProxyHarbor.Api/ProxyHarbor.Api.csproj && \
+              test -f /context/src/proxyharbor-web/package-lock.json && \
+              test ! -e /context/.env && \
+              test ! -e /context/.tmp-postgres && \
+              test ! -e /context/backups && \
+              test ! -e /context/src/proxyharbor-web/node_modules
+          DOCKERFILE
       - run: docker compose config
         env:
           POSTGRES_DB: proxyharbor
@@ -51,6 +74,18 @@ jobs:
           }
           trap cleanup EXIT
           docker compose up --detach --build
+          api_id=$(docker compose ps --quiet api)
+          web_id=$(docker compose ps --quiet web)
+          postgres_id=$(docker compose ps --quiet postgres)
+          test "$(docker inspect --format '{{.Config.User}}' "$api_id")" = 'proxyharbor'
+          test "$(docker inspect --format '{{.HostConfig.ReadonlyRootfs}}' "$api_id")" = 'true'
+          test "$(docker inspect --format '{{.HostConfig.PidsLimit}}' "$api_id")" = '512'
+          test "$(docker inspect --format '{{.HostConfig.Init}}' "$api_id")" = 'true'
+          docker inspect --format '{{json .HostConfig.CapDrop}}' "$api_id" | grep --ignore-case 'ALL'
+          test "$(docker inspect --format '{{index .HostConfig.LogConfig.Config "max-size"}}' "$api_id")" = '10m'
+          test "$(docker inspect --format '{{.HostConfig.ReadonlyRootfs}}' "$web_id")" = 'true'
+          test "$(docker inspect --format '{{.HostConfig.PidsLimit}}' "$web_id")" = '128'
+          test "$(docker inspect --format '{{.HostConfig.PidsLimit}}' "$postgres_id")" = '256'
           for attempt in {1..90}; do
             if curl --fail --silent http://127.0.0.1:8080/health/ready; then break; fi
             if [ "$attempt" -eq 90 ]; then exit 1; fi
@@ -77,6 +112,20 @@ jobs:
           grep --ignore-case '^X-Content-Type-Options: nosniff' "$asset_headers"
           grep --ignore-case '^Cache-Control:.*max-age=' "$asset_headers"
           rm "$asset_headers"
+          oversized_body=$(mktemp)
+          head --bytes 70000 /dev/zero | tr '\0' a > "$oversized_body"
+          oversized_status=$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            --request POST --header 'Content-Type: application/json' \
+            --header 'X-Admin-Key: ci-admin-key-at-least-24-chars' \
+            --data-binary "@$oversized_body" http://127.0.0.1:8080/api/v1/admin/sources)
+          rm "$oversized_body"
+          test "$oversized_status" -eq 413
+          docker compose restart api
+          for attempt in {1..60}; do
+            if curl --fail --silent http://127.0.0.1:8080/health/ready; then break; fi
+            if [ "$attempt" -eq 60 ]; then exit 1; fi
+            sleep 1
+          done
 
   postgres-integration:
     runs-on: ubuntu-latest

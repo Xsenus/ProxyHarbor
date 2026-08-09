@@ -1,9 +1,20 @@
-**/bin
-**/obj
-**/node_modules
-**/dist
-.git
-.env
-backups
-TestResults
-README.md
+# Контекст формируется по allowlist: локальные секреты, БД и backup не могут попасть в daemon/cache.
+**
+!Directory.Build.*
+!src/
+!src/ProxyHarbor.Domain/
+!src/ProxyHarbor.Domain/**
+!src/ProxyHarbor.Infrastructure/
+!src/ProxyHarbor.Infrastructure/**
+!src/ProxyHarbor.Api/
+!src/ProxyHarbor.Api/**
+!src/proxyharbor-web/
+!src/proxyharbor-web/**
+
+# Даже внутри разрешённых проектов не передаём локальные/сгенерированные артефакты.
+**/bin/
+**/obj/
+**/node_modules/
+**/dist/
+**/*.user
+**/*.suo

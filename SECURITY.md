@@ -14,4 +14,6 @@ Backup содержит данные БД и безопасную часть н�
 
 Telegram-клиент не следует redirect, запрещает соединения с приватными/служебными адресами после DNS-разрешения и не включает URI с bot token в стандартные HTTP-логи. HTTP 2xx без корректного ограниченного JSON-ответа `ok=true` считается неподтверждённой доставкой, поэтому не может выставить успешный backup audit.
 
+Docker build context использует allowlist проектов: `.env`, backup, локальные PostgreSQL data directories, `.git`, `node_modules`, `bin/obj` и другие непредназначенные для образа данные исключены до отправки Docker daemon. CI создаёт секретные sentinel-файлы и прерывает сборку, если хотя бы один оказывается внутри тестового context image.
+
 В Production browser CORS закрыт по умолчанию; добавляйте только точные HTTP(S) origins без пути. Доверенные `X-Forwarded-For` и `X-Forwarded-Proto` ограничиваются одним переходом и CIDR reverse proxy. Не расширяйте доверие до общей private-сети: синхронно задавайте `BACKEND_SUBNET` в Docker Compose либо `ForwardedHeaders__KnownNetworks__N` в собственной инфраструктуре.

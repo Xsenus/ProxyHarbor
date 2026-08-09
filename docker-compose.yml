@@ -1,4 +1,10 @@
 name: proxyharbor
+x-logging: &bounded-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   postgres:
     image: postgres:18-alpine
@@ -15,6 +21,9 @@ services:
       timeout: 5s
       retries: 20
     networks: [backend]
+    pids_limit: 256
+    stop_grace_period: 1m
+    logging: *bounded-logging
     security_opt: [no-new-privileges:true]
 
   api:
@@ -39,8 +48,13 @@ services:
     volumes:
       - backups:/app/backups
     networks: [backend]
+    init: true
+    pids_limit: 512
+    stop_grace_period: 2m
     read_only: true
     tmpfs: [/tmp]
+    cap_drop: [ALL]
+    logging: *bounded-logging
     security_opt: [no-new-privileges:true]
 
   web:
@@ -52,8 +66,12 @@ services:
       api: { condition: service_healthy }
     ports: ["8080:80"]
     networks: [backend]
+    init: true
+    pids_limit: 128
+    stop_grace_period: 15s
     read_only: true
     tmpfs: [/var/cache/nginx, /var/run]
+    logging: *bounded-logging
     security_opt: [no-new-privileges:true]
 
 volumes:

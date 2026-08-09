@@ -19,7 +19,7 @@
 
 ## Быстрый запуск в Docker
 
-Требуются Docker Engine 26+ и Docker Compose v2.
+Требуются Docker Engine 26+ и Docker Compose v2. Build context формируется по allowlist: `.env`, локальная PostgreSQL, backup, Git-метаданные и dependency/build-каталоги никогда не отправляются Docker daemon и не попадают в build cache. Compose ограничивает размер/ротацию логов и PID, запускает API без Linux capabilities и даёт процессу до двух минут на корректную отмену операций, очистку partial backup и запись итогового аудита при остановке.
 
 ```bash
 cp .env.example .env
