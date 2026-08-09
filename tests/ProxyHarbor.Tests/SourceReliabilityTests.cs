@@ -1,4 +1,6 @@
 using System.Net;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using ProxyHarbor.Domain;
 using ProxyHarbor.Infrastructure;
 
@@ -69,6 +71,39 @@ public sealed class SourceReliabilityTests
         Assert.False(SourceHttpRetry.IsRetryable(new TaskCanceledException("timeout"), cancellation.Token));
     }
 
+    [Fact]
+    public async Task TransientHttpResponseIsDisposedBeforeRetryBackoff()
+    {
+        var firstContent = new DisposeTrackingContent();
+        var handler = new SequencedHandler(
+            new HttpResponseMessage(HttpStatusCode.ServiceUnavailable) { Content = firstContent },
+            new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("8.8.8.8:8080") });
+        using var client = new HttpClient(handler);
+        using var collector = new ProxyCollector(
+            null!, null!,
+            Options.Create(new CollectorOptions { SourceRetryCount = 1, SourceTimeoutSeconds = 2 }),
+            NullLogger<ProxyCollector>.Instance);
+        var delayStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseDelay = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var fetch = collector.FetchSourceAsync(
+            client,
+            "https://1.1.1.1/feed.txt",
+            CancellationToken.None,
+            (_, _) =>
+            {
+                delayStarted.TrySetResult();
+                return releaseDelay.Task;
+            });
+        await delayStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var disposedBeforeBackoff = firstContent.Disposed.IsCompletedSuccessfully;
+        releaseDelay.TrySetResult();
+        Assert.True(disposedBeforeBackoff);
+        Assert.Equal("8.8.8.8:8080", await fetch);
+        Assert.Equal(2, handler.Requests);
+    }
+
     [Theory]
     [InlineData(1, 15)]
     [InlineData(2, 30)]
@@ -93,5 +128,34 @@ public sealed class SourceReliabilityTests
         Assert.False(SourceFetchSchedule.IsDue(next, now, forceAllSources: false));
         Assert.True(SourceFetchSchedule.IsDue(next, now, forceAllSources: true));
         Assert.True(SourceFetchSchedule.IsDue(null, now, forceAllSources: false));
+    }
+
+    private sealed class SequencedHandler(params HttpResponseMessage[] responses) : HttpMessageHandler
+    {
+        private int _index;
+        internal int Requests => _index;
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            var index = Interlocked.Increment(ref _index) - 1;
+            return Task.FromResult(responses[index]);
+        }
+    }
+
+    private sealed class DisposeTrackingContent : ByteArrayContent
+    {
+        private readonly TaskCompletionSource _disposed =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal Task Disposed => _disposed.Task;
+
+        internal DisposeTrackingContent() : base([]) { }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) _disposed.TrySetResult();
+            base.Dispose(disposing);
+        }
     }
 }

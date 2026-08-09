@@ -177,8 +177,13 @@ public sealed class ProxyCollector(
         }
     }
 
-    private async Task<string> FetchSourceAsync(HttpClient client, string url, CancellationToken token)
+    internal async Task<string> FetchSourceAsync(
+        HttpClient client,
+        string url,
+        CancellationToken token,
+        Func<TimeSpan, CancellationToken, Task>? delayAsync = null)
     {
+        delayAsync ??= static (delay, cancellationToken) => Task.Delay(delay, cancellationToken);
         var retries = Math.Clamp(options.Value.SourceRetryCount, 0, 5);
         for (var attempt = 0; ; attempt++)
         {
@@ -193,7 +198,10 @@ public sealed class ProxyCollector(
                         response.Headers.RetryAfter?.Date - DateTimeOffset.UtcNow ??
                         TimeSpan.FromMilliseconds(400 * (attempt + 1));
                     var delayMilliseconds = Math.Clamp(retryAfter.TotalMilliseconds, 0, 4_750) + Random.Shared.Next(50, 250);
-                    await Task.Delay(TimeSpan.FromMilliseconds(delayMilliseconds), token);
+                    // ResponseHeadersRead не потребляет body. Освобождаем response до backoff,
+                    // иначе один transient feed удерживает connection-pool slot всё время паузы.
+                    response.Dispose();
+                    await delayAsync(TimeSpan.FromMilliseconds(delayMilliseconds), token);
                     continue;
                 }
 
@@ -204,7 +212,8 @@ public sealed class ProxyCollector(
             }
             catch (Exception ex) when (attempt < retries && SourceHttpRetry.IsRetryable(ex, token))
             {
-                await Task.Delay(TimeSpan.FromMilliseconds(400 * (attempt + 1) + Random.Shared.Next(50, 250)), token);
+                await delayAsync(
+                    TimeSpan.FromMilliseconds(400 * (attempt + 1) + Random.Shared.Next(50, 250)), token);
             }
         }
     }
