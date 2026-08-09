@@ -1,0 +1,80 @@
+name: Source feed audit
+
+on:
+  schedule:
+    - cron: '17 3 * * 0'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: source-feed-audit
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_DB: proxyharbor
+          POSTGRES_USER: proxyharbor
+          POSTGRES_PASSWORD: audit-password
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U proxyharbor -d proxyharbor"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v5
+        with: { dotnet-version: '10.0.x' }
+      - run: dotnet build ProxyHarbor.slnx -c Release
+      - name: Audit all built-in source feeds
+        env:
+          ASPNETCORE_ENVIRONMENT: Production
+          ASPNETCORE_URLS: http://127.0.0.1:5080
+          ConnectionStrings__Postgres: Host=127.0.0.1;Port=5432;Database=proxyharbor;Username=proxyharbor;Password=audit-password
+          Security__AdminApiKey: source-audit-admin-key-at-least-24-chars
+          Collector__BackgroundWorkersEnabled: false
+          Collector__SourceTimeoutSeconds: 30
+          Backup__Enabled: false
+        run: |
+          dotnet run --no-build -c Release --no-launch-profile --project src/ProxyHarbor.Api/ProxyHarbor.Api.csproj > source-audit-api.log 2>&1 &
+          api_pid=$!
+          cleanup() { kill "$api_pid" 2>/dev/null || true; wait "$api_pid" 2>/dev/null || true; }
+          trap cleanup EXIT
+          for attempt in {1..60}; do
+            if curl --fail --silent http://127.0.0.1:5080/health/ready; then break; fi
+            if [ "$attempt" -eq 60 ]; then cat source-audit-api.log; exit 1; fi
+            sleep 1
+          done
+          pwsh -NoProfile -File ./tools/Audit-SourceFeeds.ps1 \
+            -ApiBaseUrl http://127.0.0.1:5080 \
+            -AdminKey source-audit-admin-key-at-least-24-chars \
+            -ReportPath source-audit.json
+      - name: Publish audit summary
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path source-audit.json) {
+            $report = Get-Content source-audit.json -Raw | ConvertFrom-Json
+            "## Source feed audit" >> $env:GITHUB_STEP_SUMMARY
+            "- Audited: $($report.auditedAt)" >> $env:GITHUB_STEP_SUMMARY
+            "- Success: $($report.succeeded)/$($report.enabled)" >> $env:GITHUB_STEP_SUMMARY
+            "- Parsed entries: $($report.parsedItems)" >> $env:GITHUB_STEP_SUMMARY
+            "- Failed: $($report.failed)" >> $env:GITHUB_STEP_SUMMARY
+          }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: source-feed-audit
+          path: |
+            source-audit.json
+            source-audit-api.log
+          if-no-files-found: warn
+          retention-days: 30

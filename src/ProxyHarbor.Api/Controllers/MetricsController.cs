@@ -36,7 +36,12 @@ public sealed class MetricsController(
             Enabled = x.Count(source => source.Enabled),
             Failing = x.Count(source => source.Enabled && source.ConsecutiveFailures > 0)
         }).FirstOrDefaultAsync(token);
-        var lastRun = await db.Runs.AsNoTracking().OrderByDescending(x => x.StartedAt).FirstOrDefaultAsync(token);
+        // Текущий running-цикл не должен обнулять показатели последнего действительно завершённого запуска.
+        var lastFinishedRun = await db.Runs.AsNoTracking().Where(x => x.FinishedAt != null)
+            .OrderByDescending(x => x.FinishedAt).FirstOrDefaultAsync(token);
+        var lastSuccessfulRun = await db.Runs.AsNoTracking().Where(x => x.Status == "completed" && x.FinishedAt != null)
+            .OrderByDescending(x => x.FinishedAt).FirstOrDefaultAsync(token);
+        var activeRuns = await db.Runs.AsNoTracking().CountAsync(x => x.Status == "running" && x.FinishedAt == null, token);
 
         var output = new StringBuilder(1_024);
         output.AppendLine("# HELP proxyharbor_proxies Number of known proxies by status and protocol.");
@@ -49,11 +54,23 @@ public sealed class MetricsController(
         Gauge(output, "proxyharbor_validation_leased", "Proxy records currently leased by validators.", queue?.Leased ?? 0);
         Gauge(output, "proxyharbor_sources_enabled", "Enabled proxy source feeds.", sources?.Enabled ?? 0);
         Gauge(output, "proxyharbor_sources_failing", "Enabled feeds whose latest fetch failed.", sources?.Failing ?? 0);
+        Gauge(output, "proxyharbor_sources_healthy", "Enabled feeds whose latest fetch succeeded.",
+            (sources?.Enabled ?? 0) - (sources?.Failing ?? 0));
         Gauge(output, "proxyharbor_proxies_published", "Alive proxies fresh enough for public API and exports.",
             await db.Proxies.AsNoTracking().CountAsync(x => x.Status == ProxyStatus.Alive && x.LastCheckedAt >= freshAfter, token));
-        Gauge(output, "proxyharbor_last_collection_candidates", "Candidates found by the last collection run.", lastRun?.CandidatesFound ?? 0);
+        Gauge(output, "proxyharbor_collection_runs_active", "Collection runs currently marked as active.", activeRuns);
+        Gauge(output, "proxyharbor_last_collection_success", "Whether the latest finished collection completed successfully.",
+            lastFinishedRun?.Status == "completed" ? 1 : 0);
+        Gauge(output, "proxyharbor_last_collection_candidates", "Candidates found by the latest finished collection run.",
+            lastFinishedRun?.CandidatesFound ?? 0);
         Gauge(output, "proxyharbor_last_collection_timestamp_seconds", "Unix timestamp of the last collection completion.",
-            lastRun?.FinishedAt?.ToUnixTimeSeconds() ?? 0);
+            lastFinishedRun?.FinishedAt?.ToUnixTimeSeconds() ?? 0);
+        Gauge(output, "proxyharbor_last_successful_collection_timestamp_seconds", "Unix timestamp of the latest successful collection.",
+            lastSuccessfulRun?.FinishedAt?.ToUnixTimeSeconds() ?? 0);
+        GaugeDouble(output, "proxyharbor_last_collection_duration_seconds", "Duration of the latest finished collection in seconds.",
+            lastFinishedRun?.FinishedAt is { } finishedAt
+                ? Math.Max(0, (finishedAt - lastFinishedRun.StartedAt).TotalSeconds)
+                : 0);
         return Content(output.ToString(), "text/plain; version=0.0.4; charset=utf-8", Encoding.UTF8);
     }
 
@@ -62,5 +79,12 @@ public sealed class MetricsController(
         output.Append("# HELP ").Append(name).Append(' ').AppendLine(help);
         output.Append("# TYPE ").Append(name).AppendLine(" gauge");
         output.Append(name).Append(' ').AppendLine(value.ToString(CultureInfo.InvariantCulture));
+    }
+
+    private static void GaugeDouble(StringBuilder output, string name, string help, double value)
+    {
+        output.Append("# HELP ").Append(name).Append(' ').AppendLine(help);
+        output.Append("# TYPE ").Append(name).AppendLine(" gauge");
+        output.Append(name).Append(' ').AppendLine(value.ToString("0.###", CultureInfo.InvariantCulture));
     }
 }
