@@ -43,6 +43,7 @@ jobs:
           Security__AdminApiKey: source-audit-admin-key-at-least-24-chars
           Collector__BackgroundWorkersEnabled: false
           Collector__SourceTimeoutSeconds: 30
+          Collector__ValidationBatchSize: 250
           Backup__Enabled: false
         run: |
           dotnet run --no-build -c Release --no-launch-profile --project src/ProxyHarbor.Api/ProxyHarbor.Api.csproj > source-audit-api.log 2>&1 &
@@ -54,12 +55,21 @@ jobs:
             if [ "$attempt" -eq 60 ]; then cat source-audit-api.log; exit 1; fi
             sleep 1
           done
+          source_status=0
           pwsh -NoProfile -File ./tools/Audit-SourceFeeds.ps1 \
             -ApiBaseUrl http://127.0.0.1:5080 \
             -AdminKey source-audit-admin-key-at-least-24-chars \
             -ReportPath source-audit.json \
             -ExpectedBuiltInSources 81 \
-            -ExpectedProviders 50
+            -ExpectedProviders 50 || source_status=$?
+          validation_status=0
+          pwsh -NoProfile -File ./tools/Audit-Validation.ps1 \
+            -ApiBaseUrl http://127.0.0.1:5080 \
+            -AdminKey source-audit-admin-key-at-least-24-chars \
+            -ReportPath validation-audit.json \
+            -ExportLimit 1000 || validation_status=$?
+          test "$source_status" -eq 0
+          test "$validation_status" -eq 0
       - name: Publish audit summary
         if: always()
         shell: pwsh
@@ -77,12 +87,22 @@ jobs:
             "- Truncated feeds: $($report.truncated)" >> $env:GITHUB_STEP_SUMMARY
             "- Global candidate limit reached: $($report.candidateLimitReached)" >> $env:GITHUB_STEP_SUMMARY
           }
+          if (Test-Path validation-audit.json) {
+            $validation = Get-Content validation-audit.json -Raw | ConvertFrom-Json
+            "## Proxy validation audit" >> $env:GITHUB_STEP_SUMMARY
+            "- Success: $($validation.success)" >> $env:GITHUB_STEP_SUMMARY
+            "- Checked: $($validation.checked)" >> $env:GITHUB_STEP_SUMMARY
+            "- Alive: $($validation.alive)" >> $env:GITHUB_STEP_SUMMARY
+            "- Deferred: $($validation.deferred)" >> $env:GITHUB_STEP_SUMMARY
+            "- Published JSON/XML/TXT/CSV: $($validation.jsonRows)/$($validation.xmlRows)/$($validation.txtRows)/$($validation.csvRows)" >> $env:GITHUB_STEP_SUMMARY
+          }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: source-feed-audit
           path: |
             source-audit.json
+            validation-audit.json
             source-audit-api.log
           if-no-files-found: warn
           retention-days: 30
