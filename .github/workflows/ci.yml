@@ -57,6 +57,9 @@ jobs:
             foreach ($parseError in $errors) { Write-Error "$($script.Name): $parseError"; $failed = $true }
           }
           if ($failed) { throw 'Operational PowerShell scripts contain syntax errors.' }
+      - name: Verify source-audit evidence contracts
+        shell: pwsh
+        run: ./tools/Test-AuditSourceFeeds.ps1
       - run: npm ci
         working-directory: src/proxyharbor-web
       - run: npm audit --audit-level=moderate

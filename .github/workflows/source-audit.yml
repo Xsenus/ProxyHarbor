@@ -79,6 +79,7 @@ jobs:
             $report = Get-Content source-audit.json -Raw | ConvertFrom-Json
             "## Source feed audit" >> $env:GITHUB_STEP_SUMMARY
             "- Audited: $($report.auditedAt)" >> $env:GITHUB_STEP_SUMMARY
+            "- Verified current run: $($report.success)" >> $env:GITHUB_STEP_SUMMARY
             "- Success: $($report.succeeded)/$($report.enabled)" >> $env:GITHUB_STEP_SUMMARY
             "- Built-in catalog: $($report.enabledBuiltInSources)/$($report.expectedBuiltInSources)" >> $env:GITHUB_STEP_SUMMARY
             "- Providers: $($report.providers)/$($report.expectedProviders)" >> $env:GITHUB_STEP_SUMMARY
@@ -87,6 +88,9 @@ jobs:
             "- Failed: $($report.failed)" >> $env:GITHUB_STEP_SUMMARY
             "- Truncated feeds: $($report.truncated)" >> $env:GITHUB_STEP_SUMMARY
             "- Global candidate limit reached: $($report.candidateLimitReached)" >> $env:GITHUB_STEP_SUMMARY
+            "- Collection counters match: $($report.collectionCountersMatch)" >> $env:GITHUB_STEP_SUMMARY
+            "- Stale source evidence: $($report.staleEvidence)" >> $env:GITHUB_STEP_SUMMARY
+            if ($report.error) { "- Error: $($report.error)" >> $env:GITHUB_STEP_SUMMARY }
           }
           if (Test-Path validation-audit.json) {
             $validation = Get-Content validation-audit.json -Raw | ConvertFrom-Json
@@ -98,6 +102,15 @@ jobs:
             "- Deferred: $($validation.deferred)" >> $env:GITHUB_STEP_SUMMARY
             "- Published JSON/XML/TXT/CSV: $($validation.jsonRows)/$($validation.xmlRows)/$($validation.txtRows)/$($validation.csvRows)" >> $env:GITHUB_STEP_SUMMARY
           }
+      - name: Verify audit evidence artifacts exist
+        if: always()
+        shell: pwsh
+        run: |
+          $missing = @('source-audit.json', 'validation-audit.json', 'source-audit-api.log') |
+            Where-Object { -not (Test-Path -LiteralPath $_ -PathType Leaf) }
+          if ($missing.Count -gt 0) {
+            throw "Source audit did not produce required evidence: $($missing -join ', ')."
+          }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
@@ -106,5 +119,5 @@ jobs:
             source-audit.json
             validation-audit.json
             source-audit-api.log
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 30

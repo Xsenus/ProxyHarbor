@@ -7,66 +7,120 @@ param(
     [switch]$SkipCollection
 )
 
-# Полный сбор обновляет LastItemCount/LastError каждого feed'а тем же кодом, который работает в production.
-$headers = @{ 'X-Admin-Key' = $AdminKey }
-$collection = $null
-if (-not $SkipCollection) {
-    $collection = Invoke-RestMethod -Method Post -Uri "$ApiBaseUrl/api/v1/admin/collect" -Headers $headers
-}
-$sources = Invoke-RestMethod -Method Get -Uri "$ApiBaseUrl/api/v1/admin/sources" -Headers $headers
-$ordered = @($sources | Sort-Object Priority)
-$ordered | Select-Object Name, Provider, IsBuiltIn, DefaultProtocol, LastItemCount, LastResultTruncated, ConsecutiveFailures, LastFetchedAt, NextFetchAt, LastError | Format-Table -AutoSize
-
-$failed = @($ordered | Where-Object { $_.Enabled -and ($_.LastItemCount -le 0 -or $_.LastError) })
-$truncated = @($ordered | Where-Object { $_.Enabled -and $_.LastResultTruncated })
-$candidateLimitReached = if ($null -eq $collection) { $null } else { [bool]$collection.CandidateLimitReached }
-$builtIn = @($ordered | Where-Object IsBuiltIn)
-$enabledBuiltIn = @($builtIn | Where-Object Enabled)
-$providers = @($builtIn | ForEach-Object Provider | Where-Object { $_ } | Sort-Object -Unique)
-$catalogErrors = [System.Collections.Generic.List[string]]::new()
-if ($builtIn.Count -ne $ExpectedBuiltInSources) {
-    $catalogErrors.Add("ожидалось $ExpectedBuiltInSources встроенных feed'ов, API вернул $($builtIn.Count)")
-}
-if ($enabledBuiltIn.Count -ne $ExpectedBuiltInSources) {
-    $catalogErrors.Add("включено $($enabledBuiltIn.Count) из $ExpectedBuiltInSources встроенных feed'ов")
-}
-if ($providers.Count -ne $ExpectedProviders) {
-    $catalogErrors.Add("ожидалось $ExpectedProviders независимых провайдеров, API вернул $($providers.Count)")
-}
+$ErrorActionPreference = 'Stop'
 $report = [ordered]@{
     auditedAt = [DateTimeOffset]::UtcNow.ToString('O')
     apiBaseUrl = $ApiBaseUrl
     collectionTriggered = -not [bool]$SkipCollection
-    total = $ordered.Count
-    enabled = @($ordered | Where-Object Enabled).Count
-    succeeded = @($ordered | Where-Object { $_.Enabled -and $_.LastItemCount -gt 0 -and -not $_.LastError }).Count
-    failed = $failed.Count
-    truncated = $truncated.Count
-    candidateLimitReached = $candidateLimitReached
-    parsedItems = ($ordered | Where-Object Enabled | Measure-Object -Property LastItemCount -Sum).Sum
+    success = $false
+    collectionId = $null
+    collectionStartedAt = $null
+    collectionFinishedAt = $null
+    collectionStatus = $null
+    collectionCountersMatch = $null
+    total = 0
+    enabled = 0
+    succeeded = 0
+    failed = 0
+    staleEvidence = 0
+    truncated = 0
+    candidateLimitReached = $null
+    parsedItems = 0
     expectedBuiltInSources = $ExpectedBuiltInSources
-    builtInSources = $builtIn.Count
-    enabledBuiltInSources = $enabledBuiltIn.Count
+    builtInSources = 0
+    enabledBuiltInSources = 0
     expectedProviders = $ExpectedProviders
-    providers = $providers.Count
-    catalogComplete = $catalogErrors.Count -eq 0
-    catalogErrors = @($catalogErrors)
-    sources = $ordered
-}
-if ($ReportPath) {
-    $parent = Split-Path -Parent $ReportPath
-    if ($parent) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
-    $report | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $ReportPath -Encoding utf8NoBOM
-    Write-Host "JSON-отчёт сохранён: $ReportPath"
-}
-if ($failed.Count -gt 0 -or $truncated.Count -gt 0 -or $candidateLimitReached -eq $true -or $catalogErrors.Count -gt 0) {
-    $catalogDetail = if ($catalogErrors.Count -gt 0) { " Нарушения каталога: $($catalogErrors -join '; ')." } else { '' }
-    $limitDetail = if ($truncated.Count -gt 0 -or $candidateLimitReached) {
-        " Достигнуты защитные лимиты: усечено feed'ов $($truncated.Count), общий лимит кандидатов: $candidateLimitReached."
-    } else { '' }
-    Write-Error "$($failed.Count) активных источников не прошли аудит.$limitDetail$catalogDetail Подробности показаны выше."
-    exit 1
+    providers = 0
+    catalogComplete = $false
+    catalogErrors = @()
+    error = $null
+    sources = @()
 }
 
-Write-Host "Аудит пройден без усечения: $($report.succeeded)/$($report.enabled) активных источников, $($report.builtInSources) встроенных feed'ов от $($report.providers) провайдеров вернули $($report.parsedItems) распознанных записей." -ForegroundColor Green
-exit 0
+try {
+    # Полный сбор обновляет LastItemCount/LastError каждого feed'а тем же кодом,
+    # который работает в production. Любая HTTP/JSON-ошибка немедленно прерывает аудит.
+    $headers = @{ 'X-Admin-Key' = $AdminKey }
+    $collection = $null
+    if (-not $SkipCollection) {
+        $collection = Invoke-RestMethod -Method Post -Uri "$ApiBaseUrl/api/v1/admin/collect" -Headers $headers
+        if (-not $collection -or $collection.Status -ne 'completed' -or -not $collection.StartedAt -or -not $collection.FinishedAt) {
+            throw 'Admin collection не вернул завершённый аудит с временными границами.'
+        }
+        $report.collectionId = $collection.Id
+        $report.collectionStartedAt = ([DateTimeOffset]$collection.StartedAt).ToString('O')
+        $report.collectionFinishedAt = ([DateTimeOffset]$collection.FinishedAt).ToString('O')
+        $report.collectionStatus = $collection.Status
+        $report.candidateLimitReached = [bool]$collection.CandidateLimitReached
+    }
+
+    $sources = Invoke-RestMethod -Method Get -Uri "$ApiBaseUrl/api/v1/admin/sources" -Headers $headers
+    $ordered = @($sources | Sort-Object Priority)
+    $enabled = @($ordered | Where-Object Enabled)
+    $failed = @($enabled | Where-Object { $_.LastItemCount -le 0 -or $_.LastError })
+    $truncated = @($enabled | Where-Object LastResultTruncated)
+    $builtIn = @($ordered | Where-Object IsBuiltIn)
+    $enabledBuiltIn = @($builtIn | Where-Object Enabled)
+    $providers = @($builtIn | ForEach-Object Provider | Where-Object { $_ } | Sort-Object -Unique)
+    $staleEvidence = @()
+    if ($collection) {
+        $collectionStartedAt = [DateTimeOffset]$collection.StartedAt
+        $staleEvidence = @($enabled | Where-Object {
+            -not $_.LastFetchedAt -or [DateTimeOffset]$_.LastFetchedAt -lt $collectionStartedAt
+        })
+    }
+
+    $catalogErrors = [System.Collections.Generic.List[string]]::new()
+    if ($builtIn.Count -ne $ExpectedBuiltInSources) {
+        $catalogErrors.Add("ожидалось $ExpectedBuiltInSources встроенных feed'ов, API вернул $($builtIn.Count)")
+    }
+    if ($enabledBuiltIn.Count -ne $ExpectedBuiltInSources) {
+        $catalogErrors.Add("включено $($enabledBuiltIn.Count) из $ExpectedBuiltInSources встроенных feed'ов")
+    }
+    if ($providers.Count -ne $ExpectedProviders) {
+        $catalogErrors.Add("ожидалось $ExpectedProviders независимых провайдеров, API вернул $($providers.Count)")
+    }
+
+    $countersMatch = $null
+    if ($collection) {
+        $countersMatch = [int]$collection.SourcesProcessed -eq $enabled.Count -and
+            [int]$collection.SourcesSucceeded -eq ($enabled.Count - $failed.Count) -and
+            [int]$collection.SourcesFailed -eq $failed.Count -and
+            [int]$collection.SourcesTruncated -eq $truncated.Count
+    }
+
+    $report.collectionCountersMatch = $countersMatch
+    $report.total = $ordered.Count
+    $report.enabled = $enabled.Count
+    $report.succeeded = $enabled.Count - $failed.Count
+    $report.failed = $failed.Count
+    $report.staleEvidence = $staleEvidence.Count
+    $report.truncated = $truncated.Count
+    $report.parsedItems = ($enabled | Measure-Object -Property LastItemCount -Sum).Sum
+    $report.builtInSources = $builtIn.Count
+    $report.enabledBuiltInSources = $enabledBuiltIn.Count
+    $report.providers = $providers.Count
+    $report.catalogComplete = $catalogErrors.Count -eq 0
+    $report.catalogErrors = @($catalogErrors)
+    $report.sources = $ordered
+
+    $ordered | Select-Object Name, Provider, IsBuiltIn, DefaultProtocol, LastItemCount, LastResultTruncated, ConsecutiveFailures, LastFetchedAt, NextFetchAt, LastError | Format-Table -AutoSize
+
+    if ($failed.Count -gt 0 -or $staleEvidence.Count -gt 0 -or $truncated.Count -gt 0 -or
+        $report.candidateLimitReached -eq $true -or $catalogErrors.Count -gt 0 -or $countersMatch -eq $false) {
+        throw "Source-аудит недостоверен или неполон: failed=$($failed.Count), stale=$($staleEvidence.Count), truncated=$($truncated.Count), candidateLimit=$($report.candidateLimitReached), countersMatch=$countersMatch, catalogErrors=$($catalogErrors.Count)."
+    }
+
+    $report.success = $true
+    Write-Host "Аудит пройден без усечения: $($report.succeeded)/$($report.enabled) активных источников, $($report.builtInSources) встроенных feed'ов от $($report.providers) провайдеров вернули $($report.parsedItems) распознанных записей." -ForegroundColor Green
+} catch {
+    $report.error = $_.Exception.Message
+    throw
+} finally {
+    if ($ReportPath) {
+        $parent = Split-Path -Parent $ReportPath
+        if ($parent) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
+        $report | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $ReportPath -Encoding utf8NoBOM
+        Write-Host "JSON-отчёт source-аудита сохранён: $ReportPath"
+    }
+}
