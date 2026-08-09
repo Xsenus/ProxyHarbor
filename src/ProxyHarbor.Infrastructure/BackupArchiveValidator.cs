@@ -9,6 +9,10 @@ public static class BackupArchiveValidator
 {
     private const long MaxManifestBytes = 64 * 1024;
     private const long MaxSettingsEntryBytes = 1024 * 1024;
+    private const long MaxDatabaseEntryBytes = 16L * 1024 * 1024 * 1024;
+    private const long MaxTotalUncompressedBytes = 32L * 1024 * 1024 * 1024;
+    private const long CompressionRatioThresholdBytes = 1024 * 1024;
+    private const long MaxCompressionRatio = 200;
     private static readonly JsonSerializerOptions SettingsJsonOptions = new(JsonSerializerDefaults.Web);
     private static readonly string[] RequiredDatabaseEntries =
     [
@@ -43,6 +47,8 @@ public static class BackupArchiveValidator
         var unexpected = archive.Entries.FirstOrDefault(entry => !AllowedEntries.Contains(entry.FullName));
         if (unexpected is not null)
             throw new InvalidDataException($"Backup содержит файл вне разрешённой схемы: {unexpected.FullName}.");
+
+        ValidateArchiveBounds(archive);
 
         var manifestEntry = RequiredEntry(archive, "manifest.json");
         if (manifestEntry.Length > MaxManifestBytes)
@@ -90,13 +96,6 @@ public static class BackupArchiveValidator
         if (versionNumber >= 4)
             _ = RequiredEntry(archive, "database/validation-runs.json");
 
-        foreach (var name in CurrentSettingsEntries)
-        {
-            var entry = archive.GetEntry(name);
-            if (entry?.Length > MaxSettingsEntryBytes)
-                throw new InvalidDataException($"Файл настроек {name} превышает допустимый размер.");
-        }
-
         if (versionNumber >= 5)
         {
             ValidateSettingsObject<CollectorOptions>(archive, "settings/collector.json");
@@ -108,6 +107,38 @@ public static class BackupArchiveValidator
                 RequireFalse(rootElement, "connectionStringIncluded", "settings/runtime.json");
             });
         }
+    }
+
+    /// <summary>Отклоняет ZIP-bomb и архив, выходящий за эксплуатационные пределы restore.</summary>
+    private static void ValidateArchiveBounds(ZipArchive archive)
+    {
+        long totalLength = 0;
+        foreach (var entry in archive.Entries)
+            totalLength = AccumulateValidatedEntrySize(
+                entry.FullName, entry.Length, entry.CompressedLength, totalLength);
+    }
+
+    /// <summary>Чистая bounded-проверка одного ZIP entry, используемая до распаковки.</summary>
+    internal static long AccumulateValidatedEntrySize(
+        string name,
+        long length,
+        long compressedLength,
+        long currentTotal)
+    {
+        if (name.StartsWith("settings/", StringComparison.Ordinal) && length > MaxSettingsEntryBytes)
+            throw new InvalidDataException($"Файл настроек {name} превышает допустимый размер.");
+        if (name.StartsWith("database/", StringComparison.Ordinal) && length > MaxDatabaseEntryBytes)
+            throw new InvalidDataException($"Файл данных {name} превышает лимит 16 ГиБ.");
+        if (length > MaxTotalUncompressedBytes - currentTotal)
+            throw new InvalidDataException("Распакованный backup превышает общий лимит 32 ГиБ.");
+
+        // Небольшие JSON-файлы могут иметь высокий ratio без существенного расхода.
+        // Для крупных entry отношение 200:1 оставляет большой запас обычному JSON,
+        // но останавливает классические deflate-bomb до начала транзакции restore.
+        if (length >= CompressionRatioThresholdBytes &&
+            (compressedLength <= 0 || (double)length / compressedLength > MaxCompressionRatio))
+            throw new InvalidDataException($"Файл {name} имеет опасную степень ZIP-сжатия.");
+        return currentTotal + length;
     }
 
     /// <summary>Требует точную, недублированную и десериализуемую схему JSON settings.</summary>

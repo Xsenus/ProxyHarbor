@@ -166,6 +166,40 @@ public sealed class BackupArchiveValidatorTests
     }
 
     [Fact]
+    public void RejectsHighlyCompressedDatabaseEntryBeforeRestoreTransaction()
+    {
+        // Два МиБ пробелов сжимаются в несколько КиБ и имитируют deflate ZIP-bomb,
+        // не выделяя гигабайты памяти в unit-тесте.
+        using var archive = CreateArchive(
+            """{"version":2,"secretsIncluded":false}""",
+            proxiesJson: new string(' ', 2 * 1024 * 1024) + "[]");
+
+        var exception = Assert.Throws<InvalidDataException>(() => BackupArchiveValidator.Validate(archive));
+
+        Assert.Contains("опасную степень ZIP-сжатия", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RejectsDatabaseEntryOverSixteenGibibytes()
+    {
+        var exception = Assert.Throws<InvalidDataException>(() =>
+            BackupArchiveValidator.AccumulateValidatedEntrySize(
+                "database/proxies.json", 16L * 1024 * 1024 * 1024 + 1, 16L * 1024 * 1024 * 1024, 0));
+
+        Assert.Contains("16 ГиБ", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RejectsAggregateUncompressedSizeOverThirtyTwoGibibytes()
+    {
+        var exception = Assert.Throws<InvalidDataException>(() =>
+            BackupArchiveValidator.AccumulateValidatedEntrySize(
+                "database/runs.json", 2, 2, 32L * 1024 * 1024 * 1024 - 1));
+
+        Assert.Contains("32 ГиБ", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RejectsDuplicateEntriesBeforeDatabaseReplacement()
     {
         using var stream = new MemoryStream();
@@ -208,13 +242,14 @@ public sealed class BackupArchiveValidatorTests
         string? unexpectedEntry = null,
         string collectorSettings = "{}",
         string backupSettings = "{}",
-        string runtimeSettings = "{}")
+        string runtimeSettings = "{}",
+        string proxiesJson = "[]")
     {
         var stream = new MemoryStream();
         using (var writer = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true))
         {
             AddEntry(writer, "manifest.json", manifest);
-            AddEntry(writer, "database/proxies.json", "[]");
+            AddEntry(writer, "database/proxies.json", proxiesJson);
             AddEntry(writer, "database/sources.json", "[]");
             AddEntry(writer, "database/runs.json", "[]");
             if (includeBackupRuns) AddEntry(writer, "database/backup-runs.json", "[]");

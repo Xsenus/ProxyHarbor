@@ -19,6 +19,7 @@
 - SSRF test gate проверяет как URL-policy, так и финальный TCP connect для IPv4/IPv6 loopback до открытия socket.
 - Публичные list/seek/export endpoint'ы возвращают 400 для числовых enum-значений неизвестного proxy protocol.
 - Diagnostics, React и Prometheus публикуют каноническую дату последнего полного release-аудита каталога.
+- Restore до изменения БД отклоняет ZIP-bomb, database entry крупнее 16 ГиБ и backup распакованным размером более 32 ГиБ.
 
 ## [1.0.0] - 2026-08-10
 
