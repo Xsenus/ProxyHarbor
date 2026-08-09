@@ -1,0 +1,8 @@
+{{ define "telegram.proxyharbor.message" -}}
+{{ if eq .Status "firing" }}🚨{{ else }}✅{{ end }} <b>ProxyHarbor · {{ .Status | toUpper | html }}</b>
+{{ range .Alerts }}
+<b>{{ .Labels.alertname | html }}</b>{{ with .Labels.severity }} · {{ . | toUpper | html }}{{ end }}
+{{ with .Annotations.summary }}{{ . | html }}{{ end }}
+{{ with .Annotations.description }}{{ . | html }}{{ end }}
+{{ end -}}
+{{ end }}

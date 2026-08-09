@@ -15,7 +15,7 @@
 - ограничение частоты запросов, SSRF-защита источников, контейнеры без root и с read-only ФС;
 - потоковые зашифрованные AES-256-GCM снимки БД и настроек с отправкой в Telegram;
 - постоянный аудит создания, размера и подтверждённой Telegram-доставки каждого backup;
-- opt-in Prometheus с bounded retention и проверяемыми alert rules для API, сбора, validation и backup;
+- opt-in Prometheus + Alertmanager с bounded retention, проверяемыми alert rules и Telegram-уведомлениями;
 - CI для backend, frontend, тестов и проверки Docker Compose.
 
 ## Быстрый запуск в Docker
@@ -51,7 +51,7 @@ Production override убирает прямой порт `8080` у frontend и �
 docker compose -f docker-compose.yml -f docker-compose.production.yml --profile monitoring up -d --build
 ```
 
-Prometheus слушает только `127.0.0.1:9090`; production gateway намеренно не публикует `/metrics`. Полный список alarms и действия оператора: [docs/MONITORING.md](docs/MONITORING.md).
+Prometheus слушает только `127.0.0.1:9090`, Alertmanager — `127.0.0.1:9093`; production gateway намеренно не публикует `/metrics`. Профиль требует `TELEGRAM_BOT_TOKEN` и числовой `TELEGRAM_CHAT_ID`, передаёт их Alertmanager как Compose secrets и отправляет сгруппированные firing/resolved уведомления. Полный список alarms и действия оператора: [docs/MONITORING.md](docs/MONITORING.md).
 
 ## Конфигурация
 
@@ -68,6 +68,8 @@ Prometheus слушает только `127.0.0.1:9090`; production gateway на
 | `PROMETHEUS_PORT` | Loopback-порт opt-in Prometheus, по умолчанию 9090 |
 | `PROMETHEUS_RETENTION_TIME` | Максимальный возраст метрик, по умолчанию 30d |
 | `PROMETHEUS_RETENTION_SIZE` | Максимальный объём TSDB, по умолчанию 10GB |
+| `ALERTMANAGER_PORT` | Loopback-порт Alertmanager, по умолчанию 9093 |
+| `ALERTMANAGER_RETENTION_TIME` | Срок notification log и silences, по умолчанию 120h |
 | `Collector__BackgroundWorkersEnabled` | Позволяет отключить workers для миграций, CI или отдельной API-реплики |
 | `VALIDATION_CONCURRENCY` / `Collector__ValidationConcurrency` | Параллельность сетевых проверок, по умолчанию 800 |
 | `VALIDATION_BATCH_SIZE` / `Collector__ValidationBatchSize` | Размер одной очереди, по умолчанию 1600 |

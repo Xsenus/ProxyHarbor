@@ -106,6 +106,8 @@ jobs:
           BACKUP_ENCRYPTION_KEY: ci-encryption-key-at-least-32-chars
           PUBLIC_HOST: localhost
           ACME_EMAIL: ci@example.com
+          TELEGRAM_BOT_TOKEN: ci-telegram-token
+          TELEGRAM_CHAT_ID: "123456"
         run: |
           docker compose config
           production_config=$(docker compose \
@@ -121,7 +123,12 @@ jobs:
             .services.prometheus.image == "prom/prometheus:v3.13.2-distroless" and
             .services.prometheus.user == "65532:65532" and
             .services.prometheus.read_only == true and
-            .services.prometheus.ports[0].host_ip == "127.0.0.1"'
+            .services.prometheus.ports[0].host_ip == "127.0.0.1" and
+            .services.alertmanager.image == "prom/alertmanager:v0.32.1" and
+            .services.alertmanager.user == "65534:65534" and
+            .services.alertmanager.read_only == true and
+            .services.alertmanager.ports[0].host_ip == "127.0.0.1" and
+            (.services.alertmanager.environment | length) == 0'
           docker run --rm \
             --env PUBLIC_HOST=localhost --env ACME_EMAIL=ci@example.com \
             --volume "$PWD/deploy/Caddyfile:/etc/caddy/Caddyfile:ro" \
@@ -135,6 +142,32 @@ jobs:
             --volume "$PWD/deploy/prometheus:/etc/prometheus:ro" \
             prom/prometheus:v3.13.2-distroless \
             test rules /etc/prometheus/alerts.test.yml
+          docker run --rm --entrypoint /bin/amtool \
+            --volume "$PWD/deploy/alertmanager:/etc/alertmanager:ro" \
+            prom/alertmanager:v0.32.1 \
+            --enable-feature=utf8-strict-mode \
+            check-config /etc/alertmanager/alertmanager.yml
+          docker run --rm --entrypoint /bin/amtool \
+            --volume "$PWD/deploy/alertmanager:/etc/alertmanager:ro" \
+            prom/alertmanager:v0.32.1 \
+            config routes test --config.file=/etc/alertmanager/alertmanager.yml \
+            --verify.receivers=telegram severity=critical alertname=CriticalTest
+          docker run --rm --entrypoint /bin/amtool \
+            --volume "$PWD/deploy/alertmanager:/etc/alertmanager:ro" \
+            prom/alertmanager:v0.32.1 \
+            config routes test --config.file=/etc/alertmanager/alertmanager.yml \
+            --verify.receivers=telegram severity=warning alertname=WarningTest
+          rendered_alert=$(docker run --rm --entrypoint /bin/amtool \
+            --volume "$PWD/deploy/alertmanager:/etc/alertmanager:ro" \
+            prom/alertmanager:v0.32.1 \
+            template render \
+            --template.glob='/etc/alertmanager/templates/*.tmpl' \
+            --template.text='{{ template "telegram.proxyharbor.message" . }}' \
+            --template.type=html \
+            --template.data=/etc/alertmanager/telegram.test.json \
+            --no-version-check)
+          echo "$rendered_alert" | grep 'Proxy&lt;Down&gt;'
+          echo "$rendered_alert" | grep 'Unsafe &lt;b&gt;tag&lt;/b&gt; &amp; text'
       - name: Container smoke test
         env:
           POSTGRES_DB: proxyharbor
@@ -145,6 +178,8 @@ jobs:
           BACKGROUND_WORKERS_ENABLED: false
           PUBLIC_HOST: localhost
           ACME_EMAIL: ci@example.com
+          TELEGRAM_BOT_TOKEN: ci-telegram-token
+          TELEGRAM_CHAT_ID: "123456"
         run: |
           cleanup() {
             status=$?
@@ -269,6 +304,8 @@ jobs:
             ps --quiet caddy)
           prometheus_id=$(docker compose -f docker-compose.yml -f docker-compose.production.yml \
             --profile monitoring ps --quiet prometheus)
+          alertmanager_id=$(docker compose -f docker-compose.yml -f docker-compose.production.yml \
+            --profile monitoring ps --quiet alertmanager)
           test "$(docker inspect --format '{{.Config.User}}' "$caddy_id")" = '65532:65532'
           test "$(docker inspect --format '{{.HostConfig.ReadonlyRootfs}}' "$caddy_id")" = 'true'
           test "$(docker inspect --format '{{.HostConfig.PidsLimit}}' "$caddy_id")" = '128'
@@ -281,6 +318,15 @@ jobs:
           test "$(docker inspect --format '{{.HostConfig.NanoCpus}}' "$prometheus_id")" = '1000000000'
           docker inspect --format '{{json .HostConfig.CapDrop}}' "$prometheus_id" | grep --ignore-case 'ALL'
           docker port "$prometheus_id" 9090/tcp | grep '^127.0.0.1:9090$'
+          test "$(docker inspect --format '{{.Config.User}}' "$alertmanager_id")" = '65534:65534'
+          test "$(docker inspect --format '{{.HostConfig.ReadonlyRootfs}}' "$alertmanager_id")" = 'true'
+          test "$(docker inspect --format '{{.HostConfig.PidsLimit}}' "$alertmanager_id")" = '128'
+          test "$(docker inspect --format '{{.HostConfig.Memory}}' "$alertmanager_id")" = '268435456'
+          test "$(docker inspect --format '{{.HostConfig.NanoCpus}}' "$alertmanager_id")" = '500000000'
+          docker inspect --format '{{json .HostConfig.CapDrop}}' "$alertmanager_id" | grep --ignore-case 'ALL'
+          docker port "$alertmanager_id" 9093/tcp | grep '^127.0.0.1:9093$'
+          if docker inspect --format '{{json .Config.Env}}' "$alertmanager_id" | \
+            grep --ignore-case 'telegram'; then exit 1; fi
           web_port=$(docker compose -f docker-compose.yml -f docker-compose.production.yml \
             port web 80 2>/dev/null || true)
           test -z "$web_port"
@@ -323,12 +369,32 @@ jobs:
           done
           for attempt in {1..60}; do
             if curl --fail --silent http://127.0.0.1:9090/api/v1/targets | jq --exit-status \
-              '.data.activeTargets | any(.labels.job == "proxyharbor" and .health == "up")'; then break; fi
+              '.data.activeTargets as $targets |
+               any($targets[]; .labels.job == "proxyharbor" and .health == "up") and
+               any($targets[]; .labels.job == "alertmanager" and .health == "up")'; then break; fi
             if [ "$attempt" -eq 60 ]; then exit 1; fi
             sleep 1
           done
           curl --fail --silent http://127.0.0.1:9090/api/v1/rules | jq --exit-status \
-            '[.data.groups[].rules[] | select(.type == "alerting")] | length == 15'
+            '[.data.groups[].rules[] | select(.type == "alerting")] | length == 17'
+          for attempt in {1..60}; do
+            if curl --fail --silent http://127.0.0.1:9090/api/v1/alertmanagers | jq --exit-status \
+              '.data.activeAlertmanagers | any(.url | startswith("http://alertmanager:9093/"))'; then break; fi
+            if [ "$attempt" -eq 60 ]; then exit 1; fi
+            sleep 1
+          done
+          curl --fail --silent http://127.0.0.1:9093/-/ready
+          synthetic_start=$(date --utc +'%Y-%m-%dT%H:%M:%SZ')
+          synthetic_end=$(date --utc --date='+5 minutes' +'%Y-%m-%dT%H:%M:%SZ')
+          curl --fail --silent --request POST --header 'Content-Type: application/json' \
+            --data "[{\"labels\":{\"alertname\":\"ProxyHarborCiSynthetic\",\"severity\":\"warning\"},\"startsAt\":\"$synthetic_start\",\"endsAt\":\"$synthetic_end\"}]" \
+            http://127.0.0.1:9093/api/v2/alerts
+          curl --fail --silent \
+            'http://127.0.0.1:9093/api/v2/alerts?filter=alertname%3DProxyHarborCiSynthetic' | \
+            jq --exit-status 'length == 1 and .[0].labels.alertname == "ProxyHarborCiSynthetic"'
+          curl --fail --silent --request POST --header 'Content-Type: application/json' \
+            --data "[{\"labels\":{\"alertname\":\"ProxyHarborCiSynthetic\",\"severity\":\"warning\"},\"startsAt\":\"$synthetic_start\",\"endsAt\":\"$synthetic_start\"}]" \
+            http://127.0.0.1:9093/api/v2/alerts
 
   postgres-integration:
     runs-on: ubuntu-latest

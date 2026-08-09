@@ -10,6 +10,24 @@ groups:
           summary: ProxyHarbor API недоступен
           description: Prometheus не может получить /metrics API более двух минут.
 
+      - alert: ProxyHarborAlertmanagerDown
+        expr: up{job="alertmanager"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Alertmanager недоступен
+          description: Prometheus не может передать alerts в Telegram-маршрутизатор более двух минут.
+
+      - alert: ProxyHarborTelegramNotificationErrors
+        expr: sum(increase(alertmanager_notifications_failed_total[10m])) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Alertmanager не доставляет уведомления
+          description: За последние десять минут зарегистрированы ошибки Telegram-доставки.
+
       - alert: ProxyHarborBackgroundWorkersDisabled
         expr: proxyharbor_background_workers_enabled == 0
         for: 10m

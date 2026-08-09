@@ -36,11 +36,12 @@ docker compose -f docker-compose.yml -f docker-compose.production.yml logs --tai
 
 ## Встроенный мониторинг
 
-Opt-in профиль запускает Prometheus с 30-дневным/10-ГБ bounded retention и готовыми alert rules:
+Opt-in профиль запускает Prometheus с 30-дневным/10-ГБ bounded retention и Alertmanager с Telegram-маршрутом. До запуска задайте bot token и числовой chat ID (для group/channel обычно отрицательный):
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.production.yml --profile monitoring up -d
 curl --fail http://127.0.0.1:9090/-/ready
+curl --fail http://127.0.0.1:9093/-/ready
 ```
 
-Порт привязан только к loopback. Для удалённого просмотра используйте SSH tunnel `ssh -L 9090:127.0.0.1:9090 user@server`, а не открывайте Prometheus в интернет. История находится в volume `prometheus-data`; пределы меняются через `PROMETHEUS_RETENTION_TIME` и `PROMETHEUS_RETENTION_SIZE`. Уведомления требуют отдельного доверенного Alertmanager либо интеграции существующей monitoring-платформы. Runbook и alarms описаны в [MONITORING.md](MONITORING.md).
+Оба порта привязаны только к loopback. Для удалённого просмотра используйте SSH tunnel, а не открывайте UI в интернет. История метрик находится в `prometheus-data`, silences/notification log — в `alertmanager-data`. Token и chat ID монтируются из Compose secrets и в эти volumes не записываются. Runbook и alarms описаны в [MONITORING.md](MONITORING.md).

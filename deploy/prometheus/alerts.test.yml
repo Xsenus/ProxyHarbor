@@ -24,6 +24,23 @@ tests:
               summary: ProxyHarbor API недоступен
               description: Prometheus не может получить /metrics API более двух минут.
 
+  - name: Alertmanager down is independently detected
+    interval: 1m
+    input_series:
+      - series: 'up{job="alertmanager",instance="alertmanager:9093"}'
+        values: '0x4'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: ProxyHarborAlertmanagerDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: alertmanager
+              instance: alertmanager:9093
+            exp_annotations:
+              summary: Alertmanager недоступен
+              description: Prometheus не может передать alerts в Telegram-маршрутизатор более двух минут.
+
   - name: Collection stall uses configured interval and worker guard
     interval: 1m
     input_series:
