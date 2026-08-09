@@ -1,4 +1,5 @@
 using System.IO.Compression;
+using System.Reflection;
 using System.Text.Json;
 
 namespace ProxyHarbor.Infrastructure;
@@ -8,6 +9,7 @@ public static class BackupArchiveValidator
 {
     private const long MaxManifestBytes = 64 * 1024;
     private const long MaxSettingsEntryBytes = 1024 * 1024;
+    private static readonly JsonSerializerOptions SettingsJsonOptions = new(JsonSerializerDefaults.Web);
     private static readonly string[] RequiredDatabaseEntries =
     [
         "database/proxies.json",
@@ -49,11 +51,13 @@ public static class BackupArchiveValidator
         using var stream = manifestEntry.Open();
         using var manifest = JsonDocument.Parse(stream);
         var root = manifest.RootElement;
-        if (root.ValueKind != JsonValueKind.Object ||
-            !root.TryGetProperty("version", out var version) ||
+        if (root.ValueKind != JsonValueKind.Object)
+            throw new InvalidDataException("Manifest backup должен содержать JSON object.");
+        EnsureNoDuplicateProperties(root, "manifest.json");
+        if (!root.TryGetProperty("version", out var version) ||
             version.ValueKind != JsonValueKind.Number ||
             !version.TryGetInt32(out var versionNumber) ||
-            versionNumber is not (2 or 3 or 4))
+            versionNumber is < 2 or > 5)
             throw new InvalidDataException("Версия manifest backup не поддерживается.");
         if (!root.TryGetProperty("secretsIncluded", out var secretsIncluded) ||
             secretsIncluded.ValueKind is not (JsonValueKind.True or JsonValueKind.False) ||
@@ -65,6 +69,15 @@ public static class BackupArchiveValidator
                 createdAt.ValueKind != JsonValueKind.String ||
                 !createdAt.TryGetDateTimeOffset(out _)))
             throw new InvalidDataException("Manifest текущего backup не содержит корректный createdAt.");
+        if (versionNumber >= 5 &&
+            (!root.TryGetProperty("settingsSchemaVersion", out var settingsSchemaVersion) ||
+                settingsSchemaVersion.ValueKind != JsonValueKind.Number ||
+                !settingsSchemaVersion.TryGetInt32(out var settingsSchemaVersionNumber) ||
+                settingsSchemaVersionNumber != 1))
+            throw new InvalidDataException("Manifest текущего backup не содержит поддерживаемую схему настроек.");
+        if (versionNumber >= 5)
+            RequireExactProperties(root,
+                ["version", "settingsSchemaVersion", "createdAt", "secretsIncluded"], "manifest.json");
 
         foreach (var name in RequiredDatabaseEntries)
             _ = RequiredEntry(archive, name);
@@ -83,6 +96,74 @@ public static class BackupArchiveValidator
             if (entry?.Length > MaxSettingsEntryBytes)
                 throw new InvalidDataException($"Файл настроек {name} превышает допустимый размер.");
         }
+
+        if (versionNumber >= 5)
+        {
+            ValidateSettingsObject<CollectorOptions>(archive, "settings/collector.json");
+            ValidateSettingsObject<BackupSettingsSnapshot>(archive, "settings/backup.json", rootElement =>
+                RequireFalse(rootElement, "secretsIncluded", "settings/backup.json"));
+            ValidateSettingsObject<BackupRuntimeSettings>(archive, "settings/runtime.json", rootElement =>
+            {
+                RequireFalse(rootElement, "adminApiKeyIncluded", "settings/runtime.json");
+                RequireFalse(rootElement, "connectionStringIncluded", "settings/runtime.json");
+            });
+        }
+    }
+
+    /// <summary>Требует точную, недублированную и десериализуемую схему JSON settings.</summary>
+    private static void ValidateSettingsObject<T>(
+        ZipArchive archive,
+        string name,
+        Action<JsonElement>? semanticValidation = null)
+    {
+        try
+        {
+            using var stream = RequiredEntry(archive, name).Open();
+            using var document = JsonDocument.Parse(stream, new JsonDocumentOptions { MaxDepth = 32 });
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+                throw new InvalidDataException($"Файл настроек {name} должен содержать JSON object.");
+
+            var expected = typeof(T).GetProperties(BindingFlags.Instance | BindingFlags.Public)
+                .Select(property => JsonNamingPolicy.CamelCase.ConvertName(property.Name))
+                .ToHashSet(StringComparer.Ordinal);
+            RequireExactProperties(root, expected, name);
+            _ = root.Deserialize<T>(SettingsJsonOptions) ??
+                throw new InvalidDataException($"Файл настроек {name} не удалось десериализовать.");
+            semanticValidation?.Invoke(root);
+        }
+        catch (JsonException exception)
+        {
+            throw new InvalidDataException($"Файл настроек {name} содержит некорректный JSON.", exception);
+        }
+    }
+
+    private static void RequireFalse(JsonElement root, string propertyName, string entryName)
+    {
+        if (!root.TryGetProperty(propertyName, out var property) ||
+            property.ValueKind is not (JsonValueKind.True or JsonValueKind.False) || property.GetBoolean())
+            throw new InvalidDataException($"Файл настроек {entryName} нарушает политику исключения секретов.");
+    }
+
+    private static void RequireExactProperties(
+        JsonElement root,
+        IEnumerable<string> expectedProperties,
+        string entryName)
+    {
+        var actual = EnsureNoDuplicateProperties(root, entryName);
+        if (!actual.SetEquals(expectedProperties))
+            throw new InvalidDataException($"Файл {entryName} не соответствует полной схеме версии 1.");
+    }
+
+    private static HashSet<string> EnsureNoDuplicateProperties(JsonElement root, string entryName)
+    {
+        var actual = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var property in root.EnumerateObject())
+        {
+            if (!actual.Add(property.Name))
+                throw new InvalidDataException($"Файл {entryName} содержит повторяющееся поле {property.Name}.");
+        }
+        return actual;
     }
 
     /// <summary>Возвращает единственную обязательную запись с точным именем.</summary>

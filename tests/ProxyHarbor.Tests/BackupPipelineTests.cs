@@ -70,6 +70,7 @@ public sealed class BackupPipelineTests
             await BackupEncryption.DecryptAsync(encryptedPath, decryptedPath, EncryptionKey, CancellationToken.None);
 
             using var archive = ZipFile.OpenRead(decryptedPath);
+            BackupArchiveValidator.Validate(archive);
             var names = archive.Entries.Select(entry => entry.FullName).Order(StringComparer.Ordinal).ToArray();
             Assert.Equal(
                 [
@@ -89,6 +90,10 @@ public sealed class BackupPipelineTests
             using var sources = await JsonDocument.ParseAsync(sourcesStream);
             Assert.Equal("Pipeline source", sources.RootElement[0].GetProperty("name").GetString());
             Assert.True(sources.RootElement[0].GetProperty("lastResultTruncated").GetBoolean());
+            using var manifestStream = BackupArchiveValidator.RequiredEntry(archive, "manifest.json").Open();
+            using var manifest = await JsonDocument.ParseAsync(manifestStream);
+            Assert.Equal(5, manifest.RootElement.GetProperty("version").GetInt32());
+            Assert.Equal(1, manifest.RootElement.GetProperty("settingsSchemaVersion").GetInt32());
         }
         finally
         {

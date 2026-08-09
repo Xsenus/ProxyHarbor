@@ -135,6 +135,8 @@ public sealed class BackupRestoreRoundTripIntegrationTests
             Assert.Equal("proxy.example;localhost", runtime.RootElement.GetProperty("allowedHosts").GetString());
             Assert.Equal("Information", runtime.RootElement.GetProperty("logLevels").GetProperty("Default").GetString());
             Assert.Equal("https://dashboard.example", runtime.RootElement.GetProperty("corsOrigins")[0].GetString());
+            Assert.True(runtime.RootElement.GetProperty("connectionStringConfigured").GetBoolean());
+            Assert.False(runtime.RootElement.GetProperty("connectionStringIncluded").GetBoolean());
 
             var entryContents = new List<string>();
             foreach (var entry in archive.Entries)

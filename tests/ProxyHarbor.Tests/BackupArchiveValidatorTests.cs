@@ -1,5 +1,6 @@
 using System.IO.Compression;
 using System.Text;
+using System.Text.Json;
 using ProxyHarbor.Infrastructure;
 
 namespace ProxyHarbor.Tests;
@@ -25,6 +26,78 @@ public sealed class BackupArchiveValidatorTests
             includeSettings: true);
 
         BackupArchiveValidator.Validate(archive);
+    }
+
+    [Fact]
+    public void AcceptsVersionFiveOnlyWithCompleteTypedSettings()
+    {
+        var settings = CurrentSettings();
+        using var archive = CreateArchive(
+            """{"version":5,"settingsSchemaVersion":1,"createdAt":"2026-08-09T10:00:00Z","secretsIncluded":false}""",
+            includeBackupRuns: true,
+            includeValidationRuns: true,
+            includeSettings: true,
+            collectorSettings: settings.Collector,
+            backupSettings: settings.Backup,
+            runtimeSettings: settings.Runtime);
+
+        BackupArchiveValidator.Validate(archive);
+    }
+
+    [Fact]
+    public void VersionFiveRejectsPresentButIncompleteSettingsObject()
+    {
+        var settings = CurrentSettings();
+        using var archive = CreateArchive(
+            """{"version":5,"settingsSchemaVersion":1,"createdAt":"2026-08-09T10:00:00Z","secretsIncluded":false}""",
+            includeBackupRuns: true,
+            includeValidationRuns: true,
+            includeSettings: true,
+            collectorSettings: "{}",
+            backupSettings: settings.Backup,
+            runtimeSettings: settings.Runtime);
+
+        var exception = Assert.Throws<InvalidDataException>(() => BackupArchiveValidator.Validate(archive));
+
+        Assert.Contains("полной схеме", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void VersionFiveRejectsSecretInclusionFlagInsideSettings()
+    {
+        var settings = CurrentSettings();
+        var unsafeBackup = settings.Backup.Replace(
+            "\"secretsIncluded\":false", "\"secretsIncluded\":true", StringComparison.Ordinal);
+        using var archive = CreateArchive(
+            """{"version":5,"settingsSchemaVersion":1,"createdAt":"2026-08-09T10:00:00Z","secretsIncluded":false}""",
+            includeBackupRuns: true,
+            includeValidationRuns: true,
+            includeSettings: true,
+            collectorSettings: settings.Collector,
+            backupSettings: unsafeBackup,
+            runtimeSettings: settings.Runtime);
+
+        var exception = Assert.Throws<InvalidDataException>(() => BackupArchiveValidator.Validate(archive));
+
+        Assert.Contains("политику исключения секретов", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("""{"version":5,"version":5,"settingsSchemaVersion":1,"createdAt":"2026-08-09T10:00:00Z","secretsIncluded":false}""")]
+    [InlineData("""{"version":5,"settingsSchemaVersion":1,"createdAt":"2026-08-09T10:00:00Z","secretsIncluded":false,"untrackedSetting":true}""")]
+    public void VersionFiveRejectsAmbiguousOrExtendedManifest(string manifest)
+    {
+        var settings = CurrentSettings();
+        using var archive = CreateArchive(
+            manifest,
+            includeBackupRuns: true,
+            includeValidationRuns: true,
+            includeSettings: true,
+            collectorSettings: settings.Collector,
+            backupSettings: settings.Backup,
+            runtimeSettings: settings.Runtime);
+
+        Assert.Throws<InvalidDataException>(() => BackupArchiveValidator.Validate(archive));
     }
 
     [Fact]
@@ -117,6 +190,8 @@ public sealed class BackupArchiveValidatorTests
     [InlineData("""{"version":2,"secretsIncluded":true}""")]
     [InlineData("""{"version":3,"createdAt":"not-a-date","secretsIncluded":false}""")]
     [InlineData("""{"version":4,"secretsIncluded":false}""")]
+    [InlineData("""{"version":5,"createdAt":"2026-08-09T10:00:00Z","secretsIncluded":false}""")]
+    [InlineData("""{"version":5,"settingsSchemaVersion":2,"createdAt":"2026-08-09T10:00:00Z","secretsIncluded":false}""")]
     public void RejectsUnsafeOrUnsupportedManifest(string manifest)
     {
         using var archive = CreateArchive(manifest);
@@ -131,6 +206,8 @@ public sealed class BackupArchiveValidatorTests
         bool includeSettings = false,
         string? omittedEntry = null,
         string? unexpectedEntry = null,
+        string collectorSettings = "{}",
+        string backupSettings = "{}",
         string runtimeSettings = "{}")
     {
         var stream = new MemoryStream();
@@ -144,14 +221,29 @@ public sealed class BackupArchiveValidatorTests
             if (includeValidationRuns) AddEntry(writer, "database/validation-runs.json", "[]");
             if (includeSettings)
             {
-                if (omittedEntry != "settings/collector.json") AddEntry(writer, "settings/collector.json", "{}");
-                if (omittedEntry != "settings/backup.json") AddEntry(writer, "settings/backup.json", "{}");
+                if (omittedEntry != "settings/collector.json") AddEntry(writer, "settings/collector.json", collectorSettings);
+                if (omittedEntry != "settings/backup.json") AddEntry(writer, "settings/backup.json", backupSettings);
                 if (omittedEntry != "settings/runtime.json") AddEntry(writer, "settings/runtime.json", runtimeSettings);
             }
             if (unexpectedEntry is not null) AddEntry(writer, unexpectedEntry, "top-secret");
         }
         stream.Position = 0;
         return new ZipArchive(stream, ZipArchiveMode.Read);
+    }
+
+    private static (string Collector, string Backup, string Runtime) CurrentSettings()
+    {
+        var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        return (
+            JsonSerializer.Serialize(new CollectorOptions(), jsonOptions),
+            JsonSerializer.Serialize(
+                BackupSettingsSnapshot.FromOptions(new BackupOptions(), telegramConfigured: false), jsonOptions),
+            JsonSerializer.Serialize(new BackupRuntimeSettings(
+                [], [], "*", new Dictionary<string, string?> { ["Default"] = "Information" },
+                AdminApiKeyConfigured: true,
+                AdminApiKeyIncluded: false,
+                ConnectionStringConfigured: true,
+                ConnectionStringIncluded: false), jsonOptions));
     }
 
     private static void AddEntry(ZipArchive archive, string name, string contents)

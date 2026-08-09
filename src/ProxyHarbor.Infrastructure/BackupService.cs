@@ -232,21 +232,18 @@ public sealed class BackupService(
                 await WriteJsonAsync(archive, "database/backup-runs.json",
                     db.BackupRuns.AsNoTracking().Where(x => x.Id != backupRunId).AsAsyncEnumerable(), token);
                 await WriteJsonAsync(archive, "settings/collector.json", collectorOptions.Value, token);
-                await WriteJsonAsync(archive, "settings/backup.json", new
-                {
-                    options.Enabled,
-                    options.IntervalHours,
-                    options.Directory,
-                    options.RetentionDays,
-                    options.HistoryRetentionDays,
-                    options.MaxTelegramFileSizeMb,
-                    telegramConfigured,
-                    secretsIncluded = false
-                }, token);
+                await WriteJsonAsync(archive, "settings/backup.json",
+                    BackupSettingsSnapshot.FromOptions(options, telegramConfigured), token);
                 await WriteJsonAsync(archive, "settings/runtime.json",
                     BackupRuntimeSettings.FromConfiguration(configuration), token);
                 await WriteJsonAsync(archive, "manifest.json",
-                    new { version = 4, createdAt = DateTimeOffset.UtcNow, secretsIncluded = false }, token);
+                    new
+                    {
+                        version = 5,
+                        settingsSchemaVersion = 1,
+                        createdAt = DateTimeOffset.UtcNow,
+                        secretsIncluded = false
+                    }, token);
             }
             await output.FlushAsync(token);
             await snapshot.CommitAsync(token);
@@ -346,6 +343,7 @@ internal sealed record BackupRuntimeSettings(
     IReadOnlyDictionary<string, string?> LogLevels,
     bool AdminApiKeyConfigured,
     bool AdminApiKeyIncluded,
+    bool ConnectionStringConfigured,
     bool ConnectionStringIncluded)
 {
     internal static BackupRuntimeSettings FromConfiguration(IConfiguration configuration) => new(
@@ -356,7 +354,62 @@ internal sealed record BackupRuntimeSettings(
             .ToDictionary(child => child.Key, child => child.Value, StringComparer.OrdinalIgnoreCase),
         !string.IsNullOrWhiteSpace(configuration["Security:AdminApiKey"]),
         AdminApiKeyIncluded: false,
+        !string.IsNullOrWhiteSpace(configuration.GetConnectionString("Postgres")),
         ConnectionStringIncluded: false);
+}
+
+/// <summary>
+/// Полный безопасный срез BackupOptions. FromOptions fail-closed требует явно
+/// классифицировать каждое новое свойство как экспортируемое либо секретное.
+/// </summary>
+internal sealed record BackupSettingsSnapshot(
+    bool Enabled,
+    int IntervalHours,
+    string Directory,
+    int RetentionDays,
+    int HistoryRetentionDays,
+    int MaxTelegramFileSizeMb,
+    bool TelegramConfigured,
+    bool SecretsIncluded)
+{
+    private static readonly HashSet<string> SecretOptionNames =
+    [
+        nameof(BackupOptions.EncryptionKey),
+        nameof(BackupOptions.TelegramBotToken),
+        nameof(BackupOptions.TelegramChatId)
+    ];
+
+    internal static BackupSettingsSnapshot FromOptions(BackupOptions options, bool telegramConfigured)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        EnsureEveryOptionIsClassified();
+        return new BackupSettingsSnapshot(
+            options.Enabled,
+            options.IntervalHours,
+            options.Directory,
+            options.RetentionDays,
+            options.HistoryRetentionDays,
+            options.MaxTelegramFileSizeMb,
+            telegramConfigured,
+            SecretsIncluded: false);
+    }
+
+    private static void EnsureEveryOptionIsClassified()
+    {
+        var snapshotOnly = new HashSet<string>(
+            [nameof(TelegramConfigured), nameof(SecretsIncluded)], StringComparer.Ordinal);
+        var classified = typeof(BackupSettingsSnapshot).GetProperties()
+            .Select(property => property.Name)
+            .Where(name => !snapshotOnly.Contains(name))
+            .Concat(SecretOptionNames)
+            .ToHashSet(StringComparer.Ordinal);
+        var actual = typeof(BackupOptions).GetProperties()
+            .Select(property => property.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        if (!classified.SetEquals(actual))
+            throw new InvalidOperationException(
+                "Каждое свойство BackupOptions должно быть явно включено в безопасный snapshot либо secret allowlist.");
+    }
 }
 
 /// <summary>Потоково создаёт по одной временной части и гарантированно удаляет её после отправки.</summary>
