@@ -22,7 +22,7 @@ describe('ProxyHarbor UI', () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
       if (url.includes('/api/v1/stats')) return jsonResponse(stats)
-      if (url.includes('/api/v1/proxies')) return jsonResponse({ items: [], page: 1, pageSize: 100, total: 0 })
+      if (url.includes('/api/v1/proxies')) return jsonResponse({ items: [], pageSize: 100, hasMore: false, nextCursor: null })
       if (url.includes('/api/v1/admin/sources')) return jsonResponse({ title: 'Неверный ключ администратора' }, 401)
       return jsonResponse({ title: 'Unexpected request' }, 500)
     }))
@@ -44,7 +44,7 @@ describe('ProxyHarbor UI', () => {
     vi.mocked(fetch).mockImplementation(async input => {
       const url = String(input)
       if (url.includes('/api/v1/stats')) return jsonResponse(stats)
-      if (url.includes('/api/v1/proxies')) return jsonResponse({ items: [], page: 1, pageSize: 100, total: 0 })
+      if (url.includes('/api/v1/proxies')) return jsonResponse({ items: [], pageSize: 100, hasMore: false, nextCursor: null })
       if (url.includes('/api/v1/admin/sources')) return jsonResponse([])
       if (url.includes('/api/v1/admin/diagnostics')) return jsonResponse({
         serverTime: '2026-08-09T10:00:00Z', databaseBytes: 0,
@@ -113,11 +113,84 @@ describe('ProxyHarbor UI', () => {
       'href', '/api/v1/export/json?maxLatencyMs=1000&protocol=Socks5'))
   })
 
+  it('loads and de-duplicates cursor pages without replacing the first page', async () => {
+    const firstProxy = {
+      host: '192.0.2.10', port: 8080, protocol: 'Http', url: 'http://192.0.2.10:8080',
+      latencyMs: 120, successRate: 98, lastCheckedAt: '2026-08-09T10:00:00Z',
+    }
+    const secondProxy = {
+      host: '198.51.100.20', port: 1080, protocol: 'Socks5', url: 'socks5://198.51.100.20:1080',
+      latencyMs: 240, successRate: 96, lastCheckedAt: '2026-08-09T10:00:00Z',
+    }
+    vi.mocked(fetch).mockImplementation(async input => {
+      const url = String(input)
+      if (url.includes('/api/v1/stats')) return jsonResponse(stats)
+      if (url.includes('/api/v1/proxies/seek') && url.includes('after=cursor-token')) {
+        return jsonResponse({ items: [firstProxy, secondProxy], pageSize: 100, hasMore: false, nextCursor: null })
+      }
+      if (url.includes('/api/v1/proxies/seek')) {
+        return jsonResponse({ items: [firstProxy], pageSize: 100, hasMore: true, nextCursor: 'cursor-token' })
+      }
+      return jsonResponse({ title: 'Unexpected request' }, 500)
+    })
+
+    render(<App />)
+    expect(await screen.findByText((_, element) =>
+      element?.tagName === 'CODE' && element.textContent === '192.0.2.10:8080')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /Показать ещё/ }))
+
+    expect(await screen.findByText((_, element) =>
+      element?.tagName === 'CODE' && element.textContent === '198.51.100.20:1080')).toBeInTheDocument()
+    expect(screen.getAllByText((_, element) =>
+      element?.tagName === 'CODE' && element.textContent === '192.0.2.10:8080')).toHaveLength(1)
+    expect(screen.queryByRole('button', { name: /Показать ещё/ })).not.toBeInTheDocument()
+    expect(vi.mocked(fetch).mock.calls.some(([input]) =>
+      String(input).includes('/api/v1/proxies/seek?pageSize=100&maxLatencyMs=2000&after=cursor-token'))).toBe(true)
+  })
+
+  it('ignores a stale catalog response after filters change', async () => {
+    let resolveFirstPage!: (response: Response) => void
+    const firstPage = new Promise<Response>(resolve => { resolveFirstPage = resolve })
+    let catalogRequests = 0
+    vi.mocked(fetch).mockImplementation(async input => {
+      const url = String(input)
+      if (url.includes('/api/v1/stats')) return jsonResponse(stats)
+      if (url.includes('/api/v1/proxies/seek')) {
+        catalogRequests++
+        if (catalogRequests === 1) return firstPage
+        return jsonResponse({
+          items: [{
+            host: '203.0.113.50', port: 1080, protocol: 'Socks5', url: 'socks5://203.0.113.50:1080',
+            latencyMs: 180, successRate: 99, lastCheckedAt: '2026-08-09T10:00:00Z',
+          }],
+          pageSize: 100, hasMore: false, nextCursor: null,
+        })
+      }
+      return jsonResponse({ title: 'Unexpected request' }, 500)
+    })
+
+    render(<App />)
+    await waitFor(() => expect(catalogRequests).toBe(1))
+    fireEvent.click(screen.getByRole('button', { name: 'SOCKS5' }))
+    expect(await screen.findByText((_, element) =>
+      element?.tagName === 'CODE' && element.textContent === '203.0.113.50:1080')).toBeInTheDocument()
+
+    resolveFirstPage(jsonResponse({
+      items: [{
+        host: '192.0.2.99', port: 8080, protocol: 'Http', url: 'http://192.0.2.99:8080',
+        latencyMs: 90, successRate: 100, lastCheckedAt: '2026-08-09T10:00:00Z',
+      }],
+      pageSize: 100, hasMore: false, nextCursor: null,
+    }))
+    await waitFor(() => expect(screen.queryByText((_, element) =>
+      element?.tagName === 'CODE' && element.textContent === '192.0.2.99:8080')).not.toBeInTheDocument())
+  })
+
   it('labels built-in sources with canonical provider metadata', async () => {
     vi.mocked(fetch).mockImplementation(async input => {
       const url = String(input)
       if (url.includes('/api/v1/stats')) return jsonResponse(stats)
-      if (url.includes('/api/v1/proxies')) return jsonResponse({ items: [], page: 1, pageSize: 100, total: 0 })
+      if (url.includes('/api/v1/proxies')) return jsonResponse({ items: [], pageSize: 100, hasMore: false, nextCursor: null })
       if (url.includes('/api/v1/admin/sources')) return jsonResponse([{
         id: 'source-1', name: 'ProxyScrape HTTP', url: 'https://example.test/list.txt',
         defaultProtocol: 'Http', enabled: true, priority: 1, lastItemCount: 100,
@@ -168,7 +241,7 @@ describe('ProxyHarbor UI', () => {
     vi.mocked(fetch).mockImplementation(async (input, init) => {
       const url = String(input)
       if (url.includes('/api/v1/stats')) return jsonResponse(stats)
-      if (url.includes('/api/v1/proxies')) return jsonResponse({ items: [], page: 1, pageSize: 100, total: 0 })
+      if (url.includes('/api/v1/proxies')) return jsonResponse({ items: [], pageSize: 100, hasMore: false, nextCursor: null })
       if (url.includes('/api/v1/admin/sources')) return jsonResponse([])
       if (url.includes('/api/v1/admin/diagnostics')) return failDiagnostics
         ? jsonResponse({ title: 'Диагностика временно недоступна' }, 503)

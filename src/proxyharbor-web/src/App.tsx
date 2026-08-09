@@ -3,6 +3,7 @@ import { Activity, ArrowDownToLine, Check, Clock3, Database, Gauge, KeyRound, Ne
 
 type Protocol = 'Http' | 'Https' | 'Socks4' | 'Socks5'
 type Proxy = { host: string; port: number; protocol: Protocol; url: string; latencyMs: number; successRate: number; exitIp?: string; lastCheckedAt: string }
+type CursorPage<T> = { items: T[]; pageSize: number; hasMore: boolean; nextCursor?: string | null }
 type Stats = { alive: number; staleAlive: number; pending: number; dead: number; dueForCheck: number; scheduledChecks: number; averageLatencyMs: number | null; sources: number; failingSources: number; repeatedlyFailingSources: number; truncatedSources: number; byProtocol: { protocol: Protocol; count: number }[]; lastRun?: { startedAt: string; candidatesFound: number; newProxies: number; sourcesTruncated: number; candidateLimitReached: boolean; status: string } }
 type Source = { id: string; name: string; url: string; defaultProtocol: Protocol; enabled: boolean; priority: number; lastItemCount: number; lastResultTruncated: boolean; lastFetchedAt?: string; lastSucceededAt?: string; nextFetchAt?: string; consecutiveFailures: number; lastError?: string; isBuiltIn: boolean; provider?: string; providerIdentity?: string; catalogRank?: number }
 type CollectionRun = { id: string; startedAt: string; finishedAt?: string; sourcesProcessed: number; sourcesSucceeded: number; sourcesFailed: number; sourcesSkipped: number; sourcesTruncated: number; candidatesFound: number; candidateLimitReached: boolean; newProxies: number; status: string; error?: string }
@@ -46,6 +47,9 @@ export default function App() {
   const [protocol, setProtocol] = useState<Protocol | 'All'>('All')
   const [maxLatency, setMaxLatency] = useState(2000)
   const [loading, setLoading] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [hasMore, setHasMore] = useState(false)
+  const [nextCursor, setNextCursor] = useState<string | null>(null)
   const [apiError, setApiError] = useState('')
   const [adminOpen, setAdminOpen] = useState(false)
   const [adminKey, setAdminKey] = useState(readStoredAdminKey)
@@ -61,30 +65,96 @@ export default function App() {
   const adminDialogRef = useRef<HTMLElement>(null)
   const adminKeyRef = useRef<HTMLInputElement>(null)
   const autoLoginAttemptedRef = useRef(false)
+  const extendedCatalogRef = useRef(false)
+  const catalogRequestIdRef = useRef(0)
 
-  const load = useCallback(async () => {
+  /** Обновляет статистику и, при необходимости, первую keyset-страницу каталога. */
+  const load = useCallback(async (includeCatalog = true) => {
+    const catalogRequestId = includeCatalog ? ++catalogRequestIdRef.current : 0
     try {
       const query = new URLSearchParams({ pageSize: '100', maxLatencyMs: String(maxLatency) })
       if (protocol !== 'All') query.set('protocol', protocol)
       const [statsResponse, proxyResponse] = await Promise.all([
-        fetch(`${API}/api/v1/stats`), fetch(`${API}/api/v1/proxies?${query}`),
+        fetch(`${API}/api/v1/stats`),
+        includeCatalog ? fetch(`${API}/api/v1/proxies/seek?${query}`) : Promise.resolve(null),
       ])
-      if (!statsResponse.ok || !proxyResponse.ok) throw new Error('API пока недоступен')
+      if (!statsResponse.ok || (proxyResponse && !proxyResponse.ok)) throw new Error('API пока недоступен')
       setStats(await statsResponse.json())
-      setProxies((await proxyResponse.json()).items)
+      if (proxyResponse && catalogRequestId === catalogRequestIdRef.current) {
+        const page = await proxyResponse.json() as CursorPage<Proxy>
+        setProxies(page.items)
+        setHasMore(page.hasMore)
+        setNextCursor(page.nextCursor ?? null)
+      }
       setApiError('')
-    } catch (reason) { setApiError(reason instanceof Error ? reason.message : 'Ошибка загрузки') }
-    finally { setLoading(false) }
+    } catch (reason) {
+      if (!includeCatalog || catalogRequestId === catalogRequestIdRef.current) {
+        setApiError(reason instanceof Error ? reason.message : 'Ошибка загрузки')
+      }
+    } finally {
+      if (!includeCatalog || catalogRequestId === catalogRequestIdRef.current) setLoading(false)
+    }
   }, [protocol, maxLatency])
 
   useEffect(() => {
+    // Смена фильтра начинает новый обход; старые ответы больше не могут заменить его результаты.
+    extendedCatalogRef.current = false
     const initialLoad = window.setTimeout(() => void load(), 0)
-    const refreshTimer = window.setInterval(load, 15_000)
+    const refreshTimer = window.setInterval(() => void load(!extendedCatalogRef.current), 15_000)
     return () => {
       window.clearTimeout(initialLoad)
       window.clearInterval(refreshTimer)
     }
   }, [load])
+
+  /** Добавляет следующую страницу, не выполняя дорожающий OFFSET и не дублируя изменившиеся строки. */
+  const loadMore = async () => {
+    if (!nextCursor || loadingMore) return
+    extendedCatalogRef.current = true
+    setLoadingMore(true)
+    const catalogRequestId = catalogRequestIdRef.current
+    try {
+      const query = new URLSearchParams({ pageSize: '100', maxLatencyMs: String(maxLatency), after: nextCursor })
+      if (protocol !== 'All') query.set('protocol', protocol)
+      const response = await fetch(`${API}/api/v1/proxies/seek?${query}`)
+      if (!response.ok) throw new Error(await responseMessage(response, 'Не удалось загрузить следующую страницу'))
+      const page = await response.json() as CursorPage<Proxy>
+      if (catalogRequestId !== catalogRequestIdRef.current) return
+      setProxies(current => {
+        const known = new Set(current.map(proxy => proxy.url))
+        return [...current, ...page.items.filter(proxy => !known.has(proxy.url))]
+      })
+      setHasMore(page.hasMore)
+      setNextCursor(page.nextCursor ?? null)
+      setApiError('')
+    } catch (reason) {
+      if (catalogRequestId === catalogRequestIdRef.current) {
+        setApiError(reason instanceof Error ? reason.message : 'Ошибка загрузки')
+      }
+    }
+    finally { setLoadingMore(false) }
+  }
+
+  /** Инвалидирует предыдущий cursor до запуска запроса с новым фильтром. */
+  const changeProtocol = (value: Protocol | 'All') => {
+    if (value === protocol) return
+    catalogRequestIdRef.current++
+    extendedCatalogRef.current = false
+    setLoading(true)
+    setHasMore(false)
+    setNextCursor(null)
+    setProtocol(value)
+  }
+
+  const changeMaxLatency = (value: number) => {
+    if (value === maxLatency) return
+    catalogRequestIdRef.current++
+    extendedCatalogRef.current = false
+    setLoading(true)
+    setHasMore(false)
+    setNextCursor(null)
+    setMaxLatency(value)
+  }
 
   const loadAdminData = useCallback(async () => {
     if (!adminKey) {
@@ -297,16 +367,17 @@ export default function App() {
       </section>
 
       <section id="catalog" className="catalog">
-        <div className="section-heading"><div><span className="kicker">LIVE CATALOG</span><h2>Лучшие прямо сейчас</h2></div><p>Автообновление каждые 15 секунд</p></div>
-        <div className="filters"><div className="tabs"><button className={protocol === 'All' ? 'active' : ''} onClick={() => setProtocol('All')}>Все</button>{protocols.map(x => <button key={x} className={protocol === x ? 'active' : ''} onClick={() => setProtocol(x)}>{label(x)}</button>)}</div><label>до <b>{maxLatency} мс</b><input type="range" min="200" max="5000" step="100" value={maxLatency} onChange={e => setMaxLatency(Number(e.target.value))}/></label></div>
+        <div className="section-heading"><div><span className="kicker">LIVE CATALOG</span><h2>Лучшие прямо сейчас</h2></div><p>Быстрый обход без глубокого OFFSET</p></div>
+        <div className="filters"><div className="tabs"><button className={protocol === 'All' ? 'active' : ''} onClick={() => changeProtocol('All')}>Все</button>{protocols.map(x => <button key={x} className={protocol === x ? 'active' : ''} onClick={() => changeProtocol(x)}>{label(x)}</button>)}</div><label>до <b>{maxLatency} мс</b><input type="range" min="200" max="5000" step="100" value={maxLatency} onChange={e => changeMaxLatency(Number(e.target.value))}/></label></div>
         {apiError && <div className="error-banner" role="alert"><X size={17}/>{apiError}<button onClick={() => { setApiError(''); setLoading(true); void load() }}>повторить</button></div>}
         <div className="proxy-table" aria-busy={loading}>
           <div className="table-row table-head"><span>Адрес</span><span>Протокол</span><span>Задержка</span><span>Надёжность</span><span>Проверен</span></div>
           {loading ? <div className="empty"><RefreshCw className="spin"/> Загружаем свежий каталог…</div> : proxies.length === 0 ? <div className="empty"><Server/> Живые прокси появятся после первого цикла проверки.</div> : proxies.map(proxy => <div className="table-row" key={proxy.url}><code>{proxy.host}<i>:</i>{proxy.port}</code><span className={`badge ${proxy.protocol.toLowerCase()}`}>{label(proxy.protocol)}</span><span className="latency"><i className={proxy.latencyMs < 800 ? 'fast' : proxy.latencyMs < 1800 ? 'medium' : 'slow'}/>{proxy.latencyMs} мс</span><span>{proxy.successRate}%</span><span>{timeAgo(proxy.lastCheckedAt)}</span></div>)}
         </div>
+        {hasMore && nextCursor && !loading && <div className="catalog-more" aria-live="polite"><button onClick={loadMore} disabled={loadingMore}>{loadingMore ? <><RefreshCw className="spin"/> Загружаем…</> : <>Показать ещё <span>· загружено {formatNumber(proxies.length)}</span></>}</button></div>}
       </section>
 
-      <section id="api" className="api-panel"><div><span className="kicker">ONE-CLICK EXPORT</span><h2>Забирайте как удобно</h2><p>Фильтруйте через API или скачивайте готовый список. Экспорт содержит только свежие Alive-прокси; наборы свыше 50 000 строк доступны последовательными страницами limit/offset.</p></div><div className="export-grid">{['json','xml','txt','csv'].map(format => <a key={format} href={`${API}/api/v1/export/${format}?${exportQuery}`}><span>.{format}</span><ArrowDownToLine size={18}/></a>)}</div><div className="endpoint"><span>GET</span><code>/api/v1/proxies?protocol=Socks5&amp;maxLatencyMs=1000</code></div></section>
+      <section id="api" className="api-panel"><div><span className="kicker">ONE-CLICK EXPORT</span><h2>Забирайте как удобно</h2><p>Фильтруйте через API или скачивайте готовый список. Экспорт содержит только свежие Alive-прокси; большие наборы обходятся последовательными cursor-страницами без замедляющего OFFSET.</p></div><div className="export-grid">{['json','xml','txt','csv'].map(format => <a key={format} href={`${API}/api/v1/export/${format}?${exportQuery}`}><span>.{format}</span><ArrowDownToLine size={18}/></a>)}</div><div className="endpoint"><span>GET</span><code>/api/v1/proxies/seek?protocol=Socks5&amp;maxLatencyMs=1000</code></div></section>
     </main>
 
     <footer aria-hidden={adminOpen || undefined}><div className="brand"><span className="brand-mark"><Network size={18}/></span><span>Proxy<span>Harbor</span></span></div><p>Используйте публичные прокси ответственно и в рамках закона.</p><span>v{APP_VERSION} · © {new Date().getFullYear()}</span></footer>
