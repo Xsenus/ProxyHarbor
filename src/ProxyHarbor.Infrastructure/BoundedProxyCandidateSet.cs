@@ -10,7 +10,7 @@ namespace ProxyHarbor.Infrastructure;
 /// </summary>
 internal sealed class BoundedProxyCandidateSet
 {
-    private readonly ConcurrentDictionary<(string Host, int Port, ProxyProtocol Protocol), byte> _items = new();
+    private readonly ConcurrentDictionary<ProxyCandidateKey, byte> _items;
     private readonly int _limit;
     private int _count;
     private int _limitReached;
@@ -19,6 +19,9 @@ internal sealed class BoundedProxyCandidateSet
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(limit, 1);
         _limit = limit;
+        _items = new ConcurrentDictionary<ProxyCandidateKey, byte>(
+            Environment.ProcessorCount,
+            Math.Min(limit, 4_096));
     }
 
     /// <summary>
@@ -26,6 +29,10 @@ internal sealed class BoundedProxyCandidateSet
     /// Дубликаты и уникальные элементы сверх лимита возвращают false.
     /// </summary>
     internal bool TryAdd((string Host, int Port, ProxyProtocol Protocol) candidate)
+        => TryAdd(ProxyCandidateKey.Parse(candidate.Host, candidate.Port, candidate.Protocol));
+
+    /// <summary>Горячий collector-path не материализует каноническую IP-строку.</summary>
+    internal bool TryAdd(ProxyCandidateKey candidate)
     {
         if (!_items.TryAdd(candidate, 0)) return false;
 
@@ -45,7 +52,8 @@ internal sealed class BoundedProxyCandidateSet
     internal int Count => Volatile.Read(ref _count);
 
     /// <summary>Снимок endpoint'ов для последующего PostgreSQL binary COPY.</summary>
-    internal IEnumerable<(string Host, int Port, ProxyProtocol Protocol)> Items => _items.Keys;
+    internal IEnumerable<(string Host, int Port, ProxyProtocol Protocol)> Items =>
+        _items.Keys.Select(static candidate => candidate.ToEndpoint());
 
     /// <summary>Истина только если хотя бы один новый уникальный endpoint был отброшен.</summary>
     internal bool LimitReached => Volatile.Read(ref _limitReached) != 0;

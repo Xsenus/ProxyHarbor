@@ -70,17 +70,21 @@ public sealed class ProxyCollector(
                         var content = await FetchSourceAsync(client, source.Url, token);
                         // Лимит применяется внутри parser: крупный недоверенный feed не может сначала
                         // построить неограниченную коллекцию, которая будет усечена только здесь.
-                        var parsed = SourceFeedParser.ParseBoundedRequired(
-                            content, source.DefaultProtocol, options.Value.MaxProxiesPerSource);
-                        foreach (var item in parsed.Items)
-                        {
-                            _ = candidates.TryAdd(item);
-                            // После первого реально отброшенного unique endpoint полнота уже
-                            // доказанно потеряна: дальнейшее межисточниковое сканирование не
-                            // меняет аудит и только расходует CPU на больших feed'ах.
-                            if (candidates.LimitReached) break;
-                        }
-                        sourceResults.Add((source.Id, parsed.Items.Count, parsed.Truncated, null));
+                        var publishCandidates = true;
+                        var parsed = SourceFeedParser.ParseBoundedToRequired(
+                            content,
+                            source.DefaultProtocol,
+                            options.Value.MaxProxiesPerSource,
+                            candidate =>
+                            {
+                                if (!publishCandidates) return;
+                                _ = candidates.TryAdd(candidate);
+                                // После первого реально отброшенного unique endpoint полнота уже
+                                // доказанно потеряна. Feed продолжаем сканировать только для точного
+                                // per-source count/truncation, без дальнейшей нагрузки на общий set.
+                                if (candidates.LimitReached) publishCandidates = false;
+                            });
+                        sourceResults.Add((source.Id, parsed.Count, parsed.Truncated, null));
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException || !token.IsCancellationRequested)
                     {
@@ -336,6 +340,20 @@ internal static class SourceFeedParser
         EnsureNotHtmlEnvelope(content);
         var parsed = ProxyParser.ParseWithLimitStatus(content, defaultProtocol, maxResults);
         if (parsed.Items.Count == 0)
+            throw new InvalidDataException("Источник не содержит распознаваемых прокси.");
+        return parsed;
+    }
+
+    /// <summary>Collector-path без materialized списка строк для каждого параллельного feed'а.</summary>
+    internal static ProxyParseSummary ParseBoundedToRequired(
+        string content,
+        ProxyProtocol defaultProtocol,
+        int maxResults,
+        Action<ProxyCandidateKey> accept)
+    {
+        EnsureNotHtmlEnvelope(content);
+        var parsed = ProxyParser.ParseTo(content, defaultProtocol, maxResults, accept);
+        if (parsed.Count == 0)
             throw new InvalidDataException("Источник не содержит распознаваемых прокси.");
         return parsed;
     }

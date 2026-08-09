@@ -22,6 +22,7 @@
 - Restore до изменения БД отклоняет ZIP-bomb, database entry крупнее 16 ГиБ и backup распакованным размером более 32 ГиБ.
 - Restore валидирует semantic invariants каждой JSON-строки до её записи через PostgreSQL binary COPY.
 - Пятнадцать PostgreSQL CHECK constraints независимо защищают пять операционных таблиц; rollout использует повторяемый `NOT VALID`/`VALIDATE CONSTRAINT` без длительной блокировки writes.
+- Collector парсит параллельные feed'ы прямо в общий bounded-набор через компактные IP value-key без per-source materialized списков и удерживаемых строк.
 
 ## [1.0.0] - 2026-08-10
 

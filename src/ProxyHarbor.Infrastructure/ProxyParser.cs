@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Net;
 using System.Text.RegularExpressions;
 using ProxyHarbor.Domain;
@@ -35,10 +36,25 @@ public static partial class ProxyParser
         ProxyProtocol defaultProtocol,
         int maxResults)
     {
-        ArgumentNullException.ThrowIfNull(content);
-        ArgumentOutOfRangeException.ThrowIfLessThan(maxResults, 1);
         var result = new List<(string Host, int Port, ProxyProtocol Protocol)>(Math.Min(maxResults, 4_096));
-        var unique = new HashSet<(string Host, int Port, ProxyProtocol Protocol)>();
+        var summary = ParseTo(content, defaultProtocol, maxResults, candidate => result.Add(candidate.ToEndpoint()));
+        return new ProxyParseResult(result, summary.Truncated);
+    }
+
+    /// <summary>
+    /// Передаёт уникальные кандидаты прямо потребителю, сохраняя только компактный
+    /// value-key для дедупликации текущего feed'а и не создавая список строк.
+    /// </summary>
+    internal static ProxyParseSummary ParseTo(
+        string content,
+        ProxyProtocol defaultProtocol,
+        int maxResults,
+        Action<ProxyCandidateKey> accept)
+    {
+        ArgumentNullException.ThrowIfNull(content);
+        ArgumentNullException.ThrowIfNull(accept);
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxResults, 1);
+        var unique = new HashSet<ProxyCandidateKey>(Math.Min(maxResults, 4_096));
 
         foreach (Match match in EndpointRegex().Matches(content))
         {
@@ -54,21 +70,20 @@ public static partial class ProxyParser
             // Scheme находится непосредственно перед IP, но намеренно не включён в regex:
             // так URL/временные метки в заголовке feed'а не влияют на поиск следующего endpoint.
             var protocol = ParseProtocolBefore(content.AsSpan(0, match.Index), defaultProtocol);
-            var normalizedHost = ip.ToString();
-            var endpoint = (normalizedHost, port, protocol);
-            if (result.Count < maxResults)
+            var candidate = ProxyCandidateKey.Create(ip, port, protocol);
+            if (unique.Count < maxResults)
             {
-                if (!unique.Add(endpoint)) continue;
-                result.Add(endpoint);
+                if (!unique.Add(candidate)) continue;
+                accept(candidate);
                 continue;
             }
 
             // После заполнения коллекции lookup нужен только для различения безопасного
             // duplicate-tail и первого действительно потерянного уникального адреса.
-            if (!unique.Contains(endpoint)) return new ProxyParseResult(result, Truncated: true);
+            if (!unique.Contains(candidate)) return new ProxyParseSummary(unique.Count, Truncated: true);
         }
 
-        return new ProxyParseResult(result, Truncated: false);
+        return new ProxyParseSummary(unique.Count, Truncated: false);
     }
 
     private static ProxyProtocol ParseProtocolBefore(ReadOnlySpan<char> prefix, ProxyProtocol fallback) =>
@@ -79,7 +94,74 @@ public static partial class ProxyParser
         fallback;
 }
 
+/// <summary>
+/// Компактный канонический ключ IP/port/protocol без ссылок на строки или массивы.
+/// Строка создаётся только один раз при потоковой записи итогового набора в PostgreSQL.
+/// </summary>
+internal readonly record struct ProxyCandidateKey(
+    ulong AddressHigh,
+    ulong AddressLow,
+    ushort PortValue,
+    byte ProtocolValue,
+    bool IsIpv6)
+{
+    internal int Port => PortValue;
+    internal ProxyProtocol Protocol => (ProxyProtocol)ProtocolValue;
+
+    internal static ProxyCandidateKey Create(IPAddress address, int port, ProxyProtocol protocol)
+    {
+        ArgumentNullException.ThrowIfNull(address);
+        ArgumentOutOfRangeException.ThrowIfLessThan(port, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(port, 65_535);
+        if (!Enum.IsDefined(protocol)) throw new ArgumentOutOfRangeException(nameof(protocol));
+        if (address.IsIPv4MappedToIPv6) address = address.MapToIPv4();
+        Span<byte> bytes = stackalloc byte[16];
+        if (!address.TryWriteBytes(bytes, out var written))
+            throw new InvalidOperationException("Не удалось получить бинарное представление IP.");
+        return written switch
+        {
+            4 => new ProxyCandidateKey(0, BinaryPrimitives.ReadUInt32BigEndian(bytes), (ushort)port, (byte)protocol, false),
+            16 => new ProxyCandidateKey(
+                BinaryPrimitives.ReadUInt64BigEndian(bytes),
+                BinaryPrimitives.ReadUInt64BigEndian(bytes[8..]),
+                (ushort)port,
+                (byte)protocol,
+                true),
+            _ => throw new InvalidOperationException("IP имеет неизвестное бинарное представление.")
+        };
+    }
+
+    internal static ProxyCandidateKey Parse(
+        string host,
+        int port,
+        ProxyProtocol protocol) =>
+        IPAddress.TryParse(host, out var address)
+            ? Create(address, port, protocol)
+            : throw new ArgumentException("Host должен быть IP-адресом.", nameof(host));
+
+    internal (string Host, int Port, ProxyProtocol Protocol) ToEndpoint()
+    {
+        Span<byte> bytes = stackalloc byte[16];
+        IPAddress address;
+        if (IsIpv6)
+        {
+            BinaryPrimitives.WriteUInt64BigEndian(bytes, AddressHigh);
+            BinaryPrimitives.WriteUInt64BigEndian(bytes[8..], AddressLow);
+            address = new IPAddress(bytes);
+        }
+        else
+        {
+            BinaryPrimitives.WriteUInt32BigEndian(bytes, checked((uint)AddressLow));
+            address = new IPAddress(bytes[..4]);
+        }
+        return (address.ToString(), Port, Protocol);
+    }
+}
+
 /// <summary>Bounded-результат parser с явным сигналом, что вход содержал ещё уникальные адреса.</summary>
 internal sealed record ProxyParseResult(
     IReadOnlyCollection<(string Host, int Port, ProxyProtocol Protocol)> Items,
     bool Truncated);
+
+/// <summary>Итог потокового разбора без materialized списка endpoint'ов.</summary>
+internal readonly record struct ProxyParseSummary(int Count, bool Truncated);

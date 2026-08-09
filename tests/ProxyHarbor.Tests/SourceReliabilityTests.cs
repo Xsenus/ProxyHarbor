@@ -102,6 +102,21 @@ public sealed class SourceReliabilityTests
     }
 
     [Fact]
+    public void CollectorFeedPathStreamsCandidatesWithoutAResultList()
+    {
+        var accepted = new List<ProxyCandidateKey>();
+
+        var parsed = SourceFeedParser.ParseBoundedToRequired(
+            "1.1.1.1:80\n8.8.8.8:81\n1.1.1.1:80",
+            ProxyProtocol.Http,
+            maxResults: 2,
+            accepted.Add);
+
+        Assert.Equal(new ProxyParseSummary(2, Truncated: false), parsed);
+        Assert.Equal(2, accepted.Count);
+    }
+
+    [Fact]
     public void RetryPolicyDoesNotRepeatPermanentHttpStatus()
     {
         var exception = new HttpRequestException("not found", null, HttpStatusCode.NotFound);

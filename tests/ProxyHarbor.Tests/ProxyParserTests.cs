@@ -1,3 +1,5 @@
+using System.Runtime.CompilerServices;
+using System.Text;
 using ProxyHarbor.Domain;
 using ProxyHarbor.Infrastructure;
 
@@ -6,6 +8,82 @@ namespace ProxyHarbor.Tests;
 /// <summary>Фиксирует правила нормализации данных из недоверенных источников.</summary>
 public sealed class ProxyParserTests
 {
+    [Fact]
+    public void InternalCandidateKeyContainsNoManagedReferences()
+    {
+        Assert.False(RuntimeHelpers.IsReferenceOrContainsReferences<ProxyCandidateKey>());
+        Assert.InRange(Unsafe.SizeOf<ProxyCandidateKey>(), 1, 32);
+    }
+
+    [Fact]
+    public void CompactKeyCanonicalizesIpv6AndRoundTripsEndpoint()
+    {
+        var expanded = ProxyCandidateKey.Parse("2606:4700:4700:0:0:0:0:1111", 443, ProxyProtocol.Https);
+        var compressed = ProxyCandidateKey.Parse("2606:4700:4700::1111", 443, ProxyProtocol.Https);
+
+        Assert.Equal(expanded, compressed);
+        Assert.Equal(("2606:4700:4700::1111", 443, ProxyProtocol.Https), expanded.ToEndpoint());
+    }
+
+    [Fact]
+    public void CompactKeyCanonicalizesMappedIpv4AndRejectsUnknownProtocol()
+    {
+        var ipv4 = ProxyCandidateKey.Parse("8.8.8.8", 80, ProxyProtocol.Http);
+        var mapped = ProxyCandidateKey.Parse("::ffff:8.8.8.8", 80, ProxyProtocol.Http);
+
+        Assert.Equal(ipv4, mapped);
+        Assert.Equal(("8.8.8.8", 80, ProxyProtocol.Http), mapped.ToEndpoint());
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            ProxyCandidateKey.Parse("8.8.8.8", 80, (ProxyProtocol)999));
+    }
+
+    [Fact]
+    public void ParseToStreamsUniqueCandidatesAndPreservesTruncationSemantics()
+    {
+        var accepted = new List<ProxyCandidateKey>();
+
+        var summary = ProxyParser.ParseTo(
+            "8.8.8.8:80\n8.8.8.8:80\n1.1.1.1:81\n9.9.9.9:82",
+            ProxyProtocol.Http,
+            maxResults: 2,
+            accepted.Add);
+
+        Assert.Equal(new ProxyParseSummary(2, Truncated: true), summary);
+        Assert.Equal(
+            [("8.8.8.8", 80, ProxyProtocol.Http), ("1.1.1.1", 81, ProxyProtocol.Http)],
+            accepted.Select(candidate => candidate.ToEndpoint()));
+    }
+
+    [Fact]
+    public void StreamingPathAvoidsPerEndpointMaterializationAllocations()
+    {
+        const int endpointCount = 20_000;
+        var content = new StringBuilder(endpointCount * 20);
+        for (var index = 0; index < endpointCount; index++)
+            content.Append("11.").Append(index >> 16).Append('.').Append(index >> 8 & 255).Append('.')
+                .Append(index & 255).Append(':').Append(1_000 + index % 60_000).Append('\n');
+        var feed = content.ToString();
+
+        // Прогрев отделяет JIT/regex initialization от сравниваемых allocations.
+        _ = ProxyParser.ParseTo("8.8.8.8:80", ProxyProtocol.Http, 1, static _ => { });
+        _ = ProxyParser.ParseWithLimitStatus("8.8.8.8:80", ProxyProtocol.Http, 1);
+
+        var beforeStreaming = GC.GetAllocatedBytesForCurrentThread();
+        var streamed = ProxyParser.ParseTo(feed, ProxyProtocol.Http, endpointCount, static _ => { });
+        var streamingBytes = GC.GetAllocatedBytesForCurrentThread() - beforeStreaming;
+
+        var beforeMaterialized = GC.GetAllocatedBytesForCurrentThread();
+        var materialized = ProxyParser.ParseWithLimitStatus(feed, ProxyProtocol.Http, endpointCount);
+        var materializedBytes = GC.GetAllocatedBytesForCurrentThread() - beforeMaterialized;
+
+        Assert.Equal(endpointCount, streamed.Count);
+        Assert.Equal(endpointCount, materialized.Items.Count);
+        Assert.True(
+            materializedBytes - streamingBytes >= endpointCount * 32L,
+            $"Ожидалась экономия минимум 32 bytes/endpoint, получено {materializedBytes - streamingBytes:N0} bytes.");
+        GC.KeepAlive(materialized);
+    }
+
     [Fact]
     public void ParseRecognizesSchemesAndFallbackProtocol()
     {
