@@ -55,6 +55,9 @@ jobs:
             sleep 2
           done
           curl --fail --silent http://127.0.0.1:8080/api/v1/stats
+          curl --fail --silent http://127.0.0.1:8080/metrics | grep 'proxyharbor_sources_enabled 81'
+          curl --fail --silent http://127.0.0.1:8080/openapi/v1.json | grep '"openapi"'
+          curl --fail --silent http://127.0.0.1:8080/health/live
 
   postgres-integration:
     runs-on: ubuntu-latest
@@ -76,6 +79,10 @@ jobs:
       - uses: actions/setup-dotnet@v5
         with: { dotnet-version: '10.0.x' }
       - run: dotnet build ProxyHarbor.slnx -c Release
+      - name: PostgreSQL advisory-lock integration test
+        env:
+          PROXYHARBOR_INTEGRATION_POSTGRES: Host=127.0.0.1;Port=5432;Database=proxyharbor;Username=proxyharbor;Password=integration-password
+        run: dotnet test ProxyHarbor.slnx -c Release --no-build --filter Category=PostgresIntegration
       - name: Migrations and API smoke test
         env:
           ASPNETCORE_ENVIRONMENT: Production

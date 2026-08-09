@@ -17,6 +17,7 @@ public sealed class CollectorWorker(ProxyCollector collector, IOptions<Collector
         do
         {
             try { await collector.CollectAsync(stoppingToken); }
+            catch (OperationAlreadyRunningException) { }
             catch (Exception ex) when (!stoppingToken.IsCancellationRequested) { CollectionFailed(logger, ex); }
         } while (await timer.WaitForNextTickAsync(stoppingToken));
     }

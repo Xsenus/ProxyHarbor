@@ -100,6 +100,14 @@ public sealed class ProxiesController(
 /// <summary>Стабильный публичный контракт без внутренних полей и ошибок.</summary>
 public sealed record ProxyDto(string Host, int Port, ProxyProtocol Protocol, string Url, int? LatencyMs, decimal SuccessRate, string? ExitIp, DateTimeOffset? LastCheckedAt)
 {
-    public static ProxyDto From(ProxyEndpoint x) => new(x.Host, x.Port, x.Protocol,
-        $"{x.Protocol.ToString().ToLowerInvariant()}://{(x.Host.Contains(':') ? $"[{x.Host}]" : x.Host)}:{x.Port}", x.LatencyMs, x.SuccessRate, x.ExitIp, x.LastCheckedAt);
+    public static ProxyDto From(ProxyEndpoint x)
+    {
+        // Категория HTTPS в публичных free-list означает HTTP CONNECT, а не TLS до proxy endpoint.
+        var transportScheme = x.Protocol is ProxyProtocol.Http or ProxyProtocol.Https
+            ? "http"
+            : x.Protocol.ToString().ToLowerInvariant();
+        var host = x.Host.Contains(':') ? $"[{x.Host}]" : x.Host;
+        return new ProxyDto(x.Host, x.Port, x.Protocol, $"{transportScheme}://{host}:{x.Port}",
+            x.LatencyMs, x.SuccessRate, x.ExitIp, x.LastCheckedAt);
+    }
 }

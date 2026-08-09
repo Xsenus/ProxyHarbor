@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Npgsql;
 using NpgsqlTypes;
@@ -10,8 +11,12 @@ namespace ProxyHarbor.Infrastructure;
 public sealed class ProxyValidator(
     IDbContextFactory<ProxyHarborDbContext> dbFactory,
     ProxyProbeService probe,
-    IOptions<CollectorOptions> options) : IDisposable
+    IOptions<CollectorOptions> options,
+    ILogger<ProxyValidator> logger) : IDisposable
 {
+    private static readonly Action<ILogger, string, Exception?> UnexpectedProbeFailure =
+        LoggerMessage.Define<string>(LogLevel.Error, new EventId(1301, "UnexpectedProbeFailure"),
+            "Непредусмотренная ошибка проверки прокси {ProxyKey}");
     private readonly SemaphoreSlim _runGate = new(1, 1);
 
     /// <summary>Проверяет приоритетный пакет и возвращает число фактически сохранённых результатов.</summary>
@@ -37,7 +42,17 @@ public sealed class ProxyValidator(
             {
                 MaxDegreeOfParallelism = concurrency,
                 CancellationToken = cancellationToken
-            }, async (proxy, token) => results.Add(await probe.CheckAsync(proxy, token)));
+            }, async (proxy, token) =>
+            {
+                try { results.Add(await probe.CheckAsync(proxy, token)); }
+                catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+                catch (Exception exception)
+                {
+                    // Ошибка одной реализации/записи не должна терять результаты всего арендованного пакета.
+                    UnexpectedProbeFailure(logger, proxy.Key, exception);
+                    results.Add(new ProxyCheckResult(proxy.Id, false, null, null, false, "internal probe error"));
+                }
+            });
 
             now = DateTimeOffset.UtcNow;
             var proxiesById = proxies.ToDictionary(x => x.Id);

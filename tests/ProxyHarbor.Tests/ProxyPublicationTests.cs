@@ -13,6 +13,18 @@ namespace ProxyHarbor.Tests;
 public sealed class ProxyPublicationTests
 {
     [Fact]
+    public void HttpsCategoryUsesHttpConnectTransportUri()
+    {
+        var endpoint = Endpoint("8.8.4.4", ProxyStatus.Alive, DateTimeOffset.UtcNow);
+        endpoint.Protocol = ProxyProtocol.Https;
+
+        var dto = ProxyDto.From(endpoint);
+
+        Assert.Equal(ProxyProtocol.Https, dto.Protocol);
+        Assert.Equal("http://8.8.4.4:8080", dto.Url);
+    }
+
+    [Fact]
     public async Task PublicListAndExportContainOnlyFreshAliveProxies()
     {
         var root = new InMemoryDatabaseRoot();

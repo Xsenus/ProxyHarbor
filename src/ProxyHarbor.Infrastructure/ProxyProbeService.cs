@@ -16,6 +16,8 @@ public sealed class ProxyProbeService(IOptions<CollectorOptions> options, Origin
     /// <summary>Выполняет HTTP CONNECT, SOCKS4a или SOCKS5 handshake и реальный HTTPS-запрос.</summary>
     public async Task<ProxyCheckResult> CheckAsync(ProxyEndpoint proxy, CancellationToken cancellationToken)
     {
+        // Origin IP нужен только для признака анонимности и не расходует timeout самого proxy-туннеля.
+        var originIp = await originIpProvider.GetAsync(cancellationToken);
         var timer = Stopwatch.StartNew();
         try
         {
@@ -30,13 +32,16 @@ public sealed class ProxyProbeService(IOptions<CollectorOptions> options, Origin
             {
                 case ProxyProtocol.Http:
                 case ProxyProtocol.Https:
-                    await EstablishHttpTunnelAsync(stream, timeout.Token);
+                    await ProxyTunnelProtocol.EstablishHttpConnectAsync(
+                        stream, options.Value.ProbeHost, options.Value.ProbePort, timeout.Token);
                     break;
                 case ProxyProtocol.Socks4:
-                    await EstablishSocks4TunnelAsync(stream, timeout.Token);
+                    await ProxyTunnelProtocol.EstablishSocks4aAsync(
+                        stream, options.Value.ProbeHost, options.Value.ProbePort, timeout.Token);
                     break;
                 case ProxyProtocol.Socks5:
-                    await EstablishSocks5TunnelAsync(stream, timeout.Token);
+                    await ProxyTunnelProtocol.EstablishSocks5Async(
+                        stream, options.Value.ProbeHost, options.Value.ProbePort, timeout.Token);
                     break;
             }
 
@@ -52,109 +57,17 @@ public sealed class ProxyProbeService(IOptions<CollectorOptions> options, Origin
             await tls.FlushAsync(timeout.Token);
 
             var response = await ReadLimitedAsync(tls, 64 * 1024, timeout.Token);
-            if (!response.StartsWith("HTTP/1.1 200", StringComparison.OrdinalIgnoreCase) &&
-                !response.StartsWith("HTTP/1.0 200", StringComparison.OrdinalIgnoreCase))
-                throw new IOException("Контрольный сервер вернул неуспешный HTTP-код.");
-
-            var separator = response.IndexOf("\r\n\r\n", StringComparison.Ordinal);
-            if (separator < 0) throw new IOException("Некорректный HTTP-ответ контрольного сервера.");
-            using var json = JsonDocument.Parse(response[(separator + 4)..]);
-            var exitIp = json.RootElement.TryGetProperty("ip", out var ipElement) ? ipElement.GetString() : null;
-            if (!IPAddress.TryParse(exitIp, out var exitAddress) || !NetworkSafety.IsPublicAddress(exitAddress))
-                throw new IOException("Контрольный сервер не вернул внешний IP.");
+            var exitIp = ProxyOriginResponse.ParseExitIp(response);
 
             timer.Stop();
-            var originIp = await originIpProvider.GetAsync(timeout.Token);
             return new ProxyCheckResult(proxy.Id, true, checked((int)timer.ElapsedMilliseconds), exitIp,
                 originIp is not null && !string.Equals(originIp, exitIp, StringComparison.OrdinalIgnoreCase), null);
         }
-        catch (Exception ex) when (ex is SocketException or IOException or AuthenticationException or OperationCanceledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (Exception ex) when (ex is SocketException or IOException or AuthenticationException or JsonException or OperationCanceledException)
         {
             return new ProxyCheckResult(proxy.Id, false, null, null, false,
                 ex is OperationCanceledException ? "timeout" : ex.Message[..Math.Min(500, ex.Message.Length)]);
-        }
-    }
-
-    private async Task EstablishHttpTunnelAsync(Stream stream, CancellationToken token)
-    {
-        var request = $"CONNECT {options.Value.ProbeHost}:{options.Value.ProbePort} HTTP/1.1\r\nHost: {options.Value.ProbeHost}:{options.Value.ProbePort}\r\nProxy-Connection: keep-alive\r\n\r\n";
-        await stream.WriteAsync(Encoding.ASCII.GetBytes(request), token);
-        var response = await ReadHeadersAsync(stream, token);
-        if (!response.Contains(" 200 ", StringComparison.Ordinal))
-            throw new IOException("HTTP CONNECT отклонён прокси.");
-    }
-
-    private async Task EstablishSocks4TunnelAsync(Stream stream, CancellationToken token)
-    {
-        var host = Encoding.ASCII.GetBytes(options.Value.ProbeHost);
-        var port = options.Value.ProbePort;
-        var request = new byte[10 + host.Length];
-        request[0] = 4; request[1] = 1;
-        request[2] = (byte)(port >> 8); request[3] = (byte)port;
-        request[7] = 1; // SOCKS4a: доменное имя следует после пустого user id.
-        host.CopyTo(request, 9);
-        await stream.WriteAsync(request, token);
-        var response = new byte[8];
-        await ReadExactlyAsync(stream, response, token);
-        if (response[1] != 90) throw new IOException($"SOCKS4 отклонил соединение ({response[1]}).");
-    }
-
-    private async Task EstablishSocks5TunnelAsync(Stream stream, CancellationToken token)
-    {
-        await stream.WriteAsync(new byte[] { 5, 1, 0 }, token);
-        var greeting = new byte[2];
-        await ReadExactlyAsync(stream, greeting, token);
-        if (greeting[0] != 5 || greeting[1] != 0) throw new IOException("SOCKS5 требует неподдерживаемую авторизацию.");
-
-        var host = Encoding.ASCII.GetBytes(options.Value.ProbeHost);
-        var port = options.Value.ProbePort;
-        var request = new byte[7 + host.Length];
-        request[0] = 5; request[1] = 1; request[2] = 0; request[3] = 3; request[4] = (byte)host.Length;
-        host.CopyTo(request, 5);
-        request[^2] = (byte)(port >> 8); request[^1] = (byte)port;
-        await stream.WriteAsync(request, token);
-
-        var header = new byte[4];
-        await ReadExactlyAsync(stream, header, token);
-        if (header[1] != 0) throw new IOException($"SOCKS5 отклонил соединение ({header[1]}).");
-        var addressLength = header[3] switch
-        {
-            1 => 4,
-            4 => 16,
-            3 => await ReadByteAsync(stream, token),
-            _ => throw new IOException("Некорректный SOCKS5-ответ.")
-        };
-        await ReadExactlyAsync(stream, new byte[addressLength + 2], token);
-    }
-
-    private static async Task<string> ReadHeadersAsync(Stream stream, CancellationToken token)
-    {
-        var buffer = new List<byte>(512);
-        while (buffer.Count < 16 * 1024)
-        {
-            var value = await ReadByteAsync(stream, token);
-            buffer.Add((byte)value);
-            if (buffer.Count >= 4 && buffer[^4] == 13 && buffer[^3] == 10 && buffer[^2] == 13 && buffer[^1] == 10)
-                return Encoding.ASCII.GetString(buffer.ToArray());
-        }
-        throw new IOException("Заголовок ответа прокси слишком велик.");
-    }
-
-    private static async Task<int> ReadByteAsync(Stream stream, CancellationToken token)
-    {
-        var buffer = new byte[1];
-        await ReadExactlyAsync(stream, buffer, token);
-        return buffer[0];
-    }
-
-    private static async Task ReadExactlyAsync(Stream stream, byte[] buffer, CancellationToken token)
-    {
-        var read = 0;
-        while (read < buffer.Length)
-        {
-            var count = await stream.ReadAsync(buffer.AsMemory(read), token);
-            if (count == 0) throw new IOException("Прокси преждевременно закрыл соединение.");
-            read += count;
         }
     }
 
@@ -190,7 +103,9 @@ public sealed class OriginIpProvider(IHttpClientFactory clients) : IDisposable
             {
                 var json = await clients.CreateClient("origin").GetStringAsync("https://api.ipify.org/?format=json", token);
                 using var document = JsonDocument.Parse(json);
-                var value = document.RootElement.GetProperty("ip").GetString();
+                var value = document.RootElement.TryGetProperty("ip", out var ipElement)
+                    ? ipElement.GetString()
+                    : null;
                 _value = IPAddress.TryParse(value, out var address) && NetworkSafety.IsPublicAddress(address) ? value : null;
                 _expiresAt = DateTimeOffset.UtcNow.AddMinutes(_value is null ? 1 : 10);
             }

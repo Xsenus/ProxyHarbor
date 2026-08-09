@@ -15,6 +15,8 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
         var proxy = modelBuilder.Entity<ProxyEndpoint>();
         proxy.HasIndex(x => new { x.Host, x.Port, x.Protocol }).IsUnique();
         proxy.HasIndex(x => new { x.Status, x.LatencyMs, x.LastCheckedAt });
+        proxy.HasIndex(x => new { x.Status, x.Protocol, x.LatencyMs, x.LastCheckedAt });
+        proxy.HasIndex(x => new { x.Status, x.LastSeenAt });
         proxy.HasIndex(x => new { x.NextCheckAt, x.CheckLeaseUntil });
         proxy.Ignore(x => x.Key);
         proxy.Ignore(x => x.SuccessRate);

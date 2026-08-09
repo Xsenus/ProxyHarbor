@@ -22,9 +22,13 @@ public sealed class ProxyCollector(
     /// <summary>Запускает один полный цикл сбора и возвращает его аудит.</summary>
     public async Task<CollectionRun> CollectAsync(CancellationToken cancellationToken)
     {
-        await _runGate.WaitAsync(cancellationToken);
+        if (!await _runGate.WaitAsync(0, cancellationToken))
+            throw new OperationAlreadyRunningException("сбор источников");
         try
         {
+            await using var clusterLock = await PostgresAdvisoryLock.TryAcquireAsync(
+                dbFactory, PostgresAdvisoryLock.CollectionKey, cancellationToken)
+                ?? throw new OperationAlreadyRunningException("сбор источников");
             await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
             var run = new CollectionRun();
             db.Runs.Add(run);
@@ -134,7 +138,8 @@ public sealed class ProxyCollector(
                     var retryAfter = response.Headers.RetryAfter?.Delta ??
                         response.Headers.RetryAfter?.Date - DateTimeOffset.UtcNow ??
                         TimeSpan.FromMilliseconds(400 * (attempt + 1));
-                    await Task.Delay(TimeSpan.FromMilliseconds(Math.Min(5_000, retryAfter.TotalMilliseconds + Random.Shared.Next(50, 250))), token);
+                    var delayMilliseconds = Math.Clamp(retryAfter.TotalMilliseconds, 0, 4_750) + Random.Shared.Next(50, 250);
+                    await Task.Delay(TimeSpan.FromMilliseconds(delayMilliseconds), token);
                     continue;
                 }
 
@@ -214,18 +219,17 @@ public sealed class ProxyCollector(
         return added;
     }
 
-    private static async Task<string> ReadLimitedAsync(HttpContent content, int maxCharacters, CancellationToken token)
+    private static async Task<string> ReadLimitedAsync(HttpContent content, int maxBytes, CancellationToken token)
     {
         await using var stream = await content.ReadAsStreamAsync(token);
-        using var reader = new StreamReader(stream);
-        var builder = new System.Text.StringBuilder(Math.Min(maxCharacters, 64 * 1024));
-        var buffer = new char[8192];
+        using var output = new MemoryStream(Math.Min(maxBytes, 64 * 1024));
+        var buffer = new byte[8192];
         while (true)
         {
-            var read = await reader.ReadAsync(buffer, token);
-            if (read == 0) return builder.ToString();
-            if (builder.Length + read > maxCharacters) throw new InvalidOperationException("Источник превышает лимит 10 млн символов.");
-            builder.Append(buffer, 0, read);
+            var read = await stream.ReadAsync(buffer, token);
+            if (read == 0) return System.Text.Encoding.UTF8.GetString(output.GetBuffer(), 0, checked((int)output.Length));
+            if (output.Length + read > maxBytes) throw new InvalidOperationException("Источник превышает лимит 10 МБ.");
+            await output.WriteAsync(buffer.AsMemory(0, read), token);
         }
     }
 }

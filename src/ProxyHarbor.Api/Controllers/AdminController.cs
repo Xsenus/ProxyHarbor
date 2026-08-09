@@ -101,7 +101,14 @@ public sealed class AdminController(
     }
 
     [HttpPost("collect")]
-    public async Task<IActionResult> Collect(CancellationToken token) => Ok(await collector.CollectAsync(token));
+    public async Task<IActionResult> Collect(CancellationToken token)
+    {
+        try { return Ok(await collector.CollectAsync(token)); }
+        catch (OperationAlreadyRunningException exception)
+        {
+            return Conflict(new ProblemDetails { Title = exception.Message, Status = 409 });
+        }
+    }
 
     [HttpPost("validate")]
     public async Task<IActionResult> Validate(CancellationToken token)
@@ -113,7 +120,12 @@ public sealed class AdminController(
     [HttpPost("backup")]
     public async Task<IActionResult> Backup(CancellationToken token)
     {
-        var path = await backup.CreateAndSendAsync(token);
+        string path;
+        try { path = await backup.CreateAndSendAsync(token); }
+        catch (OperationAlreadyRunningException exception)
+        {
+            return Conflict(new ProblemDetails { Title = exception.Message, Status = 409 });
+        }
         var sent = !string.IsNullOrWhiteSpace(backupOptions.Value.TelegramBotToken) &&
             !string.IsNullOrWhiteSpace(backupOptions.Value.TelegramChatId);
         return Ok(new { created = Path.GetFileName(path), sentToTelegram = sent });

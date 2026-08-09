@@ -24,9 +24,13 @@ public sealed class BackupService(
     /// <summary>Создаёт один снимок; секреты намеренно не сериализуются.</summary>
     public async Task<string> CreateAndSendAsync(CancellationToken cancellationToken)
     {
-        await _runGate.WaitAsync(cancellationToken);
+        if (!await _runGate.WaitAsync(0, cancellationToken))
+            throw new OperationAlreadyRunningException("резервное копирование");
         try
         {
+            await using var clusterLock = await PostgresAdvisoryLock.TryAcquireAsync(
+                dbFactory, PostgresAdvisoryLock.BackupKey, cancellationToken)
+                ?? throw new OperationAlreadyRunningException("резервное копирование");
             var options = backupOptions.Value;
             if (string.IsNullOrWhiteSpace(options.EncryptionKey) || options.EncryptionKey.Length < 16)
                 throw new InvalidOperationException("Backup__EncryptionKey должен содержать не менее 16 символов.");
@@ -174,6 +178,7 @@ public sealed class BackupWorker(BackupService backup, IOptions<BackupOptions> o
         do
         {
             try { await backup.CreateAndSendAsync(stoppingToken); }
+            catch (OperationAlreadyRunningException) { }
             catch (Exception ex) when (!stoppingToken.IsCancellationRequested) { BackupFailed(logger, ex); }
         } while (await timer.WaitForNextTickAsync(stoppingToken));
     }

@@ -1,0 +1,115 @@
+using System.Text;
+
+namespace ProxyHarbor.Infrastructure;
+
+/// <summary>Строго формирует и проверяет handshakes поддерживаемых proxy-протоколов.</summary>
+internal static class ProxyTunnelProtocol
+{
+    internal static async Task EstablishHttpConnectAsync(
+        Stream stream, string targetHost, int targetPort, CancellationToken token)
+    {
+        var authority = $"{targetHost}:{targetPort}";
+        var request = $"CONNECT {authority} HTTP/1.1\r\nHost: {authority}\r\nProxy-Connection: keep-alive\r\n\r\n";
+        await stream.WriteAsync(Encoding.ASCII.GetBytes(request), token);
+        var response = await ReadHeadersAsync(stream, token);
+        var lineEnd = response.IndexOf("\r\n", StringComparison.Ordinal);
+        var statusLine = lineEnd >= 0 ? response[..lineEnd] : response;
+        var parts = statusLine.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length < 2 || !parts[0].StartsWith("HTTP/", StringComparison.OrdinalIgnoreCase) ||
+            !int.TryParse(parts[1], out var statusCode) || statusCode is < 200 or >= 300)
+            throw new IOException("HTTP CONNECT отклонён прокси.");
+    }
+
+    internal static async Task EstablishSocks4aAsync(
+        Stream stream, string targetHost, int targetPort, CancellationToken token)
+    {
+        var host = EncodeHost(targetHost);
+        var request = new byte[10 + host.Length];
+        request[0] = 4;
+        request[1] = 1;
+        request[2] = (byte)(targetPort >> 8);
+        request[3] = (byte)targetPort;
+        request[7] = 1; // SOCKS4a: 0.0.0.1, затем пустой user id и DNS-имя.
+        host.CopyTo(request, 9);
+        await stream.WriteAsync(request, token);
+        var response = new byte[8];
+        await ReadExactlyAsync(stream, response, token);
+        if (response[0] != 0 || response[1] != 90)
+            throw new IOException($"SOCKS4 отклонил соединение ({response[1]}).");
+    }
+
+    internal static async Task EstablishSocks5Async(
+        Stream stream, string targetHost, int targetPort, CancellationToken token)
+    {
+        await stream.WriteAsync(new byte[] { 5, 1, 0 }, token);
+        var greeting = new byte[2];
+        await ReadExactlyAsync(stream, greeting, token);
+        if (greeting[0] != 5 || greeting[1] != 0)
+            throw new IOException("SOCKS5 требует неподдерживаемую авторизацию.");
+
+        var host = EncodeHost(targetHost);
+        if (host.Length > byte.MaxValue) throw new IOException("DNS-имя назначения слишком длинное для SOCKS5.");
+        var request = new byte[7 + host.Length];
+        request[0] = 5;
+        request[1] = 1;
+        request[2] = 0;
+        request[3] = 3;
+        request[4] = (byte)host.Length;
+        host.CopyTo(request, 5);
+        request[^2] = (byte)(targetPort >> 8);
+        request[^1] = (byte)targetPort;
+        await stream.WriteAsync(request, token);
+
+        var header = new byte[4];
+        await ReadExactlyAsync(stream, header, token);
+        if (header[0] != 5 || header[2] != 0)
+            throw new IOException("Некорректный SOCKS5-ответ.");
+        if (header[1] != 0) throw new IOException($"SOCKS5 отклонил соединение ({header[1]}).");
+        var addressLength = header[3] switch
+        {
+            1 => 4,
+            4 => 16,
+            3 => await ReadByteAsync(stream, token),
+            _ => throw new IOException("Некорректный тип адреса в SOCKS5-ответе.")
+        };
+        await ReadExactlyAsync(stream, new byte[addressLength + 2], token);
+    }
+
+    private static byte[] EncodeHost(string host)
+    {
+        if (string.IsNullOrWhiteSpace(host) || host.Any(character => character is '\0' or > '\x7f'))
+            throw new IOException("Proxy-протокол поддерживает только корректное ASCII DNS-имя назначения.");
+        return Encoding.ASCII.GetBytes(host);
+    }
+
+    private static async Task<string> ReadHeadersAsync(Stream stream, CancellationToken token)
+    {
+        var buffer = new List<byte>(512);
+        while (buffer.Count < 16 * 1024)
+        {
+            var value = await ReadByteAsync(stream, token);
+            buffer.Add((byte)value);
+            if (buffer.Count >= 4 && buffer[^4] == 13 && buffer[^3] == 10 && buffer[^2] == 13 && buffer[^1] == 10)
+                return Encoding.ASCII.GetString(buffer.ToArray());
+        }
+        throw new IOException("Заголовок ответа прокси слишком велик.");
+    }
+
+    private static async Task<int> ReadByteAsync(Stream stream, CancellationToken token)
+    {
+        var buffer = new byte[1];
+        await ReadExactlyAsync(stream, buffer, token);
+        return buffer[0];
+    }
+
+    private static async Task ReadExactlyAsync(Stream stream, byte[] buffer, CancellationToken token)
+    {
+        var read = 0;
+        while (read < buffer.Length)
+        {
+            var count = await stream.ReadAsync(buffer.AsMemory(read), token);
+            if (count == 0) throw new IOException("Прокси преждевременно закрыл соединение.");
+            read += count;
+        }
+    }
+}
