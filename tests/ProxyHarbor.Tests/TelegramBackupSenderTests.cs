@@ -52,6 +52,42 @@ public sealed class TelegramBackupSenderTests
     }
 
     [Fact]
+    public async Task ReleasesResponseAndBackupFileBeforeRetryDelay()
+    {
+        var path = await TemporaryBackupAsync();
+        try
+        {
+            var firstContent = new DisposeTrackingContent(
+                """{"ok":false,"error_code":429,"parameters":{"retry_after":30}}""");
+            var handler = new ResourceTrackingHandler(firstContent);
+            using var client = new HttpClient(handler);
+            var responseDisposed = false;
+            var backupFileReleased = false;
+
+            await TelegramBackupSender.SendAsync(
+                client,
+                path,
+                "backup",
+                "secret-token",
+                "123456",
+                CancellationToken.None,
+                (delay, _) =>
+                {
+                    Assert.Equal(TimeSpan.FromSeconds(30), delay);
+                    responseDisposed = firstContent.Disposed;
+                    using var exclusive = File.Open(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+                    backupFileReleased = true;
+                    return Task.CompletedTask;
+                });
+
+            Assert.True(responseDisposed);
+            Assert.True(backupFileReleased);
+            Assert.Equal(2, handler.Attempts);
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
     public async Task FinalTransportErrorDoesNotExposeBotToken()
     {
         var path = Path.Combine(Path.GetTempPath(), $"proxyharbor-telegram-{Guid.NewGuid():N}.phbackup");
@@ -195,6 +231,33 @@ public sealed class TelegramBackupSenderTests
 
             LastMultipartLength = (await request.Content!.ReadAsByteArrayAsync(cancellationToken)).Length;
             return JsonResponse(HttpStatusCode.OK, """{"ok":true,"result":{}}""");
+        }
+    }
+
+    private sealed class ResourceTrackingHandler(DisposeTrackingContent firstContent) : HttpMessageHandler
+    {
+        public int Attempts { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            Attempts++;
+            return Task.FromResult(Attempts == 1
+                ? new HttpResponseMessage(HttpStatusCode.TooManyRequests) { Content = firstContent }
+                : JsonResponse(HttpStatusCode.OK, """{"ok":true,"result":{}}"""));
+        }
+    }
+
+    private sealed class DisposeTrackingContent(string json)
+        : ByteArrayContent(Encoding.UTF8.GetBytes(json))
+    {
+        public bool Disposed { get; private set; }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) Disposed = true;
+            base.Dispose(disposing);
         }
     }
 

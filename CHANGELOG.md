@@ -12,6 +12,7 @@
 - Frontend Nginx запускается непривилегированным пользователем на порту 8080 с read-only root filesystem и без Linux capabilities.
 - Prometheus заранее предупреждает, когда ETA validation-очереди превышает допустимое окно свежести публичного каталога.
 - Transient HTTP-ответы proxy-feed освобождают соединение до retry backoff и не блокируют source connection pool во время ожидания.
+- Telegram retry закрывает response, multipart и backup file handle до ожидания `retry_after`.
 
 ## [1.0.0] - 2026-08-10
 

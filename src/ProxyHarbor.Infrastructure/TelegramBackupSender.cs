@@ -17,10 +17,13 @@ internal static class TelegramBackupSender
         string caption,
         string botToken,
         string chatId,
-        CancellationToken token)
+        CancellationToken token,
+        Func<TimeSpan, CancellationToken, Task>? delayAsync = null)
     {
+        delayAsync ??= static (delay, cancellationToken) => Task.Delay(delay, cancellationToken);
         for (var attempt = 1; attempt <= MaxAttempts; attempt++)
         {
+            TimeSpan retryDelay;
             try
             {
                 // Multipart и поток файла создаются заново: после неудачной отправки их нельзя
@@ -42,15 +45,14 @@ internal static class TelegramBackupSender
                 if (!retryable || attempt == MaxAttempts)
                     throw DeliveryRejected(response.StatusCode, apiResponse);
 
-                await DelayBeforeRetryAsync(
+                retryDelay = RetryDelay(
                     response.Headers.RetryAfter,
                     apiResponse?.Parameters?.RetryAfter,
-                    attempt,
-                    token);
+                    attempt);
             }
             catch (Exception exception) when (IsTransientTransportFailure(exception, token) && attempt < MaxAttempts)
             {
-                await DelayBeforeRetryAsync(null, null, attempt, token);
+                retryDelay = RetryDelay(null, null, attempt);
             }
             catch (Exception exception) when (IsTransientTransportFailure(exception, token))
             {
@@ -58,6 +60,10 @@ internal static class TelegramBackupSender
                 // а URI Telegram содержит секретный bot token.
                 throw new HttpRequestException("Telegram недоступен после нескольких попыток отправки backup.");
             }
+
+            // К этому моменту response, multipart и файловый поток уже вышли из using-scope.
+            // Длительный retry_after не удерживает socket либо backup file handle.
+            if (retryDelay > TimeSpan.Zero) await delayAsync(retryDelay, token);
         }
     }
 
@@ -114,11 +120,10 @@ internal static class TelegramBackupSender
         }
     }
 
-    private static async Task DelayBeforeRetryAsync(
+    private static TimeSpan RetryDelay(
         RetryConditionHeaderValue? retryAfter,
         int? bodyRetryAfterSeconds,
-        int attempt,
-        CancellationToken token)
+        int attempt)
     {
         var serverDelay = retryAfter?.Delta;
         if (serverDelay is null && retryAfter?.Date is { } retryDate)
@@ -126,8 +131,7 @@ internal static class TelegramBackupSender
         if (serverDelay is null && bodyRetryAfterSeconds is >= 0)
             serverDelay = TimeSpan.FromSeconds(bodyRetryAfterSeconds.Value);
         var delay = serverDelay ?? TimeSpan.FromSeconds(Math.Pow(2, attempt - 1));
-        delay = TimeSpan.FromMilliseconds(Math.Clamp(delay.TotalMilliseconds, 0, 30_000));
-        if (delay > TimeSpan.Zero) await Task.Delay(delay, token);
+        return TimeSpan.FromMilliseconds(Math.Clamp(delay.TotalMilliseconds, 0, 30_000));
     }
 
     private sealed record TelegramApiResponse(
