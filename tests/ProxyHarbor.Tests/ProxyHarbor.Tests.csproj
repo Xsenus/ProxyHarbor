@@ -23,6 +23,7 @@
     <ProjectReference Include="..\..\src\ProxyHarbor.Domain\ProxyHarbor.Domain.csproj" />
     <ProjectReference Include="..\..\src\ProxyHarbor.Infrastructure\ProxyHarbor.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\ProxyHarbor.Api\ProxyHarbor.Api.csproj" />
+    <ProjectReference Include="..\..\src\ProxyHarbor.Restore\ProxyHarbor.Restore.csproj" />
   </ItemGroup>
 
 </Project>

@@ -98,7 +98,7 @@ jobs:
       - uses: actions/setup-dotnet@v5
         with: { dotnet-version: '10.0.x' }
       - run: dotnet build ProxyHarbor.slnx -c Release
-      - name: PostgreSQL advisory-lock integration test
+      - name: PostgreSQL and encrypted backup/restore integration tests
         env:
           PROXYHARBOR_INTEGRATION_POSTGRES: Host=127.0.0.1;Port=5432;Database=proxyharbor;Username=proxyharbor;Password=integration-password
         run: dotnet test ProxyHarbor.slnx -c Release --no-build --filter Category=PostgresIntegration
@@ -153,6 +153,16 @@ jobs:
           invalid_list_filter=$(curl --silent --output /dev/null --write-out '%{http_code}' \
             'http://127.0.0.1:5080/api/v1/proxies?maxLatencyMs=0')
           test "$invalid_list_filter" -eq 400
+          PGPASSWORD=integration-password psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -U proxyharbor -d proxyharbor <<'SQL'
+          INSERT INTO "Proxies"
+            ("Id", "Host", "Port", "Protocol", "Status", "LatencyMs", "ExitIp", "CountryCode", "IsAnonymous",
+             "FirstSeenAt", "LastSeenAt", "LastCheckedAt", "NextCheckAt", "SuccessfulChecks", "FailedChecks",
+             "ConsecutiveFailedChecks", "LastError")
+          VALUES
+            ('20000000-0000-0000-0000-000000000001', '8.8.4.4', 18080, 3, 1, 321, '1.0.0.1', 'DE', true,
+             '2026-08-09T10:00:00Z', '2026-08-09T11:00:00Z', '2026-08-09T12:00:00Z', '2026-08-09T12:05:00Z',
+             7, 2, 1, 'ci round-trip marker');
+          SQL
           backup_json=$(curl --fail --silent -X POST \
             -H 'X-Admin-Key: integration-admin-key-at-least-24-chars' \
             http://127.0.0.1:5080/api/v1/admin/backup)
@@ -171,6 +181,11 @@ jobs:
              .recentBackups[0].sentToTelegram == false'
           curl --fail --silent http://127.0.0.1:5080/metrics | \
             grep 'proxyharbor_last_backup_success 1'
+          PGPASSWORD=integration-password psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -U proxyharbor -d proxyharbor \
+            -c "DELETE FROM \"Proxies\" WHERE \"Id\" = '20000000-0000-0000-0000-000000000001';"
+          test "$(PGPASSWORD=integration-password psql -tAc \
+            "SELECT count(*) FROM \"Proxies\" WHERE \"Id\" = '20000000-0000-0000-0000-000000000001';" \
+            -h 127.0.0.1 -U proxyharbor -d proxyharbor)" -eq 0
           invalid_export_filter=$(curl --silent --output /dev/null --write-out '%{http_code}' \
             'http://127.0.0.1:5080/api/v1/export/json?minSuccessRate=101')
           test "$invalid_export_filter" -eq 400
@@ -197,3 +212,7 @@ jobs:
           done
           restored_sources=$(curl --fail --silent -H 'X-Admin-Key: integration-admin-key-at-least-24-chars' http://127.0.0.1:5080/api/v1/admin/sources)
           test "$(echo "$restored_sources" | jq length)" -eq 81
+          restored_proxy=$(PGPASSWORD=integration-password psql -tA -F '|' \
+            -h 127.0.0.1 -U proxyharbor -d proxyharbor \
+            -c "SELECT \"Host\", \"Port\", \"Protocol\", \"Status\", \"LatencyMs\", \"ExitIp\", \"CountryCode\", \"IsAnonymous\", \"SuccessfulChecks\", \"FailedChecks\", \"ConsecutiveFailedChecks\", \"LastError\" FROM \"Proxies\" WHERE \"Id\" = '20000000-0000-0000-0000-000000000001';")
+          test "$restored_proxy" = '8.8.4.4|18080|3|1|321|1.0.0.1|DE|t|7|2|1|ci round-trip marker'

@@ -10,7 +10,20 @@ public static class DatabaseSeeder
     private const long MigrationLockKey = 0x5052484D49475203;
 
     /// <summary>Добавляет недостающие feed'ы и обновляет их метаданные, сохраняя выбор Enabled/Disabled.</summary>
-    public static async Task InitializeAsync(ProxyHarborDbContext db, CancellationToken cancellationToken = default)
+    public static Task InitializeAsync(ProxyHarborDbContext db, CancellationToken cancellationToken = default) =>
+        ExecuteWithMigrationLockAsync(db, MigrateAndSeedAsync, cancellationToken);
+
+    /// <summary>Применяет только DDL migrations под общей startup-блокировкой, не изменяя строки приложения.</summary>
+    public static Task MigrateSchemaAsync(ProxyHarborDbContext db, CancellationToken cancellationToken = default) =>
+        ExecuteWithMigrationLockAsync(
+            db,
+            static (context, token) => context.Database.MigrateAsync(token),
+            cancellationToken);
+
+    private static async Task ExecuteWithMigrationLockAsync(
+        ProxyHarborDbContext db,
+        Func<ProxyHarborDbContext, CancellationToken, Task> operation,
+        CancellationToken cancellationToken)
     {
         var connection = (NpgsqlConnection)db.Database.GetDbConnection();
         var closeWhenFinished = connection.State != System.Data.ConnectionState.Open;
@@ -33,7 +46,7 @@ public static class DatabaseSeeder
             }
             try
             {
-                await MigrateAndSeedAsync(db, cancellationToken);
+                await operation(db, cancellationToken);
             }
             finally
             {

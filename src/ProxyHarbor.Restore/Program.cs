@@ -60,7 +60,9 @@ internal static class RestoreApplication
             .UseNpgsql(connectionString, npgsql => npgsql.EnableRetryOnFailure(3))
             .Options;
         await using var strategyDb = new ProxyHarborDbContext(dbOptions);
-        await strategyDb.Database.MigrateAsync(token);
+        // Используем тот же startup-gate, что API: параллельный запуск реплик не может
+        // одновременно применить pending DDL, пока restore готовит целевую схему.
+        await DatabaseSeeder.MigrateSchemaAsync(strategyDb, token);
         var strategy = strategyDb.Database.CreateExecutionStrategy();
         return await strategy.ExecuteAsync(async () =>
         {
