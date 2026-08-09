@@ -85,14 +85,14 @@ internal static class RestoreApplication
                 archive,
                 "database/sources.json",
                 connection,
-                """COPY "Sources" ("Id", "Name", "Url", "DefaultProtocol", "Enabled", "Priority", "LastFetchedAt", "LastSucceededAt", "LastItemCount", "ConsecutiveFailures", "LastError") FROM STDIN (FORMAT BINARY)""",
+                """COPY "Sources" ("Id", "Name", "Url", "DefaultProtocol", "Enabled", "Priority", "LastFetchedAt", "LastSucceededAt", "NextFetchAt", "LastItemCount", "ConsecutiveFailures", "LastError") FROM STDIN (FORMAT BINARY)""",
                 WriteSourceAsync,
                 token);
             var runCount = await ImportAsync<CollectionRun>(
                 archive,
                 "database/runs.json",
                 connection,
-                """COPY "Runs" ("Id", "StartedAt", "FinishedAt", "SourcesProcessed", "SourcesSucceeded", "SourcesFailed", "CandidatesFound", "NewProxies", "AliveProxies", "Status", "Error") FROM STDIN (FORMAT BINARY)""",
+                """COPY "Runs" ("Id", "StartedAt", "FinishedAt", "SourcesProcessed", "SourcesSucceeded", "SourcesFailed", "SourcesSkipped", "CandidatesFound", "NewProxies", "AliveProxies", "Status", "Error") FROM STDIN (FORMAT BINARY)""",
                 WriteRunAsync,
                 token);
             await transaction.CommitAsync(token);
@@ -156,6 +156,7 @@ internal static class RestoreApplication
         await writer.WriteAsync(entity.Priority, token);
         await WriteNullableValueAsync(writer, entity.LastFetchedAt, token);
         await WriteNullableValueAsync(writer, entity.LastSucceededAt, token);
+        await WriteNullableValueAsync(writer, entity.NextFetchAt, token);
         await writer.WriteAsync(entity.LastItemCount, token);
         await writer.WriteAsync(entity.ConsecutiveFailures, token);
         await WriteNullableReferenceAsync(writer, entity.LastError, token);
@@ -170,6 +171,7 @@ internal static class RestoreApplication
         await writer.WriteAsync(entity.SourcesProcessed, token);
         await writer.WriteAsync(entity.SourcesSucceeded, token);
         await writer.WriteAsync(entity.SourcesFailed, token);
+        await writer.WriteAsync(entity.SourcesSkipped, token);
         await writer.WriteAsync(entity.CandidatesFound, token);
         await writer.WriteAsync(entity.NewProxies, token);
         await writer.WriteAsync(entity.AliveProxies, token);

@@ -20,7 +20,7 @@ public sealed class ProxyCollector(
     private readonly SemaphoreSlim _runGate = new(1, 1);
 
     /// <summary>Запускает один полный цикл сбора и возвращает его аудит.</summary>
-    public async Task<CollectionRun> CollectAsync(CancellationToken cancellationToken)
+    public async Task<CollectionRun> CollectAsync(CancellationToken cancellationToken, bool forceAllSources = false)
     {
         if (!await _runGate.WaitAsync(0, cancellationToken))
             throw new OperationAlreadyRunningException("сбор источников");
@@ -36,7 +36,11 @@ public sealed class ProxyCollector(
 
             try
             {
-                var sources = await db.Sources.AsNoTracking().Where(x => x.Enabled).OrderBy(x => x.Priority).ToListAsync(cancellationToken);
+                var collectionStartedAt = DateTimeOffset.UtcNow;
+                var allSources = await db.Sources.AsNoTracking().Where(x => x.Enabled)
+                    .OrderBy(x => x.Priority).ToListAsync(cancellationToken);
+                var sources = allSources.Where(source =>
+                    SourceFetchSchedule.IsDue(source.NextFetchAt, collectionStartedAt, forceAllSources)).ToList();
                 var candidates = new ConcurrentDictionary<string, (string Host, int Port, ProxyProtocol Protocol)>();
                 var candidateCount = 0;
                 var sourceResults = new ConcurrentBag<(Guid Id, int Count, string? Error)>();
@@ -51,7 +55,7 @@ public sealed class ProxyCollector(
                     try
                     {
                         var content = await FetchSourceAsync(client, source.Url, token);
-                        var parsed = ProxyParser.Parse(content, source.DefaultProtocol);
+                        var parsed = SourceFeedParser.ParseRequired(content, source.DefaultProtocol);
                         foreach (var item in parsed.Take(options.Value.MaxProxiesPerSource))
                         {
                             if (Volatile.Read(ref candidateCount) >= options.Value.MaxCandidatesPerRun) break;
@@ -71,31 +75,42 @@ public sealed class ProxyCollector(
                     }
                 });
 
-                foreach (var result in sourceResults)
+                var sourceResultById = sourceResults.ToDictionary(result => result.Id);
+                var sourceIds = sourceResultById.Keys.ToArray();
+                var trackedSources = await db.Sources.Where(source => sourceIds.Contains(source.Id)).ToListAsync(cancellationToken);
+                foreach (var source in trackedSources)
                 {
-                    var source = await db.Sources.FindAsync([result.Id], cancellationToken);
-                    if (source is null) continue;
-                    source.LastFetchedAt = DateTimeOffset.UtcNow;
+                    var result = sourceResultById[source.Id];
+                    var fetchedAt = DateTimeOffset.UtcNow;
+                    source.LastFetchedAt = fetchedAt;
                     source.LastItemCount = result.Count;
                     source.LastError = result.Error?[..Math.Min(500, result.Error.Length)];
                     if (result.Error is null)
                     {
-                        source.LastSucceededAt = DateTimeOffset.UtcNow;
+                        source.LastSucceededAt = fetchedAt;
                         source.ConsecutiveFailures = 0;
+                        source.NextFetchAt = null;
                     }
                     else
                     {
                         source.ConsecutiveFailures++;
+                        source.NextFetchAt = SourceFetchSchedule.NextAttempt(
+                            collectionStartedAt,
+                            source.ConsecutiveFailures,
+                            options.Value.SourceFailureBackoffBaseMinutes,
+                            options.Value.SourceFailureBackoffMaxHours);
                     }
                 }
 
                 var now = DateTimeOffset.UtcNow;
-                var added = await BulkUpsertAsync(db, candidates.Values, now, cancellationToken);
+                var added = await BulkUpsertAsync(
+                    db, candidates.Values, now, options.Value.LastSeenRefreshMinutes, cancellationToken);
 
                 run.FinishedAt = now;
                 run.SourcesProcessed = sourceResults.Count;
                 run.SourcesSucceeded = sourceResults.Count(x => x.Error is null);
                 run.SourcesFailed = sourceResults.Count(x => x.Error is not null);
+                run.SourcesSkipped = allSources.Count - sources.Count;
                 run.CandidatesFound = candidates.Count;
                 run.NewProxies = added;
                 run.AliveProxies = await db.Proxies.CountAsync(x => x.Status == ProxyStatus.Alive, cancellationToken);
@@ -148,7 +163,7 @@ public sealed class ProxyCollector(
                     throw new InvalidOperationException("Источник превышает лимит 10 МБ.");
                 return await ReadLimitedAsync(response.Content, 10_000_000, timeout.Token);
             }
-            catch (Exception ex) when (attempt < retries && !token.IsCancellationRequested && ex is HttpRequestException or TaskCanceledException)
+            catch (Exception ex) when (attempt < retries && SourceHttpRetry.IsRetryable(ex, token))
             {
                 await Task.Delay(TimeSpan.FromMilliseconds(400 * (attempt + 1) + Random.Shared.Next(50, 250)), token);
             }
@@ -179,6 +194,7 @@ public sealed class ProxyCollector(
         ProxyHarborDbContext db,
         IEnumerable<(string Host, int Port, ProxyProtocol Protocol)> candidates,
         DateTimeOffset now,
+        int lastSeenRefreshMinutes,
         CancellationToken token)
     {
         var connection = (NpgsqlConnection)db.Database.GetDbConnection();
@@ -203,18 +219,31 @@ public sealed class ProxyCollector(
             await writer.CompleteAsync(token);
         }
 
-        await using var count = new NpgsqlCommand(
-            "SELECT count(*)::integer FROM proxy_import i WHERE NOT EXISTS (SELECT 1 FROM \"Proxies\" p WHERE p.\"Host\" = i.host AND p.\"Port\" = i.port AND p.\"Protocol\" = i.protocol)",
-            connection, transaction);
-        var added = (int)(await count.ExecuteScalarAsync(token) ?? 0);
-
-        await using var merge = new NpgsqlCommand("""
+        // Отдельный INSERT возвращает точное число новых строк и не заставляет PostgreSQL
+        // выполнять бесполезный UPDATE каждого существующего proxy на каждом 15-минутном цикле.
+        await using var insert = new NpgsqlCommand("""
             INSERT INTO "Proxies" ("Id", "Host", "Port", "Protocol", "Status", "IsAnonymous", "FirstSeenAt", "LastSeenAt", "SuccessfulChecks", "FailedChecks")
-            SELECT gen_random_uuid(), host, port, protocol, 0, false, seen_at, seen_at, 0, 0
-            FROM proxy_import
-            ON CONFLICT ("Host", "Port", "Protocol") DO UPDATE SET "LastSeenAt" = EXCLUDED."LastSeenAt"
+            SELECT gen_random_uuid(), i.host, i.port, i.protocol, 0, false, i.seen_at, i.seen_at, 0, 0
+            FROM proxy_import i
+            WHERE NOT EXISTS (
+                SELECT 1 FROM "Proxies" p
+                WHERE p."Host" = i.host AND p."Port" = i.port AND p."Protocol" = i.protocol)
+            ON CONFLICT ("Host", "Port", "Protocol") DO NOTHING
             """, connection, transaction);
-        await merge.ExecuteNonQueryAsync(token);
+        var added = await insert.ExecuteNonQueryAsync(token);
+
+        // LastSeenAt нужен для retention, но точность до каждого цикла не нужна. Ограничение
+        // частоты резко сокращает WAL и перезапись индекса на сотнях тысяч строк.
+        await using var refresh = new NpgsqlCommand("""
+            UPDATE "Proxies" p
+            SET "LastSeenAt" = i.seen_at
+            FROM proxy_import i
+            WHERE p."Host" = i.host AND p."Port" = i.port AND p."Protocol" = i.protocol
+              AND p."LastSeenAt" < @refresh_before
+            """, connection, transaction);
+        refresh.Parameters.AddWithValue("refresh_before", NpgsqlDbType.TimestampTz,
+            now.AddMinutes(-Math.Max(1, lastSeenRefreshMinutes)));
+        await refresh.ExecuteNonQueryAsync(token);
         await transaction.CommitAsync(token);
         return added;
     }
@@ -231,5 +260,46 @@ public sealed class ProxyCollector(
             if (output.Length + read > maxBytes) throw new InvalidOperationException("Источник превышает лимит 10 МБ.");
             await output.WriteAsync(buffer.AsMemory(0, read), token);
         }
+    }
+}
+
+/// <summary>Проверяет семантическую пригодность HTTP-ответа, а не только код 2xx.</summary>
+internal static class SourceFeedParser
+{
+    internal static IReadOnlyCollection<(string Host, int Port, ProxyProtocol Protocol)> ParseRequired(
+        string content,
+        ProxyProtocol defaultProtocol)
+    {
+        var parsed = ProxyParser.Parse(content, defaultProtocol);
+        if (parsed.Count == 0)
+            throw new InvalidDataException("Источник не содержит распознаваемых прокси.");
+        return parsed;
+    }
+}
+
+/// <summary>Отделяет временные транспортные сбои от постоянных HTTP-ответов 4xx.</summary>
+internal static class SourceHttpRetry
+{
+    internal static bool IsRetryable(Exception exception, CancellationToken outerToken) =>
+        !outerToken.IsCancellationRequested &&
+        (exception is HttpRequestException { StatusCode: null } || exception is TaskCanceledException);
+}
+
+/// <summary>Рассчитывает bounded exponential backoff для недоступного free-feed.</summary>
+internal static class SourceFetchSchedule
+{
+    internal static bool IsDue(DateTimeOffset? nextFetchAt, DateTimeOffset now, bool forceAllSources) =>
+        forceAllSources || nextFetchAt is null || nextFetchAt <= now;
+
+    internal static DateTimeOffset NextAttempt(
+        DateTimeOffset failedAt,
+        int consecutiveFailures,
+        int baseMinutes,
+        int maxHours)
+    {
+        var exponent = Math.Clamp(consecutiveFailures - 1, 0, 20);
+        var delayMinutes = baseMinutes * Math.Pow(2, exponent);
+        var boundedMinutes = Math.Min(delayMinutes, TimeSpan.FromHours(maxHours).TotalMinutes);
+        return failedAt.AddMinutes(boundedMinutes);
     }
 }

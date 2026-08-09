@@ -27,8 +27,15 @@ public static class ServiceCollectionExtensions
             .Validate(x => x.SourceTimeoutSeconds is >= 2 and <= 300, "SourceTimeoutSeconds: 2..300")
             .Validate(x => x.SourceConcurrency is >= 1 and <= 32, "SourceConcurrency: 1..32")
             .Validate(x => x.SourceRetryCount is >= 0 and <= 5, "SourceRetryCount: 0..5")
+            .Validate(x => x.SourceFailureBackoffBaseMinutes is >= 1 and <= 1_440, "SourceFailureBackoffBaseMinutes: 1..1440")
+            .Validate(x => x.SourceFailureBackoffMaxHours is >= 1 and <= 720, "SourceFailureBackoffMaxHours: 1..720")
+            .Validate(x => TimeSpan.FromMinutes(x.SourceFailureBackoffBaseMinutes) <= TimeSpan.FromHours(x.SourceFailureBackoffMaxHours),
+                "SourceFailureBackoffBaseMinutes не может превышать SourceFailureBackoffMaxHours")
             .Validate(x => x.MaxProxiesPerSource is >= 1 and <= 1_000_000, "MaxProxiesPerSource: 1..1000000")
             .Validate(x => x.MaxCandidatesPerRun is >= 1 and <= 5_000_000, "MaxCandidatesPerRun: 1..5000000")
+            .Validate(x => x.LastSeenRefreshMinutes is >= 1 and <= 10_080, "LastSeenRefreshMinutes: 1..10080")
+            .Validate(x => TimeSpan.FromMinutes(x.LastSeenRefreshMinutes) <= TimeSpan.FromDays(x.DeadRetentionDays),
+                "LastSeenRefreshMinutes не может превышать DeadRetentionDays")
             .Validate(x => x.DeadRetentionDays is >= 1 and <= 365, "DeadRetentionDays: 1..365")
             .Validate(x => x.RunRetentionDays is >= 1 and <= 3_650, "RunRetentionDays: 1..3650")
             .Validate(x => x.ProbePort is >= 1 and <= 65_535, "ProbePort: 1..65535")

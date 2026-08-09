@@ -65,6 +65,8 @@ public sealed class MetricsController(
             lastFinishedRun?.Status == "completed" ? 1 : 0);
         Gauge(output, "proxyharbor_last_collection_candidates", "Candidates found by the latest finished collection run.",
             lastFinishedRun?.CandidatesFound ?? 0);
+        Gauge(output, "proxyharbor_last_collection_sources_skipped", "Feeds skipped by adaptive failure backoff in the latest finished run.",
+            lastFinishedRun?.SourcesSkipped ?? 0);
         Gauge(output, "proxyharbor_last_collection_timestamp_seconds", "Unix timestamp of the last collection completion.",
             lastFinishedRun?.FinishedAt?.ToUnixTimeSeconds() ?? 0);
         Gauge(output, "proxyharbor_last_successful_collection_timestamp_seconds", "Unix timestamp of the latest successful collection.",

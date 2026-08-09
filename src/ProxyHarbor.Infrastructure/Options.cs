@@ -16,8 +16,11 @@ public sealed class CollectorOptions
     public int SourceTimeoutSeconds { get; set; } = 20;
     public int SourceConcurrency { get; set; } = 8;
     public int SourceRetryCount { get; set; } = 2;
+    public int SourceFailureBackoffBaseMinutes { get; set; } = 15;
+    public int SourceFailureBackoffMaxHours { get; set; } = 24;
     public int MaxProxiesPerSource { get; set; } = 100_000;
     public int MaxCandidatesPerRun { get; set; } = 500_000;
+    public int LastSeenRefreshMinutes { get; set; } = 360;
     public int DeadRetentionDays { get; set; } = 3;
     public int RunRetentionDays { get; set; } = 30;
     public string ProbeHost { get; set; } = "api.ipify.org";

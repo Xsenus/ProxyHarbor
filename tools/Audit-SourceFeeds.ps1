@@ -9,7 +9,7 @@ $headers = @{ 'X-Admin-Key' = $AdminKey }
 Invoke-RestMethod -Method Post -Uri "$ApiBaseUrl/api/v1/admin/collect" -Headers $headers | Out-Null
 $sources = Invoke-RestMethod -Method Get -Uri "$ApiBaseUrl/api/v1/admin/sources" -Headers $headers
 $ordered = @($sources | Sort-Object Priority)
-$ordered | Select-Object Name, DefaultProtocol, LastItemCount, ConsecutiveFailures, LastFetchedAt, LastError | Format-Table -AutoSize
+$ordered | Select-Object Name, DefaultProtocol, LastItemCount, ConsecutiveFailures, LastFetchedAt, NextFetchAt, LastError | Format-Table -AutoSize
 
 $failed = @($ordered | Where-Object { $_.Enabled -and ($_.LastItemCount -le 0 -or $_.LastError) })
 $report = [ordered]@{

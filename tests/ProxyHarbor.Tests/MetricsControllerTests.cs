@@ -42,6 +42,7 @@ public sealed class MetricsControllerTests
         Assert.Contains("proxyharbor_collection_runs_active 1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_last_collection_success 1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_last_collection_candidates 42", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_last_collection_sources_skipped 0", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_last_collection_timestamp_seconds 1700000100", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_last_collection_duration_seconds 12.5", metrics, StringComparison.Ordinal);
         Assert.DoesNotContain("proxyharbor_last_collection_candidates 999", metrics, StringComparison.Ordinal);

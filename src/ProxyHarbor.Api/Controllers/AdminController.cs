@@ -55,8 +55,20 @@ public sealed class AdminController(
         var normalizedUrl = new Uri(request.Url, UriKind.Absolute).AbsoluteUri;
         if (await db.Sources.AnyAsync(x => x.Id != id && x.Url == normalizedUrl, token))
             return Conflict(new ProblemDetails { Title = "Источник с таким URL уже существует", Status = 409 });
+        var endpointChanged = !string.Equals(source.Url, normalizedUrl, StringComparison.OrdinalIgnoreCase) ||
+            source.DefaultProtocol != request.Protocol;
+        var reenabled = request.Enabled && !source.Enabled;
         source.Name = request.Name.Trim(); source.Url = normalizedUrl; source.DefaultProtocol = request.Protocol;
         source.Priority = request.Priority; source.Enabled = request.Enabled;
+        if (endpointChanged)
+        {
+            source.LastFetchedAt = null;
+            source.LastSucceededAt = null;
+            source.LastItemCount = 0;
+            source.ConsecutiveFailures = 0;
+            source.LastError = null;
+        }
+        if (endpointChanged || reenabled) source.NextFetchAt = null;
         try { await db.SaveChangesAsync(token); }
         catch (DbUpdateException ex) when (ex.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation })
         {
@@ -103,7 +115,8 @@ public sealed class AdminController(
     [HttpPost("collect")]
     public async Task<IActionResult> Collect(CancellationToken token)
     {
-        try { return Ok(await collector.CollectAsync(token)); }
+        // Ручной запуск является полным аудитом и намеренно игнорирует background backoff.
+        try { return Ok(await collector.CollectAsync(token, forceAllSources: true)); }
         catch (OperationAlreadyRunningException exception)
         {
             return Conflict(new ProblemDetails { Title = exception.Message, Status = 409 });

@@ -28,6 +28,7 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
         var source = modelBuilder.Entity<ProxySource>();
         source.HasIndex(x => x.Url).IsUnique();
         source.HasIndex(x => new { x.Enabled, x.ConsecutiveFailures });
+        source.HasIndex(x => new { x.Enabled, x.NextFetchAt });
         source.Property(x => x.Name).HasMaxLength(120);
         source.Property(x => x.Url).HasMaxLength(2048);
         source.Property(x => x.LastError).HasMaxLength(500);

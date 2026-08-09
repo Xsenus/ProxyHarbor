@@ -52,6 +52,8 @@ public sealed class ProxySource
     public int Priority { get; set; } = 100;
     public DateTimeOffset? LastFetchedAt { get; set; }
     public DateTimeOffset? LastSucceededAt { get; set; }
+    /// <summary>Неудачный источник не опрашивается background worker до этого момента; admin-аудит игнорирует паузу.</summary>
+    public DateTimeOffset? NextFetchAt { get; set; }
     public int LastItemCount { get; set; }
     public int ConsecutiveFailures { get; set; }
     public string? LastError { get; set; }
@@ -66,6 +68,7 @@ public sealed class CollectionRun
     public int SourcesProcessed { get; set; }
     public int SourcesSucceeded { get; set; }
     public int SourcesFailed { get; set; }
+    public int SourcesSkipped { get; set; }
     public int CandidatesFound { get; set; }
     public int NewProxies { get; set; }
     public int AliveProxies { get; set; }
