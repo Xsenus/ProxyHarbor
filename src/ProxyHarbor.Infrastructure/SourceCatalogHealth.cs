@@ -54,9 +54,9 @@ public static class SourceCatalogHealth
         var stale = enabled.Count(entry =>
             entry.Source.LastFetchedAt is not null && entry.Source.LastFetchedAt < freshAfter);
         var truncated = enabled.Count(entry => entry.Source.LastResultTruncated);
-        var presentProviders = entries.Select(entry => entry.Definition.Provider)
+        var presentProviders = entries.Select(entry => entry.Definition.ProviderIdentity)
             .Distinct(StringComparer.Ordinal).Count();
-        var enabledProviders = enabled.Select(entry => entry.Definition.Provider)
+        var enabledProviders = enabled.Select(entry => entry.Definition.ProviderIdentity)
             .Distinct(StringComparer.Ordinal).Count();
         var expectedSources = BuiltInSourceCatalog.Sources.Count;
         var expectedProviders = BuiltInSourceCatalog.ProviderCount;

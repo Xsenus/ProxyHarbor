@@ -57,7 +57,7 @@ public sealed class SourceCatalogHealthTests
     {
         var sources = HealthyCatalog();
         var singleFeedProvider = BuiltInSourceCatalog.Sources
-            .GroupBy(source => source.Provider)
+            .GroupBy(source => source.ProviderIdentity)
             .First(group => group.Count() == 1).Single();
         sources.RemoveAll(source => source.Url == singleFeedProvider.Url);
         sources[0].LastFetchedAt = null;

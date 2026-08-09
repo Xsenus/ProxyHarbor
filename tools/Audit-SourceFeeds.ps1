@@ -61,7 +61,9 @@ try {
     $truncated = @($enabled | Where-Object LastResultTruncated)
     $builtIn = @($ordered | Where-Object IsBuiltIn)
     $enabledBuiltIn = @($builtIn | Where-Object Enabled)
-    $providers = @($builtIn | ForEach-Object Provider | Where-Object { $_ } | Sort-Object -Unique)
+    # Display-name не доказывает независимость: completeness считается по канонической
+    # identity владельца (GitHub owner либо отдельный DNS hostname), отданной API.
+    $providers = @($builtIn | ForEach-Object ProviderIdentity | Where-Object { $_ } | Sort-Object -Unique)
     $staleEvidence = @()
     if ($collection) {
         $collectionStartedAt = [DateTimeOffset]$collection.StartedAt
@@ -104,7 +106,7 @@ try {
     $report.catalogErrors = @($catalogErrors)
     $report.sources = $ordered
 
-    $ordered | Select-Object Name, Provider, IsBuiltIn, DefaultProtocol, LastItemCount, LastResultTruncated, ConsecutiveFailures, LastFetchedAt, NextFetchAt, LastError | Format-Table -AutoSize
+    $ordered | Select-Object Name, Provider, ProviderIdentity, IsBuiltIn, DefaultProtocol, LastItemCount, LastResultTruncated, ConsecutiveFailures, LastFetchedAt, NextFetchAt, LastError | Format-Table -AutoSize
 
     if ($failed.Count -gt 0 -or $staleEvidence.Count -gt 0 -or $truncated.Count -gt 0 -or
         $report.candidateLimitReached -eq $true -or $catalogErrors.Count -gt 0 -or $countersMatch -eq $false) {

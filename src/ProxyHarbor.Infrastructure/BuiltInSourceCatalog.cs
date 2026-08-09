@@ -103,8 +103,11 @@ public static class BuiltInSourceCatalog
     private static readonly Dictionary<string, BuiltInSource> SourcesByUrl =
         Sources.ToDictionary(source => source.Url, StringComparer.Ordinal);
 
-    /// <summary>Число независимых владельцев feed'ов в текущей версии каталога.</summary>
-    public static int ProviderCount { get; } = Sources.Select(source => source.Provider)
+    /// <summary>
+    /// Число независимых origin-владельцев, а не произвольных отображаемых названий.
+    /// Для GitHub identity определяется owner path, для остальных feed'ов — DNS hostname.
+    /// </summary>
+    public static int ProviderCount { get; } = Sources.Select(source => source.ProviderIdentity)
         .Distinct(StringComparer.Ordinal).Count();
 
     /// <summary>Возвращает канонические метаданные только для точного встроенного endpoint.</summary>
@@ -112,8 +115,26 @@ public static class BuiltInSourceCatalog
         SourcesByUrl.TryGetValue(url, out var source) ? source : null;
 
     private static BuiltInSource Feed(int rank, string name, string provider, string url, ProxyProtocol protocol) =>
-        new(rank, name, provider, url, protocol);
+        new(rank, name, provider, ProviderIdentity(url), url, protocol);
+
+    /// <summary>Канонизирует технического владельца feed endpoint для completeness-gate.</summary>
+    private static string ProviderIdentity(string url)
+    {
+        var uri = new Uri(url, UriKind.Absolute);
+        if (uri.IdnHost.Equals("raw.githubusercontent.com", StringComparison.OrdinalIgnoreCase))
+        {
+            var owner = uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries)[0];
+            return $"github:{owner.ToLowerInvariant()}";
+        }
+        return $"host:{uri.IdnHost.ToLowerInvariant()}";
+    }
 }
 
 /// <summary>Неизменяемое описание одного встроенного публичного feed'а.</summary>
-public sealed record BuiltInSource(int Rank, string Name, string Provider, string Url, ProxyProtocol Protocol);
+public sealed record BuiltInSource(
+    int Rank,
+    string Name,
+    string Provider,
+    string ProviderIdentity,
+    string Url,
+    ProxyProtocol Protocol);

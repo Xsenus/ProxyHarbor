@@ -257,6 +257,7 @@ public sealed record SourceResponse(
     string? LastError,
     bool IsBuiltIn,
     string? Provider,
+    string? ProviderIdentity,
     int? CatalogRank)
 {
     /// <summary>Обогащает изменяемую запись БД каноническими метаданными каталога.</summary>
@@ -279,6 +280,7 @@ public sealed record SourceResponse(
             source.LastError,
             builtIn is not null,
             builtIn?.Provider,
+            builtIn?.ProviderIdentity,
             builtIn?.Rank);
     }
 }

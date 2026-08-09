@@ -121,7 +121,8 @@ describe('ProxyHarbor UI', () => {
       if (url.includes('/api/v1/admin/sources')) return jsonResponse([{
         id: 'source-1', name: 'ProxyScrape HTTP', url: 'https://example.test/list.txt',
         defaultProtocol: 'Http', enabled: true, priority: 1, lastItemCount: 100,
-        consecutiveFailures: 0, isBuiltIn: true, provider: 'ProxyScrape', catalogRank: 2,
+        consecutiveFailures: 0, isBuiltIn: true, provider: 'ProxyScrape',
+        providerIdentity: 'host:api.proxyscrape.com', catalogRank: 2,
       }])
       if (url.includes('/api/v1/admin/diagnostics')) return jsonResponse({
         serverTime: '2026-08-09T07:00:00Z', databaseBytes: 0,
@@ -137,7 +138,8 @@ describe('ProxyHarbor UI', () => {
     fireEvent.change(screen.getByLabelText('Ключ администратора'), { target: { value: 'valid-admin-key' } })
     fireEvent.click(screen.getByRole('button', { name: 'Войти' }))
 
-    expect(await screen.findByTitle('Встроенный источник · ProxyScrape · ранг 2')).toHaveTextContent('ProxyScrape')
+    expect(await screen.findByTitle(
+      'Встроенный источник · ProxyScrape · host:api.proxyscrape.com · ранг 2')).toHaveTextContent('ProxyScrape')
   })
 
   it('shows operational diagnostics and refreshes them after a backup', async () => {

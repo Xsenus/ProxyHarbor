@@ -13,6 +13,8 @@ public sealed class BuiltInSourceCatalogTests
         Assert.Equal(81, BuiltInSourceCatalog.Sources.Count);
         Assert.Equal(81, BuiltInSourceCatalog.Sources.Select(x => x.Url).Distinct(StringComparer.OrdinalIgnoreCase).Count());
         Assert.Equal(50, BuiltInSourceCatalog.Sources.Select(x => x.Provider).Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        Assert.Equal(50, BuiltInSourceCatalog.Sources.Select(x => x.ProviderIdentity).Distinct(StringComparer.Ordinal).Count());
+        Assert.Equal(50, BuiltInSourceCatalog.ProviderCount);
         Assert.Equal(Enumerable.Range(1, 81), BuiltInSourceCatalog.Sources.Select(x => x.Rank));
     }
 
@@ -25,7 +27,12 @@ public sealed class BuiltInSourceCatalogTests
             Assert.Equal(Uri.UriSchemeHttps, uri!.Scheme);
             Assert.False(string.IsNullOrWhiteSpace(source.Name));
             Assert.False(string.IsNullOrWhiteSpace(source.Provider));
+            Assert.Matches("^(github|host):[a-z0-9.-]+$", source.ProviderIdentity);
         });
+        Assert.All(BuiltInSourceCatalog.Sources.GroupBy(source => source.Provider), group =>
+            Assert.Single(group.Select(source => source.ProviderIdentity).Distinct(StringComparer.Ordinal)));
+        Assert.All(BuiltInSourceCatalog.Sources.GroupBy(source => source.ProviderIdentity), group =>
+            Assert.Single(group.Select(source => source.Provider).Distinct(StringComparer.Ordinal)));
     }
 
     [Fact]
@@ -50,6 +57,7 @@ public sealed class BuiltInSourceCatalogTests
 
         Assert.True(response.IsBuiltIn);
         Assert.Equal(definition.Provider, response.Provider);
+        Assert.Equal(definition.ProviderIdentity, response.ProviderIdentity);
         Assert.Equal(definition.Rank, response.CatalogRank);
         Assert.Equal("renamed locally", response.Name);
         Assert.Equal(999, response.Priority);
@@ -70,6 +78,7 @@ public sealed class BuiltInSourceCatalogTests
 
         Assert.False(response.IsBuiltIn);
         Assert.Null(response.Provider);
+        Assert.Null(response.ProviderIdentity);
         Assert.Null(response.CatalogRank);
     }
 }

@@ -13,7 +13,7 @@ function Get-FreeTcpPort {
     finally { $listener.Stop() }
 }
 
-function Start-SourceAuditMock([int]$Port, [ValidateSet('success', 'saved-state', 'stale', 'http-failure')][string]$Mode) {
+function Start-SourceAuditMock([int]$Port, [ValidateSet('success', 'saved-state', 'stale', 'identity-missing', 'http-failure')][string]$Mode) {
     # Start-Job используется намеренно: вызываемый audit остаётся отдельным обычным
     # PowerShell script и проходит тот же HTTP/JSON путь, что в GitHub Actions.
     return Start-Job -ArgumentList $Port, $Mode -ScriptBlock {
@@ -42,7 +42,8 @@ function Start-SourceAuditMock([int]$Port, [ValidateSet('success', 'saved-state'
                     $handled++
                     $status = 200
                     $fetchedAt = if ($Mode -eq 'stale') { '2026-08-09T11:59:59Z' } else { '2026-08-09T12:00:01Z' }
-                    $json = '[{"id":"22222222-2222-2222-2222-222222222222","name":"Mock feed","provider":"Mock provider","isBuiltIn":true,"enabled":true,"priority":1,"defaultProtocol":"Http","lastItemCount":10,"lastResultTruncated":false,"consecutiveFailures":0,"lastFetchedAt":"' + $fetchedAt + '","lastError":null}]'
+                    $identity = if ($Mode -eq 'identity-missing') { '' } else { ',"providerIdentity":"host:mock.example"' }
+                    $json = '[{"id":"22222222-2222-2222-2222-222222222222","name":"Mock feed","provider":"Mock provider"' + $identity + ',"isBuiltIn":true,"enabled":true,"priority":1,"defaultProtocol":"Http","lastItemCount":10,"lastResultTruncated":false,"consecutiveFailures":0,"lastFetchedAt":"' + $fetchedAt + '","lastError":null}]'
                 }
 
                 $bytes = [Text.Encoding]::UTF8.GetBytes($json)
@@ -129,10 +130,14 @@ try {
     $success = Invoke-SourceAuditCase -Name 'success' -Mode 'success' -ShouldSucceed $true
     $savedState = Invoke-SourceAuditCase -Name 'saved-state' -Mode 'saved-state' -ShouldSucceed $true -SkipCollection $true
     $stale = Invoke-SourceAuditCase -Name 'stale' -Mode 'stale' -ShouldSucceed $false
+    $identityMissing = Invoke-SourceAuditCase -Name 'identity-missing' -Mode 'identity-missing' -ShouldSucceed $false
     $httpFailure = Invoke-SourceAuditCase -Name 'http-failure' -Mode 'http-failure' -ShouldSucceed $false
     if ($stale.staleEvidence -ne 1) { throw 'Stale-контракт не указал ровно один устаревший feed.' }
+    if ($identityMissing.providers -ne 0 -or $identityMissing.catalogComplete) {
+        throw 'Отсутствующая origin identity не должна засчитываться как независимый provider.'
+    }
     if ($httpFailure.collectionId) { throw 'Ранний HTTP-сбой не должен выглядеть как запущенный collection-run.' }
-    Write-Host 'Source-audit contracts пройдены: current-run success, explicit saved-state mode, stale evidence rejection, early HTTP failure report.' -ForegroundColor Green
+    Write-Host 'Source-audit contracts пройдены: current-run success, explicit saved-state mode, stale evidence rejection, provider-identity enforcement, early HTTP failure report.' -ForegroundColor Green
 } finally {
     # Каталог создаётся под системным temp с непредсказуемым GUID и удаляется
     # только по точному пути, сформированному этим тестом.
