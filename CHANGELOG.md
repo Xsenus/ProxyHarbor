@@ -16,6 +16,7 @@
 - Backup worker после ошибки повторяет полный цикл через 15 минут, а count/age retention не позволяет recovery-снимкам заполнить volume.
 - Collector отклоняет HTTP 200 HTML/WAF/error страницы, даже если они содержат похожий на прокси `IP:port`.
 - React test gate использует стабильный thread pool и fail-closed отклоняет запуск без обнаруженных тестов.
+- SSRF test gate проверяет как URL-policy, так и финальный TCP connect для IPv4/IPv6 loopback до открытия socket.
 
 ## [1.0.0] - 2026-08-10
 
