@@ -11,7 +11,7 @@ type SourceCatalogSnapshot = { expectedSources: number; presentSources: number; 
 type Diagnostics = {
   serverTime: string
   databaseBytes: number
-  validationQueue?: { total: number; leased: number; neverChecked: number; due: number; scheduled: number; repeatedlyFailing: number }
+  validationQueue?: { total: number; leased: number; neverChecked: number; neverAttempted: number; due: number; scheduled: number; repeatedlyFailing: number; attemptsLastFiveMinutes: number; checkedLastFiveMinutes: number; aliveLastFiveMinutes: number; deferredLastFiveMinutes: number; lastAttemptAt?: string }
   sourceCatalog?: SourceCatalogSnapshot
   recentRuns: CollectionRun[]
   recentBackups: BackupRun[]
@@ -322,7 +322,7 @@ export default function App() {
         {adminAuthenticated && <section className="admin-diagnostics" aria-label="Диагностика сервиса">
           <div className="diagnostics-heading"><h3>Диагностика</h3><button aria-label="Обновить диагностику" onClick={loadAdminData} disabled={adminLoading}><RefreshCw className={adminLoading ? 'spin' : ''}/></button></div>
           <div className="diagnostic-grid">
-            <article><span>Очередь проверки</span><strong>{formatNumber(diagnostics?.validationQueue?.due)}</strong><small>{formatNumber(diagnostics?.validationQueue?.neverChecked)} ещё не проверено · {formatNumber(diagnostics?.validationQueue?.leased)} арендовано</small></article>
+            <article><span>Очередь проверки</span><strong>{formatNumber(diagnostics?.validationQueue?.due)}</strong><small>{formatNumber(diagnostics?.validationQueue?.attemptsLastFiveMinutes)} попыток за 5 мин · {formatNumber(diagnostics?.validationQueue?.aliveLastFiveMinutes)} живых · {formatNumber(diagnostics?.validationQueue?.deferredLastFiveMinutes)} отложено · {diagnostics?.validationQueue?.lastAttemptAt ? timeAgo(diagnostics.validationQueue.lastAttemptAt) : 'попыток ещё нет'}</small></article>
             <article><span>Последний сбор</span><strong className={latestCollection?.candidateLimitReached || latestCollection?.sourcesTruncated ? 'status-running' : statusClass(latestCollection?.status)}>{latestCollection?.candidateLimitReached || latestCollection?.sourcesTruncated ? 'достигнут лимит' : statusLabel(latestCollection?.status)}</strong><small>{latestCollection ? `${formatNumber(latestCollection.candidatesFound)} кандидатов · ${timeAgo(latestCollection.startedAt)}` : 'Циклов пока нет'}</small></article>
             <article><span>Последний backup</span><strong className={statusClass(latestBackup?.status)}>{statusLabel(latestBackup?.status)}</strong><small>{latestBackup ? `${formatBytes(latestBackup.sizeBytes)} · ${backupDelivery(latestBackup)}` : 'Backup ещё не создавался'}</small></article>
             <article><span>Размер PostgreSQL</span><strong>{formatBytes(diagnostics?.databaseBytes)}</strong><small>{formatNumber(diagnostics?.validationQueue?.total)} известных прокси</small></article>

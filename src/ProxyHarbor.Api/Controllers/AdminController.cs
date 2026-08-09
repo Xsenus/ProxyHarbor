@@ -122,6 +122,7 @@ public sealed class AdminController(
     {
         await using var db = await dbFactory.CreateDbContextAsync(token);
         var now = DateTimeOffset.UtcNow;
+        var validationWindowStart = now.AddMinutes(-5);
         var databaseBytes = await db.Database.SqlQueryRaw<long>("SELECT pg_database_size(current_database()) AS \"Value\"")
             .SingleAsync(token);
         var queue = await db.Proxies.AsNoTracking().GroupBy(_ => 1).Select(x => new
@@ -129,9 +130,18 @@ public sealed class AdminController(
             total = x.Count(),
             leased = x.Count(proxy => proxy.CheckLeaseUntil > now),
             neverChecked = x.Count(proxy => proxy.LastCheckedAt == null),
+            neverAttempted = x.Count(proxy => proxy.LastValidationAttemptAt == null),
             due = x.Count(proxy => proxy.NextCheckAt == null || proxy.NextCheckAt <= now),
             scheduled = x.Count(proxy => proxy.NextCheckAt > now),
-            repeatedlyFailing = x.Count(proxy => proxy.ConsecutiveFailedChecks >= 3)
+            repeatedlyFailing = x.Count(proxy => proxy.ConsecutiveFailedChecks >= 3),
+            attemptsLastFiveMinutes = x.Count(proxy => proxy.LastValidationAttemptAt >= validationWindowStart),
+            checkedLastFiveMinutes = x.Count(proxy => proxy.LastValidationAttemptAt >= validationWindowStart &&
+                !proxy.LastValidationDeferred),
+            aliveLastFiveMinutes = x.Count(proxy => proxy.LastValidationAttemptAt >= validationWindowStart &&
+                !proxy.LastValidationDeferred && proxy.Status == ProxyStatus.Alive),
+            deferredLastFiveMinutes = x.Count(proxy => proxy.LastValidationAttemptAt >= validationWindowStart &&
+                proxy.LastValidationDeferred),
+            lastAttemptAt = x.Max(proxy => proxy.LastValidationAttemptAt)
         }).FirstOrDefaultAsync(token);
         var builtInUrls = BuiltInSourceCatalog.Sources.Select(source => source.Url).ToArray();
         var sourceCatalog = SourceCatalogHealth.Calculate(

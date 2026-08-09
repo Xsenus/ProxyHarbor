@@ -49,6 +49,7 @@ public sealed class MetricsControllerTests
             .UseInMemoryDatabase($"metrics-{Guid.NewGuid():N}").Options;
         var finishedAt = DateTimeOffset.FromUnixTimeSeconds(1_700_000_100);
         var sourceAuditedAt = DateTimeOffset.UtcNow;
+        var latestValidationAttempt = sourceAuditedAt.AddMinutes(-1);
         var builtIn = BuiltInSourceCatalog.Sources[0];
         await using (var seed = new ProxyHarborDbContext(options))
         {
@@ -64,6 +65,23 @@ public sealed class MetricsControllerTests
                     LastResultTruncated = true
                 },
                 new ProxySource { Name = "failed", Url = "https://example.com/b", ConsecutiveFailures = 1, LastError = "timeout" });
+            seed.Proxies.AddRange(
+                new ProxyEndpoint
+                {
+                    Host = "8.8.8.8",
+                    Port = 8080,
+                    Status = ProxyStatus.Alive,
+                    LastCheckedAt = latestValidationAttempt,
+                    LastValidationAttemptAt = latestValidationAttempt
+                },
+                new ProxyEndpoint
+                {
+                    Host = "1.1.1.1",
+                    Port = 8081,
+                    LastValidationAttemptAt = sourceAuditedAt.AddMinutes(-2),
+                    LastValidationDeferred = true
+                },
+                new ProxyEndpoint { Host = "9.9.9.9", Port = 8082 });
             seed.Runs.AddRange(
                 new CollectionRun
                 {
@@ -110,6 +128,13 @@ public sealed class MetricsControllerTests
         Assert.Contains("proxyharbor_builtin_providers_expected 50", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_builtin_providers_present 1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_collection_runs_active 1", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_validation_never_attempted 1", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_validation_attempts_last_5m 2", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_validation_checked_last_5m 1", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_validation_alive_last_5m 1", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_validation_deferred_last_5m 1", metrics, StringComparison.Ordinal);
+        Assert.Contains($"proxyharbor_validation_last_attempt_timestamp_seconds {latestValidationAttempt.ToUnixTimeSeconds()}",
+            metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_probe_control_available 1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_last_collection_success 1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_last_collection_candidates 42", metrics, StringComparison.Ordinal);

@@ -25,6 +25,7 @@ public sealed class MetricsController(
         await using var db = await dbFactory.CreateDbContextAsync(token);
         var now = DateTimeOffset.UtcNow;
         var freshAfter = now.AddMinutes(-collectorOptions.Value.PublicFreshnessMinutes);
+        var validationWindowStart = now.AddMinutes(-5);
         var sourceFreshAfter = now.Subtract(
             SourceCatalogHealth.FreshnessWindow(collectorOptions.Value.CollectionIntervalMinutes));
         var proxyCounts = await db.Proxies.AsNoTracking()
@@ -34,7 +35,16 @@ public sealed class MetricsController(
         var queue = await db.Proxies.AsNoTracking().GroupBy(_ => 1).Select(x => new
         {
             Due = x.Count(proxy => proxy.NextCheckAt == null || proxy.NextCheckAt <= now),
-            Leased = x.Count(proxy => proxy.CheckLeaseUntil > now)
+            Leased = x.Count(proxy => proxy.CheckLeaseUntil > now),
+            NeverAttempted = x.Count(proxy => proxy.LastValidationAttemptAt == null),
+            AttemptsLastFiveMinutes = x.Count(proxy => proxy.LastValidationAttemptAt >= validationWindowStart),
+            CheckedLastFiveMinutes = x.Count(proxy => proxy.LastValidationAttemptAt >= validationWindowStart &&
+                !proxy.LastValidationDeferred),
+            AliveLastFiveMinutes = x.Count(proxy => proxy.LastValidationAttemptAt >= validationWindowStart &&
+                !proxy.LastValidationDeferred && proxy.Status == ProxyStatus.Alive),
+            DeferredLastFiveMinutes = x.Count(proxy => proxy.LastValidationAttemptAt >= validationWindowStart &&
+                proxy.LastValidationDeferred),
+            LastAttemptAt = x.Max(proxy => proxy.LastValidationAttemptAt)
         }).FirstOrDefaultAsync(token);
         var sources = await db.Sources.AsNoTracking().GroupBy(_ => 1).Select(group => new
         {
@@ -81,6 +91,18 @@ public sealed class MetricsController(
                 .AppendLine(row.Count.ToString(CultureInfo.InvariantCulture));
         Gauge(output, "proxyharbor_validation_due", "Proxy records currently due for validation.", queue?.Due ?? 0);
         Gauge(output, "proxyharbor_validation_leased", "Proxy records currently leased by validators.", queue?.Leased ?? 0);
+        Gauge(output, "proxyharbor_validation_never_attempted", "Proxy records that have never completed a validation attempt.",
+            queue?.NeverAttempted ?? 0);
+        Gauge(output, "proxyharbor_validation_attempts_last_5m", "Validation attempts completed during the last five minutes.",
+            queue?.AttemptsLastFiveMinutes ?? 0);
+        Gauge(output, "proxyharbor_validation_checked_last_5m", "Non-deferred proxy checks completed during the last five minutes.",
+            queue?.CheckedLastFiveMinutes ?? 0);
+        Gauge(output, "proxyharbor_validation_alive_last_5m", "Latest non-deferred checks marked Alive during the last five minutes.",
+            queue?.AliveLastFiveMinutes ?? 0);
+        Gauge(output, "proxyharbor_validation_deferred_last_5m", "Validation attempts deferred during the last five minutes.",
+            queue?.DeferredLastFiveMinutes ?? 0);
+        Gauge(output, "proxyharbor_validation_last_attempt_timestamp_seconds", "Unix timestamp of the latest completed validation attempt.",
+            queue?.LastAttemptAt?.ToUnixTimeSeconds() ?? 0);
         Gauge(output, "proxyharbor_probe_control_available", "Control endpoint health: 1 available, 0 unavailable, -1 not checked.",
             probeControlHealth.Availability);
         Gauge(output, "proxyharbor_probe_control_last_check_timestamp_seconds", "Unix timestamp of the latest control endpoint health check.",

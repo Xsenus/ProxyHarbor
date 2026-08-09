@@ -21,6 +21,10 @@ public sealed class ProxyEndpoint
     public DateTimeOffset FirstSeenAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset LastSeenAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? LastCheckedAt { get; set; }
+    /// <summary>Время последней завершённой попытки, включая нейтральный Deferred-результат.</summary>
+    public DateTimeOffset? LastValidationAttemptAt { get; set; }
+    /// <summary>Последняя попытка не смогла объективно оценить прокси и не изменила его качество.</summary>
+    public bool LastValidationDeferred { get; set; }
     /// <summary>Момент следующей проверки; null означает немедленную проверку нового кандидата.</summary>
     public DateTimeOffset? NextCheckAt { get; set; }
     /// <summary>Короткая распределённая аренда, исключающая повторную проверку другим экземпляром сервиса.</summary>

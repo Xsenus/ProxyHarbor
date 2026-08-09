@@ -82,7 +82,7 @@ internal static class RestoreApplication
                 archive,
                 "database/proxies.json",
                 connection,
-                """COPY "Proxies" ("Id", "Host", "Port", "Protocol", "Status", "LatencyMs", "ExitIp", "CountryCode", "IsAnonymous", "FirstSeenAt", "LastSeenAt", "LastCheckedAt", "NextCheckAt", "CheckLeaseUntil", "CheckLeaseId", "SuccessfulChecks", "FailedChecks", "ConsecutiveFailedChecks", "LastError") FROM STDIN (FORMAT BINARY)""",
+                """COPY "Proxies" ("Id", "Host", "Port", "Protocol", "Status", "LatencyMs", "ExitIp", "CountryCode", "IsAnonymous", "FirstSeenAt", "LastSeenAt", "LastCheckedAt", "LastValidationAttemptAt", "LastValidationDeferred", "NextCheckAt", "CheckLeaseUntil", "CheckLeaseId", "SuccessfulChecks", "FailedChecks", "ConsecutiveFailedChecks", "LastError") FROM STDIN (FORMAT BINARY)""",
                 WriteProxyAsync,
                 token);
             var sourceCount = await ImportAsync<ProxySource>(
@@ -149,6 +149,8 @@ internal static class RestoreApplication
         await writer.WriteAsync(entity.FirstSeenAt, token);
         await writer.WriteAsync(entity.LastSeenAt, token);
         await WriteNullableValueAsync(writer, entity.LastCheckedAt, token);
+        await WriteNullableValueAsync(writer, entity.LastValidationAttemptAt, token);
+        await writer.WriteAsync(entity.LastValidationDeferred, token);
         await WriteNullableValueAsync(writer, entity.NextCheckAt, token);
         await WriteNullableValueAsync(writer, entity.CheckLeaseUntil, token);
         await WriteNullableValueAsync(writer, entity.CheckLeaseId, token);

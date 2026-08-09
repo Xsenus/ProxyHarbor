@@ -238,6 +238,8 @@ public sealed class ProxyValidator(
             await using var merge = new NpgsqlCommand("""
                 UPDATE "Proxies" AS proxy SET
                     "LastCheckedAt" = CASE WHEN incoming.outcome = 2 THEN proxy."LastCheckedAt" ELSE incoming.checked_at END,
+                    "LastValidationAttemptAt" = incoming.checked_at,
+                    "LastValidationDeferred" = incoming.outcome = 2,
                     "NextCheckAt" = incoming.next_check_at,
                     "CheckLeaseUntil" = NULL,
                     "CheckLeaseId" = NULL,

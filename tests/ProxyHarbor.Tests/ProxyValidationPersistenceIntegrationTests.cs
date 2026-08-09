@@ -89,6 +89,8 @@ public sealed class ProxyValidationPersistenceIntegrationTests
             Assert.Null(saved.CheckLeaseId);
             Assert.Null(saved.CheckLeaseUntil);
             Assert.Null(saved.LastCheckedAt);
+            Assert.Null(saved.LastValidationAttemptAt);
+            Assert.False(saved.LastValidationDeferred);
             Assert.Equal(ProxyStatus.Alive, saved.Status);
             Assert.Equal(7, saved.SuccessfulChecks);
             Assert.Equal(2, saved.FailedChecks);
@@ -251,6 +253,8 @@ public sealed class ProxyValidationPersistenceIntegrationTests
             Assert.Equal("8.8.8.8", saved.ExitIp);
             Assert.True(saved.IsAnonymous);
             Assert.Equal(checkedAt, saved.LastCheckedAt);
+            Assert.Equal(checkedAt.AddMinutes(1), saved.LastValidationAttemptAt);
+            Assert.True(saved.LastValidationDeferred);
             Assert.Equal(5, saved.SuccessfulChecks);
             Assert.Equal(2, saved.FailedChecks);
             Assert.Equal(3, saved.ConsecutiveFailedChecks);
@@ -258,6 +262,29 @@ public sealed class ProxyValidationPersistenceIntegrationTests
             Assert.Null(saved.CheckLeaseUntil);
             Assert.Equal(checkedAt.AddMinutes(2), saved.NextCheckAt);
             Assert.Equal("control unavailable", saved.LastError);
+
+            // Следующая полноценная проверка должна заменить Deferred telemetry и снова
+            // сделать LastCheckedAt временем объективного результата.
+            var aliveLease = Guid.NewGuid();
+            await using (var owner = await factory.CreateDbContextAsync())
+                await owner.Proxies.Where(x => x.Id == proxyId).ExecuteUpdateAsync(setters => setters
+                    .SetProperty(x => x.CheckLeaseId, aliveLease)
+                    .SetProperty(x => x.CheckLeaseUntil, checkedAt.AddMinutes(6)));
+            var alive = ProxyCheckScheduler.Create(
+                new ProxyCheckResult(proxyId, true, 88, "1.1.1.1", true, null),
+                saved.ConsecutiveFailedChecks,
+                aliveLease,
+                checkedAt.AddMinutes(2),
+                settings);
+
+            Assert.Equal((1, 1, 0), await validator.PersistResultsAsync([alive], CancellationToken.None));
+            await using var afterAlive = await factory.CreateDbContextAsync();
+            var completed = await afterAlive.Proxies.AsNoTracking().SingleAsync(x => x.Id == proxyId);
+            Assert.Equal(checkedAt.AddMinutes(2), completed.LastCheckedAt);
+            Assert.Equal(checkedAt.AddMinutes(2), completed.LastValidationAttemptAt);
+            Assert.False(completed.LastValidationDeferred);
+            Assert.Equal(ProxyStatus.Alive, completed.Status);
+            Assert.Equal(88, completed.LatencyMs);
         }
         finally
         {

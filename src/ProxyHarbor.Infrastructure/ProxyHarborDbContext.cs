@@ -19,6 +19,7 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
         proxy.HasIndex(x => new { x.Status, x.Protocol, x.LatencyMs, x.LastCheckedAt });
         proxy.HasIndex(x => new { x.Status, x.LastSeenAt });
         proxy.HasIndex(x => new { x.NextCheckAt, x.CheckLeaseUntil });
+        proxy.HasIndex(x => x.LastValidationAttemptAt);
         proxy.Ignore(x => x.Key);
         proxy.Ignore(x => x.SuccessRate);
         proxy.Property(x => x.Host).HasMaxLength(255);

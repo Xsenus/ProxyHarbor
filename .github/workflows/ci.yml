@@ -114,6 +114,8 @@ jobs:
           echo "$metrics" | grep 'proxyharbor_builtin_providers_expected 50'
           echo "$metrics" | grep 'proxyharbor_sources_truncated 0'
           echo "$metrics" | grep 'proxyharbor_last_collection_candidate_limit_reached 0'
+          echo "$metrics" | grep 'proxyharbor_validation_attempts_last_5m 0'
+          echo "$metrics" | grep 'proxyharbor_validation_last_attempt_timestamp_seconds 0'
           openapi_document=$(curl --fail --silent http://127.0.0.1:8080/openapi/v1.json)
           echo "$openapi_document" | jq --exit-status \
             '.components.securitySchemes.AdminApiKey.type == "apiKey" and
@@ -217,6 +219,8 @@ jobs:
           echo "$metrics" | grep 'proxyharbor_builtin_providers_present 50'
           echo "$metrics" | grep 'proxyharbor_sources_truncated 0'
           echo "$metrics" | grep 'proxyharbor_last_collection_candidate_limit_reached 0'
+          echo "$metrics" | grep 'proxyharbor_validation_attempts_last_5m 0'
+          echo "$metrics" | grep 'proxyharbor_validation_last_attempt_timestamp_seconds 0'
           sources=$(curl --fail --silent -H 'X-Admin-Key: integration-admin-key-at-least-24-chars' http://127.0.0.1:5080/api/v1/admin/sources)
           test "$(echo "$sources" | jq length)" -eq 81
           test "$(echo "$sources" | jq '[.[] | select(.isBuiltIn)] | length')" -eq 81

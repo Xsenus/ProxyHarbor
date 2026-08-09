@@ -239,6 +239,8 @@ public sealed class BackupRestoreRoundTripIntegrationTests
         FirstSeenAt = SnapshotTime.AddDays(-2),
         LastSeenAt = SnapshotTime.AddDays(-1),
         LastCheckedAt = SnapshotTime,
+        LastValidationAttemptAt = SnapshotTime.AddMinutes(1),
+        LastValidationDeferred = true,
         NextCheckAt = SnapshotTime.AddMinutes(5),
         CheckLeaseUntil = SnapshotTime.AddMinutes(1),
         CheckLeaseId = SnapshotIds.Lease,
