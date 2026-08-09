@@ -393,6 +393,35 @@ public sealed class ProxyPublicationTests
     }
 
     [Fact]
+    public async Task XmlExportPropagatesRequestCancellationIntoBlockedResponseWrite()
+    {
+        var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+            .UseInMemoryDatabase($"xml-cancellation-{Guid.NewGuid():N}")
+            .Options;
+        await using (var seed = new ProxyHarborDbContext(options))
+        {
+            seed.Proxies.Add(Endpoint("1.1.1.1", ProxyStatus.Alive, DateTimeOffset.UtcNow));
+            await seed.SaveChangesAsync();
+        }
+        var controller = new ProxiesController(
+            new TestDbFactory(options), Options.Create(new CollectorOptions { PublicFreshnessMinutes = 15 }));
+        await using var output = new BlockingAsyncWriteStream();
+        controller.ControllerContext = new ControllerContext
+        {
+            HttpContext = new DefaultHttpContext { Response = { Body = output } }
+        };
+        using var cancellation = new CancellationTokenSource();
+
+        var export = controller.Export("xml", null, null, null, cancellation.Token, limit: 1);
+        var receivedToken = await output.WriteStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.True(receivedToken.CanBeCanceled);
+        await cancellation.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+            await export.WaitAsync(TimeSpan.FromSeconds(2)));
+    }
+
+    [Fact]
     public async Task ExtremePageNumberIsRejectedBeforeDatabaseOffsetOverflows()
     {
         var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
@@ -469,6 +498,43 @@ public sealed class ProxyPublicationTests
             var copy = buffer.ToArray();
             base.Write(copy, 0, copy.Length);
             return ValueTask.CompletedTask;
+        }
+    }
+
+    /// <summary>Имитирует Kestrel backpressure и завершается только по token записи.</summary>
+    private sealed class BlockingAsyncWriteStream : Stream
+    {
+        internal TaskCompletionSource<CancellationToken> WriteStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public override bool CanRead => false;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => throw new NotSupportedException();
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush() => throw new InvalidOperationException("Synchronous flush is forbidden.");
+        public override Task FlushAsync(CancellationToken cancellationToken) => BlockAsync(cancellationToken);
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) =>
+            throw new InvalidOperationException("Synchronous write is forbidden.");
+        public override Task WriteAsync(
+            byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+            BlockAsync(cancellationToken);
+        public override ValueTask WriteAsync(
+            ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default) =>
+            new(BlockAsync(cancellationToken));
+
+        private async Task BlockAsync(CancellationToken token)
+        {
+            WriteStarted.TrySetResult(token);
+            await Task.Delay(Timeout.InfiniteTimeSpan, token);
         }
     }
 }

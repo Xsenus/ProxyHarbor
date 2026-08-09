@@ -276,7 +276,9 @@ public sealed class ProxiesController(
         // XmlWriter.Dispose выполняет синхронный Flush даже после FlushAsync. Kestrel и
         // compression streams запрещают его, поэтому обёртка поглощает только финальный
         // избыточный Flush, сохраняя запрет на любые синхронные записи.
-        using var asyncOutput = new AsyncXmlOutputStream(output);
+        // XmlWriter async API не принимает CancellationToken для отдельных записей.
+        // Адаптер поэтому навязывает request token каждому обращению к Response.Body.
+        using var asyncOutput = new AsyncXmlOutputStream(output, token);
         using var writer = XmlWriter.Create(asyncOutput, new XmlWriterSettings
         {
             Async = true,
@@ -356,7 +358,7 @@ public sealed class ProxiesController(
     }
 
     /// <summary>Адаптирует финальный Dispose XmlWriter к async-only HTTP response stream.</summary>
-    private sealed class AsyncXmlOutputStream(Stream inner) : Stream
+    private sealed class AsyncXmlOutputStream(Stream inner, CancellationToken requestToken) : Stream
     {
         public override bool CanRead => false;
         public override bool CanSeek => false;
@@ -370,16 +372,26 @@ public sealed class ProxiesController(
 
         // Перед Dispose всегда выполняется XmlWriter.FlushAsync; повторный sync flush не нужен.
         public override void Flush() { }
-        public override Task FlushAsync(CancellationToken cancellationToken) => inner.FlushAsync(cancellationToken);
+        public override Task FlushAsync(CancellationToken cancellationToken)
+        {
+            requestToken.ThrowIfCancellationRequested();
+            return inner.FlushAsync(requestToken);
+        }
         public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
         public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
         public override void SetLength(long value) => throw new NotSupportedException();
         public override void Write(byte[] buffer, int offset, int count) =>
             throw new InvalidOperationException("Synchronous XML response writes are forbidden.");
-        public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
-            inner.WriteAsync(buffer, offset, count, cancellationToken);
-        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default) =>
-            inner.WriteAsync(buffer, cancellationToken);
+        public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+        {
+            requestToken.ThrowIfCancellationRequested();
+            return inner.WriteAsync(buffer, offset, count, requestToken);
+        }
+        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            requestToken.ThrowIfCancellationRequested();
+            return inner.WriteAsync(buffer, requestToken);
+        }
 
         protected override void Dispose(bool disposing)
         {
