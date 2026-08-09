@@ -21,6 +21,7 @@
 - Diagnostics, React и Prometheus публикуют каноническую дату последнего полного release-аудита каталога.
 - Restore до изменения БД отклоняет ZIP-bomb, database entry крупнее 16 ГиБ и backup распакованным размером более 32 ГиБ.
 - Restore валидирует semantic invariants каждой JSON-строки до её записи через PostgreSQL binary COPY.
+- Пятнадцать PostgreSQL CHECK constraints независимо защищают пять операционных таблиц; rollout использует повторяемый `NOT VALID`/`VALIDATE CONSTRAINT` без длительной блокировки writes.
 
 ## [1.0.0] - 2026-08-10
 
