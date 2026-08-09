@@ -1,6 +1,7 @@
 using System.IO.Compression;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 using ProxyHarbor.Domain;
 using ProxyHarbor.Infrastructure;
 
@@ -53,7 +54,7 @@ internal static class RestoreApplication
     private static async Task<RestoreCounts> RestoreDatabaseAsync(string zipPath, string connectionString, CancellationToken token)
     {
         using var archive = ZipFile.OpenRead(zipPath);
-        ValidateManifest(archive);
+        BackupArchiveValidator.Validate(archive);
         var dbOptions = new DbContextOptionsBuilder<ProxyHarborDbContext>()
             .UseNpgsql(connectionString, npgsql => npgsql.EnableRetryOnFailure(3))
             .Options;
@@ -70,60 +71,124 @@ internal static class RestoreApplication
             await db.Proxies.ExecuteDeleteAsync(token);
             await db.Sources.ExecuteDeleteAsync(token);
 
-            var proxyCount = await ImportAsync(archive, "database/proxies.json", db, db.Proxies, token);
-            var sourceCount = await ImportAsync(archive, "database/sources.json", db, db.Sources, token);
-            var runCount = await ImportAsync(archive, "database/runs.json", db, db.Runs, token);
+            // PostgreSQL binary COPY сохраняет потоковый характер restore и на больших снимках
+            // на порядки быстрее отдельных INSERT, создаваемых ChangeTracker/SaveChanges.
+            var connection = (NpgsqlConnection)db.Database.GetDbConnection();
+            var proxyCount = await ImportAsync<ProxyEndpoint>(
+                archive,
+                "database/proxies.json",
+                connection,
+                """COPY "Proxies" ("Id", "Host", "Port", "Protocol", "Status", "LatencyMs", "ExitIp", "CountryCode", "IsAnonymous", "FirstSeenAt", "LastSeenAt", "LastCheckedAt", "NextCheckAt", "CheckLeaseUntil", "CheckLeaseId", "SuccessfulChecks", "FailedChecks", "ConsecutiveFailedChecks", "LastError") FROM STDIN (FORMAT BINARY)""",
+                WriteProxyAsync,
+                token);
+            var sourceCount = await ImportAsync<ProxySource>(
+                archive,
+                "database/sources.json",
+                connection,
+                """COPY "Sources" ("Id", "Name", "Url", "DefaultProtocol", "Enabled", "Priority", "LastFetchedAt", "LastSucceededAt", "LastItemCount", "ConsecutiveFailures", "LastError") FROM STDIN (FORMAT BINARY)""",
+                WriteSourceAsync,
+                token);
+            var runCount = await ImportAsync<CollectionRun>(
+                archive,
+                "database/runs.json",
+                connection,
+                """COPY "Runs" ("Id", "StartedAt", "FinishedAt", "SourcesProcessed", "SourcesSucceeded", "SourcesFailed", "CandidatesFound", "NewProxies", "AliveProxies", "Status", "Error") FROM STDIN (FORMAT BINARY)""",
+                WriteRunAsync,
+                token);
             await transaction.CommitAsync(token);
             return new RestoreCounts(proxyCount, sourceCount, runCount);
         });
     }
 
-    private static void ValidateManifest(ZipArchive archive)
-    {
-        var entry = RequiredEntry(archive, "manifest.json");
-        using var stream = entry.Open();
-        using var manifest = JsonDocument.Parse(stream);
-        if (!manifest.RootElement.TryGetProperty("version", out var version) || version.GetInt32() != 2)
-            throw new InvalidDataException("Версия manifest backup не поддерживается.");
-        _ = RequiredEntry(archive, "database/proxies.json");
-        _ = RequiredEntry(archive, "database/sources.json");
-        _ = RequiredEntry(archive, "database/runs.json");
-    }
-
-    private static ZipArchiveEntry RequiredEntry(ZipArchive archive, string name) =>
-        archive.GetEntry(name) ?? throw new InvalidDataException($"В backup отсутствует обязательный файл {name}.");
-
     private static async Task<int> ImportAsync<TEntity>(
         ZipArchive archive,
         string entryName,
-        ProxyHarborDbContext db,
-        DbSet<TEntity> destination,
-        CancellationToken token) where TEntity : class
+        NpgsqlConnection connection,
+        string copyCommand,
+        Func<NpgsqlBinaryImporter, TEntity, CancellationToken, ValueTask> writeEntity,
+        CancellationToken token)
     {
-        const int batchSize = 5_000;
         var count = 0;
-        var batch = new List<TEntity>(batchSize);
-        await using var stream = RequiredEntry(archive, entryName).Open();
+        await using var stream = BackupArchiveValidator.RequiredEntry(archive, entryName).Open();
+        await using var importer = await connection.BeginBinaryImportAsync(copyCommand, token);
         await foreach (var entity in JsonSerializer.DeserializeAsyncEnumerable<TEntity>(stream, JsonOptions, token))
         {
             if (entity is null) throw new InvalidDataException($"Файл {entryName} содержит пустой объект.");
-            batch.Add(entity);
-            if (batch.Count < batchSize) continue;
-            await destination.AddRangeAsync(batch, token);
-            await db.SaveChangesAsync(token);
-            count += batch.Count;
-            batch.Clear();
-            db.ChangeTracker.Clear();
+            await writeEntity(importer, entity, token);
+            count = checked(count + 1);
         }
-
-        if (batch.Count > 0)
-        {
-            await destination.AddRangeAsync(batch, token);
-            await db.SaveChangesAsync(token);
-            count += batch.Count;
-            db.ChangeTracker.Clear();
-        }
+        await importer.CompleteAsync(token);
         return count;
+    }
+
+    private static async ValueTask WriteProxyAsync(NpgsqlBinaryImporter writer, ProxyEndpoint entity, CancellationToken token)
+    {
+        await writer.StartRowAsync(token);
+        await writer.WriteAsync(entity.Id, token);
+        await writer.WriteAsync(entity.Host, token);
+        await writer.WriteAsync(entity.Port, token);
+        await writer.WriteAsync((int)entity.Protocol, token);
+        await writer.WriteAsync((int)entity.Status, token);
+        await WriteNullableValueAsync(writer, entity.LatencyMs, token);
+        await WriteNullableReferenceAsync(writer, entity.ExitIp, token);
+        await WriteNullableReferenceAsync(writer, entity.CountryCode, token);
+        await writer.WriteAsync(entity.IsAnonymous, token);
+        await writer.WriteAsync(entity.FirstSeenAt, token);
+        await writer.WriteAsync(entity.LastSeenAt, token);
+        await WriteNullableValueAsync(writer, entity.LastCheckedAt, token);
+        await WriteNullableValueAsync(writer, entity.NextCheckAt, token);
+        await WriteNullableValueAsync(writer, entity.CheckLeaseUntil, token);
+        await WriteNullableValueAsync(writer, entity.CheckLeaseId, token);
+        await writer.WriteAsync(entity.SuccessfulChecks, token);
+        await writer.WriteAsync(entity.FailedChecks, token);
+        await writer.WriteAsync(entity.ConsecutiveFailedChecks, token);
+        await WriteNullableReferenceAsync(writer, entity.LastError, token);
+    }
+
+    private static async ValueTask WriteSourceAsync(NpgsqlBinaryImporter writer, ProxySource entity, CancellationToken token)
+    {
+        await writer.StartRowAsync(token);
+        await writer.WriteAsync(entity.Id, token);
+        await writer.WriteAsync(entity.Name, token);
+        await writer.WriteAsync(entity.Url, token);
+        await writer.WriteAsync((int)entity.DefaultProtocol, token);
+        await writer.WriteAsync(entity.Enabled, token);
+        await writer.WriteAsync(entity.Priority, token);
+        await WriteNullableValueAsync(writer, entity.LastFetchedAt, token);
+        await WriteNullableValueAsync(writer, entity.LastSucceededAt, token);
+        await writer.WriteAsync(entity.LastItemCount, token);
+        await writer.WriteAsync(entity.ConsecutiveFailures, token);
+        await WriteNullableReferenceAsync(writer, entity.LastError, token);
+    }
+
+    private static async ValueTask WriteRunAsync(NpgsqlBinaryImporter writer, CollectionRun entity, CancellationToken token)
+    {
+        await writer.StartRowAsync(token);
+        await writer.WriteAsync(entity.Id, token);
+        await writer.WriteAsync(entity.StartedAt, token);
+        await WriteNullableValueAsync(writer, entity.FinishedAt, token);
+        await writer.WriteAsync(entity.SourcesProcessed, token);
+        await writer.WriteAsync(entity.SourcesSucceeded, token);
+        await writer.WriteAsync(entity.SourcesFailed, token);
+        await writer.WriteAsync(entity.CandidatesFound, token);
+        await writer.WriteAsync(entity.NewProxies, token);
+        await writer.WriteAsync(entity.AliveProxies, token);
+        await writer.WriteAsync(entity.Status, token);
+        await WriteNullableReferenceAsync(writer, entity.Error, token);
+    }
+
+    private static async ValueTask WriteNullableValueAsync<T>(NpgsqlBinaryImporter writer, T? value, CancellationToken token)
+        where T : struct
+    {
+        if (!value.HasValue) await writer.WriteNullAsync(token);
+        else await writer.WriteAsync(value.Value, token);
+    }
+
+    private static async ValueTask WriteNullableReferenceAsync<T>(NpgsqlBinaryImporter writer, T? value, CancellationToken token)
+        where T : class
+    {
+        if (value is null) await writer.WriteNullAsync(token);
+        else await writer.WriteAsync(value, token);
     }
 
     private sealed record RestoreCounts(int Proxies, int Sources, int Runs);

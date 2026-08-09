@@ -39,6 +39,7 @@ public sealed class BackupService(
             var stamp = DateTimeOffset.UtcNow.ToString("yyyyMMdd-HHmmss-ffff", CultureInfo.InvariantCulture);
             var zipPath = Path.Combine(options.Directory, $"proxyharbor-{stamp}.zip");
             var encryptedPath = zipPath + ".phbackup";
+            var partialEncryptedPath = encryptedPath + ".partial";
 
             try
             {
@@ -68,7 +69,10 @@ public sealed class BackupService(
                     await snapshot.CommitAsync(cancellationToken);
                 });
 
-                await BackupEncryption.EncryptAsync(zipPath, encryptedPath, options.EncryptionKey, cancellationToken);
+                // Финальное имя публикуется атомарно: наблюдатель каталога никогда не увидит
+                // недописанный backup с расширением .phbackup.
+                await BackupEncryption.EncryptAsync(zipPath, partialEncryptedPath, options.EncryptionKey, cancellationToken);
+                File.Move(partialEncryptedPath, encryptedPath);
                 File.Delete(zipPath);
                 if (!string.IsNullOrWhiteSpace(options.TelegramBotToken) && !string.IsNullOrWhiteSpace(options.TelegramChatId))
                     await SendToTelegramAsync(encryptedPath, options, cancellationToken);
@@ -80,6 +84,7 @@ public sealed class BackupService(
             finally
             {
                 if (File.Exists(zipPath)) File.Delete(zipPath);
+                if (File.Exists(partialEncryptedPath)) File.Delete(partialEncryptedPath);
             }
         }
         finally { _runGate.Release(); }
