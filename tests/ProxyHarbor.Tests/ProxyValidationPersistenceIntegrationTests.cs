@@ -270,7 +270,7 @@ public sealed class ProxyValidationPersistenceIntegrationTests
             CheckLeaseId = leaseId,
             CheckLeaseUntil = checkedAt.AddMinutes(5),
             SuccessfulChecks = 5,
-            FailedChecks = 2,
+            FailedChecks = 3,
             ConsecutiveFailedChecks = 3
         };
         await using (var seed = await factory.CreateDbContextAsync())
@@ -309,7 +309,7 @@ public sealed class ProxyValidationPersistenceIntegrationTests
             Assert.Equal(checkedAt.AddMinutes(1), saved.LastValidationAttemptAt);
             Assert.True(saved.LastValidationDeferred);
             Assert.Equal(5, saved.SuccessfulChecks);
-            Assert.Equal(2, saved.FailedChecks);
+            Assert.Equal(3, saved.FailedChecks);
             Assert.Equal(3, saved.ConsecutiveFailedChecks);
             Assert.Null(saved.CheckLeaseId);
             Assert.Null(saved.CheckLeaseUntil);
