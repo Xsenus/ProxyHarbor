@@ -126,11 +126,3 @@ volumes:
   caddy-config:
   prometheus-data:
   alertmanager-data:
-
-# Значения берутся из окружения/.env и монтируются как файлы только в
-# Alertmanager. В отличие от environment они не видны через docker inspect.
-secrets:
-  telegram_bot_token:
-    environment: TELEGRAM_BOT_TOKEN
-  telegram_chat_id:
-    environment: TELEGRAM_CHAT_ID

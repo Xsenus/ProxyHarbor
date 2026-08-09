@@ -4,7 +4,7 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace ProxyHarbor.Api;
 
-/// <summary>Защищает административные маршруты ключом из переменной окружения.</summary>
+/// <summary>Защищает административные маршруты ключом из итоговой безопасной configuration.</summary>
 public sealed class AdminApiKeyMiddleware
 {
     private readonly RequestDelegate _next;

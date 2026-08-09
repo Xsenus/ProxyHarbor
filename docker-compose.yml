@@ -12,7 +12,9 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
     volumes:
       - postgres-data:/var/lib/postgresql
     healthcheck:
@@ -35,8 +37,12 @@ services:
       postgres: { condition: service_healthy }
     environment:
       ASPNETCORE_ENVIRONMENT: Production
-      ConnectionStrings__Postgres: Host=postgres;Port=5432;Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}
-      Security__AdminApiKey: ${ADMIN_API_KEY}
+      ConnectionStrings__Postgres: Host=postgres;Port=5432;Database=${POSTGRES_DB};Username=${POSTGRES_USER}
+      SecretFiles__PostgresPassword: /run/secrets/postgres_password
+      SecretFiles__AdminApiKey: /run/secrets/admin_api_key
+      SecretFiles__BackupEncryptionKey: /run/secrets/backup_encryption_key
+      SecretFiles__TelegramBotToken: /run/secrets/telegram_bot_token
+      SecretFiles__TelegramChatId: /run/secrets/telegram_chat_id
       ForwardedHeaders__KnownNetworks__0: ${BACKEND_SUBNET:-172.30.0.0/24}
       Collector__BackgroundWorkersEnabled: ${BACKGROUND_WORKERS_ENABLED:-true}
       Collector__ValidationConcurrency: ${VALIDATION_CONCURRENCY:-800}
@@ -44,9 +50,12 @@ services:
       Backup__Enabled: ${BACKUP_ENABLED:-false}
       Backup__Directory: /app/backups
       Backup__HistoryRetentionDays: ${BACKUP_HISTORY_RETENTION_DAYS:-365}
-      Backup__EncryptionKey: ${BACKUP_ENCRYPTION_KEY}
-      Backup__TelegramBotToken: ${TELEGRAM_BOT_TOKEN:-}
-      Backup__TelegramChatId: ${TELEGRAM_CHAT_ID:-}
+    secrets:
+      - postgres_password
+      - admin_api_key
+      - backup_encryption_key
+      - telegram_bot_token
+      - telegram_chat_id
     volumes:
       - backups:/app/backups
     networks: [backend]
@@ -73,8 +82,12 @@ services:
     depends_on:
       postgres: { condition: service_healthy }
     environment:
-      ConnectionStrings__Postgres: Host=postgres;Port=5432;Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}
-      Backup__EncryptionKey: ${BACKUP_ENCRYPTION_KEY}
+      ConnectionStrings__Postgres: Host=postgres;Port=5432;Database=${POSTGRES_DB};Username=${POSTGRES_USER}
+      SecretFiles__PostgresPassword: /run/secrets/postgres_password
+      SecretFiles__BackupEncryptionKey: /run/secrets/backup_encryption_key
+    secrets:
+      - postgres_password
+      - backup_encryption_key
     volumes:
       - backups:/app/backups:ro
       # Анонимный writable volume не сохраняет plaintext ZIP в постоянном backup volume.
@@ -113,3 +126,17 @@ networks:
     ipam:
       config:
         - subnet: ${BACKEND_SUBNET:-172.30.0.0/24}
+
+# Compose получает значения из host environment/.env и предоставляет их
+# только явно перечисленным сервисам как read-only файлы /run/secrets/*.
+secrets:
+  postgres_password:
+    environment: POSTGRES_PASSWORD
+  admin_api_key:
+    environment: ADMIN_API_KEY
+  backup_encryption_key:
+    environment: BACKUP_ENCRYPTION_KEY
+  telegram_bot_token:
+    environment: TELEGRAM_BOT_TOKEN
+  telegram_chat_id:
+    environment: TELEGRAM_CHAT_ID

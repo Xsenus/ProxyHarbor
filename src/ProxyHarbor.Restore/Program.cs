@@ -272,15 +272,16 @@ internal sealed record RestoreOptions(
           --input ./proxyharbor.phbackup --replace-existing-data
 
         По умолчанию строка БД читается из ConnectionStrings__Postgres,
-        а ключ — из Backup__EncryptionKey. Их можно передать параметрами
-        --connection и --encryption-key, но переменные окружения безопаснее.
+        а ключ — из Backup__EncryptionKey. Docker использует bounded файлы
+        SecretFiles__PostgresPassword и SecretFiles__BackupEncryptionKey.
+        Явные --connection и --encryption-key имеют наивысший приоритет.
         """;
 
     public static RestoreOptions Parse(string[] args)
     {
         string? input = null;
-        string? connection = Environment.GetEnvironmentVariable("ConnectionStrings__Postgres");
-        string? key = Environment.GetEnvironmentVariable("Backup__EncryptionKey");
+        string? connection = null;
+        string? key = null;
         var confirm = false;
         var help = false;
         for (var index = 0; index < args.Length; index++)
@@ -294,6 +295,19 @@ internal sealed record RestoreOptions(
                 case "--help" or "-h": help = true; break;
                 default: throw new ArgumentException($"Неизвестный аргумент: {args[index]}");
             }
+        }
+
+        // Help и явно переданные CLI-secrets не должны зависеть от доступности
+        // container secret mounts. Файлы читаются только для отсутствующих defaults.
+        if (!help)
+        {
+            connection ??= RuntimeSecretConfiguration.ApplyPostgresPasswordFile(
+                Environment.GetEnvironmentVariable("ConnectionStrings__Postgres"),
+                Environment.GetEnvironmentVariable("SecretFiles__PostgresPassword"));
+            key ??= RuntimeSecretConfiguration.ReadOptionalFile(
+                Environment.GetEnvironmentVariable("SecretFiles__BackupEncryptionKey"),
+                "SecretFiles__BackupEncryptionKey")
+                ?? Environment.GetEnvironmentVariable("Backup__EncryptionKey");
         }
         return new RestoreOptions(input, connection, key, confirm, help);
     }

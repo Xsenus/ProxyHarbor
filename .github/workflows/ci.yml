@@ -111,7 +111,8 @@ jobs:
         run: |
           docker compose config
           production_config=$(docker compose \
-            -f docker-compose.yml -f docker-compose.production.yml --profile monitoring \
+            -f docker-compose.yml -f docker-compose.production.yml \
+            --profile monitoring --profile tools \
             config --format json)
           echo "$production_config" | jq --exit-status '
             ((.services.web.ports // []) | length == 0) and
@@ -128,7 +129,21 @@ jobs:
             .services.alertmanager.user == "65534:65534" and
             .services.alertmanager.read_only == true and
             .services.alertmanager.ports[0].host_ip == "127.0.0.1" and
-            (.services.alertmanager.environment | length) == 0'
+            (.services.alertmanager.environment | length) == 0 and
+            .services.postgres.environment.POSTGRES_PASSWORD == null and
+            .services.postgres.environment.POSTGRES_PASSWORD_FILE == "/run/secrets/postgres_password" and
+            .services.api.environment.Security__AdminApiKey == null and
+            .services.api.environment.Backup__EncryptionKey == null and
+            .services.api.environment.Backup__TelegramBotToken == null and
+            (.services.api.secrets | length) == 5 and
+            (.services.restore.secrets | length) == 2 and
+            (.services.alertmanager.secrets | length) == 2'
+          for secret_value in ci-password ci-admin-key ci-encryption-key-at-least-32-chars ci-telegram-token 123456; do
+            if echo "$production_config" | grep --fixed-strings "$secret_value"; then
+              echo "Secret value leaked into rendered Compose configuration."
+              exit 1
+            fi
+          done
           docker run --rm \
             --env PUBLIC_HOST=localhost --env ACME_EMAIL=ci@example.com \
             --volume "$PWD/deploy/Caddyfile:/etc/caddy/Caddyfile:ro" \
@@ -200,6 +215,26 @@ jobs:
           web_id=$(docker compose ps --quiet web)
           postgres_id=$(docker compose ps --quiet postgres)
           restore_id=$(docker compose --profile tools ps --all --quiet restore)
+          assert_secret_values_absent() {
+            container_id=$1
+            environment=$(docker inspect --format '{{json .Config.Env}}' "$container_id")
+            for secret_value in ci-password ci-admin-key-at-least-24-chars \
+              ci-encryption-key-at-least-32-chars ci-telegram-token 123456; do
+              if echo "$environment" | grep --fixed-strings "$secret_value"; then
+                echo "Secret value leaked into container environment."
+                exit 1
+              fi
+            done
+          }
+          assert_secret_values_absent "$api_id"
+          assert_secret_values_absent "$postgres_id"
+          assert_secret_values_absent "$restore_id"
+          docker inspect --format '{{json .Mounts}}' "$api_id" | jq --exit-status \
+            '[.[] | select(.Destination | startswith("/run/secrets/"))] | length == 5'
+          docker inspect --format '{{json .Mounts}}' "$postgres_id" | jq --exit-status \
+            '[.[] | select(.Destination == "/run/secrets/postgres_password")] | length == 1'
+          docker inspect --format '{{json .Mounts}}' "$restore_id" | jq --exit-status \
+            '[.[] | select(.Destination | startswith("/run/secrets/"))] | length == 2'
           test "$(docker inspect --format '{{.Config.User}}' "$api_id")" = 'proxyharbor'
           test "$(docker inspect --format '{{.HostConfig.ReadonlyRootfs}}' "$api_id")" = 'true'
           test "$(docker inspect --format '{{.HostConfig.PidsLimit}}' "$api_id")" = '512'
@@ -327,6 +362,9 @@ jobs:
           docker port "$alertmanager_id" 9093/tcp | grep '^127.0.0.1:9093$'
           if docker inspect --format '{{json .Config.Env}}' "$alertmanager_id" | \
             grep --ignore-case 'telegram'; then exit 1; fi
+          assert_secret_values_absent "$alertmanager_id"
+          docker inspect --format '{{json .Mounts}}' "$alertmanager_id" | jq --exit-status \
+            '[.[] | select(.Destination | startswith("/run/secrets/"))] | length == 2'
           web_port=$(docker compose -f docker-compose.yml -f docker-compose.production.yml \
             port web 80 2>/dev/null || true)
           test -z "$web_port"

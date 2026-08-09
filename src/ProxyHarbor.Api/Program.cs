@@ -10,6 +10,9 @@ using ProxyHarbor.Api;
 using ProxyHarbor.Infrastructure;
 
 var builder = WebApplication.CreateBuilder(args);
+// Docker secrets загружаются до validation/options и не присутствуют в
+// container environment. При обычном dotnet run этот шаг является no-op.
+RuntimeSecretConfiguration.Apply(builder.Configuration);
 builder.WebHost.ConfigureKestrel(options => options.AddServerHeader = false);
 
 if (!builder.Environment.IsDevelopment())
