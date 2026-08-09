@@ -1,3 +1,4 @@
+using ProxyHarbor.Api.Controllers;
 using ProxyHarbor.Domain;
 using ProxyHarbor.Infrastructure;
 
@@ -32,5 +33,41 @@ public sealed class BuiltInSourceCatalogTests
     {
         Assert.All(Enum.GetValues<ProxyProtocol>(), protocol =>
             Assert.Contains(BuiltInSourceCatalog.Sources, source => source.Protocol == protocol));
+    }
+
+    [Fact]
+    public void AdminSourceResponseExposesCanonicalCatalogMetadata()
+    {
+        var definition = BuiltInSourceCatalog.Sources[12];
+        var response = SourceResponse.From(new ProxySource
+        {
+            Name = "renamed locally",
+            Url = definition.Url,
+            DefaultProtocol = definition.Protocol,
+            Priority = 999
+        });
+
+        Assert.True(response.IsBuiltIn);
+        Assert.Equal(definition.Provider, response.Provider);
+        Assert.Equal(definition.Rank, response.CatalogRank);
+        Assert.Equal("renamed locally", response.Name);
+        Assert.Equal(999, response.Priority);
+        Assert.Same(definition, BuiltInSourceCatalog.FindByUrl(definition.Url));
+        Assert.Null(BuiltInSourceCatalog.FindByUrl(definition.Url.ToUpperInvariant()));
+    }
+
+    [Fact]
+    public void AdminSourceResponseDoesNotMisclassifyCustomUrl()
+    {
+        var response = SourceResponse.From(new ProxySource
+        {
+            Name = "custom",
+            Url = "https://example.com/proxies.txt",
+            DefaultProtocol = ProxyProtocol.Http
+        });
+
+        Assert.False(response.IsBuiltIn);
+        Assert.Null(response.Provider);
+        Assert.Null(response.CatalogRank);
     }
 }

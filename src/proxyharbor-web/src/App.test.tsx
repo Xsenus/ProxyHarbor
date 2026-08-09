@@ -63,6 +63,33 @@ describe('ProxyHarbor UI', () => {
     expect(trigger).toHaveFocus()
   })
 
+  it('labels built-in sources with canonical provider metadata', async () => {
+    vi.mocked(fetch).mockImplementation(async input => {
+      const url = String(input)
+      if (url.includes('/api/v1/stats')) return jsonResponse(stats)
+      if (url.includes('/api/v1/proxies')) return jsonResponse({ items: [], page: 1, pageSize: 100, total: 0 })
+      if (url.includes('/api/v1/admin/sources')) return jsonResponse([{
+        id: 'source-1', name: 'ProxyScrape HTTP', url: 'https://example.test/list.txt',
+        defaultProtocol: 'Http', enabled: true, priority: 1, lastItemCount: 100,
+        consecutiveFailures: 0, isBuiltIn: true, provider: 'ProxyScrape', catalogRank: 2,
+      }])
+      if (url.includes('/api/v1/admin/diagnostics')) return jsonResponse({
+        serverTime: '2026-08-09T07:00:00Z', databaseBytes: 0,
+        validationQueue: { total: 0, leased: 0, neverChecked: 0, due: 0, scheduled: 0, repeatedlyFailing: 0 },
+        recentRuns: [], recentBackups: [],
+      })
+      return jsonResponse({ title: 'Unexpected request' }, 500)
+    })
+
+    render(<App />)
+    await screen.findByText('система активна')
+    fireEvent.click(screen.getByRole('button', { name: /^Управление$/ }))
+    fireEvent.change(screen.getByLabelText('Ключ администратора'), { target: { value: 'valid-admin-key' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Войти' }))
+
+    expect(await screen.findByTitle('Встроенный источник · ProxyScrape · ранг 2')).toHaveTextContent('ProxyScrape')
+  })
+
   it('shows operational diagnostics and refreshes them after a backup', async () => {
     let failDiagnostics = false
     const diagnostics = {

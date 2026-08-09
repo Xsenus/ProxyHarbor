@@ -4,7 +4,7 @@ import { Activity, ArrowDownToLine, Check, Clock3, Database, Gauge, KeyRound, Ne
 type Protocol = 'Http' | 'Https' | 'Socks4' | 'Socks5'
 type Proxy = { host: string; port: number; protocol: Protocol; url: string; latencyMs: number; successRate: number; exitIp?: string; lastCheckedAt: string }
 type Stats = { alive: number; staleAlive: number; pending: number; dead: number; dueForCheck: number; scheduledChecks: number; averageLatencyMs: number | null; sources: number; failingSources: number; repeatedlyFailingSources: number; byProtocol: { protocol: Protocol; count: number }[]; lastRun?: { startedAt: string; candidatesFound: number; newProxies: number; status: string } }
-type Source = { id: string; name: string; url: string; defaultProtocol: Protocol; enabled: boolean; priority: number; lastItemCount: number; lastFetchedAt?: string; lastSucceededAt?: string; nextFetchAt?: string; consecutiveFailures: number; lastError?: string }
+type Source = { id: string; name: string; url: string; defaultProtocol: Protocol; enabled: boolean; priority: number; lastItemCount: number; lastFetchedAt?: string; lastSucceededAt?: string; nextFetchAt?: string; consecutiveFailures: number; lastError?: string; isBuiltIn: boolean; provider?: string; catalogRank?: number }
 type CollectionRun = { id: string; startedAt: string; finishedAt?: string; sourcesProcessed: number; sourcesSucceeded: number; sourcesFailed: number; sourcesSkipped: number; candidatesFound: number; newProxies: number; status: string; error?: string }
 type BackupRun = { id: string; startedAt: string; finishedAt?: string; status: string; fileName?: string; sizeBytes: number; telegramConfigured: boolean; sentToTelegram: boolean; error?: string }
 type Diagnostics = {
@@ -309,7 +309,7 @@ export default function App() {
         <h3>Источники <span>{sources.length}</span></h3>
         <div className="source-list">{sources.map(source => <article key={source.id}>
           <div><b>{source.name}</b><small>{source.defaultProtocol} · {source.lastItemCount.toLocaleString('ru-RU')} адресов{source.consecutiveFailures > 0 ? ` · сбоев подряд: ${source.consecutiveFailures}` : ''}{source.nextFetchAt ? ` · повтор ${timeUntil(source.nextFetchAt)}` : ''}</small></div>
-          <div className="source-controls"><span title={source.lastError} className={source.lastError ? 'source-error' : 'source-ok'}>{source.lastError ? 'ошибка' : source.enabled ? 'активен' : 'пауза'}</span><button disabled={sourceBusy === source.id} onClick={() => toggleSource(source)}>{source.enabled ? 'Пауза' : 'Включить'}</button><button className="danger" disabled={sourceBusy === source.id} onClick={() => removeSource(source)}>Удалить</button></div>
+          <div className="source-controls"><span title={source.isBuiltIn ? `Встроенный источник · ${source.provider} · ранг ${source.catalogRank}` : 'Пользовательский источник'} className="source-kind">{source.isBuiltIn ? source.provider : 'свой'}</span><span title={source.lastError} className={source.lastError ? 'source-error' : 'source-ok'}>{source.lastError ? 'ошибка' : source.enabled ? 'активен' : 'пауза'}</span><button disabled={sourceBusy === source.id} onClick={() => toggleSource(source)}>{source.enabled ? 'Пауза' : 'Включить'}</button><button className="danger" disabled={sourceBusy === source.id} onClick={() => removeSource(source)}>Удалить</button></div>
         </article>)}</div>
       </section>
     </div>}

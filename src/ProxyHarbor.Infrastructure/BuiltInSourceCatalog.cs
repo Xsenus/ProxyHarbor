@@ -100,6 +100,13 @@ public static class BuiltInSourceCatalog
         Feed(81, "MrMarble Mixed", "MrMarble", "https://raw.githubusercontent.com/MrMarble/proxy-list/main/all.txt", ProxyProtocol.Http),
     ];
 
+    private static readonly Dictionary<string, BuiltInSource> SourcesByUrl =
+        Sources.ToDictionary(source => source.Url, StringComparer.Ordinal);
+
+    /// <summary>Возвращает канонические метаданные только для точного встроенного endpoint.</summary>
+    public static BuiltInSource? FindByUrl(string url) =>
+        SourcesByUrl.TryGetValue(url, out var source) ? source : null;
+
     private static BuiltInSource Feed(int rank, string name, string provider, string url, ProxyProtocol protocol) =>
         new(rank, name, provider, url, protocol);
 }

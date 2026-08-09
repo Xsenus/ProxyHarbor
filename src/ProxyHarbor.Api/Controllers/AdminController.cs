@@ -19,10 +19,11 @@ public sealed class AdminController(
     IOptions<BackupOptions> backupOptions) : ControllerBase
 {
     [HttpGet("sources")]
-    public async Task<ActionResult<IReadOnlyList<ProxySource>>> Sources(CancellationToken token)
+    public async Task<ActionResult<IReadOnlyList<SourceResponse>>> Sources(CancellationToken token)
     {
         await using var db = await dbFactory.CreateDbContextAsync(token);
-        return Ok(await db.Sources.AsNoTracking().OrderBy(x => x.Priority).ToListAsync(token));
+        var sources = await db.Sources.AsNoTracking().OrderBy(x => x.Priority).ToListAsync(token);
+        return Ok(sources.Select(SourceResponse.From).ToArray());
     }
 
     [HttpPost("sources")]
@@ -53,6 +54,14 @@ public sealed class AdminController(
         var source = await db.Sources.FindAsync([id], token);
         if (source is null) return NotFound();
         var normalizedUrl = new Uri(request.Url, UriKind.Absolute).AbsoluteUri;
+        var builtIn = BuiltInSourceCatalog.FindByUrl(source.Url);
+        if (builtIn is not null &&
+            (!string.Equals(normalizedUrl, builtIn.Url, StringComparison.Ordinal) || request.Protocol != builtIn.Protocol))
+            return Conflict(new ProblemDetails
+            {
+                Title = "URL и протокол встроенного источника неизменяемы; его можно включить или отключить",
+                Status = 409
+            });
         if (await db.Sources.AnyAsync(x => x.Id != id && x.Url == normalizedUrl, token))
             return Conflict(new ProblemDetails { Title = "Источник с таким URL уже существует", Status = 409 });
         var endpointChanged = !string.Equals(source.Url, normalizedUrl, StringComparison.OrdinalIgnoreCase) ||
@@ -84,7 +93,7 @@ public sealed class AdminController(
         var source = await db.Sources.FindAsync([id], token);
         if (source is null) return NotFound();
         // Встроенные feed'ы синхронизируются при старте, поэтому DELETE для них означает устойчивое отключение.
-        if (BuiltInSourceCatalog.Sources.Any(x => string.Equals(x.Url, source.Url, StringComparison.OrdinalIgnoreCase)))
+        if (BuiltInSourceCatalog.FindByUrl(source.Url) is not null)
             source.Enabled = false;
         else
             db.Sources.Remove(source);
@@ -158,3 +167,44 @@ public sealed record SourceRequest(
     ProxyProtocol Protocol,
     [Range(-10_000, 10_000)] int Priority = 100,
     bool Enabled = true);
+
+/// <summary>Источник вместе с неизменяемой принадлежностью к встроенному каталогу.</summary>
+public sealed record SourceResponse(
+    Guid Id,
+    string Name,
+    string Url,
+    ProxyProtocol DefaultProtocol,
+    bool Enabled,
+    int Priority,
+    DateTimeOffset? LastFetchedAt,
+    DateTimeOffset? LastSucceededAt,
+    DateTimeOffset? NextFetchAt,
+    int LastItemCount,
+    int ConsecutiveFailures,
+    string? LastError,
+    bool IsBuiltIn,
+    string? Provider,
+    int? CatalogRank)
+{
+    /// <summary>Обогащает изменяемую запись БД каноническими метаданными каталога.</summary>
+    public static SourceResponse From(ProxySource source)
+    {
+        var builtIn = BuiltInSourceCatalog.FindByUrl(source.Url);
+        return new SourceResponse(
+            source.Id,
+            source.Name,
+            source.Url,
+            source.DefaultProtocol,
+            source.Enabled,
+            source.Priority,
+            source.LastFetchedAt,
+            source.LastSucceededAt,
+            source.NextFetchAt,
+            source.LastItemCount,
+            source.ConsecutiveFailures,
+            source.LastError,
+            builtIn is not null,
+            builtIn?.Provider,
+            builtIn?.Rank);
+    }
+}
