@@ -570,6 +570,11 @@ jobs:
           grep --ignore-case '^X-Export-Truncated: false' "$export_headers"
           grep --ignore-case '^Access-Control-Allow-Origin: https://dashboard.example' "$export_headers"
           grep --ignore-case '^Access-Control-Expose-Headers:.*X-Next-Offset' "$export_headers"
+          grep --ignore-case '^Access-Control-Expose-Headers:.*X-Next-Cursor' "$export_headers"
+          seek_page=$(curl --fail --silent \
+            'http://127.0.0.1:5080/api/v1/proxies/seek?pageSize=1')
+          echo "$seek_page" | jq --exit-status \
+            '.items | length == 1 and .[0].host == "8.8.4.4"'
           xml_export=$(curl --fail --silent --dump-header "$export_headers" \
             'http://127.0.0.1:5080/api/v1/export/xml?limit=1')
           echo "$xml_export" | grep '<host>8.8.4.4</host>'
@@ -583,6 +588,11 @@ jobs:
           echo "$csv_export" | grep '^protocol,host,port,latencyMs,successRate,lastCheckedAt,url,exitIp'
           echo "$csv_export" | grep '"Socks5","8.8.4.4",18080,321'
           grep --ignore-case '^Content-Type: text/csv; charset=utf-8' "$export_headers"
+          seek_export=$(curl --fail --silent --dump-header "$export_headers" \
+            'http://127.0.0.1:5080/api/v1/export/txt/seek?limit=1')
+          test "$seek_export" = 'socks5://8.8.4.4:18080'
+          grep --ignore-case '^X-Export-Cursor: start' "$export_headers"
+          grep --ignore-case '^X-Export-Truncated: false' "$export_headers"
           rm "$export_headers"
           backup_json=$(curl --fail --silent -X POST \
             -H 'X-Admin-Key: integration-admin-key-at-least-24-chars' \
@@ -607,7 +617,7 @@ jobs:
           test "$(PGPASSWORD=integration-password psql -tAc \
             "SELECT count(*) FROM \"Proxies\" WHERE \"Id\" = '20000000-0000-0000-0000-000000000001';" \
             -h 127.0.0.1 -U proxyharbor -d proxyharbor)" -eq 0
-          # Сбрасываем in-memory token bucket после четырёх успешных export smoke-запросов,
+          # Сбрасываем in-memory token bucket после пяти успешных export smoke-запросов,
           # чтобы последующая проверка ровно пятого/шестого запроса была детерминированной.
           kill "$api_pid"
           wait "$api_pid" || true

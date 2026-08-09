@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Options;
+using ProxyHarbor.Api;
 using ProxyHarbor.Api.Controllers;
 using ProxyHarbor.Domain;
 using ProxyHarbor.Infrastructure;
@@ -282,6 +283,113 @@ public sealed class ProxyPublicationTests
         Assert.IsType<EmptyResult>(await exportController.Export(
             "txt", null, null, null, CancellationToken.None, limit: 1, offset: 1));
         Assert.Equal("http://8.8.8.8:8080", Encoding.UTF8.GetString(output.ToArray()).Trim());
+    }
+
+    [Fact]
+    public async Task SeekListTraversesTiesWithoutDuplicatesOrExactCount()
+    {
+        var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+            .UseInMemoryDatabase($"seek-pagination-{Guid.NewGuid():N}")
+            .Options;
+        var now = DateTimeOffset.UtcNow;
+        var first = Endpoint("1.1.1.1", ProxyStatus.Alive, now);
+        first.Id = Guid.Parse("00000000-0000-0000-0000-000000000001");
+        first.LatencyMs = 100;
+        first.SuccessfulChecks = 5;
+        var second = Endpoint("8.8.8.8", ProxyStatus.Alive, now);
+        second.Id = Guid.Parse("00000000-0000-0000-0000-000000000002");
+        second.LatencyMs = 100;
+        second.SuccessfulChecks = 5;
+        var third = Endpoint("9.9.9.9", ProxyStatus.Alive, now);
+        third.Id = Guid.Parse("00000000-0000-0000-0000-000000000003");
+        third.LatencyMs = 200;
+        third.SuccessfulChecks = 9;
+        await using (var seed = new ProxyHarborDbContext(options))
+        {
+            seed.Proxies.AddRange(third, second, first);
+            await seed.SaveChangesAsync();
+        }
+
+        var controller = new ProxiesController(
+            new TestDbFactory(options), Options.Create(new CollectorOptions { PublicFreshnessMinutes = 15 }));
+        var firstAction = await controller.Seek(
+            null, null, null, after: null, pageSize: 2, cancellationToken: CancellationToken.None);
+        var firstPage = Assert.IsType<CursorPagedResult<ProxyDto>>(
+            Assert.IsType<OkObjectResult>(firstAction.Result).Value);
+        Assert.Equal(["1.1.1.1", "8.8.8.8"], firstPage.Items.Select(x => x.Host));
+        Assert.True(firstPage.HasMore);
+        Assert.NotNull(firstPage.NextCursor);
+
+        var secondAction = await controller.Seek(
+            null, null, null, firstPage.NextCursor, pageSize: 2, CancellationToken.None);
+        var secondPage = Assert.IsType<CursorPagedResult<ProxyDto>>(
+            Assert.IsType<OkObjectResult>(secondAction.Result).Value);
+        Assert.Equal("9.9.9.9", Assert.Single(secondPage.Items).Host);
+        Assert.False(secondPage.HasMore);
+        Assert.Null(secondPage.NextCursor);
+    }
+
+    [Fact]
+    public async Task SeekCursorIsRejectedWhenDamagedOrFiltersChange()
+    {
+        var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+            .UseInMemoryDatabase($"seek-filter-{Guid.NewGuid():N}")
+            .Options;
+        var endpoint = Endpoint("1.1.1.1", ProxyStatus.Alive, DateTimeOffset.UtcNow);
+        endpoint.LatencyMs = 100;
+        await using (var seed = new ProxyHarborDbContext(options))
+        {
+            seed.Proxies.Add(endpoint);
+            await seed.SaveChangesAsync();
+        }
+        var controller = new ProxiesController(
+            new TestDbFactory(options), Options.Create(new CollectorOptions { PublicFreshnessMinutes = 15 }));
+
+        var malformed = await controller.Seek(
+            null, null, null, "not-a-cursor", 1, CancellationToken.None);
+        Assert.IsType<BadRequestObjectResult>(malformed.Result);
+
+        var fingerprint = PublicationCursor.FilterFingerprint(ProxyProtocol.Http, 500, null);
+        var cursor = PublicationCursor.Encode(
+            new PublicationPosition(100, 1, endpoint.Id), fingerprint);
+        var changedFilters = await controller.Seek(
+            ProxyProtocol.Http, 501, null, cursor, 1, CancellationToken.None);
+        Assert.IsType<BadRequestObjectResult>(changedFilters.Result);
+    }
+
+    [Fact]
+    public async Task SeekExportReturnsOpaqueContinuationHeaders()
+    {
+        var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+            .UseInMemoryDatabase($"seek-export-{Guid.NewGuid():N}")
+            .Options;
+        var now = DateTimeOffset.UtcNow;
+        var first = Endpoint("1.1.1.1", ProxyStatus.Alive, now);
+        first.LatencyMs = 100;
+        var second = Endpoint("8.8.8.8", ProxyStatus.Alive, now);
+        second.LatencyMs = 200;
+        await using (var seed = new ProxyHarborDbContext(options))
+        {
+            seed.Proxies.AddRange(second, first);
+            await seed.SaveChangesAsync();
+        }
+
+        var firstController = Controller(options, out var firstOutput);
+        Assert.IsType<EmptyResult>(await firstController.ExportSeek(
+            "txt", null, null, null, CancellationToken.None, limit: 1));
+        Assert.Equal("http://1.1.1.1:8080", Encoding.UTF8.GetString(firstOutput.ToArray()).Trim());
+        Assert.Equal("start", firstController.Response.Headers["X-Export-Cursor"]);
+        Assert.Equal("true", firstController.Response.Headers["X-Export-Truncated"]);
+        var cursor = firstController.Response.Headers["X-Next-Cursor"].ToString();
+        Assert.Equal(PublicationCursor.EncodedLength, cursor.Length);
+
+        var secondController = Controller(options, out var secondOutput);
+        Assert.IsType<EmptyResult>(await secondController.ExportSeek(
+            "txt", null, null, null, CancellationToken.None, limit: 1, after: cursor));
+        Assert.Equal("http://8.8.8.8:8080", Encoding.UTF8.GetString(secondOutput.ToArray()).Trim());
+        Assert.Equal(cursor, secondController.Response.Headers["X-Export-Cursor"]);
+        Assert.Equal("false", secondController.Response.Headers["X-Export-Truncated"]);
+        Assert.False(secondController.Response.Headers.ContainsKey("X-Next-Cursor"));
     }
 
     [Fact]

@@ -62,6 +62,43 @@ public sealed class ProxiesController(
         return Ok(new PagedResult<ProxyDto>(items, page, pageSize, total));
     }
 
+    /// <summary>
+    /// Возвращает keyset-страницу без растущего OFFSET и дорогостоящего точного COUNT.
+    /// Следующий запрос передаёт непрозрачный NextCursor в параметре after.
+    /// </summary>
+    [HttpGet("proxies/seek")]
+    public async Task<ActionResult<CursorPagedResult<ProxyDto>>> Seek(
+        [FromQuery] ProxyProtocol? protocol,
+        [FromQuery, Range(1, int.MaxValue)] int? maxLatencyMs,
+        [FromQuery, Range(typeof(decimal), "0", "100")] decimal? minSuccessRate,
+        [FromQuery, StringLength(PublicationCursor.EncodedLength)] string? after,
+        [FromQuery] int pageSize = 100,
+        CancellationToken cancellationToken = default)
+    {
+        pageSize = Math.Clamp(pageSize, 1, 1000);
+        var fingerprint = PublicationCursor.FilterFingerprint(protocol, maxLatencyMs, minSuccessRate);
+        PublicationPosition? position = null;
+        if (after is not null)
+        {
+            if (!PublicationCursor.TryDecode(after, fingerprint, out var decoded))
+                return InvalidCursor();
+            position = decoded;
+        }
+
+        await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+        var freshAfter = DateTimeOffset.UtcNow.AddMinutes(-collectorOptions.Value.PublicFreshnessMinutes);
+        var query = ApplyFilters(db.Proxies.AsNoTracking().Where(x =>
+            x.Status == ProxyStatus.Alive && x.LastCheckedAt >= freshAfter && x.LatencyMs != null),
+            protocol, maxLatencyMs, minSuccessRate);
+        if (position.HasValue) query = ApplyAfter(query, position.Value);
+        var entities = await OrderForPublication(query).Take(pageSize + 1).ToListAsync(cancellationToken);
+        var hasMore = entities.Count > pageSize;
+        if (hasMore) entities.RemoveAt(pageSize);
+        var nextCursor = hasMore ? EncodePosition(entities[^1], fingerprint) : null;
+        return Ok(new CursorPagedResult<ProxyDto>(
+            entities.Select(ProxyDto.From).ToList(), pageSize, hasMore, nextCursor));
+    }
+
     /// <summary>Потоково экспортирует страницу живых записей в json, xml, txt или csv.</summary>
     [HttpGet("export/{format}")]
     [EnableRateLimiting("export")]
@@ -73,6 +110,32 @@ public sealed class ProxiesController(
         CancellationToken cancellationToken,
         [FromQuery, Range(1, MaxExportPageSize)] int limit = MaxExportPageSize,
         [FromQuery, Range(0, int.MaxValue)] int offset = 0)
+        => await ExportCore(
+            format, protocol, maxLatencyMs, minSuccessRate, limit, offset, after: null, cancellationToken);
+
+    /// <summary>Потоково экспортирует keyset-страницу с постоянной стоимостью продолжения.</summary>
+    [HttpGet("export/{format}/seek")]
+    [EnableRateLimiting("export")]
+    public async Task<IActionResult> ExportSeek(
+        string format,
+        [FromQuery] ProxyProtocol? protocol,
+        [FromQuery, Range(1, int.MaxValue)] int? maxLatencyMs,
+        [FromQuery, Range(typeof(decimal), "0", "100")] decimal? minSuccessRate,
+        CancellationToken cancellationToken,
+        [FromQuery, Range(1, MaxExportPageSize)] int limit = MaxExportPageSize,
+        [FromQuery, StringLength(PublicationCursor.EncodedLength)] string? after = null)
+        => await ExportCore(
+            format, protocol, maxLatencyMs, minSuccessRate, limit, offset: null, after, cancellationToken);
+
+    private async Task<IActionResult> ExportCore(
+        string format,
+        ProxyProtocol? protocol,
+        int? maxLatencyMs,
+        decimal? minSuccessRate,
+        int limit,
+        int? offset,
+        string? after,
+        CancellationToken cancellationToken)
     {
         var normalizedFormat = format.ToLowerInvariant();
         var contentType = normalizedFormat switch
@@ -85,6 +148,15 @@ public sealed class ProxiesController(
         };
         if (contentType is null)
             return Problem("Поддерживаются форматы json, xml, txt и csv.", statusCode: 400);
+        var seekMode = !offset.HasValue;
+        var fingerprint = PublicationCursor.FilterFingerprint(protocol, maxLatencyMs, minSuccessRate);
+        PublicationPosition? position = null;
+        if (seekMode && after is not null)
+        {
+            if (!PublicationCursor.TryDecode(after, fingerprint, out var decoded))
+                return InvalidCursor();
+            position = decoded;
+        }
         if (!await ExportConcurrencyGate.WaitAsync(0, cancellationToken))
         {
             Response.Headers.RetryAfter = "1";
@@ -99,24 +171,48 @@ public sealed class ProxiesController(
             var freshAfter = DateTimeOffset.UtcNow.AddMinutes(-collectorOptions.Value.PublicFreshnessMinutes);
             var query = ApplyFilters(db.Proxies.AsNoTracking().Where(x =>
                 x.Status == ProxyStatus.Alive && x.LastCheckedAt >= freshAfter), protocol, maxLatencyMs, minSuccessRate);
+            if (seekMode)
+            {
+                query = query.Where(x => x.LatencyMs != null);
+                if (position.HasValue) query = ApplyAfter(query, position.Value);
+            }
             var ordered = OrderForPublication(query);
-            var nextOffset = (long)offset + limit;
-            // Предварительный EXISTS не материализует страницу и позволяет выставить
-            // continuation headers до первой записи потокового HTTP body.
-            var hasMore = nextOffset <= int.MaxValue &&
-                await ordered.Skip((int)nextOffset).AnyAsync(cancellationToken);
-            var proxies = ordered.Skip(offset).Take(limit)
+            var legacyOffset = offset ?? 0;
+            var nextOffset = (long)legacyOffset + limit;
+            // Предварительные index-only boundary-запросы не материализуют body и
+            // позволяют выставить continuation headers до первой потоковой записи.
+            var pageQuery = seekMode ? ordered : ordered.Skip(legacyOffset);
+            var hasMore = seekMode
+                ? await pageQuery.Skip(limit).AnyAsync(cancellationToken)
+                : nextOffset <= int.MaxValue && await ordered.Skip((int)nextOffset).AnyAsync(cancellationToken);
+            string? nextCursor = null;
+            if (seekMode && hasMore)
+            {
+                var boundary = await pageQuery.Skip(limit - 1)
+                    .Select(x => new PublicationPosition(x.LatencyMs!.Value, x.SuccessfulChecks, x.Id))
+                    .FirstAsync(cancellationToken);
+                nextCursor = PublicationCursor.Encode(boundary, fingerprint);
+            }
+            var proxies = pageQuery.Take(limit)
                 .AsAsyncEnumerable().Select(ProxyDto.From);
             var suffix = protocol?.ToString().ToLowerInvariant() ?? "all";
             Response.ContentType = contentType;
-            var pageSuffix = offset == 0 ? string.Empty : $"-offset-{offset}";
+            var pageSuffix = seekMode ? "-seek" : legacyOffset == 0 ? string.Empty : $"-offset-{legacyOffset}";
             Response.Headers.ContentDisposition =
                 $"attachment; filename=\"proxies-{suffix}{pageSuffix}.{normalizedFormat}\"";
             Response.Headers.CacheControl = "no-store";
             Response.Headers["X-Export-Limit"] = limit.ToString(CultureInfo.InvariantCulture);
-            Response.Headers["X-Export-Offset"] = offset.ToString(CultureInfo.InvariantCulture);
             Response.Headers["X-Export-Truncated"] = hasMore ? "true" : "false";
-            if (hasMore)
+            if (seekMode)
+            {
+                Response.Headers["X-Export-Cursor"] = after ?? "start";
+                if (nextCursor is not null) Response.Headers["X-Next-Cursor"] = nextCursor;
+            }
+            else
+            {
+                Response.Headers["X-Export-Offset"] = legacyOffset.ToString(CultureInfo.InvariantCulture);
+            }
+            if (!seekMode && hasMore)
                 Response.Headers["X-Next-Offset"] = nextOffset.ToString(CultureInfo.InvariantCulture);
 
             switch (normalizedFormat)
@@ -130,6 +226,13 @@ public sealed class ProxiesController(
         }
         finally { ExportConcurrencyGate.Release(); }
     }
+
+    private BadRequestObjectResult InvalidCursor() => BadRequest(new ProblemDetails
+    {
+        Title = "Некорректный cursor",
+        Detail = "Cursor повреждён, устарел либо был создан для другого набора фильтров.",
+        Status = StatusCodes.Status400BadRequest
+    });
 
     private static async Task WriteJsonAsync(Stream output, IAsyncEnumerable<ProxyDto> proxies, CancellationToken token)
     {
@@ -232,6 +335,19 @@ public sealed class ProxiesController(
             .ThenByDescending(x => x.SuccessfulChecks)
             .ThenBy(x => x.Id);
 
+    /// <summary>Формирует sargable lexicographic predicate под partial public-order index.</summary>
+    internal static IQueryable<ProxyEndpoint> ApplyAfter(
+        IQueryable<ProxyEndpoint> query,
+        PublicationPosition position) =>
+        query.Where(x => x.LatencyMs > position.LatencyMs ||
+            x.LatencyMs == position.LatencyMs &&
+            (x.SuccessfulChecks < position.SuccessfulChecks ||
+                x.SuccessfulChecks == position.SuccessfulChecks && x.Id.CompareTo(position.Id) > 0));
+
+    private static string EncodePosition(ProxyEndpoint endpoint, ulong fingerprint) =>
+        PublicationCursor.Encode(
+            new PublicationPosition(endpoint.LatencyMs!.Value, endpoint.SuccessfulChecks, endpoint.Id), fingerprint);
+
     /// <summary>Кавычит строковое CSV-поле и нейтрализует spreadsheet formula injection.</summary>
     private static string CsvField(string value)
     {
@@ -287,3 +403,6 @@ public sealed record ProxyDto(string Host, int Port, ProxyProtocol Protocol, str
             x.LatencyMs, x.SuccessRate, x.ExitIp, x.LastCheckedAt);
     }
 }
+
+/// <summary>Bounded keyset-страница без линейного offset и полного count.</summary>
+public sealed record CursorPagedResult<T>(IReadOnlyList<T> Items, int PageSize, bool HasMore, string? NextCursor);
