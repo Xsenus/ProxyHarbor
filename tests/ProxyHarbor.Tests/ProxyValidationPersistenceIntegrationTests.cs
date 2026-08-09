@@ -1,7 +1,9 @@
 using System.Net;
+using System.Net.Sockets;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using Npgsql;
 using ProxyHarbor.Domain;
 using ProxyHarbor.Infrastructure;
 
@@ -11,6 +13,176 @@ namespace ProxyHarbor.Tests;
 [Collection(PostgresIntegrationGroup.Name)]
 public sealed class ProxyValidationPersistenceIntegrationTests
 {
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
+    public async Task CancellationAfterClaimImmediatelyReleasesLeaseWithoutChangingQuality()
+    {
+        var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
+        if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
+
+        var schema = $"proxyharbor_validation_cancel_{Guid.NewGuid():N}";
+        var builder = new NpgsqlConnectionStringBuilder(baseConnectionString) { SearchPath = schema };
+        await using var admin = new NpgsqlConnection(baseConnectionString);
+        await admin.OpenAsync();
+        await using (var create = new NpgsqlCommand($"CREATE SCHEMA {schema}", admin))
+            await create.ExecuteNonQueryAsync();
+
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        using var serverStop = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var accepted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var server = Task.Run(async () =>
+        {
+            using var client = await listener.AcceptTcpClientAsync(serverStop.Token);
+            accepted.TrySetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, serverStop.Token);
+        });
+
+        try
+        {
+            var dbOptions = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+                .UseNpgsql(builder.ConnectionString)
+                .Options;
+            var factory = new TestDbFactory(dbOptions);
+            await using (var migrationDb = await factory.CreateDbContextAsync())
+                await migrationDb.Database.MigrateAsync();
+            var proxyId = Guid.NewGuid();
+            await using (var seed = await factory.CreateDbContextAsync())
+            {
+                seed.Proxies.Add(new ProxyEndpoint
+                {
+                    Id = proxyId,
+                    Host = IPAddress.Loopback.ToString(),
+                    Port = port,
+                    Protocol = ProxyProtocol.Http,
+                    Status = ProxyStatus.Alive,
+                    SuccessfulChecks = 7,
+                    FailedChecks = 2,
+                    ConsecutiveFailedChecks = 1
+                });
+                await seed.SaveChangesAsync();
+            }
+
+            var settings = new CollectorOptions
+            {
+                ValidationBatchSize = 1,
+                ValidationConcurrency = 1,
+                ProbeTimeoutSeconds = 10
+            };
+            using var clients = new StubHttpClientFactory();
+            using var origin = new OriginIpProvider(clients, Options.Create(settings), new ProbeControlHealth());
+            using var validator = new ProxyValidator(
+                factory,
+                new ProxyProbeService(Options.Create(settings), origin),
+                Options.Create(settings),
+                NullLogger<ProxyValidator>.Instance);
+            using var cancellation = new CancellationTokenSource();
+
+            var validation = validator.ValidateBatchAsync(cancellation.Token);
+            await accepted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await cancellation.CancelAsync();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => validation);
+
+            await using var verify = await factory.CreateDbContextAsync();
+            var saved = await verify.Proxies.AsNoTracking().SingleAsync(proxy => proxy.Id == proxyId);
+            Assert.Null(saved.CheckLeaseId);
+            Assert.Null(saved.CheckLeaseUntil);
+            Assert.Null(saved.LastCheckedAt);
+            Assert.Equal(ProxyStatus.Alive, saved.Status);
+            Assert.Equal(7, saved.SuccessfulChecks);
+            Assert.Equal(2, saved.FailedChecks);
+            Assert.Equal(1, saved.ConsecutiveFailedChecks);
+        }
+        finally
+        {
+            await serverStop.CancelAsync();
+            listener.Stop();
+            try { await server; }
+            catch (OperationCanceledException) when (serverStop.IsCancellationRequested) { }
+            await using var drop = new NpgsqlCommand($"DROP SCHEMA IF EXISTS {schema} CASCADE", admin);
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
+    public async Task LeaseHeartbeatAndCleanupAffectOnlyExactOwnerToken()
+    {
+        var connectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
+        if (string.IsNullOrWhiteSpace(connectionString)) return;
+
+        var dbOptions = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+            .UseNpgsql(connectionString)
+            .Options;
+        var factory = new TestDbFactory(dbOptions);
+        await using (var migrationDb = await factory.CreateDbContextAsync())
+            await migrationDb.Database.MigrateAsync();
+
+        var ownedId = Guid.NewGuid();
+        var foreignId = Guid.NewGuid();
+        var ownedLease = Guid.NewGuid();
+        var foreignLease = Guid.NewGuid();
+        var initialExpiry = new DateTimeOffset(2026, 8, 9, 8, 0, 0, TimeSpan.Zero);
+        var renewedExpiry = initialExpiry.AddMinutes(5);
+        await using (var seed = await factory.CreateDbContextAsync())
+        {
+            seed.Proxies.AddRange(
+                new ProxyEndpoint
+                {
+                    Id = ownedId,
+                    Host = $"12.34.{ownedId.ToByteArray()[0]}.{ownedId.ToByteArray()[1]}",
+                    Port = 40_000 + ownedId.ToByteArray()[2],
+                    CheckLeaseId = ownedLease,
+                    CheckLeaseUntil = initialExpiry
+                },
+                new ProxyEndpoint
+                {
+                    Id = foreignId,
+                    Host = $"13.35.{foreignId.ToByteArray()[0]}.{foreignId.ToByteArray()[1]}",
+                    Port = 40_000 + foreignId.ToByteArray()[2],
+                    CheckLeaseId = foreignLease,
+                    CheckLeaseUntil = initialExpiry
+                });
+            await seed.SaveChangesAsync();
+        }
+
+        var settings = new CollectorOptions();
+        using var clients = new StubHttpClientFactory();
+        using var origin = new OriginIpProvider(clients, Options.Create(settings), new ProbeControlHealth());
+        using var validator = new ProxyValidator(
+            factory,
+            new ProxyProbeService(Options.Create(settings), origin),
+            Options.Create(settings),
+            NullLogger<ProxyValidator>.Instance);
+
+        try
+        {
+            Assert.Equal(1, await validator.RenewLeaseAsync(ownedLease, renewedExpiry, CancellationToken.None));
+            await using (var renewed = await factory.CreateDbContextAsync())
+            {
+                Assert.Equal(renewedExpiry,
+                    await renewed.Proxies.Where(proxy => proxy.Id == ownedId).Select(proxy => proxy.CheckLeaseUntil).SingleAsync());
+                Assert.Equal(initialExpiry,
+                    await renewed.Proxies.Where(proxy => proxy.Id == foreignId).Select(proxy => proxy.CheckLeaseUntil).SingleAsync());
+            }
+
+            Assert.Equal(1, await validator.ReleaseLeaseAsync(ownedLease, CancellationToken.None));
+            await using var released = await factory.CreateDbContextAsync();
+            var owned = await released.Proxies.AsNoTracking().SingleAsync(proxy => proxy.Id == ownedId);
+            var foreign = await released.Proxies.AsNoTracking().SingleAsync(proxy => proxy.Id == foreignId);
+            Assert.Null(owned.CheckLeaseId);
+            Assert.Null(owned.CheckLeaseUntil);
+            Assert.Equal(foreignLease, foreign.CheckLeaseId);
+            Assert.Equal(initialExpiry, foreign.CheckLeaseUntil);
+        }
+        finally
+        {
+            await using var cleanup = await factory.CreateDbContextAsync();
+            await cleanup.Proxies.Where(proxy => proxy.Id == ownedId || proxy.Id == foreignId).ExecuteDeleteAsync();
+        }
+    }
+
     [Fact]
     [Trait("Category", "PostgresIntegration")]
     public async Task DeferredResultReleasesLeaseWithoutDamagingProxyQuality()

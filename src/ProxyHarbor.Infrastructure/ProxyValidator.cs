@@ -17,6 +17,12 @@ public sealed class ProxyValidator(
     private static readonly Action<ILogger, string, Exception?> UnexpectedProbeFailure =
         LoggerMessage.Define<string>(LogLevel.Error, new EventId(1301, "UnexpectedProbeFailure"),
             "Непредусмотренная ошибка проверки прокси {ProxyKey}");
+    private static readonly Action<ILogger, Guid, Exception?> LeaseRenewalFailed =
+        LoggerMessage.Define<Guid>(LogLevel.Error, new EventId(1302, "LeaseRenewalFailed"),
+            "Не удалось продлить аренду validation-пакета {LeaseId}; устаревшие результаты будут отклонены PostgreSQL");
+    private static readonly Action<ILogger, Guid, Exception?> LeaseReleaseFailed =
+        LoggerMessage.Define<Guid>(LogLevel.Warning, new EventId(1303, "LeaseReleaseFailed"),
+            "Не удалось досрочно освободить аренду validation-пакета {LeaseId}; она истечёт автоматически");
     private readonly SemaphoreSlim _runGate = new(1, 1);
 
     /// <summary>Проверяет приоритетный пакет и возвращает число фактически сохранённых результатов.</summary>
@@ -33,46 +39,63 @@ public sealed class ProxyValidator(
             var now = DateTimeOffset.UtcNow;
             var concurrency = Math.Clamp(settings.ValidationConcurrency, 1, 1000);
             var batchSize = Math.Clamp(settings.ValidationBatchSize, 1, 100_000);
-            var waves = (int)Math.Ceiling((double)batchSize / concurrency);
-            var leaseDuration = TimeSpan.FromSeconds(Math.Max(120, waves * settings.ProbeTimeoutSeconds + 60));
+            // Статическая аренда на worst-case длительность всего пакета при допустимых
+            // настройках могла достигать 139 дней. Короткая heartbeat-аренда ограничивает
+            // восстановление после аварии несколькими минутами независимо от batch size.
+            var leaseDuration = ValidationLeasePolicy.Duration(settings.ProbeTimeoutSeconds);
             var leaseUntil = now.Add(leaseDuration);
             var leaseId = Guid.NewGuid();
 
             var proxies = await ClaimBatchAsync(batchSize, now, leaseUntil, leaseId, cancellationToken);
             if (proxies.Count == 0) return (0, 0, 0);
 
-            var results = new System.Collections.Concurrent.ConcurrentBag<ProxyCheckResult>();
-            await Parallel.ForEachAsync(proxies, new ParallelOptions
+            using var heartbeatStop = new CancellationTokenSource();
+            var heartbeat = MaintainLeaseAsync(leaseId, leaseDuration, heartbeatStop.Token);
+            try
             {
-                MaxDegreeOfParallelism = concurrency,
-                CancellationToken = cancellationToken
-            }, async (proxy, token) =>
-            {
-                try { results.Add(await probe.CheckAsync(proxy, token)); }
-                catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
-                catch (ProbeControlUnavailableException exception)
+                var results = new System.Collections.Concurrent.ConcurrentBag<ProxyCheckResult>();
+                await Parallel.ForEachAsync(proxies, new ParallelOptions
                 {
-                    results.Add(new ProxyCheckResult(proxy.Id, false, null, null, false,
-                        exception.Message, IsDeferred: true));
-                }
-                catch (Exception exception)
+                    MaxDegreeOfParallelism = concurrency,
+                    CancellationToken = cancellationToken
+                }, async (proxy, token) =>
                 {
-                    // Неизвестная ошибка реализации не доказывает неисправность внешнего прокси.
-                    UnexpectedProbeFailure(logger, proxy.Key, exception);
-                    results.Add(new ProxyCheckResult(proxy.Id, false, null, null, false,
-                        "internal probe error", IsDeferred: true));
-                }
-            });
+                    try { results.Add(await probe.CheckAsync(proxy, token)); }
+                    catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+                    catch (ProbeControlUnavailableException exception)
+                    {
+                        results.Add(new ProxyCheckResult(proxy.Id, false, null, null, false,
+                            exception.Message, IsDeferred: true));
+                    }
+                    catch (Exception exception)
+                    {
+                        // Неизвестная ошибка реализации не доказывает неисправность внешнего прокси.
+                        UnexpectedProbeFailure(logger, proxy.Key, exception);
+                        results.Add(new ProxyCheckResult(proxy.Id, false, null, null, false,
+                            "internal probe error", IsDeferred: true));
+                    }
+                });
 
-            now = DateTimeOffset.UtcNow;
-            var proxiesById = proxies.ToDictionary(x => x.Id);
-            var updates = results.Select(result => ProxyCheckScheduler.Create(
-                result,
-                proxiesById[result.ProxyId].ConsecutiveFailedChecks,
-                leaseId,
-                now,
-                settings)).ToArray();
-            return await PersistResultsAsync(updates, cancellationToken);
+                now = DateTimeOffset.UtcNow;
+                var proxiesById = proxies.ToDictionary(x => x.Id);
+                var updates = results.Select(result => ProxyCheckScheduler.Create(
+                    result,
+                    proxiesById[result.ProxyId].ConsecutiveFailedChecks,
+                    leaseId,
+                    now,
+                    settings)).ToArray();
+                return await PersistResultsAsync(updates, cancellationToken);
+            }
+            catch
+            {
+                await ReleaseLeaseBestEffortAsync(leaseId);
+                throw;
+            }
+            finally
+            {
+                await heartbeatStop.CancelAsync();
+                await heartbeat;
+            }
         }
         finally
         {
@@ -114,6 +137,56 @@ public sealed class ProxyValidator(
             await transaction.CommitAsync(token);
         });
         return proxies;
+    }
+
+    /// <summary>Продлевает только ещё принадлежащие этому экземпляру строки validation-пакета.</summary>
+    internal async Task<int> RenewLeaseAsync(Guid leaseId, DateTimeOffset leaseUntil, CancellationToken token)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(token);
+        return await db.Proxies.Where(proxy => proxy.CheckLeaseId == leaseId)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(proxy => proxy.CheckLeaseUntil, leaseUntil), token);
+    }
+
+    /// <summary>Освобождает пакет по точному lease token, не затрагивая аренду другой реплики.</summary>
+    internal async Task<int> ReleaseLeaseAsync(Guid leaseId, CancellationToken token)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(token);
+        return await db.Proxies.Where(proxy => proxy.CheckLeaseId == leaseId)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(proxy => proxy.CheckLeaseUntil, (DateTimeOffset?)null)
+                .SetProperty(proxy => proxy.CheckLeaseId, (Guid?)null), token);
+    }
+
+    private async Task MaintainLeaseAsync(Guid leaseId, TimeSpan duration, CancellationToken token)
+    {
+        using var timer = new PeriodicTimer(ValidationLeasePolicy.RenewalInterval(duration));
+        try
+        {
+            while (await timer.WaitForNextTickAsync(token))
+                await RenewLeaseAsync(leaseId, DateTimeOffset.UtcNow.Add(duration), token);
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+        catch (Exception exception)
+        {
+            // Lease token в merge-запросе не позволит записать устаревшие результаты,
+            // даже если после сбоя heartbeat пакет успеет арендовать другая реплика.
+            LeaseRenewalFailed(logger, leaseId, exception);
+        }
+    }
+
+    private async Task ReleaseLeaseBestEffortAsync(Guid leaseId)
+    {
+        try
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            await ReleaseLeaseAsync(leaseId, timeout.Token);
+        }
+        catch (Exception exception)
+        {
+            // Исходная ошибка или отмена важнее вторичного cleanup-сбоя. Короткая
+            // bounded-аренда остаётся последним механизмом автоматического восстановления.
+            LeaseReleaseFailed(logger, leaseId, exception);
+        }
     }
 
     internal async Task<(int Checked, int Alive, int Deferred)> PersistResultsAsync(
@@ -267,3 +340,15 @@ internal sealed record ScheduledProxyCheck(
     int FailureStreak);
 
 internal enum ProxyCheckOutcome { Dead, Alive, Deferred }
+
+/// <summary>Ограничивает crash-recovery аренды независимо от размера validation-пакета.</summary>
+internal static class ValidationLeasePolicy
+{
+    internal static TimeSpan Duration(int probeTimeoutSeconds)
+    {
+        var timeout = Math.Clamp(probeTimeoutSeconds, 1, 120);
+        return TimeSpan.FromSeconds(Math.Max(120, checked(timeout * 2 + 60)));
+    }
+
+    internal static TimeSpan RenewalInterval(TimeSpan duration) => TimeSpan.FromTicks(duration.Ticks / 3);
+}

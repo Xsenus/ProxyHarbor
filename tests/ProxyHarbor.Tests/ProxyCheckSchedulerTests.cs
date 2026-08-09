@@ -61,6 +61,20 @@ public sealed class ProxyCheckSchedulerTests
         Assert.Equal(Now.AddMinutes(1), scheduled.NextCheckAt);
     }
 
+    [Theory]
+    [InlineData(1, 120)]
+    [InlineData(30, 120)]
+    [InlineData(31, 122)]
+    [InlineData(120, 300)]
+    [InlineData(int.MaxValue, 300)]
+    public void ValidationLeaseDurationIsShortAndBounded(int probeTimeoutSeconds, int expectedSeconds)
+    {
+        var duration = ValidationLeasePolicy.Duration(probeTimeoutSeconds);
+
+        Assert.Equal(TimeSpan.FromSeconds(expectedSeconds), duration);
+        Assert.Equal(TimeSpan.FromTicks(duration.Ticks / 3), ValidationLeasePolicy.RenewalInterval(duration));
+    }
+
     private static ProxyCheckResult Result(bool alive) =>
         new(Guid.NewGuid(), alive, alive ? 100 : null, alive ? "1.1.1.1" : null, alive, alive ? null : "failed");
 }
