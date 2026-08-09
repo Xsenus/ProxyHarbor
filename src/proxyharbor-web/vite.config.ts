@@ -11,6 +11,7 @@ export default defineConfig({
   },
   server: {
     // Разрешает безопасно открывать dev-сервер из изолированного браузера Docker Desktop.
+    host: true,
     allowedHosts: ['host.docker.internal'],
     proxy: { '/api': 'http://localhost:8080', '/healthz': 'http://localhost:8080' },
   },

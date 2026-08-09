@@ -5,6 +5,15 @@ type Protocol = 'Http' | 'Https' | 'Socks4' | 'Socks5'
 type Proxy = { host: string; port: number; protocol: Protocol; url: string; latencyMs: number; successRate: number; exitIp?: string; lastCheckedAt: string }
 type Stats = { alive: number; staleAlive: number; pending: number; dead: number; dueForCheck: number; scheduledChecks: number; averageLatencyMs: number | null; sources: number; failingSources: number; repeatedlyFailingSources: number; byProtocol: { protocol: Protocol; count: number }[]; lastRun?: { startedAt: string; candidatesFound: number; newProxies: number; status: string } }
 type Source = { id: string; name: string; url: string; defaultProtocol: Protocol; enabled: boolean; priority: number; lastItemCount: number; lastFetchedAt?: string; lastSucceededAt?: string; nextFetchAt?: string; consecutiveFailures: number; lastError?: string }
+type CollectionRun = { id: string; startedAt: string; finishedAt?: string; sourcesProcessed: number; sourcesSucceeded: number; sourcesFailed: number; sourcesSkipped: number; candidatesFound: number; newProxies: number; status: string; error?: string }
+type BackupRun = { id: string; startedAt: string; finishedAt?: string; status: string; fileName?: string; sizeBytes: number; telegramConfigured: boolean; sentToTelegram: boolean; error?: string }
+type Diagnostics = {
+  serverTime: string
+  databaseBytes: number
+  validationQueue?: { total: number; leased: number; neverChecked: number; due: number; scheduled: number; repeatedlyFailing: number }
+  recentRuns: CollectionRun[]
+  recentBackups: BackupRun[]
+}
 
 const API = import.meta.env.VITE_API_URL ?? ''
 const protocols: Protocol[] = ['Http', 'Https', 'Socks4', 'Socks5']
@@ -22,6 +31,8 @@ export default function App() {
   const [adminAuthenticated, setAdminAuthenticated] = useState(false)
   const [adminError, setAdminError] = useState('')
   const [sources, setSources] = useState<Source[]>([])
+  const [diagnostics, setDiagnostics] = useState<Diagnostics | null>(null)
+  const [adminLoading, setAdminLoading] = useState(false)
   const [action, setAction] = useState('')
   const [sourceBusy, setSourceBusy] = useState('')
   const [sourceDraft, setSourceDraft] = useState<{name: string; url: string; protocol: Protocol; priority: number}>({ name: '', url: '', protocol: 'Http', priority: 100 })
@@ -54,24 +65,37 @@ export default function App() {
     }
   }, [load])
 
-  const loadSources = useCallback(async () => {
+  const loadAdminData = useCallback(async () => {
     if (!adminKey) {
       setAdminAuthenticated(false)
       return
     }
+    setAdminLoading(true)
     try {
-      const response = await fetch(`${API}/api/v1/admin/sources`, { headers: { 'X-Admin-Key': adminKey } })
-      if (!response.ok) throw new Error(await responseMessage(response, 'Неверный ключ администратора'))
+      const requestOptions = { headers: { 'X-Admin-Key': adminKey } }
+      const [sourcesResponse, diagnosticsResponse] = await Promise.all([
+        fetch(`${API}/api/v1/admin/sources`, requestOptions),
+        fetch(`${API}/api/v1/admin/diagnostics`, requestOptions),
+      ])
+      const unauthorizedResponse = [sourcesResponse, diagnosticsResponse].find(response => response.status === 401)
+      if (unauthorizedResponse) {
+        sessionStorage.removeItem('proxyharbor-admin-key')
+        setAdminAuthenticated(false)
+        setSources([])
+        setDiagnostics(null)
+        throw new Error(await responseMessage(unauthorizedResponse, 'Неверный ключ администратора'))
+      }
+      if (!sourcesResponse.ok) throw new Error(await responseMessage(sourcesResponse, 'Неверный ключ администратора'))
+      if (!diagnosticsResponse.ok) throw new Error(await responseMessage(diagnosticsResponse, 'Диагностика недоступна'))
       sessionStorage.setItem('proxyharbor-admin-key', adminKey)
-      setSources(await response.json())
+      const [sourceRows, diagnosticSnapshot] = await Promise.all([sourcesResponse.json(), diagnosticsResponse.json()])
+      setSources(sourceRows)
+      setDiagnostics(diagnosticSnapshot)
       setAdminAuthenticated(true)
       setAdminError('')
     } catch (reason) {
-      sessionStorage.removeItem('proxyharbor-admin-key')
-      setAdminAuthenticated(false)
-      setSources([])
       setAdminError(reason instanceof Error ? reason.message : 'Не удалось открыть административную консоль')
-    }
+    } finally { setAdminLoading(false) }
   }, [adminKey])
 
   useEffect(() => {
@@ -82,9 +106,15 @@ export default function App() {
     if (autoLoginAttemptedRef.current) return
     autoLoginAttemptedRef.current = true
     if (!adminKey) return
-    const initialLoad = window.setTimeout(() => void loadSources(), 0)
+    const initialLoad = window.setTimeout(() => void loadAdminData(), 0)
     return () => window.clearTimeout(initialLoad)
-  }, [adminOpen, adminKey, loadSources])
+  }, [adminOpen, adminKey, loadAdminData])
+
+  useEffect(() => {
+    if (!adminOpen || !adminAuthenticated) return
+    const refreshTimer = window.setInterval(() => void loadAdminData(), 15_000)
+    return () => window.clearInterval(refreshTimer)
+  }, [adminOpen, adminAuthenticated, loadAdminData])
 
   const openAdmin = (event: React.MouseEvent<HTMLButtonElement>) => {
     lastAdminTriggerRef.current = event.currentTarget
@@ -138,7 +168,7 @@ export default function App() {
         if (response.status === 401) { sessionStorage.removeItem('proxyharbor-admin-key'); setAdminAuthenticated(false) }
         throw new Error(await responseMessage(response, 'Административная операция не выполнена'))
       }
-      await Promise.all([load(), loadSources()])
+      await Promise.all([load(), loadAdminData()])
     } catch (reason) { setAdminError(reason instanceof Error ? reason.message : 'Административная операция не выполнена') }
     finally { setAction('') }
   }
@@ -158,7 +188,7 @@ export default function App() {
         throw new Error(await responseMessage(response, 'Не удалось добавить источник'))
       }
       setSourceDraft({ name: '', url: '', protocol: 'Http', priority: 100 })
-      await loadSources()
+      await loadAdminData()
     } catch (reason) { setAdminError(reason instanceof Error ? reason.message : 'Не удалось добавить источник') }
     finally { setSourceBusy('') }
   }
@@ -176,7 +206,7 @@ export default function App() {
         if (response.status === 401) { sessionStorage.removeItem('proxyharbor-admin-key'); setAdminAuthenticated(false) }
         throw new Error(await responseMessage(response, 'Не удалось изменить состояние источника'))
       }
-      await loadSources()
+      await loadAdminData()
     } catch (reason) { setAdminError(reason instanceof Error ? reason.message : 'Не удалось изменить состояние источника') }
     finally { setSourceBusy('') }
   }
@@ -191,13 +221,15 @@ export default function App() {
         if (response.status === 401) { sessionStorage.removeItem('proxyharbor-admin-key'); setAdminAuthenticated(false) }
         throw new Error(await responseMessage(response, 'Не удалось удалить источник'))
       }
-      await loadSources()
+      await loadAdminData()
     } catch (reason) { setAdminError(reason instanceof Error ? reason.message : 'Не удалось удалить источник') }
     finally { setSourceBusy('') }
   }
 
   const protocolCounts = useMemo(() => Object.fromEntries(stats?.byProtocol.map(x => [x.protocol, x.count]) ?? []), [stats])
   const freshness = stats?.lastRun?.startedAt ? timeAgo(stats.lastRun.startedAt) : 'ожидается'
+  const latestCollection = diagnostics?.recentRuns[0]
+  const latestBackup = diagnostics?.recentBackups[0]
 
   return <div className="app-shell">
     <header aria-hidden={adminOpen || undefined}>
@@ -246,13 +278,26 @@ export default function App() {
       <section ref={adminDialogRef} className="admin-modal" role="dialog" aria-modal="true" aria-labelledby="admin-title">
         <button className="close" aria-label="Закрыть" onClick={closeAdmin}><X/></button>
         <span className="kicker">ADMIN CONSOLE</span><h2 id="admin-title">Управление сбором</h2><p>Ключ хранится только до закрытия вкладки.</p>
-        <div className="key-input"><KeyRound size={18}/><input ref={adminKeyRef} type="password" aria-label="Ключ администратора" placeholder="X-Admin-Key" value={adminKey} onChange={e => { setAdminKey(e.target.value); setAdminAuthenticated(false); setAdminError(''); setSources([]) }}/><button onClick={loadSources}>Войти</button></div>
+        <div className="key-input"><KeyRound size={18}/><input ref={adminKeyRef} type="password" aria-label="Ключ администратора" placeholder="X-Admin-Key" value={adminKey} onChange={e => { setAdminKey(e.target.value); setAdminAuthenticated(false); setAdminError(''); setSources([]); setDiagnostics(null) }}/><button onClick={loadAdminData} disabled={adminLoading}>{adminLoading ? 'Проверяем…' : 'Войти'}</button></div>
         {adminError && <div className="admin-notice" role="alert"><X size={16}/>{adminError}</div>}
         <div className="admin-actions">
           <button onClick={() => runAdminAction('collect')} disabled={!adminAuthenticated || !!action}><Play/> {action === 'collect' ? 'Собираем…' : 'Запустить сбор'}</button>
           <button onClick={() => runAdminAction('validate')} disabled={!adminAuthenticated || !!action}><Check/> {action === 'validate' ? 'Проверяем…' : 'Проверить пакет'}</button>
           <button onClick={() => runAdminAction('backup')} disabled={!adminAuthenticated || !!action}><Database/> {action === 'backup' ? 'Копируем…' : 'Создать backup'}</button>
         </div>
+        {adminAuthenticated && <section className="admin-diagnostics" aria-label="Диагностика сервиса">
+          <div className="diagnostics-heading"><h3>Диагностика</h3><button aria-label="Обновить диагностику" onClick={loadAdminData} disabled={adminLoading}><RefreshCw className={adminLoading ? 'spin' : ''}/></button></div>
+          <div className="diagnostic-grid">
+            <article><span>Очередь проверки</span><strong>{formatNumber(diagnostics?.validationQueue?.due)}</strong><small>{formatNumber(diagnostics?.validationQueue?.neverChecked)} ещё не проверено · {formatNumber(diagnostics?.validationQueue?.leased)} арендовано</small></article>
+            <article><span>Последний сбор</span><strong className={statusClass(latestCollection?.status)}>{statusLabel(latestCollection?.status)}</strong><small>{latestCollection ? `${formatNumber(latestCollection.candidatesFound)} кандидатов · ${timeAgo(latestCollection.startedAt)}` : 'Циклов пока нет'}</small></article>
+            <article><span>Последний backup</span><strong className={statusClass(latestBackup?.status)}>{statusLabel(latestBackup?.status)}</strong><small>{latestBackup ? `${formatBytes(latestBackup.sizeBytes)} · ${backupDelivery(latestBackup)}` : 'Backup ещё не создавался'}</small></article>
+            <article><span>Размер PostgreSQL</span><strong>{formatBytes(diagnostics?.databaseBytes)}</strong><small>{formatNumber(diagnostics?.validationQueue?.total)} известных прокси</small></article>
+          </div>
+          <div className="diagnostic-history">
+            <div><h4>Последние сборы</h4>{diagnostics?.recentRuns.slice(0, 4).map(run => <article key={run.id} title={run.error}><span><i className={statusClass(run.status)}/>{timeAgo(run.startedAt)}</span><small>{formatNumber(run.sourcesSucceeded)}/{formatNumber(run.sourcesProcessed)} источников · +{formatNumber(run.newProxies)}</small></article>)}{diagnostics?.recentRuns.length === 0 && <p>Истории пока нет.</p>}</div>
+            <div><h4>История backup</h4>{diagnostics?.recentBackups.slice(0, 4).map(run => <article key={run.id} title={run.error}><span><i className={statusClass(run.status)}/>{run.fileName ?? timeAgo(run.startedAt)}</span><small>{formatBytes(run.sizeBytes)} · {backupDelivery(run)}</small></article>)}{diagnostics?.recentBackups.length === 0 && <p>Истории пока нет.</p>}</div>
+          </div>
+        </section>}
         <h3>Добавить источник</h3>
         <form className="source-form" onSubmit={saveSource}>
           <input required minLength={2} maxLength={120} aria-label="Название источника" placeholder="Название" value={sourceDraft.name} onChange={e => setSourceDraft({...sourceDraft, name: e.target.value})}/>
@@ -273,6 +318,16 @@ export default function App() {
 
 function Metric({icon, label, value, note}: {icon: React.ReactNode; label: string; value: string; note: string}) { return <article className="metric"><div className="metric-icon">{icon}</div><div><span>{label}</span><strong>{value}</strong><small>{note}</small></div></article> }
 function formatNumber(value?: number) { return value === undefined ? '—' : value.toLocaleString('ru-RU') }
+function formatBytes(value?: number) {
+  if (value === undefined) return '—'
+  if (value < 1024) return `${value} Б`
+  if (value < 1024 ** 2) return `${(value / 1024).toLocaleString('ru-RU', { maximumFractionDigits: 1 })} КБ`
+  if (value < 1024 ** 3) return `${(value / 1024 ** 2).toLocaleString('ru-RU', { maximumFractionDigits: 1 })} МБ`
+  return `${(value / 1024 ** 3).toLocaleString('ru-RU', { maximumFractionDigits: 1 })} ГБ`
+}
+function statusClass(status?: string) { return status === 'completed' ? 'status-ok' : status === 'failed' ? 'status-failed' : 'status-running' }
+function statusLabel(status?: string) { return status === 'completed' ? 'успешно' : status === 'failed' ? 'ошибка' : status === 'running' ? 'выполняется' : 'нет данных' }
+function backupDelivery(run: BackupRun) { return run.sentToTelegram ? 'доставлен в Telegram' : run.telegramConfigured ? 'Telegram не доставлен' : 'только локально' }
 function label(protocol: Protocol) { return ({Http: 'HTTP', Https: 'HTTPS', Socks4: 'SOCKS4', Socks5: 'SOCKS5'})[protocol] }
 function timeAgo(value: string) { const sec = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 1000)); if (sec < 10) return 'только что'; if (sec < 60) return `${sec} сек назад`; if (sec < 3600) return `${Math.floor(sec / 60)} мин назад`; return `${Math.floor(sec / 3600)} ч назад` }
 function timeUntil(value: string) { const sec = Math.max(0, Math.ceil((new Date(value).getTime() - Date.now()) / 1000)); if (sec < 60) return `через ${sec} сек`; if (sec < 3600) return `через ${Math.ceil(sec / 60)} мин`; return `через ${Math.ceil(sec / 3600)} ч` }
