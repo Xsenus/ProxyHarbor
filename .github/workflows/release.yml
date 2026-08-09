@@ -41,6 +41,9 @@ jobs:
         run: |
           ./tools/Get-ReleaseMetadata.ps1 -Tag $env:GITHUB_REF_NAME -RepositoryOwner $env:GITHUB_REPOSITORY_OWNER -OutputFile $env:GITHUB_OUTPUT
           ./tools/Test-ReleaseMetadata.ps1
+          $releaseVersion = $env:GITHUB_REF_NAME.Substring(1)
+          ./tools/Test-Changelog.ps1 -Version $releaseVersion
+          ./tools/Test-ChangelogContracts.ps1
           ./tools/Test-WorkflowSecurity.ps1
           ./tools/Test-AuditSourceFeeds.ps1
       - name: Build and test backend against PostgreSQL
@@ -219,11 +222,14 @@ jobs:
           jq --slurp --arg version "$VERSION" --arg revision "$REVISION" \
             '{schemaVersion:1,version:$version,revision:$revision,images:(sort_by(.component))}' \
             release-metadata/*.json > proxyharbor-release.json
+          pwsh -NoProfile -File ./tools/Test-Changelog.ps1 \
+            -Version "$VERSION" -OutputSectionFile release-notes.md
           release_args=(--verify-tag --title "ProxyHarbor $VERSION")
           if [[ "$IS_PRERELEASE" == 'true' ]]; then release_args+=(--prerelease); fi
-          assets=(proxyharbor-release.json docker-compose.yml docker-compose.release.yml docker-compose.production.yml .env.example)
+          assets=(proxyharbor-release.json CHANGELOG.md docker-compose.yml docker-compose.release.yml docker-compose.production.yml .env.example)
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" "${assets[@]}" --clobber
+            gh release edit "$TAG" --title "ProxyHarbor $VERSION" --notes-file release-notes.md
           else
-            gh release create "$TAG" "${assets[@]}" --generate-notes "${release_args[@]}"
+            gh release create "$TAG" "${assets[@]}" --notes-file release-notes.md "${release_args[@]}"
           fi
