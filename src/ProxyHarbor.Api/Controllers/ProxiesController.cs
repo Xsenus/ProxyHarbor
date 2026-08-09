@@ -55,7 +55,7 @@ public sealed class ProxiesController(
         var freshAfter = DateTimeOffset.UtcNow.AddMinutes(-collectorOptions.Value.PublicFreshnessMinutes);
         var query = ApplyFilters(db.Proxies.AsNoTracking().Where(x =>
             x.Status == ProxyStatus.Alive && x.LastCheckedAt >= freshAfter), protocol, maxLatencyMs, minSuccessRate);
-        var entities = await query.OrderBy(x => x.LatencyMs).ThenByDescending(x => x.SuccessfulChecks)
+        var entities = await OrderForPublication(query)
             .Skip(skip).Take(pageSize).ToListAsync(cancellationToken);
         var items = entities.Select(ProxyDto.From).ToList();
         var total = await query.CountAsync(cancellationToken);
@@ -99,7 +99,7 @@ public sealed class ProxiesController(
             var freshAfter = DateTimeOffset.UtcNow.AddMinutes(-collectorOptions.Value.PublicFreshnessMinutes);
             var query = ApplyFilters(db.Proxies.AsNoTracking().Where(x =>
                 x.Status == ProxyStatus.Alive && x.LastCheckedAt >= freshAfter), protocol, maxLatencyMs, minSuccessRate);
-            var ordered = query.OrderBy(x => x.LatencyMs).ThenBy(x => x.Id);
+            var ordered = OrderForPublication(query);
             var nextOffset = (long)offset + limit;
             // Предварительный EXISTS не материализует страницу и позволяет выставить
             // continuation headers до первой записи потокового HTTP body.
@@ -221,6 +221,16 @@ public sealed class ProxiesController(
         }
         return query;
     }
+
+    /// <summary>
+    /// Задаёт единый полный порядок для списка и каждого export-формата.
+    /// UUID устраняет неоднозначность между строками с одинаковой latency/statistics,
+    /// поэтому последовательные offset-страницы не повторяют и не пропускают записи.
+    /// </summary>
+    private static IOrderedQueryable<ProxyEndpoint> OrderForPublication(IQueryable<ProxyEndpoint> query) =>
+        query.OrderBy(x => x.LatencyMs)
+            .ThenByDescending(x => x.SuccessfulChecks)
+            .ThenBy(x => x.Id);
 
     /// <summary>Кавычит строковое CSV-поле и нейтрализует spreadsheet formula injection.</summary>
     private static string CsvField(string value)

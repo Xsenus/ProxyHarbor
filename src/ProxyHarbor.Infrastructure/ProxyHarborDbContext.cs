@@ -16,8 +16,28 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
     {
         var proxy = modelBuilder.Entity<ProxyEndpoint>();
         proxy.HasIndex(x => new { x.Host, x.Port, x.Protocol }).IsUnique();
-        proxy.HasIndex(x => new { x.Status, x.LatencyMs, x.LastCheckedAt });
-        proxy.HasIndex(x => new { x.Status, x.Protocol, x.LatencyMs, x.LastCheckedAt });
+        // Публичная выдача читает только Alive. Частичные индексы не раздуваются
+        // сотнями тысяч Pending/Dead строк и точно повторяют стабильный API order.
+        proxy.HasIndex(x => new { x.LatencyMs, x.SuccessfulChecks, x.Id, x.LastCheckedAt })
+            .HasDatabaseName("IX_Proxies_Alive_PublicOrder")
+            .HasFilter("\"Status\" = 1")
+            .IsDescending(false, true, false, false)
+            .IsCreatedConcurrently();
+        proxy.HasIndex(x => new { x.Protocol, x.LatencyMs, x.SuccessfulChecks, x.Id, x.LastCheckedAt })
+            .HasDatabaseName("IX_Proxies_Alive_Protocol_PublicOrder")
+            .HasFilter("\"Status\" = 1")
+            .IsDescending(false, false, true, false, false)
+            .IsCreatedConcurrently();
+        // Отдельные компактные индексы позволяют считать точный total без scan
+        // всей таблицы; LastCheckedAt является range-key окна публикации.
+        proxy.HasIndex(x => x.LastCheckedAt)
+            .HasDatabaseName("IX_Proxies_Alive_LastCheckedAt")
+            .HasFilter("\"Status\" = 1")
+            .IsCreatedConcurrently();
+        proxy.HasIndex(x => new { x.Protocol, x.LastCheckedAt })
+            .HasDatabaseName("IX_Proxies_Alive_Protocol_LastCheckedAt")
+            .HasFilter("\"Status\" = 1")
+            .IsCreatedConcurrently();
         proxy.HasIndex(x => new { x.Status, x.LastSeenAt });
         proxy.HasIndex(x => new { x.NextCheckAt, x.CheckLeaseUntil });
         proxy.HasIndex(x => x.CheckLeaseId);

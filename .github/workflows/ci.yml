@@ -20,6 +20,25 @@ jobs:
       - name: Audit NuGet dependency graph
         run: dotnet list ProxyHarbor.slnx package --vulnerable --include-transitive --no-restore
       - run: dotnet build ProxyHarbor.slnx -c Release --no-restore
+      - name: Verify EF model has a committed migration
+        run: |
+          dotnet tool restore
+          dotnet ef migrations has-pending-model-changes \
+            --project src/ProxyHarbor.Infrastructure/ProxyHarbor.Infrastructure.csproj \
+            --startup-project src/ProxyHarbor.Api/ProxyHarbor.Api.csproj \
+            --configuration Release --no-build
+          migration_sql=$(dotnet ef migrations script \
+            20260809134556_ValidationRunAudit 20260809142844_OptimizePublicQueryOrder \
+            --project src/ProxyHarbor.Infrastructure/ProxyHarbor.Infrastructure.csproj \
+            --startup-project src/ProxyHarbor.Api/ProxyHarbor.Api.csproj \
+            --configuration Release --no-build)
+          echo "$migration_sql" | grep 'CREATE INDEX CONCURRENTLY "IX_Proxies_Alive_PublicOrder"'
+          echo "$migration_sql" | grep 'DROP INDEX CONCURRENTLY IF EXISTS "IX_Proxies_Status_LatencyMs_LastCheckedAt"'
+          create_line=$(echo "$migration_sql" | grep --line-number \
+            'CREATE INDEX CONCURRENTLY "IX_Proxies_Alive_PublicOrder"' | cut --delimiter=: --fields=1)
+          old_drop_line=$(echo "$migration_sql" | grep --line-number \
+            'DROP INDEX CONCURRENTLY IF EXISTS "IX_Proxies_Status_LatencyMs_LastCheckedAt"' | cut --delimiter=: --fields=1)
+          test "$create_line" -lt "$old_drop_line"
       - run: dotnet test ProxyHarbor.slnx -c Release --no-build --logger trx --collect:'XPlat Code Coverage' --results-directory TestResults
       - name: Enforce meaningful coverage floor
         shell: pwsh

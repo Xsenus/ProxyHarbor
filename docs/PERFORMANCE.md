@@ -13,3 +13,9 @@
 Production default — **800 / 1 600**. Он ускорил контрольную выборку примерно в 3,2 раза относительно прежнего 200 / 1 000 и оставляет 20% запаса до программного hard limit 1 000. Во время точки 800 процесс занимал около 146 МБ working set, 64 МБ private memory, 49 threads и 881 handle. Docker Compose задаёт API-процессу `nofile=8192`; probes используют async I/O и не создают отдельный thread на соединение.
 
 Результат зависит от доли мгновенно отклонённых соединений, таймаутов, ОС, сети и control endpoint, поэтому это не универсальная гарантия. Фактическую ёмкость конкретной установки показывают `proxyharbor_validation_checks_per_second` и `proxyharbor_validation_estimated_drain_seconds`. При устойчивых `Deferred`, росте ошибок control endpoint или нехватке дескрипторов уменьшите `VALIDATION_CONCURRENCY`; размер партии рекомендуется держать не меньше двух волн concurrency.
+
+## Публичная выдача
+
+SQL-план проверен на 310 429 сохранённых прокси с моделированием 148 720 свежих Alive-записей внутри откатываемой транзакции. Прежний deep protocol page (`offset=10000`, `limit=100`) выполнял incremental sort за 56,9 мс; итоговый partial deterministic index сократил его до 11,9 мс, одновременно добавив UUID tie-breaker. В write-heavy MVCC-состоянии точный общий `total` занимал 140,0 мс через parallel sequential scan и 36,1 мс через partial Alive index. В steady-state protocol-specific count использовал отдельный index-only scan за 0,85 мс. Первая страница осталась практически бесплатной — 0,28 мс.
+
+Четыре `IX_Proxies_Alive_*` индекса содержат только публикуемые Alive-строки: два точно соответствуют порядку списка/экспорта, ещё два считают freshness window с протоколом и без него. Миграция строит замену через `CREATE INDEX CONCURRENTLY`, оставляет прежние индексы доступными до окончания build и допускает безопасный повтор после оборванного запуска.

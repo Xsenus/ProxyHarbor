@@ -244,6 +244,47 @@ public sealed class ProxyPublicationTests
     }
 
     [Fact]
+    public async Task ListAndExportUseTheSameDeterministicTieBreakerAcrossPages()
+    {
+        var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+            .UseInMemoryDatabase($"stable-pagination-{Guid.NewGuid():N}")
+            .Options;
+        var now = DateTimeOffset.UtcNow;
+        var first = Endpoint("1.1.1.1", ProxyStatus.Alive, now);
+        first.Id = Guid.Parse("00000000-0000-0000-0000-000000000001");
+        first.LatencyMs = 100;
+        first.SuccessfulChecks = 5;
+        var second = Endpoint("8.8.8.8", ProxyStatus.Alive, now);
+        second.Id = Guid.Parse("00000000-0000-0000-0000-000000000002");
+        second.LatencyMs = 100;
+        second.SuccessfulChecks = 5;
+        await using (var seed = new ProxyHarborDbContext(options))
+        {
+            // Обратный insertion order не должен влиять на публичный контракт.
+            seed.Proxies.AddRange(second, first);
+            await seed.SaveChangesAsync();
+        }
+
+        var listController = new ProxiesController(
+            new TestDbFactory(options), Options.Create(new CollectorOptions { PublicFreshnessMinutes = 15 }));
+        var firstAction = await listController.Get(
+            null, null, null, page: 1, pageSize: 1, cancellationToken: CancellationToken.None);
+        var firstPage = Assert.IsType<PagedResult<ProxyDto>>(
+            Assert.IsType<OkObjectResult>(firstAction.Result).Value);
+        var secondAction = await listController.Get(
+            null, null, null, page: 2, pageSize: 1, cancellationToken: CancellationToken.None);
+        var secondPage = Assert.IsType<PagedResult<ProxyDto>>(
+            Assert.IsType<OkObjectResult>(secondAction.Result).Value);
+        Assert.Equal("1.1.1.1", Assert.Single(firstPage.Items).Host);
+        Assert.Equal("8.8.8.8", Assert.Single(secondPage.Items).Host);
+
+        var exportController = Controller(options, out var output);
+        Assert.IsType<EmptyResult>(await exportController.Export(
+            "txt", null, null, null, CancellationToken.None, limit: 1, offset: 1));
+        Assert.Equal("http://8.8.8.8:8080", Encoding.UTF8.GetString(output.ToArray()).Trim());
+    }
+
+    [Fact]
     public async Task ExtremePageNumberIsRejectedBeforeDatabaseOffsetOverflows()
     {
         var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()

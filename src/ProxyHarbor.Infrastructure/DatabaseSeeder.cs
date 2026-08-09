@@ -8,6 +8,7 @@ namespace ProxyHarbor.Infrastructure;
 public static class DatabaseSeeder
 {
     private const long MigrationLockKey = 0x5052484D49475203;
+    private static readonly TimeSpan MigrationLockPollInterval = TimeSpan.FromMilliseconds(100);
 
     /// <summary>Добавляет недостающие feed'ы и обновляет их метаданные, сохраняя выбор Enabled/Disabled.</summary>
     public static Task InitializeAsync(ProxyHarborDbContext db, CancellationToken cancellationToken = default) =>
@@ -107,16 +108,31 @@ public static class DatabaseSeeder
         bool acquire,
         CancellationToken cancellationToken)
     {
+        // Блокирующий pg_advisory_lock держит активный statement snapshot, пока ждёт
+        // другую реплику. CREATE INDEX CONCURRENTLY обязан дождаться такого snapshot,
+        // что образует цикл: index ждёт waiter, waiter ждёт владельца advisory lock.
+        // Короткий try-lock polling завершает statement между попытками и разрывает цикл.
         await using var command = new NpgsqlCommand(
-            acquire ? "SELECT pg_advisory_lock(@key)" : "SELECT pg_advisory_unlock(@key)",
+            acquire ? "SELECT pg_try_advisory_lock(@key)" : "SELECT pg_advisory_unlock(@key)",
             connection);
         command.Parameters.AddWithValue("key", MigrationLockKey);
-        var result = await command.ExecuteScalarAsync(cancellationToken);
-        if (!acquire && result is not true)
+        while (true)
         {
-            // Не возвращаем в pool сессию, для которой освобождение lock не подтверждено.
-            NpgsqlConnection.ClearPool(connection);
-            throw new InvalidOperationException("PostgreSQL не подтвердил освобождение migration lock.");
+            var result = await command.ExecuteScalarAsync(cancellationToken);
+            if (acquire)
+            {
+                if (result is true) return;
+                await Task.Delay(MigrationLockPollInterval, cancellationToken);
+                continue;
+            }
+
+            if (result is not true)
+            {
+                // Не возвращаем в pool сессию, для которой освобождение lock не подтверждено.
+                NpgsqlConnection.ClearPool(connection);
+                throw new InvalidOperationException("PostgreSQL не подтвердил освобождение migration lock.");
+            }
+            return;
         }
     }
 }
