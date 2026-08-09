@@ -19,6 +19,16 @@ public static class BackupEncryption
     /// </summary>
     public static async Task EncryptAsync(string source, string destination, string password, CancellationToken token)
     {
+        await using var input = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.Read,
+            128 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
+        await EncryptAsync(input, destination, password, token);
+    }
+
+    /// <summary>Шифрует последовательный поток без требования plaintext-файла или seek.</summary>
+    public static async Task EncryptAsync(Stream input, string destination, string password, CancellationToken token)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+        if (!input.CanRead) throw new ArgumentException("Исходный поток должен поддерживать чтение.", nameof(input));
         ValidatePassword(password);
         if (File.Exists(destination)) throw new IOException("Файл назначения уже существует.");
         var salt = RandomNumberGenerator.GetBytes(SaltSize);
@@ -27,8 +37,6 @@ public static class BackupEncryption
         try
         {
             using var aes = new AesGcm(key, TagSize);
-            await using var input = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.Read,
-                128 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
             await using var output = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None,
                 128 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
             await output.WriteAsync(CurrentMagic.ToArray(), token);

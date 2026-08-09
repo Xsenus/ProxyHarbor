@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.IO.Compression;
+using System.IO.Pipelines;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
@@ -61,55 +62,23 @@ public sealed class BackupService(
             }
 
             var stamp = DateTimeOffset.UtcNow.ToString("yyyyMMdd-HHmmss-ffff", CultureInfo.InvariantCulture);
-            var zipPath = Path.Combine(options.Directory, $"proxyharbor-{stamp}.zip");
-            var encryptedPath = zipPath + ".phbackup";
+            var encryptedPath = Path.Combine(options.Directory, $"proxyharbor-{stamp}.phbackup");
             var partialEncryptedPath = encryptedPath + ".partial";
 
             try
             {
                 Directory.CreateDirectory(options.Directory);
                 // Advisory lock доказывает отсутствие другого backup этой БД: можно безопасно
-                // удалить plaintext/partial артефакты, оставшиеся после kill -9 или power loss.
+                // удалить legacy plaintext/partial артефакты после kill -9 или power loss.
                 DeleteOrphanArtifacts(options.Directory);
                 await using var strategyDb = await dbFactory.CreateDbContextAsync(cancellationToken);
                 var strategy = strategyDb.Database.CreateExecutionStrategy();
-                await strategy.ExecuteAsync(async () =>
-                {
-                    if (File.Exists(zipPath)) File.Delete(zipPath);
-                    await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
-                    await using var file = File.Create(zipPath);
-                    using var archive = new ZipArchive(file, ZipArchiveMode.Create);
-                    await using var snapshot = await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.RepeatableRead, cancellationToken);
-                    await WriteJsonAsync(archive, "database/proxies.json", db.Proxies.AsNoTracking().AsAsyncEnumerable(), cancellationToken);
-                    await WriteJsonAsync(archive, "database/sources.json", db.Sources.AsNoTracking().AsAsyncEnumerable(), cancellationToken);
-                    await WriteJsonAsync(archive, "database/runs.json", db.Runs.AsNoTracking().AsAsyncEnumerable(), cancellationToken);
-                    // Текущий аудит завершается только после шифрования и Telegram-доставки,
-                    // поэтому в снимок входят лишь полностью определённые предыдущие попытки.
-                    await WriteJsonAsync(archive, "database/backup-runs.json",
-                        db.BackupRuns.AsNoTracking().Where(x => x.Id != backupRun.Id).AsAsyncEnumerable(), cancellationToken);
-                    await WriteJsonAsync(archive, "settings/collector.json", collectorOptions.Value, cancellationToken);
-                    await WriteJsonAsync(archive, "settings/backup.json", new
-                    {
-                        options.Enabled,
-                        options.IntervalHours,
-                        options.Directory,
-                        options.RetentionDays,
-                        options.HistoryRetentionDays,
-                        options.MaxTelegramFileSizeMb,
-                        telegramConfigured,
-                        secretsIncluded = false
-                    }, cancellationToken);
-                    await WriteJsonAsync(archive, "settings/runtime.json",
-                        BackupRuntimeSettings.FromConfiguration(configuration), cancellationToken);
-                    await WriteJsonAsync(archive, "manifest.json", new { version = 3, createdAt = DateTimeOffset.UtcNow, secretsIncluded = false }, cancellationToken);
-                    await snapshot.CommitAsync(cancellationToken);
-                });
+                await strategy.ExecuteAsync(() => CreateEncryptedSnapshotAsync(
+                    partialEncryptedPath, backupRun.Id, options, telegramConfigured, cancellationToken));
 
                 // Финальное имя публикуется атомарно: наблюдатель каталога никогда не увидит
                 // недописанный backup с расширением .phbackup.
-                await BackupEncryption.EncryptAsync(zipPath, partialEncryptedPath, options.EncryptionKey, cancellationToken);
                 File.Move(partialEncryptedPath, encryptedPath);
-                File.Delete(zipPath);
 
                 // Локальная retention-политика не зависит от доступности Telegram. Иначе
                 // продолжительный внешний сбой оставлял бы новый архив на каждом цикле,
@@ -135,7 +104,6 @@ public sealed class BackupService(
             }
             finally
             {
-                if (File.Exists(zipPath)) File.Delete(zipPath);
                 if (File.Exists(partialEncryptedPath)) File.Delete(partialEncryptedPath);
             }
         }
@@ -193,6 +161,132 @@ public sealed class BackupService(
         var entry = archive.CreateEntry(name, CompressionLevel.SmallestSize);
         await using var stream = entry.Open();
         await JsonSerializer.SerializeAsync(stream, value, JsonOptions, token);
+    }
+
+    /// <summary>Одновременно создаёт ZIP и шифрует его через bounded pipe без plaintext-файла.</summary>
+    internal async Task CreateEncryptedSnapshotAsync(
+        string partialEncryptedPath,
+        Guid backupRunId,
+        BackupOptions options,
+        bool telegramConfigured,
+        CancellationToken cancellationToken)
+    {
+        if (File.Exists(partialEncryptedPath)) File.Delete(partialEncryptedPath);
+        using var pipelineCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var pipe = new Pipe(new PipeOptions(
+            pauseWriterThreshold: 4 * 1024 * 1024,
+            resumeWriterThreshold: 2 * 1024 * 1024,
+            useSynchronizationContext: false));
+        var producer = ProduceSnapshotZipAsync(
+            pipe.Writer, backupRunId, options, telegramConfigured, pipelineCancellation.Token);
+        var encryptor = EncryptSnapshotPipeAsync(
+            pipe.Reader, partialEncryptedPath, options.EncryptionKey!, pipelineCancellation.Token);
+
+        var first = await Task.WhenAny(producer, encryptor);
+        if (first == producer)
+        {
+            try { await producer; }
+            catch
+            {
+                await pipelineCancellation.CancelAsync();
+                await IgnorePipelineFailureAsync(encryptor);
+                throw;
+            }
+            await encryptor;
+            return;
+        }
+
+        try { await encryptor; }
+        catch
+        {
+            await pipelineCancellation.CancelAsync();
+            await IgnorePipelineFailureAsync(producer);
+            throw;
+        }
+        await producer;
+    }
+
+    private async Task ProduceSnapshotZipAsync(
+        PipeWriter writer,
+        Guid backupRunId,
+        BackupOptions options,
+        bool telegramConfigured,
+        CancellationToken token)
+    {
+        Exception? failure = null;
+        try
+        {
+            await using var db = await dbFactory.CreateDbContextAsync(token);
+            await using var snapshot = await db.Database.BeginTransactionAsync(
+                System.Data.IsolationLevel.RepeatableRead, token);
+            await using var output = writer.AsStream(leaveOpen: true);
+            using (var archive = new ZipArchive(output, ZipArchiveMode.Create, leaveOpen: true))
+            {
+                await WriteJsonAsync(archive, "database/proxies.json", db.Proxies.AsNoTracking().AsAsyncEnumerable(), token);
+                await WriteJsonAsync(archive, "database/sources.json", db.Sources.AsNoTracking().AsAsyncEnumerable(), token);
+                await WriteJsonAsync(archive, "database/runs.json", db.Runs.AsNoTracking().AsAsyncEnumerable(), token);
+                // Текущий аудит завершается только после шифрования и Telegram-доставки,
+                // поэтому в снимок входят лишь полностью определённые предыдущие попытки.
+                await WriteJsonAsync(archive, "database/backup-runs.json",
+                    db.BackupRuns.AsNoTracking().Where(x => x.Id != backupRunId).AsAsyncEnumerable(), token);
+                await WriteJsonAsync(archive, "settings/collector.json", collectorOptions.Value, token);
+                await WriteJsonAsync(archive, "settings/backup.json", new
+                {
+                    options.Enabled,
+                    options.IntervalHours,
+                    options.Directory,
+                    options.RetentionDays,
+                    options.HistoryRetentionDays,
+                    options.MaxTelegramFileSizeMb,
+                    telegramConfigured,
+                    secretsIncluded = false
+                }, token);
+                await WriteJsonAsync(archive, "settings/runtime.json",
+                    BackupRuntimeSettings.FromConfiguration(configuration), token);
+                await WriteJsonAsync(archive, "manifest.json",
+                    new { version = 3, createdAt = DateTimeOffset.UtcNow, secretsIncluded = false }, token);
+            }
+            await output.FlushAsync(token);
+            await snapshot.CommitAsync(token);
+        }
+        catch (Exception exception)
+        {
+            failure = exception;
+            throw;
+        }
+        finally
+        {
+            await writer.CompleteAsync(failure);
+        }
+    }
+
+    private static async Task EncryptSnapshotPipeAsync(
+        PipeReader reader,
+        string destination,
+        string encryptionKey,
+        CancellationToken token)
+    {
+        Exception? failure = null;
+        try
+        {
+            await using var input = reader.AsStream(leaveOpen: true);
+            await BackupEncryption.EncryptAsync(input, destination, encryptionKey, token);
+        }
+        catch (Exception exception)
+        {
+            failure = exception;
+            throw;
+        }
+        finally
+        {
+            await reader.CompleteAsync(failure);
+        }
+    }
+
+    private static async Task IgnorePipelineFailureAsync(Task task)
+    {
+        try { await task; }
+        catch { }
     }
 
     private async Task SendToTelegramAsync(string path, BackupOptions options, CancellationToken token)

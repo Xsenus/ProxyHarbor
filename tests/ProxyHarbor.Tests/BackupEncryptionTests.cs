@@ -66,6 +66,20 @@ public sealed class BackupEncryptionTests
     }
 
     [Fact]
+    public async Task Phb3EncryptsANonSeekableStreamWithoutAPlaintextFile()
+    {
+        using var files = new TemporaryFiles();
+        var expected = RandomNumberGenerator.GetBytes(1_300_000);
+        await using var input = new NonSeekableReadStream(expected);
+
+        await BackupEncryption.EncryptAsync(input, files.Encrypted, Password, CancellationToken.None);
+        await BackupEncryption.DecryptAsync(files.Encrypted, files.Decrypted, Password, CancellationToken.None);
+
+        Assert.False(File.Exists(files.Source));
+        Assert.Equal(expected, await File.ReadAllBytesAsync(files.Decrypted));
+    }
+
+    [Fact]
     public async Task LegacyPhb2RemainsDecryptable()
     {
         using var files = new TemporaryFiles();
@@ -109,5 +123,35 @@ public sealed class BackupEncryptionTests
         public string Encrypted => Path.Combine(_directory, "backup.phbackup");
         public string Decrypted => Path.Combine(_directory, "restored.zip");
         public void Dispose() => Directory.Delete(_directory, recursive: true);
+    }
+
+    private sealed class NonSeekableReadStream(byte[] content) : Stream
+    {
+        private readonly MemoryStream _inner = new(content, writable: false);
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush() { }
+        public override int Read(byte[] buffer, int offset, int count) => _inner.Read(buffer, offset, count);
+        public override ValueTask<int> ReadAsync(
+            Memory<byte> buffer,
+            CancellationToken cancellationToken = default) => _inner.ReadAsync(buffer, cancellationToken);
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) _inner.Dispose();
+            base.Dispose(disposing);
+        }
     }
 }
