@@ -10,6 +10,7 @@ public sealed record SourceCatalogSnapshot(
     int HealthySources,
     int FailingSources,
     int NeverAuditedSources,
+    int StaleSources,
     int ExpectedProviders,
     int PresentProviders,
     int EnabledProviders,
@@ -20,8 +21,14 @@ public sealed record SourceCatalogSnapshot(
 public static class SourceCatalogHealth
 {
     /// <summary>Строит снимок только по точным URL из версионируемого встроенного каталога.</summary>
-    public static SourceCatalogSnapshot Calculate(IEnumerable<ProxySource> sources)
+    public static SourceCatalogSnapshot Calculate(
+        IEnumerable<ProxySource> sources,
+        DateTimeOffset now,
+        TimeSpan freshnessWindow)
     {
+        ArgumentNullException.ThrowIfNull(sources);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(freshnessWindow, TimeSpan.Zero);
+        var freshAfter = now.Subtract(freshnessWindow);
         // URL уникален в PostgreSQL, но словарь делает функцию детерминированной и для
         // произвольных тестовых/внешних коллекций с ошибочными дубликатами.
         var matched = new Dictionary<string, (ProxySource Source, BuiltInSource Definition)>(StringComparer.Ordinal);
@@ -34,14 +41,16 @@ public static class SourceCatalogHealth
         var entries = matched.Values.ToArray();
         var enabled = entries.Where(entry => entry.Source.Enabled).ToArray();
         var healthy = enabled.Count(entry =>
-            entry.Source.LastFetchedAt is not null &&
-            entry.Source.LastSucceededAt is not null &&
+            entry.Source.LastFetchedAt >= freshAfter &&
+            entry.Source.LastSucceededAt >= freshAfter &&
             entry.Source.LastItemCount > 0 &&
             entry.Source.ConsecutiveFailures == 0 &&
             string.IsNullOrWhiteSpace(entry.Source.LastError));
         var failing = enabled.Count(entry =>
             entry.Source.ConsecutiveFailures > 0 || !string.IsNullOrWhiteSpace(entry.Source.LastError));
         var neverAudited = enabled.Count(entry => entry.Source.LastFetchedAt is null);
+        var stale = enabled.Count(entry =>
+            entry.Source.LastFetchedAt is not null && entry.Source.LastFetchedAt < freshAfter);
         var presentProviders = entries.Select(entry => entry.Definition.Provider)
             .Distinct(StringComparer.Ordinal).Count();
         var enabledProviders = enabled.Select(entry => entry.Definition.Provider)
@@ -58,10 +67,18 @@ public static class SourceCatalogHealth
             healthy,
             failing,
             neverAudited,
+            stale,
             expectedProviders,
             presentProviders,
             enabledProviders,
             complete,
             complete && healthy == expectedSources);
     }
+
+    /// <summary>
+    /// Допускает три плановых интервала между успешными fetch'ами: единичный длинный цикл
+    /// или краткая перезагрузка не создают ложную тревогу, остановившийся worker — создаёт.
+    /// </summary>
+    public static TimeSpan FreshnessWindow(int collectionIntervalMinutes) =>
+        TimeSpan.FromMinutes(checked(Math.Max(1, collectionIntervalMinutes) * 3));
 }

@@ -95,7 +95,7 @@ POST   /api/v1/admin/validate
 POST   /api/v1/admin/backup
 ```
 
-`diagnostics` возвращает очередь проверки, состояние встроенного каталога, последние циклы сбора и последние backup-запуски, включая итоговый статус, размер файла и подтверждённый факт Telegram-доставки. Prometheus отдельно публикует completeness и фактическое здоровье каталога через `proxyharbor_source_catalog_complete`, `proxyharbor_source_catalog_healthy`, счётчики встроенных feed'ов/провайдеров, а также backup-сигналы `proxyharbor_last_backup_success`, `proxyharbor_last_backup_sent_to_telegram`, `proxyharbor_last_backup_timestamp_seconds` и `proxyharbor_backup_runs_active`.
+`diagnostics` возвращает очередь проверки, состояние встроенного каталога, последние циклы сбора и последние backup-запуски, включая итоговый статус, размер файла и подтверждённый факт Telegram-доставки. Prometheus отдельно публикует completeness и фактическое здоровье каталога через `proxyharbor_source_catalog_complete`, `proxyharbor_source_catalog_healthy`, счётчики встроенных feed'ов/провайдеров и `proxyharbor_builtin_sources_stale`, а также backup-сигналы `proxyharbor_last_backup_success`, `proxyharbor_last_backup_sent_to_telegram`, `proxyharbor_last_backup_timestamp_seconds` и `proxyharbor_backup_runs_active`. Успешный feed считается свежим три интервала сбора, поэтому остановка collector больше не маскируется исторически зелёным статусом.
 
 Повторный запуск `collect` или `backup`, пока операция уже выполняется этой или другой репликой, немедленно получает HTTP `409`. Для `validate` тот же ответ действует внутри одной реплики; разные реплики безопасно арендуют непересекающиеся пакеты PostgreSQL. Долгие административные запросы поэтому не накапливаются в локальной очереди.
 

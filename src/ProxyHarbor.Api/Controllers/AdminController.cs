@@ -16,7 +16,8 @@ public sealed class AdminController(
     ProxyCollector collector,
     ProxyValidator validator,
     BackupService backup,
-    IOptions<BackupOptions> backupOptions) : ControllerBase
+    IOptions<BackupOptions> backupOptions,
+    IOptions<CollectorOptions> collectorOptions) : ControllerBase
 {
     [HttpGet("sources")]
     public async Task<ActionResult<IReadOnlyList<SourceResponse>>> Sources(CancellationToken token)
@@ -123,8 +124,10 @@ public sealed class AdminController(
             repeatedlyFailing = x.Count(proxy => proxy.ConsecutiveFailedChecks >= 3)
         }).FirstOrDefaultAsync(token);
         var builtInUrls = BuiltInSourceCatalog.Sources.Select(source => source.Url).ToArray();
-        var sourceCatalog = SourceCatalogHealth.Calculate(await db.Sources.AsNoTracking()
-            .Where(source => builtInUrls.Contains(source.Url)).ToListAsync(token));
+        var sourceCatalog = SourceCatalogHealth.Calculate(
+            await db.Sources.AsNoTracking().Where(source => builtInUrls.Contains(source.Url)).ToListAsync(token),
+            now,
+            SourceCatalogHealth.FreshnessWindow(collectorOptions.Value.CollectionIntervalMinutes));
         var recentRuns = await db.Runs.AsNoTracking().OrderByDescending(x => x.StartedAt).Take(10).ToListAsync(token);
         var recentBackups = await db.BackupRuns.AsNoTracking().OrderByDescending(x => x.StartedAt).Take(10).ToListAsync(token);
         return Ok(new { serverTime = now, databaseBytes, validationQueue = queue, sourceCatalog, recentRuns, recentBackups });

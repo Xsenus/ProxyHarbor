@@ -126,7 +126,9 @@ public sealed class AdminSourceControllerTests
     }
 
     private static AdminController Controller(DbContextOptions<ProxyHarborDbContext> options) =>
-        new(new TestDbFactory(options), null!, null!, null!, Microsoft.Extensions.Options.Options.Create(new BackupOptions()));
+        new(new TestDbFactory(options), null!, null!, null!,
+            Microsoft.Extensions.Options.Options.Create(new BackupOptions()),
+            Microsoft.Extensions.Options.Options.Create(new CollectorOptions()));
 
     private sealed class TestDbFactory(DbContextOptions<ProxyHarborDbContext> options)
         : IDbContextFactory<ProxyHarborDbContext>

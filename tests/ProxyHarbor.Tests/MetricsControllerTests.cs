@@ -11,11 +11,44 @@ namespace ProxyHarbor.Tests;
 public sealed class MetricsControllerTests
 {
     [Fact]
+    public async Task MetricsDoNotReportHistoricallySuccessfulStaleSourceAsHealthy()
+    {
+        var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+            .UseInMemoryDatabase($"metrics-stale-{Guid.NewGuid():N}").Options;
+        var builtIn = BuiltInSourceCatalog.Sources[0];
+        await using (var seed = new ProxyHarborDbContext(options))
+        {
+            seed.Sources.Add(new ProxySource
+            {
+                Name = builtIn.Name,
+                Url = builtIn.Url,
+                DefaultProtocol = builtIn.Protocol,
+                LastFetchedAt = DateTimeOffset.UtcNow.AddHours(-1),
+                LastSucceededAt = DateTimeOffset.UtcNow.AddHours(-1),
+                LastItemCount = 10
+            });
+            await seed.SaveChangesAsync();
+        }
+
+        var controller = new MetricsController(
+            new TestDbFactory(options), Options.Create(new CollectorOptions { CollectionIntervalMinutes = 15 }),
+            new ProbeControlHealth());
+
+        var result = Assert.IsType<ContentResult>(await controller.Get(CancellationToken.None));
+        var metrics = result.Content!;
+        Assert.Contains("proxyharbor_sources_healthy 0", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_sources_stale 1", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_builtin_sources_healthy 0", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_builtin_sources_stale 1", metrics, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task MetricsIgnoreNewerRunningCycleForLastCompletionValues()
     {
         var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
             .UseInMemoryDatabase($"metrics-{Guid.NewGuid():N}").Options;
         var finishedAt = DateTimeOffset.FromUnixTimeSeconds(1_700_000_100);
+        var sourceAuditedAt = DateTimeOffset.UtcNow;
         var builtIn = BuiltInSourceCatalog.Sources[0];
         await using (var seed = new ProxyHarborDbContext(options))
         {
@@ -25,8 +58,8 @@ public sealed class MetricsControllerTests
                     Name = "healthy",
                     Url = builtIn.Url,
                     DefaultProtocol = builtIn.Protocol,
-                    LastFetchedAt = finishedAt,
-                    LastSucceededAt = finishedAt,
+                    LastFetchedAt = sourceAuditedAt,
+                    LastSucceededAt = sourceAuditedAt,
                     LastItemCount = 10
                 },
                 new ProxySource { Name = "failed", Url = "https://example.com/b", ConsecutiveFailures = 1, LastError = "timeout" });
@@ -61,12 +94,14 @@ public sealed class MetricsControllerTests
         var result = Assert.IsType<ContentResult>(await controller.Get(CancellationToken.None));
         var metrics = result.Content!;
         Assert.Contains("proxyharbor_sources_healthy 1", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_sources_stale 0", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_source_catalog_complete 0", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_source_catalog_healthy 0", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_builtin_sources_expected 81", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_builtin_sources_present 1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_builtin_sources_enabled 1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_builtin_sources_healthy 1", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_builtin_sources_stale 0", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_builtin_providers_expected 50", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_builtin_providers_present 1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_collection_runs_active 1", metrics, StringComparison.Ordinal);
