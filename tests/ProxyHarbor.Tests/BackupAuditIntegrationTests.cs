@@ -113,7 +113,7 @@ public sealed class BackupAuditIntegrationTests
                 await migrationDb.Database.MigrateAsync();
 
             Directory.CreateDirectory(backupDirectory);
-            var expiredBackup = Path.Combine(backupDirectory, "proxyharbor-expired.phbackup");
+            var expiredBackup = Path.Combine(backupDirectory, "proxyharbor-20250701-120000-0000.phbackup");
             await File.WriteAllTextAsync(expiredBackup, "expired");
             File.SetLastWriteTimeUtc(expiredBackup, DateTime.UtcNow.AddDays(-8));
 

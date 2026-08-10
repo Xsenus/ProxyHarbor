@@ -20,6 +20,9 @@ public sealed class BackupService(
     IConfiguration configuration,
     ILogger<BackupService> logger) : IDisposable
 {
+    private const string PublishedBackupPrefix = "proxyharbor-";
+    private const string PublishedBackupSuffix = ".phbackup";
+    private const string PublishedBackupTimestampFormat = "yyyyMMdd-HHmmss-ffff";
     private static readonly TimeSpan AuditWriteTimeout = TimeSpan.FromSeconds(15);
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private static readonly Action<ILogger, string, Exception?> BackupCreated =
@@ -65,8 +68,9 @@ public sealed class BackupService(
                 await auditDb.SaveChangesAsync(cancellationToken);
             }
 
-            var stamp = DateTimeOffset.UtcNow.ToString("yyyyMMdd-HHmmss-ffff", CultureInfo.InvariantCulture);
-            var encryptedPath = Path.Combine(options.Directory, $"proxyharbor-{stamp}.phbackup");
+            var stamp = DateTimeOffset.UtcNow.ToString(PublishedBackupTimestampFormat, CultureInfo.InvariantCulture);
+            var encryptedPath = Path.Combine(
+                options.Directory, $"{PublishedBackupPrefix}{stamp}{PublishedBackupSuffix}");
             var partialEncryptedPath = encryptedPath + ".partial";
 
             try
@@ -352,8 +356,12 @@ public sealed class BackupService(
     internal static void ApplyRetention(string directory, int retentionDays, int intervalHours)
     {
         var cutoff = DateTime.UtcNow.AddDays(-Math.Max(1, retentionDays));
-        var files = Directory.EnumerateFiles(directory, "*.phbackup")
+        // Совместно смонтированный volume может содержать ручные либо чужие архивы.
+        // Retention владеет только точным namespace имён, создаваемых этим сервисом.
+        var files = Directory.EnumerateFiles(
+                directory, $"{PublishedBackupPrefix}*{PublishedBackupSuffix}", SearchOption.TopDirectoryOnly)
             .Select(path => new FileInfo(path))
+            .Where(file => IsPublishedBackupName(file.Name))
             .OrderByDescending(file => file.LastWriteTimeUtc)
             .ThenByDescending(file => file.Name, StringComparer.Ordinal)
             .ToList();
@@ -366,6 +374,22 @@ public sealed class BackupService(
             Math.Max(1, retentionDays) * 24d / Math.Max(1, intervalHours));
         var maxFiles = checked(scheduledCapacity + 2);
         foreach (var overflow in retained.Skip(maxFiles)) overflow.Delete();
+    }
+
+    /// <summary>Отличает опубликованный сервисом timestamped backup от соседних файлов volume.</summary>
+    private static bool IsPublishedBackupName(string name)
+    {
+        var expectedLength = PublishedBackupPrefix.Length +
+            PublishedBackupTimestampFormat.Length + PublishedBackupSuffix.Length;
+        return name.Length == expectedLength &&
+            name.StartsWith(PublishedBackupPrefix, StringComparison.Ordinal) &&
+            name.EndsWith(PublishedBackupSuffix, StringComparison.Ordinal) &&
+            DateTime.TryParseExact(
+                name.AsSpan(PublishedBackupPrefix.Length, PublishedBackupTimestampFormat.Length),
+                PublishedBackupTimestampFormat,
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.None,
+                out _);
     }
 
     /// <summary>Удаляет только незавершённые служебные файлы, никогда не затрагивая готовый encrypted backup.</summary>
