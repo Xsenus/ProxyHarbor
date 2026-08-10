@@ -10,24 +10,37 @@ public sealed class BackupFileSplitterTests
     {
         var directory = Path.Combine(Path.GetTempPath(), $"proxyharbor-cleanup-{Guid.NewGuid():N}");
         Directory.CreateDirectory(directory);
-        var complete = Path.Combine(directory, "proxyharbor-20260809.phbackup");
+        const string generatedStem = "proxyharbor-20260809-120000-0000";
+        var complete = Path.Combine(directory, $"{generatedStem}.phbackup");
         var unrelated = Path.Combine(directory, "keep.zip");
         var orphans = new[]
         {
-            Path.Combine(directory, "proxyharbor-20260809.zip"),
-            Path.Combine(directory, "proxyharbor-20260809.phbackup.partial"),
-            Path.Combine(directory, "proxyharbor-20260809.phbackup.part001-of-003")
+            Path.Combine(directory, $"{generatedStem}.zip"),
+            Path.Combine(directory, $"{generatedStem}.phbackup.partial"),
+            Path.Combine(directory, $"{generatedStem}.phbackup.part001-of-003"),
+            Path.Combine(directory, $"{generatedStem}.phbackup.part1000-of-1000")
+        };
+        var similarButUnowned = new[]
+        {
+            Path.Combine(directory, "proxyharbor-manual.zip"),
+            Path.Combine(directory, "proxyharbor-manual.phbackup.partial"),
+            Path.Combine(directory, $"{generatedStem}.phbackup.part1-of-3"),
+            Path.Combine(directory, $"{generatedStem}.phbackup.part0001-of-0003"),
+            Path.Combine(directory, $"{generatedStem}.phbackup.part004-of-003"),
+            Path.Combine(directory, $"{generatedStem}.phbackup.part001-of-001")
         };
         try
         {
             File.WriteAllText(complete, "encrypted");
             File.WriteAllText(unrelated, "unrelated");
             foreach (var orphan in orphans) File.WriteAllText(orphan, "incomplete");
+            foreach (var neighbor in similarButUnowned) File.WriteAllText(neighbor, "manual");
 
             var removed = BackupService.DeleteOrphanArtifacts(directory);
 
             Assert.Equal(orphans.Length, removed);
             Assert.All(orphans, path => Assert.False(File.Exists(path)));
+            Assert.All(similarButUnowned, path => Assert.True(File.Exists(path)));
             Assert.True(File.Exists(complete));
             Assert.True(File.Exists(unrelated));
         }

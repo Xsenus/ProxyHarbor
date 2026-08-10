@@ -23,6 +23,7 @@
 
 ### Changed
 
+- Crash cleanup backup volume больше не удаляет файлы по широким glob: exact ownership parser распознаёт только generated legacy ZIP, unpublished partial и корректные `partNNN-of-NNN`, оставляя malformed/prefixed manual-файлы нетронутыми.
 - Backup retention теперь владеет только точными timestamped именами `proxyharbor-yyyyMMdd-HHmmss-ffff.phbackup`; старые или превышающие capacity соседние `manual.phbackup` и неканонические prefixed-файлы остаются нетронутыми, что исключает удаление чужих архивов на общем volume.
 - Forwarded Headers trust boundary теперь принимает максимум 32 канонических CIDR и отклоняет catch-all, host-bit aliases и сети шире IPv4 `/8` или IPv6 `/24`; unit и настоящий Production startup canary не позволяют ошибочной настройке доверить клиентам `X-Forwarded-For/Proto`.
 - Production CORS теперь fail-closed принимает не более 32 канонических HTTPS origins без credentials/path/query/fragment; plaintext HTTP остаётся только для Development/Vite. Unit-контракт покрывает нормализацию и опасные формы, а Release process-smoke доказывает отказ startup при HTTP dashboard origin.

@@ -396,16 +396,66 @@ public sealed class BackupService(
     internal static int DeleteOrphanArtifacts(string directory)
     {
         var removed = 0;
-        string[] patterns = ["proxyharbor-*.zip", "proxyharbor-*.phbackup.partial", "proxyharbor-*.phbackup.part*-of-*"];
-        foreach (var pattern in patterns)
+        // Один широкий enumeration безопаснее нескольких пересекающихся glob только
+        // вместе с точным parser'ом ownership: похожий ручной файл не считается orphan.
+        foreach (var path in Directory.EnumerateFiles(
+            directory, $"{PublishedBackupPrefix}*", SearchOption.TopDirectoryOnly))
         {
-            foreach (var path in Directory.EnumerateFiles(directory, pattern, SearchOption.TopDirectoryOnly))
-            {
-                File.Delete(path);
-                removed++;
-            }
+            if (!IsOwnedOrphanName(Path.GetFileName(path))) continue;
+            File.Delete(path);
+            removed++;
         }
         return removed;
+    }
+
+    /// <summary>Распознаёт только legacy ZIP, unpublished partial и splitter parts собственного backup.</summary>
+    private static bool IsOwnedOrphanName(string name)
+    {
+        const string legacyZipSuffix = ".zip";
+        const string partialSuffix = ".partial";
+        const string partPrefix = ".part";
+        const string partSeparator = "-of-";
+        var publishedNameLength = PublishedBackupPrefix.Length +
+            PublishedBackupTimestampFormat.Length + PublishedBackupSuffix.Length;
+
+        if (name.EndsWith(legacyZipSuffix, StringComparison.Ordinal))
+            return IsGeneratedBackupStem(name.AsSpan(0, name.Length - legacyZipSuffix.Length));
+        if (name.Length == publishedNameLength + partialSuffix.Length &&
+            name.EndsWith(partialSuffix, StringComparison.Ordinal))
+            return IsPublishedBackupName(name[..publishedNameLength]);
+        if (name.Length <= publishedNameLength + partPrefix.Length ||
+            !IsPublishedBackupName(name[..publishedNameLength]))
+            return false;
+
+        var partTail = name.AsSpan(publishedNameLength);
+        if (!partTail.StartsWith(partPrefix, StringComparison.Ordinal)) return false;
+        var separatorIndex = partTail.IndexOf(partSeparator, StringComparison.Ordinal);
+        if (separatorIndex <= partPrefix.Length) return false;
+        var partNumber = partTail[partPrefix.Length..separatorIndex];
+        var totalParts = partTail[(separatorIndex + partSeparator.Length)..];
+        return TryParseCanonicalPartNumber(partNumber, out var number) &&
+            TryParseCanonicalPartNumber(totalParts, out var total) &&
+            total >= 2 && number <= total;
+    }
+
+    private static bool IsGeneratedBackupStem(ReadOnlySpan<char> stem) =>
+        stem.Length == PublishedBackupPrefix.Length + PublishedBackupTimestampFormat.Length &&
+        stem.StartsWith(PublishedBackupPrefix, StringComparison.Ordinal) &&
+        DateTime.TryParseExact(
+            stem[PublishedBackupPrefix.Length..],
+            PublishedBackupTimestampFormat,
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.None,
+            out _);
+
+    /// <summary>D3 означает ровно три цифры до 999 и естественное расширение после 999.</summary>
+    private static bool TryParseCanonicalPartNumber(ReadOnlySpan<char> digits, out int value)
+    {
+        value = 0;
+        return digits.Length >= 3 &&
+            (digits.Length == 3 || digits[0] != '0') &&
+            int.TryParse(digits, NumberStyles.None, CultureInfo.InvariantCulture, out value) &&
+            value >= 1;
     }
 
     public void Dispose() => _runGate.Dispose();
