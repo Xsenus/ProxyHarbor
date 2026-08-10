@@ -240,6 +240,90 @@ public sealed class ProxyValidationPersistenceIntegrationTests
 
     [Fact]
     [Trait("Category", "PostgresIntegration")]
+    public async Task PartialLeaseOwnershipPersistsOwnedResultButFailsClosed()
+    {
+        var connectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
+        if (string.IsNullOrWhiteSpace(connectionString)) return;
+
+        var dbOptions = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+            .UseNpgsql(connectionString)
+            .Options;
+        var factory = new TestDbFactory(dbOptions);
+        await using (var migrationDb = await factory.CreateDbContextAsync())
+            await migrationDb.Database.MigrateAsync();
+
+        var ownedId = Guid.NewGuid();
+        var foreignId = Guid.NewGuid();
+        var expectedLease = Guid.NewGuid();
+        var foreignLease = Guid.NewGuid();
+        var checkedAt = DateTimeOffset.UtcNow;
+        await using (var seed = await factory.CreateDbContextAsync())
+        {
+            seed.Proxies.AddRange(
+                new ProxyEndpoint
+                {
+                    Id = ownedId,
+                    Host = $"14.36.{ownedId.ToByteArray()[0]}.{ownedId.ToByteArray()[1]}",
+                    Port = 30_000 + ownedId.ToByteArray()[2],
+                    CheckLeaseId = expectedLease,
+                    CheckLeaseUntil = checkedAt.AddMinutes(5)
+                },
+                new ProxyEndpoint
+                {
+                    Id = foreignId,
+                    Host = $"15.37.{foreignId.ToByteArray()[0]}.{foreignId.ToByteArray()[1]}",
+                    Port = 30_000 + foreignId.ToByteArray()[2],
+                    CheckLeaseId = foreignLease,
+                    CheckLeaseUntil = checkedAt.AddMinutes(5)
+                });
+            await seed.SaveChangesAsync();
+        }
+
+        var settings = new CollectorOptions();
+        using var clients = new StubHttpClientFactory();
+        using var origin = new OriginIpProvider(clients, Options.Create(settings), new ProbeControlHealth());
+        using var validator = new ProxyValidator(
+            factory,
+            new ProxyProbeService(Options.Create(settings), origin),
+            Options.Create(settings),
+            NullLogger<ProxyValidator>.Instance);
+        var updates = new[]
+        {
+            ProxyCheckScheduler.Create(
+                new ProxyCheckResult(ownedId, true, 50, "8.8.8.8", true, null),
+                0, expectedLease, checkedAt, settings),
+            ProxyCheckScheduler.Create(
+                new ProxyCheckResult(foreignId, true, 60, "8.8.4.4", true, null),
+                0, expectedLease, checkedAt, settings)
+        };
+
+        try
+        {
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+                () => validator.PersistResultsAsync(updates, CancellationToken.None));
+            Assert.Contains("сохранено 1 из 2", exception.Message, StringComparison.Ordinal);
+
+            await using var verify = await factory.CreateDbContextAsync();
+            var owned = await verify.Proxies.AsNoTracking().SingleAsync(proxy => proxy.Id == ownedId);
+            var foreign = await verify.Proxies.AsNoTracking().SingleAsync(proxy => proxy.Id == foreignId);
+            Assert.Equal(ProxyStatus.Alive, owned.Status);
+            Assert.Equal(1, owned.SuccessfulChecks);
+            Assert.Null(owned.CheckLeaseId);
+            Assert.Equal(ProxyStatus.Pending, foreign.Status);
+            Assert.Equal(0, foreign.SuccessfulChecks);
+            Assert.Equal(foreignLease, foreign.CheckLeaseId);
+        }
+        finally
+        {
+            await using var cleanup = await factory.CreateDbContextAsync();
+            await cleanup.Proxies
+                .Where(proxy => proxy.Id == ownedId || proxy.Id == foreignId)
+                .ExecuteDeleteAsync();
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
     public async Task DeferredResultReleasesLeaseWithoutDamagingProxyQuality()
     {
         var connectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");

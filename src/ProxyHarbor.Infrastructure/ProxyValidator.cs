@@ -379,6 +379,13 @@ public sealed class ProxyValidator(
                 }
             }
             await transaction.CommitAsync(token);
+            var persistedCount = checkedCount + deferredCount;
+            // Сохраняем объективные результаты ещё принадлежащих строк, но не выдаём
+            // частичную persistence за completed batch: вызывающий catch запишет failed audit.
+            if (persistedCount != updates.Length)
+                throw new InvalidOperationException(
+                    $"Validation-партия потеряла ownership lease: сохранено {persistedCount} из {updates.Length} результатов.");
+
             return (checkedCount, aliveCount, deferredCount);
         });
     }
