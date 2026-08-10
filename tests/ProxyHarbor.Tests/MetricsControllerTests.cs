@@ -89,6 +89,15 @@ public sealed class MetricsControllerTests
                     LastValidationDeferred = true
                 },
                 new ProxyEndpoint { Host = "9.9.9.9", Port = 8082 });
+            var leasedProxy = new ProxyEndpoint
+            {
+                Host = "4.4.4.4",
+                Port = 8083,
+                LastValidationAttemptAt = sourceAuditedAt.AddMinutes(-3),
+                CheckLeaseId = Guid.NewGuid(),
+                CheckLeaseUntil = sourceAuditedAt.AddMinutes(1)
+            };
+            seed.Proxies.Add(leasedProxy);
             seed.ValidationRuns.AddRange(
                 new ValidationRun
                 {
@@ -174,6 +183,8 @@ public sealed class MetricsControllerTests
         Assert.Contains("proxyharbor_builtin_providers_present 1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_collection_runs_active 1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_validation_never_attempted 1", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_validation_due 3", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_validation_leased 1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_validation_attempts_last_5m 2", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_validation_checked_last_5m 1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_validation_alive_last_5m 1", metrics, StringComparison.Ordinal);

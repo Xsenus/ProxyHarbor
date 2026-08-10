@@ -12,6 +12,7 @@
 - PostgreSQL backup integration-gate теперь коммитит source из второй сессии строго между чтением `proxies.json` и `sources.json`; архив обязан сохранить единую старую эпоху, тогда как живая БД подтверждает поздний commit, напрямую доказывая multi-table `REPEATABLE READ` snapshot.
 - Публичная React-панель раскрывает в каждой из 50 provider-карточек полный список конкретных feed'ов: все 81 HTTPS URL, имя и заявленный HTTP/HTTPS/SOCKS4/SOCKS5 protocol доступны как keyboard/touch-friendly ссылки вместо прежней ссылки только на первый feed.
 - OpenAPI admin-контракт теперь явно описывает общий `401 ProblemDetails` и реальные success/400/404/409 responses, включая cluster-wide конфликт source mutation с collection, поэтому сгенерированные клиенты больше не предполагают только happy path.
+- Admin diagnostics получил типизированные `DiagnosticsResponse`/`ValidationQueueResponse`, поэтому OpenAPI и generated clients видят полный operator snapshot вместо schema-less `200`.
 - PostgreSQL CI process-smoke fail-closed проверяет фактически сгенерированный `/openapi/v1.json`: `AdminApiKey`, operation security, точные response-коды source CRUD и `ProblemDetails` schema для collection conflicts.
 - Воспроизводимый `Test-BuiltInSourceEndpoints.ps1` выполняет bounded parallel live-аудит 81 feed/50 технических владельцев без системного proxy и публикует JSON failures; network-free `-CatalogOnly` contract включён в CI/release. Четыре последовательных live-run 10 августа подтвердили 81/81 endpoint с `IP:port` и нулём ошибок; последний прогон завершился с worst-case 1,130 мс, максимум серии — 3,110 мс.
 - Production Caddy получил end-to-end Docker healthcheck: pinned image `curl` обращается к API `/health/ready` через внутренний TLS listener с `PUBLIC_HOST` одновременно как SNI и Host; проверка охватывает TLS → gateway → API → PostgreSQL, Compose contract фиксирует bounded timing, а container smoke требует фактический статус `healthy`.
@@ -63,6 +64,7 @@
 
 ### Fixed
 
+- Stats, admin diagnostics и Prometheus теперь считают `due` только среди доступных для claim строк и отдельно показывают активные leases; in-flight batch больше не завышает backlog/ETA и не создаёт ложный `ValidationBacklogAtRisk`, а lease с expiry ровно `now` согласована с claim ownership.
 - Dead-retention больше не удаляет строку с активной validation lease посреди сетевой проверки и не превращает корректный batch в ownership failure; просроченная lease по-прежнему допускает очистку.
 - Source CRUD теперь берёт cluster-wide shared advisory-lock, а collection — exclusive-lock того же ключа: прямой REST-клиент на любой реплике получает `409` вместо изменения enabled-каталога посреди snapshot и ложного `completed` полного аудита; параллельные CRUD по-прежнему разрешены.
 - Backup-worker после занятого cluster-lock больше не засыпает на полный production-интервал: через bounded 15 минут он перечитывает persistent `completed` audit, восстанавливает остаток расписания после успеха peer или повторяет просроченный backup после его аварии.

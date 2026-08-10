@@ -8,6 +8,7 @@ const stats = {
   pending: 1,
   dead: 0,
   dueForCheck: 1,
+  checksInProgress: 0,
   scheduledChecks: 0,
   averageLatencyMs: null,
   sources: 81,
@@ -95,6 +96,7 @@ describe('ProxyHarbor UI', () => {
     render(<App />)
     expect(await screen.findByText('система активна')).toBeInTheDocument()
     expect(screen.getByText(/v0\.0\.0-local · ©/)).toBeInTheDocument()
+    expect(screen.getByText('0 выполняется · 0 запланировано позже')).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: /^Управление$/ }))
     fireEvent.change(screen.getByLabelText('Ключ администратора'), { target: { value: 'wrong-key' } })

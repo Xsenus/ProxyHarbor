@@ -35,8 +35,9 @@ public sealed class MetricsController(
             .ToListAsync(token);
         var queue = await db.Proxies.AsNoTracking().GroupBy(_ => 1).Select(x => new
         {
-            Due = x.Count(proxy => proxy.NextCheckAt == null || proxy.NextCheckAt <= now),
-            Leased = x.Count(proxy => proxy.CheckLeaseUntil > now),
+            Due = x.Count(proxy => (proxy.NextCheckAt == null || proxy.NextCheckAt <= now) &&
+                (proxy.CheckLeaseUntil == null || proxy.CheckLeaseUntil < now)),
+            Leased = x.Count(proxy => proxy.CheckLeaseUntil >= now),
             NeverAttempted = x.Count(proxy => proxy.LastValidationAttemptAt == null),
             LastAttemptAt = x.Max(proxy => proxy.LastValidationAttemptAt)
         }).FirstOrDefaultAsync(token);
@@ -88,7 +89,7 @@ public sealed class MetricsController(
             output.Append("proxyharbor_proxies{status=\"").Append(row.Status.ToString().ToLowerInvariant())
                 .Append("\",protocol=\"").Append(row.Protocol.ToString().ToLowerInvariant()).Append("\"} ")
                 .AppendLine(row.Count.ToString(CultureInfo.InvariantCulture));
-        Gauge(output, "proxyharbor_validation_due", "Proxy records currently due for validation.", queue?.Due ?? 0);
+        Gauge(output, "proxyharbor_validation_due", "Unleased proxy records currently eligible for validation.", queue?.Due ?? 0);
         Gauge(output, "proxyharbor_validation_leased", "Proxy records currently leased by validators.", queue?.Leased ?? 0);
         Gauge(output, "proxyharbor_validation_never_attempted", "Proxy records that have never completed a validation attempt.",
             queue?.NeverAttempted ?? 0);

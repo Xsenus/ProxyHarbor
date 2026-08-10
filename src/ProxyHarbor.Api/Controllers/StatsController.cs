@@ -32,7 +32,9 @@ public sealed class StatsController(
             FreshAlive = group.Count(proxy => proxy.Status == ProxyStatus.Alive && proxy.LastCheckedAt >= freshAfter),
             StaleAlive = group.Count(proxy => proxy.Status == ProxyStatus.Alive &&
                 (proxy.LastCheckedAt == null || proxy.LastCheckedAt < freshAfter)),
-            Due = group.Count(proxy => proxy.NextCheckAt == null || proxy.NextCheckAt <= now),
+            Due = group.Count(proxy => (proxy.NextCheckAt == null || proxy.NextCheckAt <= now) &&
+                (proxy.CheckLeaseUntil == null || proxy.CheckLeaseUntil < now)),
+            Leased = group.Count(proxy => proxy.CheckLeaseUntil >= now),
             Scheduled = group.Count(proxy => proxy.NextCheckAt > now),
             FreshLatencyTotal = group.Where(proxy => proxy.Status == ProxyStatus.Alive &&
                 proxy.LastCheckedAt >= freshAfter && proxy.LatencyMs != null).Sum(proxy => (long?)proxy.LatencyMs) ?? 0,
@@ -68,6 +70,7 @@ public sealed class StatsController(
             pending = proxyRows.Where(row => row.Status == ProxyStatus.Pending).Sum(row => row.Total),
             dead = proxyRows.Where(row => row.Status == ProxyStatus.Dead).Sum(row => row.Total),
             dueForCheck = proxyRows.Sum(row => row.Due),
+            checksInProgress = proxyRows.Sum(row => row.Leased),
             scheduledChecks = proxyRows.Sum(row => row.Scheduled),
             averageLatencyMs = latencySamples == 0 ? (double?)null : (double)latencyTotal / latencySamples,
             sources = sourceHealth?.Enabled ?? 0,

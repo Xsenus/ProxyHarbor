@@ -54,6 +54,11 @@ public sealed class AdminSourceControllerTests
                 .Single(attribute => attribute.StatusCode == StatusCodes.Status409Conflict);
             Assert.Equal(typeof(ProblemDetails), conflict.Type);
         }
+
+        var diagnostics = typeof(AdminController).GetMethod(nameof(AdminController.Diagnostics))!
+            .GetCustomAttributes<ProducesResponseTypeAttribute>()
+            .Single(attribute => attribute.StatusCode == StatusCodes.Status200OK);
+        Assert.Equal(typeof(DiagnosticsResponse), diagnostics.Type);
     }
 
     [Theory]

@@ -151,8 +151,8 @@ public sealed class AdminController(
     });
 
     [HttpGet("diagnostics")]
-    [ProducesResponseType(StatusCodes.Status200OK)]
-    public async Task<IActionResult> Diagnostics(CancellationToken token)
+    [ProducesResponseType<DiagnosticsResponse>(StatusCodes.Status200OK)]
+    public async Task<ActionResult<DiagnosticsResponse>> Diagnostics(CancellationToken token)
     {
         await using var db = await dbFactory.CreateDbContextAsync(token);
         var now = DateTimeOffset.UtcNow;
@@ -162,10 +162,11 @@ public sealed class AdminController(
         var queue = await db.Proxies.AsNoTracking().GroupBy(_ => 1).Select(x => new
         {
             total = x.Count(),
-            leased = x.Count(proxy => proxy.CheckLeaseUntil > now),
+            leased = x.Count(proxy => proxy.CheckLeaseUntil >= now),
             neverChecked = x.Count(proxy => proxy.LastCheckedAt == null),
             neverAttempted = x.Count(proxy => proxy.LastValidationAttemptAt == null),
-            due = x.Count(proxy => proxy.NextCheckAt == null || proxy.NextCheckAt <= now),
+            due = x.Count(proxy => (proxy.NextCheckAt == null || proxy.NextCheckAt <= now) &&
+                (proxy.CheckLeaseUntil == null || proxy.CheckLeaseUntil < now)),
             scheduled = x.Count(proxy => proxy.NextCheckAt > now),
             repeatedlyFailing = x.Count(proxy => proxy.ConsecutiveFailedChecks >= 3),
             lastAttemptAt = x.Max(proxy => proxy.LastValidationAttemptAt)
@@ -175,8 +176,7 @@ public sealed class AdminController(
             .ToListAsync(token);
         var validationTelemetry = ValidationTelemetry.Calculate(
             validationRuns, validationWindowStart, queue?.due ?? 0);
-        var validationQueue = queue is null ? null : new
-        {
+        var validationQueue = queue is null ? null : new ValidationQueueResponse(
             queue.total,
             queue.leased,
             queue.neverChecked,
@@ -184,18 +184,17 @@ public sealed class AdminController(
             queue.due,
             queue.scheduled,
             queue.repeatedlyFailing,
-            attemptsLastFiveMinutes = validationTelemetry.Attempts,
-            checkedLastFiveMinutes = validationTelemetry.Checked,
-            aliveLastFiveMinutes = validationTelemetry.Alive,
-            deferredLastFiveMinutes = validationTelemetry.Deferred,
-            failedRunsLastFiveMinutes = validationTelemetry.FailedRuns,
-            activeRuns = validationTelemetry.ActiveRuns,
-            concurrencyLimit = collectorOptions.Value.ValidationConcurrency,
-            batchSize = collectorOptions.Value.ValidationBatchSize,
-            checksPerSecond = validationTelemetry.ChecksPerSecond,
-            estimatedDrainSeconds = validationTelemetry.EstimatedDrainSeconds,
-            queue.lastAttemptAt
-        };
+            validationTelemetry.Attempts,
+            validationTelemetry.Checked,
+            validationTelemetry.Alive,
+            validationTelemetry.Deferred,
+            validationTelemetry.FailedRuns,
+            validationTelemetry.ActiveRuns,
+            collectorOptions.Value.ValidationConcurrency,
+            collectorOptions.Value.ValidationBatchSize,
+            validationTelemetry.ChecksPerSecond,
+            validationTelemetry.EstimatedDrainSeconds,
+            queue.lastAttemptAt);
         var builtInUrls = BuiltInSourceCatalog.Sources.Select(source => source.Url).ToArray();
         var sourceCatalog = SourceCatalogHealth.Calculate(
             await db.Sources.AsNoTracking().Where(source => builtInUrls.Contains(source.Url)).ToListAsync(token),
@@ -205,16 +204,14 @@ public sealed class AdminController(
         var recentValidationRuns = await db.ValidationRuns.AsNoTracking()
             .OrderByDescending(x => x.StartedAt).Take(10).ToListAsync(token);
         var recentBackups = await db.BackupRuns.AsNoTracking().OrderByDescending(x => x.StartedAt).Take(10).ToListAsync(token);
-        return Ok(new
-        {
-            serverTime = now,
+        return Ok(new DiagnosticsResponse(
+            now,
             databaseBytes,
             validationQueue,
             sourceCatalog,
             recentRuns,
             recentValidationRuns,
-            recentBackups
-        });
+            recentBackups));
     }
 
     [HttpPost("collect")]
@@ -260,6 +257,37 @@ public sealed class AdminController(
         return Ok(new { created = Path.GetFileName(path), sentToTelegram = sent });
     }
 }
+
+/// <summary>Текущий backlog без уже арендованных строк и rolling validation telemetry.</summary>
+public sealed record ValidationQueueResponse(
+    int Total,
+    int Leased,
+    int NeverChecked,
+    int NeverAttempted,
+    int Due,
+    int Scheduled,
+    int RepeatedlyFailing,
+    int AttemptsLastFiveMinutes,
+    int CheckedLastFiveMinutes,
+    int AliveLastFiveMinutes,
+    int DeferredLastFiveMinutes,
+    int FailedRunsLastFiveMinutes,
+    int ActiveRuns,
+    int ConcurrencyLimit,
+    int BatchSize,
+    double ChecksPerSecond,
+    long? EstimatedDrainSeconds,
+    DateTimeOffset? LastAttemptAt);
+
+/// <summary>Типизированный операторский snapshot для React и generated OpenAPI clients.</summary>
+public sealed record DiagnosticsResponse(
+    DateTimeOffset ServerTime,
+    long DatabaseBytes,
+    ValidationQueueResponse? ValidationQueue,
+    SourceCatalogSnapshot SourceCatalog,
+    IReadOnlyList<CollectionRun> RecentRuns,
+    IReadOnlyList<ValidationRun> RecentValidationRuns,
+    IReadOnlyList<BackupRun> RecentBackups);
 
 /// <summary>Изменяемые поля источника.</summary>
 public sealed record SourceRequest(

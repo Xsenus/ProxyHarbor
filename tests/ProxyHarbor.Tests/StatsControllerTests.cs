@@ -21,9 +21,14 @@ public sealed class StatsControllerTests
         var now = DateTimeOffset.UtcNow;
         await using (var seed = new ProxyHarborDbContext(options))
         {
+            var leased = Endpoint(
+                "8.8.8.8", ProxyProtocol.Https, ProxyStatus.Alive,
+                now.AddHours(-1), now.AddMinutes(-1), 900);
+            leased.CheckLeaseId = Guid.NewGuid();
+            leased.CheckLeaseUntil = now.AddMinutes(1);
             seed.Proxies.AddRange(
                 Endpoint("1.1.1.1", ProxyProtocol.Http, ProxyStatus.Alive, now.AddMinutes(-1), now.AddMinutes(5), 100),
-                Endpoint("8.8.8.8", ProxyProtocol.Https, ProxyStatus.Alive, now.AddHours(-1), now.AddMinutes(-1), 900),
+                leased,
                 Endpoint("9.9.9.9", ProxyProtocol.Http, ProxyStatus.Pending, null, null, null),
                 Endpoint("4.4.4.4", ProxyProtocol.Socks5, ProxyStatus.Dead, now, now.AddMinutes(5), null));
             seed.Sources.Add(new ProxySource
@@ -46,7 +51,8 @@ public sealed class StatsControllerTests
         Assert.Equal(1, rootElement.GetProperty("staleAlive").GetInt32());
         Assert.Equal(1, rootElement.GetProperty("pending").GetInt32());
         Assert.Equal(1, rootElement.GetProperty("dead").GetInt32());
-        Assert.Equal(2, rootElement.GetProperty("dueForCheck").GetInt32());
+        Assert.Equal(1, rootElement.GetProperty("dueForCheck").GetInt32());
+        Assert.Equal(1, rootElement.GetProperty("checksInProgress").GetInt32());
         Assert.Equal(2, rootElement.GetProperty("scheduledChecks").GetInt32());
         Assert.Equal(100, rootElement.GetProperty("averageLatencyMs").GetDouble());
         Assert.Equal(1, rootElement.GetProperty("sources").GetInt32());
