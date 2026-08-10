@@ -35,7 +35,16 @@ internal static class TelegramBackupSender
                 using var file = new StreamContent(stream);
                 file.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
                 form.Add(file, "document", Path.GetFileName(path));
-                using var response = await client.PostAsync($"https://api.telegram.org/bot{botToken}/sendDocument", form, token);
+                using var request = new HttpRequestMessage(
+                    HttpMethod.Post, $"https://api.telegram.org/bot{botToken}/sendDocument")
+                {
+                    Content = form
+                };
+                // PostAsync сначала буферизует response body целиком, поэтому внешний
+                // endpoint мог обойти MaxResponseBytes ещё до bounded parser. Читаем поток
+                // сразу и закрываем response/connection при превышении лимита.
+                using var response = await client.SendAsync(
+                    request, HttpCompletionOption.ResponseHeadersRead, token);
                 var apiResponse = await ReadApiResponseAsync(response.Content, token);
                 // Bot API определяет успех одновременно транспортным 2xx и JSON-полем ok=true.
                 // Одного HTTP-кода недостаточно для подтверждения фактической доставки документа.

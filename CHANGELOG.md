@@ -55,6 +55,7 @@
 
 ### Fixed
 
+- Telegram backup sender теперь запрашивает `ResponseHeadersRead`: недоверенный Bot API body больше не буферизуется `HttpClient` целиком до 64-КиБ parser limit. Oversized streaming response bounded-читается, закрывается и никогда не подтверждает доставку; регрессия запрещает возврат к `ResponseContentRead`.
 - Weekly validation-audit больше не принимает пустую публикацию или разные наборы одинакового размера: требуется хотя бы один Alive proxy и точное ordered URL equality JSON↔XML↔TXT↔CSV; artifact/summary публикуют SHA-256 набора, новый HTTP-mock contract отклоняет format mismatch и zero-Alive, а CI/release обязаны запускать этот contract.
 - Forced source-audit теперь требует двустороннее доказательство текущего запуска: `StartedAt ≤ LastFetchedAt ≤ FinishedAt` для каждого enabled feed. Повреждённая или сохранённая дата из будущего больше не проходит freshness-проверку; JSON artifact публикует `futureEvidence`, а mock-contract воспроизводит отклонение.
 - Export boundary query и потоковое тело теперь выполняются в одной PostgreSQL `REPEATABLE READ` транзакции: `X-Next-Cursor`/`X-Next-Offset`, `X-Export-Truncated` и JSON/XML/TXT/CSV больше не расходятся при concurrent validation update; race-регрессия изменяет статус первой строки строго между двумя SQL-командами.

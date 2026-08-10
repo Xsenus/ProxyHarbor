@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Headers;
 using System.Text;
 using ProxyHarbor.Infrastructure;
 
@@ -142,6 +143,31 @@ public sealed class TelegramBackupSenderTests
             Assert.Null(exception.StatusCode);
             Assert.Contains("ok=true", exception.Message, StringComparison.Ordinal);
             Assert.DoesNotContain("super-secret-token", exception.ToString(), StringComparison.Ordinal);
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
+    public async Task OversizedResponseIsStreamedIntoBoundedParserWithoutHttpClientPrebuffering()
+    {
+        var path = await TemporaryBackupAsync();
+        try
+        {
+            var handler = new OversizedStreamingResponseHandler();
+            using var client = new HttpClient(handler);
+
+            var exception = await Assert.ThrowsAnyAsync<HttpRequestException>(() =>
+                TelegramBackupSender.SendAsync(
+                    client, path, "backup", "secret-token", "123456", CancellationToken.None,
+                    (_, _) => Task.CompletedTask));
+
+            Assert.Equal(3, handler.Contents.Count);
+            Assert.All(handler.Contents, content =>
+            {
+                Assert.Equal(0, content.SerializeCalls);
+                Assert.Equal(1, content.StreamCreations);
+            });
+            Assert.Contains("ok=true", exception.Message, StringComparison.Ordinal);
         }
         finally { File.Delete(path); }
     }
@@ -317,6 +343,51 @@ public sealed class TelegramBackupSenderTests
             RequestStarted.TrySetResult(true);
             await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
             return JsonResponse(HttpStatusCode.OK, """{"ok":true,"result":{}}""");
+        }
+    }
+
+    private sealed class OversizedStreamingResponseHandler : HttpMessageHandler
+    {
+        internal List<StreamingOnlyContent> Contents { get; } = [];
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            var content = new StreamingOnlyContent();
+            Contents.Add(content);
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = content });
+        }
+    }
+
+    /// <summary>
+    /// ResponseContentRead вызывает SerializeToStreamAsync и падает; ResponseHeadersRead
+    /// передаёт bounded parser поток напрямую через CreateContentReadStreamAsync.
+    /// </summary>
+    private sealed class StreamingOnlyContent : HttpContent
+    {
+        internal int SerializeCalls { get; private set; }
+        internal int StreamCreations { get; private set; }
+
+        internal StreamingOnlyContent() =>
+            Headers.ContentType = new MediaTypeHeaderValue("application/json");
+
+        protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context)
+        {
+            SerializeCalls++;
+            throw new InvalidOperationException("Telegram response prebuffering is forbidden.");
+        }
+
+        protected override Task<Stream> CreateContentReadStreamAsync()
+        {
+            StreamCreations++;
+            return Task.FromResult<Stream>(new MemoryStream(new byte[70 * 1024], writable: false));
+        }
+
+        protected override bool TryComputeLength(out long length)
+        {
+            length = -1;
+            return false;
         }
     }
 }
