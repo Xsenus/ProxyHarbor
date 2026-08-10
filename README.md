@@ -212,6 +212,8 @@ $env:Backup__EncryptionKey='ваш ключ'
 dotnet run -c Release --project src/ProxyHarbor.Restore -- --input ./proxyharbor.phbackup --replace-existing-data
 ```
 
+Вместо environment можно передать абсолютный путь к bounded UTF-8 secret-файлу через `--encryption-key-file`; inline `--encryption-key` оставлен для совместимости, но не рекомендуется, поскольку значение видно в process arguments. Ctrl+C и container `SIGTERM` отменяют расшифровку/COPY, откатывают транзакцию, удаляют временный plaintext ZIP и завершаются кодом 130.
+
 На опубликованном Docker Compose-хосте локальный .NET SDK не требуется. Restore вынесен в opt-in profile `tools`, запускается без root с read-only root filesystem и по умолчанию только показывает справку. Сначала остановите процессы, которые пишут в БД, затем запустите одноразовый контейнер с точным именем backup из volume и после успеха верните сервисы:
 
 ```powershell

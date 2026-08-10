@@ -8,6 +8,7 @@ namespace ProxyHarbor.Tests;
 public sealed class RestoreOptionsTests
 {
     private const string LegacyKey = "legacy-key-16chr";
+    private const string StrongKey = "restore-cancellation-key-32-chars";
     private const string Connection = "Host=localhost;Database=proxyharbor;Username=proxyharbor";
 
     [Fact]
@@ -58,9 +59,84 @@ public sealed class RestoreOptionsTests
         Assert.Throws<ArgumentException>(options.Validate);
     }
 
+    [Fact]
+    public void ParseReadsBoundedAbsoluteEncryptionKeyFile()
+    {
+        using var input = new TemporaryInput();
+        using var keyFile = new TemporaryInput(LegacyKey);
+
+        var options = RestoreOptions.Parse([
+            "--input", input.Path,
+            "--connection", Connection,
+            "--encryption-key-file", keyFile.Path,
+            "--replace-existing-data"]);
+
+        Assert.Equal(LegacyKey, options.EncryptionKey);
+        options.Validate();
+    }
+
+    [Fact]
+    public void ParseRejectsAmbiguousInlineAndFileKeys()
+    {
+        using var input = new TemporaryInput();
+        using var keyFile = new TemporaryInput(LegacyKey);
+
+        Assert.Throws<ArgumentException>(() => RestoreOptions.Parse([
+            "--input", input.Path,
+            "--connection", Connection,
+            "--encryption-key", LegacyKey,
+            "--encryption-key-file", keyFile.Path,
+            "--replace-existing-data"]));
+    }
+
+    [Fact]
+    public void ParseRejectsExplicitEmptyEncryptionKeyFile()
+    {
+        using var input = new TemporaryInput();
+        using var keyFile = new TemporaryInput();
+
+        var exception = Assert.Throws<ArgumentException>(() => RestoreOptions.Parse([
+            "--input", input.Path,
+            "--connection", Connection,
+            "--encryption-key-file", keyFile.Path,
+            "--replace-existing-data"]));
+
+        Assert.Contains("не содержит ключ", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task PreCancelledRestoreReturnsStandardInterruptedExitCode()
+    {
+        using var plaintext = new TemporaryInput("representative plaintext");
+        var encryptedPath = Path.Combine(Path.GetTempPath(), $"proxyharbor-cancel-{Guid.NewGuid():N}.phbackup");
+        try
+        {
+            await BackupEncryption.EncryptAsync(
+                plaintext.Path, encryptedPath, StrongKey, CancellationToken.None);
+            using var stopping = new CancellationTokenSource();
+            await stopping.CancelAsync();
+
+            var exitCode = await RestoreApplication.RunAsync([
+                "--input", encryptedPath,
+                "--connection", Connection,
+                "--encryption-key", StrongKey,
+                "--replace-existing-data"], stopping.Token);
+
+            Assert.Equal(130, exitCode);
+        }
+        finally
+        {
+            if (File.Exists(encryptedPath)) File.Delete(encryptedPath);
+        }
+    }
+
     private sealed class TemporaryInput : IDisposable
     {
-        public TemporaryInput() => Path = System.IO.Path.GetTempFileName();
+        public TemporaryInput(string content = "")
+        {
+            Path = System.IO.Path.GetTempFileName();
+            File.WriteAllText(Path, content);
+        }
 
         public string Path { get; }
 

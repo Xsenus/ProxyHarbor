@@ -1,13 +1,14 @@
 using System.IO.Compression;
 using System.Net;
 using System.Net.Http.Headers;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using ProxyHarbor.Domain;
 using ProxyHarbor.Infrastructure;
 
-return await RestoreApplication.RunAsync(args);
+return await RestoreApplication.RunWithConsoleCancellationAsync(args);
 
 /// <summary>Изолированная CLI-команда полного восстановления БД из зашифрованного backup.</summary>
 internal static class RestoreApplication
@@ -17,7 +18,35 @@ internal static class RestoreApplication
         PropertyNameCaseInsensitive = true
     };
 
-    public static async Task<int> RunAsync(string[] args)
+    /// <summary>Связывает Ctrl+C и container SIGTERM с общей отменой restore pipeline.</summary>
+    internal static async Task<int> RunWithConsoleCancellationAsync(string[] args)
+    {
+        using var shutdown = new CancellationTokenSource();
+        ConsoleCancelEventHandler cancelHandler = (_, eventArgs) =>
+        {
+            eventArgs.Cancel = true;
+            shutdown.Cancel();
+        };
+        Console.CancelKeyPress += cancelHandler;
+        PosixSignalRegistration? terminateRegistration = null;
+        if (!OperatingSystem.IsWindows())
+        {
+            terminateRegistration = PosixSignalRegistration.Create(PosixSignal.SIGTERM, context =>
+            {
+                context.Cancel = true;
+                shutdown.Cancel();
+            });
+        }
+
+        try { return await RunAsync(args, shutdown.Token); }
+        finally
+        {
+            terminateRegistration?.Dispose();
+            Console.CancelKeyPress -= cancelHandler;
+        }
+    }
+
+    public static async Task<int> RunAsync(string[] args, CancellationToken cancellationToken = default)
     {
         try
         {
@@ -35,8 +64,10 @@ internal static class RestoreApplication
             {
                 var zipPath = Path.Combine(temporaryDirectory, "snapshot.zip");
                 Console.WriteLine("Проверка целостности и расшифровка backup...");
-                await BackupEncryption.DecryptAsync(options.InputFile!, zipPath, options.EncryptionKey!, CancellationToken.None);
-                var counts = await RestoreDatabaseAsync(zipPath, options.ConnectionString!, CancellationToken.None);
+                await BackupEncryption.DecryptAsync(
+                    options.InputFile!, zipPath, options.EncryptionKey!, cancellationToken);
+                var counts = await RestoreDatabaseAsync(
+                    zipPath, options.ConnectionString!, cancellationToken);
                 Console.WriteLine($"Восстановление завершено: {counts.Proxies:N0} прокси, {counts.Sources:N0} источников, " +
                     $"{counts.Runs:N0} циклов сбора, {counts.ValidationRuns:N0} validation-партий, " +
                     $"{counts.BackupRuns:N0} циклов backup.");
@@ -47,6 +78,11 @@ internal static class RestoreApplication
                 // Расшифрованный ZIP содержит данные БД и никогда не должен оставаться во временном каталоге.
                 Directory.Delete(temporaryDirectory, recursive: true);
             }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            Console.Error.WriteLine("Восстановление прервано; транзакция отменена, временные данные удалены.");
+            return 130;
         }
         catch (Exception exception)
         {
@@ -457,7 +493,9 @@ internal sealed record RestoreOptions(
         По умолчанию строка БД читается из ConnectionStrings__Postgres,
         а ключ — из Backup__EncryptionKey. Docker использует bounded файлы
         SecretFiles__PostgresPassword и SecretFiles__BackupEncryptionKey.
-        Явные --connection и --encryption-key имеют наивысший приоритет.
+        Для локального secret-файла используйте --encryption-key-file с абсолютным
+        путём. Inline --encryption-key совместим, но виден в process arguments.
+        Явные CLI-параметры имеют наивысший приоритет.
         """;
 
     public static RestoreOptions Parse(string[] args)
@@ -465,6 +503,7 @@ internal sealed record RestoreOptions(
         string? input = null;
         string? connection = null;
         string? key = null;
+        string? keyFile = null;
         var confirm = false;
         var help = false;
         for (var index = 0; index < args.Length; index++)
@@ -474,6 +513,7 @@ internal sealed record RestoreOptions(
                 case "--input": input = NextValue(args, ref index, "--input"); break;
                 case "--connection": connection = NextValue(args, ref index, "--connection"); break;
                 case "--encryption-key": key = NextValue(args, ref index, "--encryption-key"); break;
+                case "--encryption-key-file": keyFile = NextValue(args, ref index, "--encryption-key-file"); break;
                 case "--replace-existing-data": confirm = true; break;
                 case "--help" or "-h": help = true; break;
                 default: throw new ArgumentException($"Неизвестный аргумент: {args[index]}");
@@ -484,9 +524,20 @@ internal sealed record RestoreOptions(
         // container secret mounts. Файлы читаются только для отсутствующих defaults.
         if (!help)
         {
+            if (key is not null && keyFile is not null)
+                throw new ArgumentException(
+                    "Передайте только один из --encryption-key и --encryption-key-file.");
             connection ??= RuntimeSecretConfiguration.ApplyPostgresPasswordFile(
                 Environment.GetEnvironmentVariable("ConnectionStrings__Postgres"),
                 Environment.GetEnvironmentVariable("SecretFiles__PostgresPassword"));
+            if (keyFile is not null)
+            {
+                key = RuntimeSecretConfiguration.ReadOptionalFile(
+                    keyFile,
+                    "--encryption-key-file");
+                if (key is null)
+                    throw new ArgumentException("Файл --encryption-key-file не содержит ключ.");
+            }
             key ??= RuntimeSecretConfiguration.ReadOptionalFile(
                 Environment.GetEnvironmentVariable("SecretFiles__BackupEncryptionKey"),
                 "SecretFiles__BackupEncryptionKey")

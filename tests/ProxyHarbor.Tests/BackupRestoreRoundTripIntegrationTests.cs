@@ -78,6 +78,8 @@ public sealed class BackupRestoreRoundTripIntegrationTests
                 NullLogger<BackupService>.Instance);
 
             var encryptedPath = await backup.CreateAndSendAsync(CancellationToken.None);
+            var restoreKeyFile = Path.Combine(backupDirectory, "restore-key.secret");
+            await File.WriteAllTextAsync(restoreKeyFile, EncryptionKey);
 
             Assert.True(File.Exists(encryptedPath));
             Assert.EndsWith(".phbackup", encryptedPath, StringComparison.Ordinal);
@@ -93,7 +95,7 @@ public sealed class BackupRestoreRoundTripIntegrationTests
             var failedExitCode = await RestoreApplication.RunAsync([
                 "--input", invalidBackup,
                 "--connection", targetConnection,
-                "--encryption-key", EncryptionKey,
+                "--encryption-key-file", restoreKeyFile,
                 "--replace-existing-data"]);
             Assert.Equal(1, failedExitCode);
             await using (var unchanged = new ProxyHarborDbContext(targetOptions))
@@ -108,7 +110,7 @@ public sealed class BackupRestoreRoundTripIntegrationTests
             var exitCode = await RestoreApplication.RunAsync([
                 "--input", encryptedPath,
                 "--connection", targetConnection,
-                "--encryption-key", EncryptionKey,
+                "--encryption-key-file", restoreKeyFile,
                 "--replace-existing-data"]);
             Assert.Equal(0, exitCode);
 
