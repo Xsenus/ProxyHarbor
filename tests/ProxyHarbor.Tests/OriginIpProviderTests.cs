@@ -265,6 +265,31 @@ public sealed class OriginIpProviderTests
         Assert.Equal(0, health.Availability);
     }
 
+    [Theory]
+    [InlineData("[]")]
+    [InlineData("\"8.8.8.8\"")]
+    [InlineData("123")]
+    [InlineData("null")]
+    public async Task NonObjectControlJsonFailsClosedWithoutEscapingAsServerError(string json)
+    {
+        var handler = new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(json)
+        });
+        using var factory = new StubHttpClientFactory(handler);
+        var health = new ProbeControlHealth();
+        using var provider = new OriginIpProvider(
+            factory,
+            Options.Create(new CollectorOptions()),
+            health);
+
+        await Assert.ThrowsAsync<ProbeControlUnavailableException>(
+            () => provider.GetRequiredAsync(CancellationToken.None));
+
+        Assert.Equal(1, handler.RequestCount);
+        Assert.Equal(0, health.Availability);
+    }
+
     [Fact]
     public async Task UnavailableEndpointStopsValidatorBeforeDatabaseQueueClaim()
     {

@@ -55,7 +55,7 @@
 
 ### Fixed
 
-- Прямой ответ validation control endpoint теперь разбирается из исходных UTF-8 bytes: невалидная кодировка fail-closed отклоняется JSON parser вместо молчаливой подмены повреждённых байтов на replacement characters.
+- Прямой ответ validation control endpoint теперь разбирается из исходных UTF-8 bytes и требует object со строковым `ip`: невалидная кодировка или JSON shape fail-closed отклоняются вместо replacement characters либо необработанного server error.
 - Validation worker больше не принимает непустой deferred-only пакет за пустую очередь: после временной ошибки control endpoint он продолжает осушать остальные due-записи с короткой паузой вместо 30-секундной остановки.
 - Telegram backup sender теперь запрашивает `ResponseHeadersRead`: недоверенный Bot API body больше не буферизуется `HttpClient` целиком до 64-КиБ parser limit. Oversized streaming response bounded-читается, закрывается и никогда не подтверждает доставку; регрессия запрещает возврат к `ResponseContentRead`.
 - Weekly validation-audit больше не принимает пустую публикацию или разные наборы одинакового размера: требуется хотя бы один Alive proxy и точное ordered URL equality JSON↔XML↔TXT↔CSV; artifact/summary публикуют SHA-256 набора, новый HTTP-mock contract отклоняет format mismatch и zero-Alive, а CI/release обязаны запускать этот contract.

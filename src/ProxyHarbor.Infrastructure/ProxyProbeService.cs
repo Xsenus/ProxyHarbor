@@ -142,7 +142,8 @@ public sealed class OriginIpProvider(
                 // Повреждённая кодировка не превращается в допустимый U+FFFD.
                 _ = StrictUtf8.GetCharCount(jsonUtf8.Span);
                 using var document = JsonDocument.Parse(jsonUtf8);
-                var value = document.RootElement.TryGetProperty("ip", out var ipElement) &&
+                var value = document.RootElement.ValueKind == JsonValueKind.Object &&
+                    document.RootElement.TryGetProperty("ip", out var ipElement) &&
                     ipElement.ValueKind == JsonValueKind.String
                     ? ipElement.GetString()
                     : null;
