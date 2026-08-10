@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using System.Data;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
@@ -179,6 +180,12 @@ public sealed class ProxiesController(
         try
         {
             await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+            // Boundary headers и streaming body обязаны видеть один набор строк. Иначе
+            // validation update между двумя SQL-командами способен выдать cursor от одной
+            // страницы, а тело — от другой. InMemory unit provider транзакций не имеет.
+            await using var snapshot = db.Database.IsRelational()
+                ? await db.Database.BeginTransactionAsync(IsolationLevel.RepeatableRead, cancellationToken)
+                : null;
             var freshAfter = DateTimeOffset.UtcNow.AddMinutes(-collectorOptions.Value.PublicFreshnessMinutes);
             var query = ApplyFilters(db.Proxies.AsNoTracking().Where(x =>
                 x.Status == ProxyStatus.Alive && x.LastCheckedAt >= freshAfter), protocol, maxLatencyMs, minSuccessRate);
@@ -238,6 +245,7 @@ public sealed class ProxiesController(
                 case "csv": await WriteCsvAsync(Response.Body, proxies, cancellationToken); break;
                 case "xml": await WriteXmlAsync(Response.Body, proxies, cancellationToken); break;
             }
+            if (snapshot is not null) await snapshot.CommitAsync(cancellationToken);
             return new EmptyResult();
         }
         finally { ExportConcurrencyGate.Release(); }

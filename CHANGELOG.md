@@ -55,6 +55,7 @@
 
 ### Fixed
 
+- Export boundary query и потоковое тело теперь выполняются в одной PostgreSQL `REPEATABLE READ` транзакции: `X-Next-Cursor`/`X-Next-Offset`, `X-Export-Truncated` и JSON/XML/TXT/CSV больше не расходятся при concurrent validation update; race-регрессия изменяет статус первой строки строго между двумя SQL-командами.
 - Validation persistence больше не считает частично отвергнутый lease batch успешным: owned-результаты атомарно сохраняются, строки с чужим UUID остаются нетронутыми, но несовпадение submitted/persisted fail-closed завершает audit как `failed`; PostgreSQL-регрессия доказывает обе стороны этого инварианта.
 - Validation heartbeat после единичного transient-сбоя PostgreSQL больше не завершается навсегда: ошибка логируется, следующий период снова пытается продлить точный lease token, а детерминированный unit-тест доказывает retry без многоминутного ожидания.
 - Финализация collection-run теперь проверяемо переводит только собственную строку `running → completed`, а error-path допускает только `running → failed`: параллельный administrative/restore результат не перезаписывается tracked EF update; PostgreSQL-регрессия меняет audit во время feed-запроса и доказывает fail-closed ответ при сохранении уже собранного кандидата.

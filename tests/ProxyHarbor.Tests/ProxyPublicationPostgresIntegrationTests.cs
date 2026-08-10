@@ -1,7 +1,9 @@
+using System.Data.Common;
 using System.Text;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Options;
 using Npgsql;
 using ProxyHarbor.Api;
@@ -88,6 +90,73 @@ public sealed class ProxyPublicationPostgresIntegrationTests
         }
     }
 
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
+    public async Task ExportHeadersAndBodyUseOneSnapshotDuringConcurrentValidationUpdate()
+    {
+        var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
+        if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
+
+        var schema = $"proxyharbor_export_snapshot_{Guid.NewGuid():N}";
+        var builder = new NpgsqlConnectionStringBuilder(baseConnectionString) { SearchPath = schema };
+        await using var admin = new NpgsqlConnection(baseConnectionString);
+        await admin.OpenAsync();
+        await using (var create = new NpgsqlCommand($"CREATE SCHEMA {schema}", admin))
+            await create.ExecuteNonQueryAsync();
+
+        try
+        {
+            var plainOptions = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+                .UseNpgsql(builder.ConnectionString)
+                .Options;
+            var plainFactory = new TestDbFactory(plainOptions);
+            await using (var migrationDb = await plainFactory.CreateDbContextAsync())
+                await migrationDb.Database.MigrateAsync();
+
+            var now = DateTimeOffset.UtcNow;
+            var firstId = Guid.Parse("00000000-0000-0000-0000-000000000011");
+            await using (var seed = await plainFactory.CreateDbContextAsync())
+            {
+                seed.Proxies.AddRange(
+                    Endpoint("1.1.1.1", firstId.ToString(), 100, 5, now),
+                    Endpoint("8.8.8.8", "00000000-0000-0000-0000-000000000012", 200, 5, now));
+                await seed.SaveChangesAsync();
+            }
+
+            var interceptor = new MutateBeforeSecondProxyReadInterceptor(async token =>
+            {
+                await using var update = await plainFactory.CreateDbContextAsync(token);
+                await update.Proxies.Where(proxy => proxy.Id == firstId)
+                    .ExecuteUpdateAsync(setters => setters
+                        .SetProperty(proxy => proxy.Status, ProxyStatus.Dead), token);
+            });
+            var exportOptions = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+                .UseNpgsql(builder.ConnectionString)
+                .AddInterceptors(interceptor)
+                .Options;
+            await using var output = new MemoryStream();
+            var controller = ExportController(new TestDbFactory(exportOptions), output);
+
+            Assert.IsType<EmptyResult>(await controller.ExportSeek(
+                "txt", null, null, null, CancellationToken.None, limit: 1));
+
+            Assert.True(interceptor.MutationInvoked);
+            Assert.Equal("http://1.1.1.1:8080", Encoding.UTF8.GetString(output.ToArray()).Trim());
+            Assert.Equal("true", controller.Response.Headers["X-Export-Truncated"]);
+            Assert.Equal(PublicationCursor.EncodedLength,
+                controller.Response.Headers["X-Next-Cursor"].ToString().Length);
+            await using var verify = await plainFactory.CreateDbContextAsync();
+            Assert.Equal(ProxyStatus.Dead,
+                await verify.Proxies.Where(proxy => proxy.Id == firstId)
+                    .Select(proxy => proxy.Status).SingleAsync());
+        }
+        finally
+        {
+            await using var drop = new NpgsqlCommand($"DROP SCHEMA IF EXISTS {schema} CASCADE", admin);
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
+
     private static ProxiesController ExportController(
         IDbContextFactory<ProxyHarborDbContext> factory,
         Stream output)
@@ -121,5 +190,29 @@ public sealed class ProxyPublicationPostgresIntegrationTests
         public ProxyHarborDbContext CreateDbContext() => new(options);
         public Task<ProxyHarborDbContext> CreateDbContextAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult(CreateDbContext());
+    }
+
+    /// <summary>Изменяет первую строку строго между boundary query и streaming query.</summary>
+    private sealed class MutateBeforeSecondProxyReadInterceptor(
+        Func<CancellationToken, Task> mutate) : DbCommandInterceptor
+    {
+        private int _proxyReads;
+        internal bool MutationInvoked { get; private set; }
+
+        public override async ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            if (command.CommandText.Contains("FROM \"Proxies\"", StringComparison.Ordinal) &&
+                Interlocked.Increment(ref _proxyReads) == 2)
+            {
+                await mutate(cancellationToken);
+                MutationInvoked = true;
+            }
+
+            return result;
+        }
     }
 }
