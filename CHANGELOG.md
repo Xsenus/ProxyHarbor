@@ -7,6 +7,7 @@
 
 ### Added
 
+- Локальный cross-platform transport-canary проверяет полный HTTP proxy probe `CONNECT → TLS 1.2/1.3 → bounded HTTP framing → canonical exit IP → anonymity`; keep-alive остаётся открытым до завершения проверки, доказывая отсутствие ожидания EOF после полного `Content-Length`.
 - Backup pipeline получил симметричные bounded failure-canary: сбой ZIP producer обязан отменить PHB3 encryptor без потери исходного исключения и partial-файла, а мгновенный сбой encryptor — отменить зависший DB producer без deadlock.
 - PostgreSQL restore cancellation-canary останавливает процесс как после первой реально записанной binary `COPY` row, так и после завершения всех пяти `COPY` непосредственно перед `COMMIT`; оба сценария доказывают полный rollback исходной БД, отсутствие частично импортированных данных, стандартный exit code 130 и удаление расшифрованного временного ZIP.
 - PostgreSQL backup shutdown-canary отменяет процесс строго во время Telegram upload, затем требует закрытые file handles, отсутствие `.partial/.part*`, криптографически пригодный локальный PHB3, завершённый `failed` audit и отсутствие Telegram secrets в error.

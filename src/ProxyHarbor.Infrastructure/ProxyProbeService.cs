@@ -15,15 +15,18 @@ public sealed class ProxyProbeService(IOptions<CollectorOptions> options, Origin
 {
     private readonly Func<string, int, CancellationToken, Task<TcpClient>> _connectAsync =
         PublicProxyConnector.ConnectAsync;
+    private readonly RemoteCertificateValidationCallback? _certificateValidationCallback;
 
     /// <summary>Позволяет integration-тесту заменить только транспорт, не ослабляя production-коннектор.</summary>
     internal ProxyProbeService(
         IOptions<CollectorOptions> options,
         OriginIpProvider originIpProvider,
-        Func<string, int, CancellationToken, Task<TcpClient>> connectAsync)
+        Func<string, int, CancellationToken, Task<TcpClient>> connectAsync,
+        RemoteCertificateValidationCallback? certificateValidationCallback = null)
         : this(options, originIpProvider)
     {
         _connectAsync = connectAsync ?? throw new ArgumentNullException(nameof(connectAsync));
+        _certificateValidationCallback = certificateValidationCallback;
     }
 
     /// <summary>Не позволяет арендовать пакет, пока доверенный control endpoint недоступен напрямую.</summary>
@@ -67,7 +70,12 @@ public sealed class ProxyProbeService(IOptions<CollectorOptions> options, Origin
                     break;
             }
 
-            using var tls = new SslStream(stream, leaveInnerStreamOpen: false);
+            // Production-конструктор не задаёт callback и всегда использует системную
+            // проверку цепочки/имени. Friend test assembly может доверять только своему
+            // ephemeral сертификату для полного локального transport-canary.
+            using var tls = _certificateValidationCallback is null
+                ? new SslStream(stream, leaveInnerStreamOpen: false)
+                : new SslStream(stream, leaveInnerStreamOpen: false, _certificateValidationCallback);
             await tls.AuthenticateAsClientAsync(new SslClientAuthenticationOptions
             {
                 TargetHost = options.Value.ProbeHost,
