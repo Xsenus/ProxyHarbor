@@ -4,6 +4,7 @@ $decryptor = Join-Path $PSScriptRoot 'Decrypt-Backup.ps1'
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) "proxyharbor-backup-key-$([Guid]::NewGuid().ToString('N'))"
 $missingInput = Join-Path $testRoot 'missing.phb'
 $legacyInput = Join-Path $testRoot 'legacy-unicode.phb'
+$corruptInput = Join-Path $testRoot 'corrupt-unicode.phb'
 $outputZip = Join-Path $testRoot 'output.zip'
 $unicodeKeyFile = Join-Path $testRoot 'unicode-key.secret'
 $emptyKeyFile = Join-Path $testRoot 'empty-key.secret'
@@ -18,6 +19,13 @@ function Invoke-FailingDecrypt([string]$EncryptionKey) {
         throw 'Decrypt-Backup.ps1 неожиданно завершился успешно.'
     } catch {
         return $_.Exception.Message
+    }
+}
+
+function Assert-NoRestorePartial {
+    $partials = @(Get-ChildItem -LiteralPath $testRoot -Filter '.proxyharbor-restore-*.partial' -File)
+    if ($partials.Count -ne 0) {
+        throw "Restore оставил plaintext partial: $($partials.Name -join ', ')."
     }
 }
 
@@ -138,12 +146,45 @@ try {
 
     # BOM и один терминальный CRLF удаляются так же, как Docker secret loader.
     [IO.File]::WriteAllText($unicodeKeyFile, "$unicodeLegacyKey`r`n", [Text.UTF8Encoding]::new($true, $true))
+
+    # Существующий output нельзя ни перезаписать, ни удалить даже при валидном backup.
+    $existingOutput = [Text.Encoding]::UTF8.GetBytes('operator-owned-output')
+    [IO.File]::WriteAllBytes($outputZip, $existingOutput)
+    try {
+        & $decryptor -InputFile $legacyInput -OutputZip $outputZip -EncryptionKeyFile $unicodeKeyFile
+        throw 'Существующий output неожиданно перезаписан.'
+    } catch {
+        if ($_.Exception.Message -notmatch 'уже существует') {
+            throw "Существующий output отклонён по неверной причине: $($_.Exception.Message)"
+        }
+    }
+    if (-not [Linq.Enumerable]::SequenceEqual($existingOutput, [IO.File]::ReadAllBytes($outputZip))) {
+        throw 'Неуспешный restore изменил существующий output.'
+    }
+    Assert-NoRestorePartial
+    Remove-Item -LiteralPath $outputZip
+
+    # Ошибка AEAD после создания plaintext partial обязана удалить только partial.
+    $corruptBytes = [IO.File]::ReadAllBytes($legacyInput)
+    $corruptBytes[40] = $corruptBytes[40] -bxor 1 # Первый байт authentication tag.
+    [IO.File]::WriteAllBytes($corruptInput, $corruptBytes)
+    $corruptionRejected = $false
+    try {
+        & $decryptor -InputFile $corruptInput -OutputZip $outputZip -EncryptionKeyFile $unicodeKeyFile
+    } catch {
+        $corruptionRejected = $true
+    }
+    if (-not $corruptionRejected) { throw 'Повреждённый backup неожиданно расшифрован.' }
+    if (Test-Path -LiteralPath $outputZip) { throw 'Повреждённый backup опубликовал выходной ZIP.' }
+    Assert-NoRestorePartial
+
     & $decryptor -InputFile $legacyInput -OutputZip $outputZip -EncryptionKeyFile $unicodeKeyFile
     if (-not [Linq.Enumerable]::SequenceEqual($plaintext, [IO.File]::ReadAllBytes($outputZip))) {
         throw 'PowerShell restore изменил содержимое корректного Unicode PHB2-архива.'
     }
+    Assert-NoRestorePartial
 
-    Write-Host 'Контракты key-file, Unicode-ключей и PHB2-совместимости резервных копий пройдены.' -ForegroundColor Green
+    Write-Host 'Контракты key-file, атомарной публикации и PHB2-совместимости резервных копий пройдены.' -ForegroundColor Green
 } finally {
     if (Test-Path -LiteralPath $testRoot) { Remove-Item -LiteralPath $testRoot -Recurse -Force }
 }

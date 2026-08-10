@@ -16,6 +16,7 @@ $keyFileBytes = $null
 $keyCharacters = $null
 $keyStream = $null
 $aes = $null
+$partialOutput = $null
 
 try {
     $strictUtf8 = [Text.UTF8Encoding]::new($false, $true)
@@ -81,10 +82,20 @@ try {
     }
 
     $resolvedInput = (Resolve-Path -LiteralPath $InputFile).Path
-    if (Test-Path -LiteralPath $OutputZip) { throw 'Выходной ZIP уже существует.' }
+    $resolvedOutput = [IO.Path]::GetFullPath($OutputZip)
+    if (Test-Path -LiteralPath $resolvedOutput) { throw 'Выходной ZIP уже существует.' }
+    $outputDirectory = [IO.Path]::GetDirectoryName($resolvedOutput)
+    if (-not [IO.Directory]::Exists($outputDirectory)) { throw 'Каталог выходного ZIP не существует.' }
+
     $inputStream = [IO.File]::OpenRead($resolvedInput)
     $reader = [IO.BinaryReader]::new($inputStream)
-    $outputStream = [IO.File]::Create($OutputZip)
+    # Plaintext появляется только в уникальном sibling-файле без sharing. Финальный
+    # Move без overwrite публикует уже аутентифицированный ZIP атомарно и не позволяет
+    # конкурентно созданному OutputZip быть затёртым либо удалённым при ошибке.
+    $partialOutput = [IO.Path]::Combine(
+        $outputDirectory, ".proxyharbor-restore-$([Guid]::NewGuid().ToString('N')).partial")
+    $outputStream = [IO.File]::Open(
+        $partialOutput, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
 
     # PHB2/PHB3 обрабатываются потоково: память не зависит от размера резервной копии.
     $magic = [Text.Encoding]::ASCII.GetString($reader.ReadBytes(4))
@@ -134,19 +145,35 @@ try {
         $blockIndex++
     }
     if ($inputStream.Position -ne $inputStream.Length) { throw 'После завершающего блока обнаружены лишние данные.' }
-} catch {
-    if ($null -ne $outputStream) { $outputStream.Dispose(); $outputStream = $null }
-    Remove-Item -LiteralPath $OutputZip -ErrorAction SilentlyContinue
-    throw
+
+    # Flush(true) синхронизирует содержимое до публикации. Move с overwrite=false
+    # является последней защитой от TOCTOU после начальной проверки существования.
+    $outputStream.Flush($true)
+    $outputStream.Dispose()
+    $outputStream = $null
+    [IO.File]::Move($partialOutput, $resolvedOutput, $false)
+    $partialOutput = $null
 } finally {
-    if ($null -ne $keyCharacters) { [Array]::Clear($keyCharacters, 0, $keyCharacters.Length) }
-    if ($null -ne $keyFileBytes) { [Security.Cryptography.CryptographicOperations]::ZeroMemory($keyFileBytes) }
-    if ($null -ne $passwordBytes) { [Security.Cryptography.CryptographicOperations]::ZeroMemory($passwordBytes) }
-    if ($null -ne $key) { [Security.Cryptography.CryptographicOperations]::ZeroMemory($key) }
-    if ($null -ne $aes) { $aes.Dispose() }
-    if ($null -ne $reader) { $reader.Dispose() }
-    if ($null -ne $inputStream) { $inputStream.Dispose() }
-    if ($null -ne $outputStream) { $outputStream.Dispose() }
-    if ($null -ne $keyStream) { $keyStream.Dispose() }
-    $EncryptionKey = $null
+    try {
+        if ($null -ne $keyCharacters) { [Array]::Clear($keyCharacters, 0, $keyCharacters.Length) }
+        if ($null -ne $keyFileBytes) { [Security.Cryptography.CryptographicOperations]::ZeroMemory($keyFileBytes) }
+        if ($null -ne $passwordBytes) { [Security.Cryptography.CryptographicOperations]::ZeroMemory($passwordBytes) }
+        if ($null -ne $key) { [Security.Cryptography.CryptographicOperations]::ZeroMemory($key) }
+        if ($null -ne $aes) { $aes.Dispose() }
+        if ($null -ne $reader) { $reader.Dispose() }
+        if ($null -ne $inputStream) { $inputStream.Dispose() }
+        if ($null -ne $keyStream) { $keyStream.Dispose() }
+    } finally {
+        # Даже исключение одного из cleanup-шагов не должно пропустить закрытие и
+        # удаление plaintext. File.Delete намеренно не подавляет отказ удаления.
+        try {
+            if ($null -ne $outputStream) { $outputStream.Dispose() }
+        } finally {
+            try {
+                if ($null -ne $partialOutput) { [IO.File]::Delete($partialOutput) }
+            } finally {
+                $EncryptionKey = $null
+            }
+        }
+    }
 }
