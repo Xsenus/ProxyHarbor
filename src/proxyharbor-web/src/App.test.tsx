@@ -118,6 +118,44 @@ describe('ProxyHarbor UI', () => {
     expect(vi.mocked(fetch).mock.calls.filter(([input]) => String(input).includes('/api/v1/sources'))).toHaveLength(1)
   })
 
+  it('recovers the public provider catalog after a temporary failure', async () => {
+    let sourceAttempts = 0
+    vi.mocked(fetch).mockImplementation(async input => {
+      const url = String(input)
+      if (url.includes('/api/v1/stats')) return jsonResponse(stats)
+      if (url.includes('/api/v1/sources')) {
+        sourceAttempts++
+        return sourceAttempts === 1
+          ? jsonResponse({ title: 'Temporary failure' }, 503)
+          : jsonResponse(publicSourceCatalog)
+      }
+      if (url.includes('/api/v1/proxies')) return jsonResponse({ items: [], pageSize: 100, hasMore: false, nextCursor: null })
+      return jsonResponse({ title: 'Unexpected request' }, 500)
+    })
+
+    render(<App />)
+    expect(await screen.findByRole('status')).toHaveTextContent('Каталог источников временно недоступен')
+    fireEvent.click(screen.getByRole('button', { name: 'повторить' }))
+
+    expect(await screen.findByText('ProxyScrape')).toBeInTheDocument()
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+    expect(sourceAttempts).toBe(2)
+  })
+
+  it('keeps a truncated-source warning visible after provider metadata loads', async () => {
+    vi.mocked(fetch).mockImplementation(async input => {
+      const url = String(input)
+      if (url.includes('/api/v1/stats')) return jsonResponse({ ...stats, truncatedSources: 2 })
+      if (url.includes('/api/v1/sources')) return jsonResponse(publicSourceCatalog)
+      if (url.includes('/api/v1/proxies')) return jsonResponse({ items: [], pageSize: 100, hasMore: false, nextCursor: null })
+      return jsonResponse({ title: 'Unexpected request' }, 500)
+    })
+
+    render(<App />)
+    expect(await screen.findByText('2 упёрлись в лимит')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: '50 независимых провайдеров' })).toBeInTheDocument()
+  })
+
   it('cannot restore an admin session from a response owned by an old key', async () => {
     let resolveSources!: (response: Response) => void
     let resolveDiagnostics!: (response: Response) => void

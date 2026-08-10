@@ -60,6 +60,7 @@ export default function App() {
   const [apiError, setApiError] = useState('')
   const [sourceCatalog, setSourceCatalog] = useState<PublicSourceCatalog | null>(null)
   const [sourceCatalogError, setSourceCatalogError] = useState('')
+  const [sourceCatalogLoading, setSourceCatalogLoading] = useState(false)
   const [adminOpen, setAdminOpen] = useState(false)
   const [adminKey, setAdminKey] = useState(readStoredAdminKey)
   const [adminAuthenticated, setAdminAuthenticated] = useState(false)
@@ -79,6 +80,8 @@ export default function App() {
   const publicRequestIdRef = useRef(0)
   const publicAbortRef = useRef<AbortController | null>(null)
   const loadMoreAbortRef = useRef<AbortController | null>(null)
+  const sourceCatalogRequestIdRef = useRef(0)
+  const sourceCatalogAbortRef = useRef<AbortController | null>(null)
   const adminRequestIdRef = useRef(0)
   const adminAbortRef = useRef<AbortController | null>(null)
 
@@ -89,22 +92,39 @@ export default function App() {
     loadMoreAbortRef.current?.abort()
   }, [])
 
-  useEffect(() => {
+  const loadSourceCatalog = useCallback(async () => {
+    const requestId = ++sourceCatalogRequestIdRef.current
+    sourceCatalogAbortRef.current?.abort()
     const controller = new AbortController()
-    const loadSourceCatalog = async () => {
-      try {
-        const response = await fetch(`${API}/api/v1/sources`, { signal: controller.signal })
-        if (!response.ok) throw new Error('Каталог источников временно недоступен')
-        setSourceCatalog(await response.json() as PublicSourceCatalog)
-        setSourceCatalogError('')
-      } catch (reason) {
-        if (!isAbortError(reason))
-          setSourceCatalogError(reason instanceof Error ? reason.message : 'Каталог источников временно недоступен')
+    sourceCatalogAbortRef.current = controller
+    setSourceCatalogLoading(true)
+    try {
+      const response = await fetch(`${API}/api/v1/sources`, { signal: controller.signal })
+      if (!response.ok) throw new Error('Каталог источников временно недоступен')
+      const snapshot = await response.json() as PublicSourceCatalog
+      if (requestId !== sourceCatalogRequestIdRef.current) return
+      setSourceCatalog(snapshot)
+      setSourceCatalogError('')
+    } catch (reason) {
+      if (!isAbortError(reason) && requestId === sourceCatalogRequestIdRef.current)
+        setSourceCatalogError(reason instanceof Error ? reason.message : 'Каталог источников временно недоступен')
+    } finally {
+      if (requestId === sourceCatalogRequestIdRef.current) {
+        sourceCatalogAbortRef.current = null
+        setSourceCatalogLoading(false)
       }
     }
-    void loadSourceCatalog()
-    return () => controller.abort()
   }, [])
+
+  const cancelSourceCatalogRequest = useCallback(() => {
+    sourceCatalogRequestIdRef.current++
+    sourceCatalogAbortRef.current?.abort()
+  }, [])
+
+  useEffect(() => {
+    void loadSourceCatalog()
+    return cancelSourceCatalogRequest
+  }, [loadSourceCatalog, cancelSourceCatalogRequest])
 
   /** Обновляет статистику и, при необходимости, первую keyset-страницу каталога. */
   const load = useCallback(async (includeCatalog = true) => {
@@ -464,13 +484,13 @@ export default function App() {
       <section className="metrics" aria-label="Главные показатели">
         <Metric icon={<Activity/>} label="Живых адресов" value={formatNumber(stats?.alive)} note={stats?.staleAlive ? `${formatNumber(stats.staleAlive)} скрыто как устаревшие` : 'прошли свежую проверку'}/>
         <Metric icon={<Gauge/>} label="Средняя задержка" value={stats?.averageLatencyMs ? `${Math.round(stats.averageLatencyMs)} мс` : '—'} note="до контрольного HTTPS"/>
-        <Metric icon={<Database/>} label="Feed-источников" value={formatNumber(stats?.sources)} note={stats?.failingSources ? `${stats.failingSources} требуют внимания` : sourceCatalog ? `${sourceCatalog.providerCount} независимых провайдеров` : stats?.truncatedSources ? `${stats.truncatedSources} упёрлись в лимит` : 'все источники стабильны'}/>
+        <Metric icon={<Database/>} label="Feed-источников" value={formatNumber(stats?.sources)} note={stats?.failingSources ? `${stats.failingSources} требуют внимания` : stats?.truncatedSources ? `${stats.truncatedSources} упёрлись в лимит` : sourceCatalog ? `${sourceCatalog.providerCount} независимых провайдеров` : 'все источники стабильны'}/>
         <Metric icon={<Clock3/>} label="Готовы к проверке" value={formatNumber(stats?.dueForCheck)} note={`${formatNumber(stats?.scheduledChecks)} запланировано позже`}/>
       </section>
 
       <section id="sources" className="public-sources" aria-label="Встроенные источники прокси">
         <div className="section-heading"><div><span className="kicker">SOURCE TRANSPARENCY</span><h2>{sourceCatalog?.providerCount ?? 50} независимых провайдеров</h2></div><p>{sourceCatalog ? `${sourceCatalog.feedCount} HTTPS feed · аудит ${sourceCatalog.lastAuditedOn}` : 'Публичный read-only каталог'}</p></div>
-        {sourceCatalogError && <div className="source-catalog-error" role="status">{sourceCatalogError}</div>}
+        {sourceCatalogError && <div className="source-catalog-error" role="status"><span>{sourceCatalogError}</span><button onClick={() => void loadSourceCatalog()} disabled={sourceCatalogLoading}>{sourceCatalogLoading ? 'повторяем…' : 'повторить'}</button></div>}
         {sourceCatalog && <div className="provider-grid">{sourceCatalog.providers.map(provider =>
           <article key={`${provider.rank}-${provider.name}`}>
             <div><span>#{provider.rank}</span><strong>{provider.name}</strong></div>
