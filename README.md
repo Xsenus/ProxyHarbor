@@ -22,7 +22,7 @@
 
 ## Быстрый запуск в Docker
 
-Требуются Docker Engine 26+ и Docker Compose 2.24.4+. Build context формируется по allowlist: `.env`, локальная PostgreSQL, backup, Git-метаданные и dependency/build-каталоги никогда не отправляются Docker daemon и не попадают в build cache. Compose ограничивает размер/ротацию логов и PID, запускает API без Linux capabilities и даёт процессу до двух минут на корректную отмену операций, очистку partial backup и запись итогового аудита при остановке.
+Требуются Docker Engine 26+ и Docker Compose 2.24.4+. Все сторонние build/runtime/service images записаны как читаемый `tag@sha256:manifest-digest`: тег сообщает ожидаемую версию, а multi-architecture digest запрещает реестру незаметно подменить фактические байты. CI отклоняет новый mutable image reference; Dependabot обновляет тег и digest совместно. Build context формируется по allowlist: `.env`, локальная PostgreSQL, backup, Git-метаданные и dependency/build-каталоги никогда не отправляются Docker daemon и не попадают в build cache. Compose ограничивает размер/ротацию логов и PID, запускает API без Linux capabilities и даёт процессу до двух минут на корректную отмену операций, очистку partial backup и запись итогового аудита при остановке.
 
 ```bash
 cp .env.example .env

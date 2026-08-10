@@ -4,7 +4,7 @@ services:
     ports: !reset []
 
   caddy:
-    image: caddy:2.11.4-alpine
+    image: caddy:2.11.4-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648
     restart: unless-stopped
     depends_on:
       api: { condition: service_healthy }
@@ -39,7 +39,7 @@ services:
   # доступен только с самого хоста либо через явно настроенный SSH tunnel.
   prometheus:
     profiles: [monitoring]
-    image: prom/prometheus:v3.13.2-distroless
+    image: prom/prometheus:v3.13.2-distroless@sha256:64f71bb84e03c855948418b0fc5dea53e9543d8e3fc9931598f583805507f05e
     restart: unless-stopped
     depends_on:
       api: { condition: service_healthy }
@@ -81,7 +81,7 @@ services:
 
   alertmanager:
     profiles: [monitoring]
-    image: prom/alertmanager:v0.32.1
+    image: prom/alertmanager:v0.32.1@sha256:51a825c2a40acc3e338fdd00d622e01ec090f72be2b3ea46be0839cd47a4d286
     restart: unless-stopped
     command:
       - --config.file=/etc/alertmanager/alertmanager.yml
