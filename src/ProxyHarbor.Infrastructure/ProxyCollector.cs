@@ -86,6 +86,8 @@ public sealed class ProxyCollector(
                                     "Источник вернул 304 без сохранённого успешного непустого результата.");
                             sourceResults.Add(new SourceCollectionResult(
                                 source.Id,
+                                source.Url,
+                                source.DefaultProtocol,
                                 source.LastItemCount,
                                 source.LastResultTruncated,
                                 fetched.HttpETag,
@@ -114,6 +116,8 @@ public sealed class ProxyCollector(
                             });
                         sourceResults.Add(new SourceCollectionResult(
                             source.Id,
+                            source.Url,
+                            source.DefaultProtocol,
                             parsed.Count,
                             parsed.Truncated,
                             fetched.HttpETag,
@@ -125,7 +129,8 @@ public sealed class ProxyCollector(
                     {
                         SourceFailed(logger, source.Name, ex);
                         sourceResults.Add(new SourceCollectionResult(
-                            source.Id, 0, false, null, null, ContentFetched: false, ex.Message));
+                            source.Id, source.Url, source.DefaultProtocol,
+                            0, false, null, null, ContentFetched: false, ex.Message));
                     }
                 });
 
@@ -135,6 +140,12 @@ public sealed class ProxyCollector(
                 foreach (var source in trackedSources)
                 {
                     var result = sourceResultById[source.Id];
+                    // Admin мог заменить endpoint, пока старый HTTP-запрос находился в полёте.
+                    // Результат старой конфигурации нельзя приписывать новой: особенно ETag и
+                    // LastContentFetchedAt, иначе новый feed способен получать ложные 304.
+                    if (!string.Equals(source.Url, result.SourceUrl, StringComparison.Ordinal) ||
+                        source.DefaultProtocol != result.SourceProtocol)
+                        continue;
                     var fetchedAt = DateTimeOffset.UtcNow;
                     source.LastFetchedAt = fetchedAt;
                     source.LastItemCount = result.Count;
@@ -406,6 +417,8 @@ public sealed class ProxyCollector(
 
     private sealed record SourceCollectionResult(
         Guid Id,
+        string SourceUrl,
+        ProxyProtocol SourceProtocol,
         int Count,
         bool Truncated,
         string? HttpETag,

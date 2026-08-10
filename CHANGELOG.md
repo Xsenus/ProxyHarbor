@@ -7,6 +7,7 @@
 
 ### Changed
 
+- Collector больше не записывает ETag, fetch timeline и health старого endpoint поверх источника, который администратор перенастроил во время HTTP-загрузки.
 - CI и release теперь одинаково запускают закреплённый `actionlint` с проверкой официального SHA-256 до распаковки; отдельный contract test защищает version/hash pins и подключение gate в обоих workflow.
 - Conditional source fetch теперь периодически выполняет обязательный full-body refresh и сохраняет `LastContentFetchedAt`, поэтому сочетание вечного `304` и dead retention не может навсегда удалить кандидата из неизменившегося feed.
 - Origin IP cache теперь атомарно публикует immutable value+expiry snapshot для lock-free fast path при сотнях параллельных proxy probes.

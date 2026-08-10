@@ -14,6 +14,94 @@ public sealed class ProxyCollectorIntegrationTests
 {
     [Fact]
     [Trait("Category", "PostgresIntegration")]
+    public async Task InFlightResultCannotOverwriteAReconfiguredSource()
+    {
+        var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
+        if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
+
+        var schema = $"proxyharbor_source_race_{Guid.NewGuid():N}";
+        var builder = new NpgsqlConnectionStringBuilder(baseConnectionString) { SearchPath = schema };
+        await using var admin = new NpgsqlConnection(baseConnectionString);
+        await admin.OpenAsync();
+        await using (var create = new NpgsqlCommand($"CREATE SCHEMA {schema}", admin))
+            await create.ExecuteNonQueryAsync();
+
+        try
+        {
+            var dbOptions = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+                .UseNpgsql(builder.ConnectionString)
+                .Options;
+            var factory = new TestDbFactory(dbOptions);
+            await using (var migrationDb = await factory.CreateDbContextAsync())
+                await migrationDb.Database.MigrateAsync();
+
+            var sourceId = Guid.NewGuid();
+            var previousFetchAt = DateTimeOffset.UtcNow.AddMinutes(-2);
+            await using (var seed = await factory.CreateDbContextAsync())
+            {
+                seed.Sources.Add(new ProxySource
+                {
+                    Id = sourceId,
+                    Name = "Mutable integration feed",
+                    Url = "https://8.8.8.8/old.txt",
+                    DefaultProtocol = ProxyProtocol.Http,
+                    LastFetchedAt = previousFetchAt,
+                    LastSucceededAt = previousFetchAt,
+                    LastContentFetchedAt = previousFetchAt,
+                    LastItemCount = 7,
+                    HttpETag = "\"old-etag\""
+                });
+                await seed.SaveChangesAsync();
+            }
+
+            var handler = new EndpointChangingFeedHandler(async token =>
+            {
+                await using var update = await factory.CreateDbContextAsync(token);
+                await update.Sources.Where(source => source.Id == sourceId)
+                    .ExecuteUpdateAsync(setters => setters
+                        .SetProperty(source => source.Url, "https://1.1.1.1/new.txt")
+                        .SetProperty(source => source.DefaultProtocol, ProxyProtocol.Socks5)
+                        .SetProperty(source => source.LastFetchedAt, (DateTimeOffset?)null)
+                        .SetProperty(source => source.LastSucceededAt, (DateTimeOffset?)null)
+                        .SetProperty(source => source.LastContentFetchedAt, (DateTimeOffset?)null)
+                        .SetProperty(source => source.LastItemCount, 0)
+                        .SetProperty(source => source.HttpETag, (string?)null), token);
+            });
+            using var clients = new TestHttpClientFactory(handler);
+            using var collector = new ProxyCollector(
+                factory,
+                clients,
+                Options.Create(new CollectorOptions
+                {
+                    SourceRetryCount = 0,
+                    MaxProxiesPerSource = 10,
+                    MaxCandidatesPerRun = 10
+                }),
+                NullLogger<ProxyCollector>.Instance);
+
+            var run = await collector.CollectAsync(CancellationToken.None, forceAllSources: true);
+
+            Assert.Equal("completed", run.Status);
+            Assert.Equal(1, run.SourcesSucceeded);
+            await using var verify = await factory.CreateDbContextAsync();
+            var source = await verify.Sources.AsNoTracking().SingleAsync(item => item.Id == sourceId);
+            Assert.Equal("https://1.1.1.1/new.txt", source.Url);
+            Assert.Equal(ProxyProtocol.Socks5, source.DefaultProtocol);
+            Assert.Null(source.LastFetchedAt);
+            Assert.Null(source.LastSucceededAt);
+            Assert.Null(source.LastContentFetchedAt);
+            Assert.Equal(0, source.LastItemCount);
+            Assert.Null(source.HttpETag);
+        }
+        finally
+        {
+            await using var drop = new NpgsqlCommand($"DROP SCHEMA IF EXISTS {schema} CASCADE", admin);
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
     public async Task SuccessfulAndCancelledCyclesRecoverAndFinalizeEveryAuditRow()
     {
         var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
@@ -255,6 +343,23 @@ public sealed class ProxyCollectorIntegrationTests
             response.Headers.ETag = new System.Net.Http.Headers.EntityTagHeaderValue("\"feed-v3\"");
             response.Content.Headers.LastModified = StaticFeedHandler.LastModifiedAt;
             return Task.FromResult(response);
+        }
+    }
+
+    private sealed class EndpointChangingFeedHandler(Func<CancellationToken, Task> changeEndpoint)
+        : HttpMessageHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            await changeEndpoint(cancellationToken);
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("8.8.4.4:8080")
+            };
+            response.Headers.ETag = new System.Net.Http.Headers.EntityTagHeaderValue("\"stale-response\"");
+            return response;
         }
     }
 
