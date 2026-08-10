@@ -107,6 +107,7 @@ public sealed class OriginIpProvider(
     ProbeControlHealth health) : IDisposable
 {
     private const int MaxDirectResponseBytes = 16 * 1024;
+    private static readonly UTF8Encoding StrictUtf8 = new(false, true);
     private readonly SemaphoreSlim _gate = new(1, 1);
     // Immutable reference публикует value+expiry одним атомарным snapshot. Отдельные
     // поля оставляли бы 16-байтовый DateTimeOffset под torn read у сотен probe-задач.
@@ -136,9 +137,13 @@ public sealed class OriginIpProvider(
                 var client = clients.CreateClient("origin");
                 using var response = await client.GetAsync(builder.Uri, HttpCompletionOption.ResponseHeadersRead, token);
                 response.EnsureSuccessStatusCode();
-                var json = await ReadDirectResponseAsync(response.Content, token);
-                using var document = JsonDocument.Parse(json);
-                var value = document.RootElement.TryGetProperty("ip", out var ipElement)
+                var jsonUtf8 = await ReadDirectResponseAsync(response.Content, token);
+                // Строки JSON декодируются лениво, поэтому валидируем весь body до DOM.
+                // Повреждённая кодировка не превращается в допустимый U+FFFD.
+                _ = StrictUtf8.GetCharCount(jsonUtf8.Span);
+                using var document = JsonDocument.Parse(jsonUtf8);
+                var value = document.RootElement.TryGetProperty("ip", out var ipElement) &&
+                    ipElement.ValueKind == JsonValueKind.String
                     ? ipElement.GetString()
                     : null;
                 var publicValue = IPAddress.TryParse(value, out var address) && NetworkSafety.IsPublicAddress(address)
@@ -156,7 +161,8 @@ public sealed class OriginIpProvider(
                 // отравлять короткий отрицательный cache для следующего запуска.
                 throw;
             }
-            catch (Exception ex) when (ex is HttpRequestException or IOException or InvalidDataException or JsonException or TaskCanceledException)
+            catch (Exception ex) when (ex is HttpRequestException or IOException or InvalidDataException or
+                JsonException or DecoderFallbackException or TaskCanceledException)
             {
                 snapshot = new CacheEntry(null, DateTimeOffset.UtcNow.AddSeconds(15));
                 Volatile.Write(ref _cache, snapshot);
@@ -167,7 +173,9 @@ public sealed class OriginIpProvider(
         finally { _gate.Release(); }
     }
 
-    private static async Task<string> ReadDirectResponseAsync(HttpContent content, CancellationToken token)
+    private static async Task<ReadOnlyMemory<byte>> ReadDirectResponseAsync(
+        HttpContent content,
+        CancellationToken token)
     {
         if (content.Headers.ContentLength is > MaxDirectResponseBytes)
             throw new InvalidDataException("Прямой ответ контрольного endpoint превышает 16 КБ.");
@@ -179,7 +187,7 @@ public sealed class OriginIpProvider(
             var remaining = checked(MaxDirectResponseBytes - (int)output.Length);
             var read = await input.ReadAsync(buffer.AsMemory(0, Math.Min(buffer.Length, remaining + 1)), token);
             if (read == 0)
-                return Encoding.UTF8.GetString(output.GetBuffer(), 0, checked((int)output.Length));
+                return output.GetBuffer().AsMemory(0, checked((int)output.Length));
             if (output.Length + read > MaxDirectResponseBytes)
                 throw new InvalidDataException("Прямой ответ контрольного endpoint превышает 16 КБ.");
             await output.WriteAsync(buffer.AsMemory(0, read), token);

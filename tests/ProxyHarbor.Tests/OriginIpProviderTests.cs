@@ -216,6 +216,56 @@ public sealed class OriginIpProviderTests
     }
 
     [Fact]
+    public async Task InvalidUtf8DirectResponseFailsClosedInsteadOfUsingReplacementCharacters()
+    {
+        // JSON-структура корректна, но значение содержит недопустимую UTF-8
+        // последовательность C3 28. Permissive decoder скрывал бы повреждение.
+        byte[] malformedJson =
+        [
+            (byte)'{', (byte)'"', (byte)'i', (byte)'p', (byte)'"', (byte)':', (byte)'"',
+            0xC3, 0x28,
+            (byte)'"', (byte)'}'
+        ];
+        var handler = new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new ByteArrayContent(malformedJson)
+        });
+        using var factory = new StubHttpClientFactory(handler);
+        var health = new ProbeControlHealth();
+        using var provider = new OriginIpProvider(
+            factory,
+            Options.Create(new CollectorOptions()),
+            health);
+
+        await Assert.ThrowsAsync<ProbeControlUnavailableException>(
+            () => provider.GetRequiredAsync(CancellationToken.None));
+
+        Assert.Equal(1, handler.RequestCount);
+        Assert.Equal(0, health.Availability);
+    }
+
+    [Fact]
+    public async Task NonStringIpFieldFailsClosedWithoutEscapingAsServerError()
+    {
+        var handler = new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("{\"ip\":123}")
+        });
+        using var factory = new StubHttpClientFactory(handler);
+        var health = new ProbeControlHealth();
+        using var provider = new OriginIpProvider(
+            factory,
+            Options.Create(new CollectorOptions()),
+            health);
+
+        await Assert.ThrowsAsync<ProbeControlUnavailableException>(
+            () => provider.GetRequiredAsync(CancellationToken.None));
+
+        Assert.Equal(1, handler.RequestCount);
+        Assert.Equal(0, health.Availability);
+    }
+
+    [Fact]
     public async Task UnavailableEndpointStopsValidatorBeforeDatabaseQueueClaim()
     {
         var handler = new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.TooManyRequests));
