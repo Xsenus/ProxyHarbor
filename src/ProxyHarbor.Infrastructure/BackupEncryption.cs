@@ -89,65 +89,86 @@ public static class BackupEncryption
         if (File.Exists(destination)) throw new IOException("Файл назначения уже существует.");
         try
         {
-            await using var input = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.Read,
-                128 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
-            var magic = new byte[4];
-            await input.ReadExactlyAsync(magic, token);
-            var isPhb3 = magic.AsSpan().SequenceEqual(CurrentMagic);
-            var isPhb2 = magic.AsSpan().SequenceEqual("PHB2"u8);
-            if (!isPhb2 && !isPhb3) throw new InvalidDataException("Неизвестный формат backup ProxyHarbor.");
-
-            var salt = new byte[SaltSize];
-            await input.ReadExactlyAsync(salt, token);
-            var chunkSize = await ReadInt32Async(input, token);
-            if (chunkSize is < 65_536 or > 16_777_216)
-                throw new InvalidDataException("Недопустимый размер блока backup.");
-
-            var key = Rfc2898DeriveBytes.Pbkdf2(password, salt, Iterations, HashAlgorithmName.SHA256, 32);
-            try
-            {
-                using var aes = new AesGcm(key, TagSize);
-                await using var output = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None,
-                    128 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
-                long index = 0;
-                while (true)
-                {
-                    var length = await ReadInt32Async(input, token);
-                    if (length is < 0 || length > chunkSize)
-                        throw new InvalidDataException("Повреждён размер блока backup.");
-                    if (length == 0 && isPhb2) break;
-
-                    var nonce = new byte[NonceSize];
-                    var tag = new byte[TagSize];
-                    await input.ReadExactlyAsync(nonce, token);
-                    await input.ReadExactlyAsync(tag, token);
-                    var ciphertext = new byte[length];
-                    if (length > 0) await input.ReadExactlyAsync(ciphertext, token);
-                    var plaintext = new byte[length];
-                    try
-                    {
-                        var associatedData = isPhb3
-                            ? CreateAssociatedData(salt, chunkSize, index, length)
-                            : null;
-                        aes.Decrypt(nonce, ciphertext, tag, plaintext, associatedData);
-                        if (length > 0) await output.WriteAsync(plaintext, token);
-                    }
-                    finally { CryptographicOperations.ZeroMemory(plaintext); }
-
-                    if (length == 0) break;
-                    index++;
-                }
-
-                if (input.ReadByte() != -1)
-                    throw new InvalidDataException("После завершающего блока backup обнаружены лишние данные.");
-            }
-            finally { CryptographicOperations.ZeroMemory(key); }
+            await DecryptCoreAsync(source, destination, password, token);
         }
         catch
         {
             if (File.Exists(destination)) File.Delete(destination);
             throw;
         }
+    }
+
+    /// <summary>
+    /// Перечитывает и аутентифицирует каждый блок backup без записи plaintext.
+    /// Используется до публикации файла и его отправки за пределы сервиса.
+    /// </summary>
+    public static Task VerifyAsync(string source, string password, CancellationToken token)
+    {
+        ValidatePassword(password);
+        return DecryptCoreAsync(source, destination: null, password, token);
+    }
+
+    private static async Task DecryptCoreAsync(
+        string source,
+        string? destination,
+        string password,
+        CancellationToken token)
+    {
+        await using var input = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.Read,
+            128 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
+        var magic = new byte[4];
+        await input.ReadExactlyAsync(magic, token);
+        var isPhb3 = magic.AsSpan().SequenceEqual(CurrentMagic);
+        var isPhb2 = magic.AsSpan().SequenceEqual("PHB2"u8);
+        if (!isPhb2 && !isPhb3) throw new InvalidDataException("Неизвестный формат backup ProxyHarbor.");
+
+        var salt = new byte[SaltSize];
+        await input.ReadExactlyAsync(salt, token);
+        var chunkSize = await ReadInt32Async(input, token);
+        if (chunkSize is < 65_536 or > 16_777_216)
+            throw new InvalidDataException("Недопустимый размер блока backup.");
+
+        var key = Rfc2898DeriveBytes.Pbkdf2(password, salt, Iterations, HashAlgorithmName.SHA256, 32);
+        try
+        {
+            using var aes = new AesGcm(key, TagSize);
+            await using var output = destination is null
+                ? null
+                : new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None,
+                    128 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
+            long index = 0;
+            while (true)
+            {
+                var length = await ReadInt32Async(input, token);
+                if (length is < 0 || length > chunkSize)
+                    throw new InvalidDataException("Повреждён размер блока backup.");
+                if (length == 0 && isPhb2) break;
+
+                var nonce = new byte[NonceSize];
+                var tag = new byte[TagSize];
+                await input.ReadExactlyAsync(nonce, token);
+                await input.ReadExactlyAsync(tag, token);
+                var ciphertext = new byte[length];
+                if (length > 0) await input.ReadExactlyAsync(ciphertext, token);
+                var plaintext = new byte[length];
+                try
+                {
+                    var associatedData = isPhb3
+                        ? CreateAssociatedData(salt, chunkSize, index, length)
+                        : null;
+                    aes.Decrypt(nonce, ciphertext, tag, plaintext, associatedData);
+                    if (length > 0 && output is not null) await output.WriteAsync(plaintext, token);
+                }
+                finally { CryptographicOperations.ZeroMemory(plaintext); }
+
+                if (length == 0) break;
+                index++;
+            }
+
+            if (input.ReadByte() != -1)
+                throw new InvalidDataException("После завершающего блока backup обнаружены лишние данные.");
+        }
+        finally { CryptographicOperations.ZeroMemory(key); }
     }
 
     private static byte[] CreateAssociatedData(byte[] salt, int chunkSize, long index, int length)

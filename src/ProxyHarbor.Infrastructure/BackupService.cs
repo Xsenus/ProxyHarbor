@@ -76,9 +76,11 @@ public sealed class BackupService(
                 await strategy.ExecuteAsync(() => CreateEncryptedSnapshotAsync(
                     partialEncryptedPath, backupRun.Id, options, telegramConfigured, cancellationToken));
 
-                // Финальное имя публикуется атомарно: наблюдатель каталога никогда не увидит
-                // недописанный backup с расширением .phbackup.
-                File.Move(partialEncryptedPath, encryptedPath);
+                // Перечитываем ciphertext целиком и проверяем AEAD-тег каждого блока и
+                // финального маркера. До успеха файл остаётся partial: retention и Telegram
+                // никогда не увидят усечённую либо повреждённую резервную копию.
+                await VerifyAndPublishAsync(
+                    partialEncryptedPath, encryptedPath, options.EncryptionKey, cancellationToken);
 
                 // Локальная retention-политика не зависит от доступности Telegram. Иначе
                 // продолжительный внешний сбой оставлял бы новый архив на каждом цикле,
@@ -300,6 +302,27 @@ public sealed class BackupService(
 
         await foreach (var part in BackupFileSplitter.SplitAsync(path, partLimit, token))
             await SendDocumentAsync(part.Path, $"ProxyHarbor backup — часть {part.Number}/{part.Total}", options, token);
+    }
+
+    /// <summary>Публикует partial-файл атомарно только после полной криптографической проверки.</summary>
+    internal static async Task VerifyAndPublishAsync(
+        string partialPath,
+        string finalPath,
+        string encryptionKey,
+        CancellationToken token)
+    {
+        try
+        {
+            await BackupEncryption.VerifyAsync(partialPath, encryptionKey, token);
+            // Оба имени находятся в одном backup directory, поэтому move является
+            // атомарным и наблюдатель никогда не увидит недописанный .phbackup.
+            File.Move(partialPath, finalPath);
+        }
+        catch
+        {
+            if (File.Exists(partialPath)) File.Delete(partialPath);
+            throw;
+        }
     }
 
     private async Task SendDocumentAsync(string path, string caption, BackupOptions options, CancellationToken token)

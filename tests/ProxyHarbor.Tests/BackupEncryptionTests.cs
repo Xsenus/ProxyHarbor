@@ -16,6 +16,8 @@ public sealed class BackupEncryptionTests
         await File.WriteAllBytesAsync(files.Source, expected);
 
         await BackupEncryption.EncryptAsync(files.Source, files.Encrypted, Password, CancellationToken.None);
+        await BackupEncryption.VerifyAsync(files.Encrypted, Password, CancellationToken.None);
+        Assert.False(File.Exists(files.Decrypted));
         await BackupEncryption.DecryptAsync(files.Encrypted, files.Decrypted, Password, CancellationToken.None);
 
         Assert.Equal(expected, await File.ReadAllBytesAsync(files.Decrypted));
@@ -33,6 +35,8 @@ public sealed class BackupEncryptionTests
         await File.WriteAllBytesAsync(files.Encrypted, encrypted);
 
         await Assert.ThrowsAsync<AuthenticationTagMismatchException>(() =>
+            BackupEncryption.VerifyAsync(files.Encrypted, Password, CancellationToken.None));
+        await Assert.ThrowsAsync<AuthenticationTagMismatchException>(() =>
             BackupEncryption.DecryptAsync(files.Encrypted, files.Decrypted, Password, CancellationToken.None));
         Assert.False(File.Exists(files.Decrypted));
     }
@@ -47,8 +51,43 @@ public sealed class BackupEncryptionTests
         await File.WriteAllBytesAsync(files.Encrypted, encrypted[..^1]);
 
         await Assert.ThrowsAnyAsync<EndOfStreamException>(() =>
+            BackupEncryption.VerifyAsync(files.Encrypted, Password, CancellationToken.None));
+        await Assert.ThrowsAnyAsync<EndOfStreamException>(() =>
             BackupEncryption.DecryptAsync(files.Encrypted, files.Decrypted, Password, CancellationToken.None));
         Assert.False(File.Exists(files.Decrypted));
+    }
+
+    [Fact]
+    public async Task VerifiedPublicationMovesOnlyAuthenticatedCiphertext()
+    {
+        using var files = new TemporaryFiles();
+        await File.WriteAllBytesAsync(files.Source, RandomNumberGenerator.GetBytes(2_000_000));
+        await BackupEncryption.EncryptAsync(files.Source, files.Encrypted, Password, CancellationToken.None);
+
+        await BackupService.VerifyAndPublishAsync(
+            files.Encrypted, files.Published, Password, CancellationToken.None);
+
+        Assert.False(File.Exists(files.Encrypted));
+        Assert.True(File.Exists(files.Published));
+        await BackupEncryption.VerifyAsync(files.Published, Password, CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task VerifiedPublicationDeletesCorruptPartialAndNeverPublishesIt()
+    {
+        using var files = new TemporaryFiles();
+        await File.WriteAllBytesAsync(files.Source, RandomNumberGenerator.GetBytes(256));
+        await BackupEncryption.EncryptAsync(files.Source, files.Encrypted, Password, CancellationToken.None);
+        var encrypted = await File.ReadAllBytesAsync(files.Encrypted);
+        encrypted[64] ^= 0x20;
+        await File.WriteAllBytesAsync(files.Encrypted, encrypted);
+
+        await Assert.ThrowsAsync<AuthenticationTagMismatchException>(() =>
+            BackupService.VerifyAndPublishAsync(
+                files.Encrypted, files.Published, Password, CancellationToken.None));
+
+        Assert.False(File.Exists(files.Encrypted));
+        Assert.False(File.Exists(files.Published));
     }
 
     [Fact]
@@ -122,6 +161,7 @@ public sealed class BackupEncryptionTests
         public string Source => Path.Combine(_directory, "source.zip");
         public string Encrypted => Path.Combine(_directory, "backup.phbackup");
         public string Decrypted => Path.Combine(_directory, "restored.zip");
+        public string Published => Path.Combine(_directory, "published.phbackup");
         public void Dispose() => Directory.Delete(_directory, recursive: true);
     }
 
