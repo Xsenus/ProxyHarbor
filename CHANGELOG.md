@@ -7,12 +7,13 @@
 
 ### Security
 
-- Добавлен fail-closed Gitleaks scan всей Git-истории с закреплёнными версией и SHA-256 архива, redaction вывода и контрактной проверкой CI/release wiring.
+- Добавлен fail-closed Gitleaks scan всей Git-истории с закреплёнными версией и отдельными SHA-256 официальных Linux x64/Windows x64 архивов, redaction вывода и контрактной проверкой CI/release wiring; тот же фактический scan теперь воспроизводится на рабочей Windows-машине без WSL/Docker.
 - Добавлен CodeQL SAST для C# и JavaScript/TypeScript с `security-extended`, locked C# build, least-privilege permissions и immutable action pins.
 - Добавлены fail-closed publication-readiness gate и воспроизводимый GitHub checklist: tracked secret-bearing/generated artifacts, включая runtime audit reports, case collisions, oversized-файлы, required checks, rulesets и security settings.
 
 ### Added
 
+- PostgreSQL integration-gate теперь покрывает полный успешный Telegram backup: реальный PHB3 проходит multipart upload с подтверждением `ok=true`, audit обязан завершиться как `completed`/`SentToTelegram=true`, а тот же отправленный ciphertext расшифровывается и проходит строгую проверку архива и безопасных настроек без секретов.
 - Сгенерированный OpenAPI теперь полностью описывает оба streaming export endpoint: canonical enum `json/xml/txt/csv`, structured ProxyDto[] для JSON/XML, текстовые TXT/CSV schemas, legacy offset и seek cursor continuation headers, `Content-Disposition`, точные `400/429/503` ProblemDetails и `Retry-After`; unit-contract и реальный CI process-smoke защищают wiring.
 - Добавлены low-overhead runtime HTTP SLI без внешней зависимости: counters и cumulative histogram используют только восемь bounded route groups и шесть status classes, исключают self-scrape `/metrics`, учитывают 5xx/client abort и питают проверяемые alarms для sustained public 5xx ratio и p95 latency; exposition всегда использует канонический LF, а Docker CI и Windows runtime-smoke пропускают фактический ответ через официальный parser.
 - Restore CLI получил read-only `--inspect-settings`: он аутентифицирует backup v5, строго проверяет архив и выводит единый машиночитаемый JSON настроек без подключения к PostgreSQL; Docker smoke доказывает полноту снимка и отсутствие всех настроенных секретов.

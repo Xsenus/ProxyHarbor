@@ -70,6 +70,77 @@ public sealed class BackupAuditIntegrationTests
 
     [Fact]
     [Trait("Category", "PostgresIntegration")]
+    public async Task SuccessfulTelegramDeliveryCompletesAuditAndKeepsRestorableEncryptedArchive()
+    {
+        var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
+        if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
+
+        var schema = $"proxyharbor_backup_telegram_success_{Guid.NewGuid():N}";
+        var directory = Path.Combine(Path.GetTempPath(), $"proxyharbor-backup-telegram-{Guid.NewGuid():N}");
+        var decryptedPath = Path.Combine(directory, "telegram-delivered.zip");
+        var builder = new NpgsqlConnectionStringBuilder(baseConnectionString) { SearchPath = schema };
+        await using var admin = new NpgsqlConnection(baseConnectionString);
+        await admin.OpenAsync();
+        await using (var create = new NpgsqlCommand($"CREATE SCHEMA {schema}", admin))
+            await create.ExecuteNonQueryAsync();
+        try
+        {
+            var dbOptions = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+                .UseNpgsql(builder.ConnectionString)
+                .Options;
+            var factory = new TestDbFactory(dbOptions);
+            await using (var migrationDb = await factory.CreateDbContextAsync())
+                await migrationDb.Database.MigrateAsync();
+
+            using var clients = new AcceptingTelegramClientFactory();
+            using var service = new BackupService(
+                factory,
+                clients,
+                Options.Create(new BackupOptions
+                {
+                    Directory = directory,
+                    EncryptionKey = EncryptionKey,
+                    TelegramBotToken = "9000000000000000000:CI_ONLY_PLACEHOLDER_NOT_A_REAL_TOKEN",
+                    TelegramChatId = "-1001234567890"
+                }),
+                Options.Create(new CollectorOptions()),
+                new ConfigurationBuilder().Build(),
+                NullLogger<BackupService>.Instance);
+
+            var path = await service.CreateAndSendAsync(CancellationToken.None);
+
+            Assert.Equal(1, clients.Requests);
+            var ciphertext = await File.ReadAllBytesAsync(path);
+            Assert.True(clients.UploadedBody.Length > ciphertext.Length);
+            Assert.True(clients.UploadedBody.AsSpan().IndexOf(ciphertext) >= 0);
+            await using var verificationDb = await factory.CreateDbContextAsync();
+            var audit = await verificationDb.BackupRuns.AsNoTracking().SingleAsync();
+            Assert.Equal("completed", audit.Status);
+            Assert.True(audit.TelegramConfigured);
+            Assert.True(audit.SentToTelegram);
+            Assert.Equal(Path.GetFileName(path), audit.FileName);
+            Assert.Equal(new FileInfo(path).Length, audit.SizeBytes);
+            Assert.Null(audit.Error);
+
+            await BackupEncryption.DecryptAsync(path, decryptedPath, EncryptionKey, CancellationToken.None);
+            using var archive = ZipFile.OpenRead(decryptedPath);
+            BackupArchiveValidator.Validate(archive);
+            await using var settingsStream = BackupArchiveValidator.RequiredEntry(
+                archive, "settings/backup.json").Open();
+            using var settings = await System.Text.Json.JsonDocument.ParseAsync(settingsStream);
+            Assert.True(settings.RootElement.GetProperty("telegramConfigured").GetBoolean());
+            Assert.False(settings.RootElement.GetProperty("secretsIncluded").GetBoolean());
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+            await using var drop = new NpgsqlCommand($"DROP SCHEMA IF EXISTS {schema} CASCADE", admin);
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
     public async Task DeliveryPolicyFailureIsPersistentScheduleAnchorButNotCompletedBackup()
     {
         var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
@@ -514,6 +585,43 @@ public sealed class BackupAuditIntegrationTests
         }
 
         public void Dispose() => _client.Dispose();
+    }
+
+    private sealed class AcceptingTelegramClientFactory : IHttpClientFactory, IDisposable
+    {
+        private readonly AcceptingTelegramHandler _handler = new();
+        private readonly HttpClient _client;
+
+        internal AcceptingTelegramClientFactory() => _client = new HttpClient(_handler);
+
+        internal int Requests => _handler.Requests;
+        internal byte[] UploadedBody => _handler.UploadedBody;
+
+        public HttpClient CreateClient(string name)
+        {
+            Assert.Equal("telegram", name);
+            return _client;
+        }
+
+        public void Dispose() => _client.Dispose();
+    }
+
+    private sealed class AcceptingTelegramHandler : HttpMessageHandler
+    {
+        internal int Requests { get; private set; }
+        internal byte[] UploadedBody { get; private set; } = [];
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            Requests++;
+            UploadedBody = await request.Content!.ReadAsByteArrayAsync(cancellationToken);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{\"ok\":true}")
+            };
+        }
     }
 
     private sealed class RejectingTelegramHandler : HttpMessageHandler

@@ -8,6 +8,9 @@ $ignoreLines = Get-Content -LiteralPath './.gitleaksignore' |
 
 if ($runner -notmatch "Version = '8\.28\.0'" -or
     $runner -notmatch "ExpectedSha256 = '[0-9a-f]{64}'" -or
+    $runner -notmatch "ExpectedWindowsSha256 = '[0-9a-f]{64}'" -or
+    $runner -notmatch 'gitleaks_\$\{Version\}_windows_x64\.zip' -or
+    $runner -notmatch 'Expand-Archive' -or
     $runner -notmatch 'Get-FileHash' -or
     $runner -notmatch '--gitleaks-ignore-path' -or
     $runner -notmatch '--redact' -or
@@ -33,4 +36,4 @@ if ($ignoreLines.Count -ne 14 -or
     throw '.gitleaksignore должен содержать только 14 проверенных точечных fingerprint без broad allowlist.'
 }
 
-Write-Host 'Gitleaks contracts пройдены: pinned archive, redaction, fail-closed exit и full-history CI/release wiring.' -ForegroundColor Green
+Write-Host 'Gitleaks contracts пройдены: Linux/Windows pinned archives, redaction, fail-closed exit и full-history CI/release wiring.' -ForegroundColor Green
