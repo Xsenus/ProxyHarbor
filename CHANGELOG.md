@@ -52,6 +52,7 @@
 
 ### Fixed
 
+- PowerShell decryptor поддерживает отдельный `-EncryptionKeyFile` parameter set, через единый descriptor читает абсолютный неизменившийся обычный файл не больше 16 КиБ, строго декодирует UTF-8/BOM, удаляет ровно один терминальный CRLF/LF и обнуляет raw/char/PBKDF2 buffers; README больше не помещает backup-ключ в command history/process arguments.
 - Restore CLI прокидывает Ctrl+C/container SIGTERM во все decrypt/COPY/transaction операции, возвращает exit code 130 после rollback и удаления временного plaintext; новый `--encryption-key-file` читает абсолютный bounded UTF-8 secret без process-argument leakage и отвергает неоднозначную пару с inline-ключом.
 - BackupWorker восстанавливает расписание из последнего persistent `completed`-аудита: restart/deploy и ручной backup больше не создают преждевременный повторный архив/Telegram-спам, overdue или отсутствующая копия запускается сразу, future timestamp bounded одним интервалом, длинное ожидание делится на суточные chunks, а временный сбой чтения БД повторяется через 15 минут без остановки host.
 - Collector после bounded bulk-upsert будит ValidatorWorker через coalescing channel: новые кандидаты больше не ждут случайно до 30 секунд idle polling, повторные сигналы занимают ровно один slot, а cancellation shutdown не маскируется.

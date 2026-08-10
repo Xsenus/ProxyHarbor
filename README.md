@@ -197,10 +197,12 @@ Backup хранится в volume `backups` и удаляется по исте�
 После успешного запуска scheduler ждёт настроенный `Backup__IntervalHours`. После ошибки БД, шифрования или Telegram он автоматически повторяет полный backup через 15 минут; cluster-lock конфликт с другой репликой считается уже обслуживаемым циклом и не создаёт retry-storm.
 
 ```powershell
-./tools/Decrypt-Backup.ps1 -InputFile ./proxyharbor.phbackup -OutputZip ./proxyharbor.zip -EncryptionKey 'ваш ключ'
+$keyFile = (Resolve-Path ./backup-key.secret).Path
+./tools/Decrypt-Backup.ps1 -InputFile ./proxyharbor.phbackup -OutputZip ./proxyharbor.zip -EncryptionKeyFile $keyFile
 ```
 
 Результат — обычный ZIP с JSON по таблицам и параметрами сборщика. Проверяйте восстановление на отдельной БД перед аварийной ситуацией. Потеря ключа делает корректно зашифрованный архив невосстановимым.
+Файл ключа должен быть доступен только оператору восстановления; передавайте абсолютный путь через `-EncryptionKeyFile` и удаляйте временную копию безопасным способом после завершения. Inline-параметр оставлен только для обратной совместимости и может раскрыть ключ в истории команд или списке процессов.
 
 Для восстановления ранее созданных PHB2/PHB3 сохранена совместимость с корректными legacy-ключами длиной от 16 символов; новые backup всегда требуют минимум 32. Ключ обязан иметь корректную Unicode-кодировку без unpaired surrogate: сервер, restore CLI и PowerShell-инструмент строго и однозначно кодируют его в UTF-8 перед PBKDF2. Корневой, относительный, пустой или содержащий управляющие символы `Backup__Directory` отклоняется, чтобы retention не работал вне явно выделенного каталога.
 
@@ -232,7 +234,8 @@ Restore сначала проверяет аутентификацию backup, m
 
 ```powershell
 ./tools/Join-BackupParts.ps1 -PartsPattern './proxyharbor.phbackup.part*' -OutputFile './proxyharbor.phbackup'
-./tools/Decrypt-Backup.ps1 -InputFile './proxyharbor.phbackup' -OutputZip './proxyharbor.zip' -EncryptionKey 'ваш ключ'
+$keyFile = (Resolve-Path './backup-key.secret').Path
+./tools/Decrypt-Backup.ps1 -InputFile './proxyharbor.phbackup' -OutputZip './proxyharbor.zip' -EncryptionKeyFile $keyFile
 ```
 
 Join-инструмент fail-closed принимает только один полный набор с общим base-name и `of-N`, требует непрерывные номера `1..N` и ожидаемые размеры частей. Слишком широкий wildcard, смешавший разные backup, пропущенный/пустой фрагмент или уже существующий output отклоняются до восстановления; целостность собранного ciphertext затем независимо подтверждается PHB3 AEAD при расшифровании.

@@ -1,7 +1,9 @@
+[CmdletBinding(DefaultParameterSetName = 'KeyFile')]
 param(
     [Parameter(Mandatory)][string]$InputFile,
     [Parameter(Mandatory)][string]$OutputZip,
-    [Parameter(Mandatory)][string]$EncryptionKey
+    [Parameter(Mandatory, ParameterSetName = 'InlineKey')][string]$EncryptionKey,
+    [Parameter(Mandatory, ParameterSetName = 'KeyFile')][string]$EncryptionKeyFile
 )
 
 $ErrorActionPreference = 'Stop'
@@ -10,9 +12,49 @@ $reader = $null
 $outputStream = $null
 $key = $null
 $passwordBytes = $null
+$keyFileBytes = $null
+$keyCharacters = $null
+$keyStream = $null
 $aes = $null
 
 try {
+    $strictUtf8 = [Text.UTF8Encoding]::new($false, $true)
+    if ($PSCmdlet.ParameterSetName -eq 'KeyFile') {
+        if (-not [IO.Path]::IsPathFullyQualified($EncryptionKeyFile)) {
+            throw 'EncryptionKeyFile должен быть абсолютным путём.'
+        }
+        $resolvedKeyFile = (Resolve-Path -LiteralPath $EncryptionKeyFile).Path
+        $keyFile = Get-Item -LiteralPath $resolvedKeyFile
+        if ($keyFile -isnot [IO.FileInfo]) { throw 'EncryptionKeyFile должен указывать на обычный файл.' }
+
+        # Один descriptor устраняет гонку между отдельными проверкой размера и чтением.
+        # Изменившийся во время чтения secret отклоняется вместо частичного использования.
+        $keyStream = [IO.File]::Open(
+            $resolvedKeyFile, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+        if ($keyStream.Length -gt 16384) { throw 'EncryptionKeyFile превышает безопасный лимит 16 КиБ.' }
+        $keyFileBytes = [byte[]]::new([int]$keyStream.Length)
+        $totalRead = 0
+        while ($totalRead -lt $keyFileBytes.Length) {
+            $read = $keyStream.Read($keyFileBytes, $totalRead, $keyFileBytes.Length - $totalRead)
+            if ($read -eq 0) { throw 'EncryptionKeyFile изменился во время чтения.' }
+            $totalRead += $read
+        }
+        if ($keyStream.ReadByte() -ne -1) { throw 'EncryptionKeyFile изменился во время чтения.' }
+        $keyStream.Dispose()
+        $keyStream = $null
+
+        $offset = if ($keyFileBytes.Length -ge 3 -and $keyFileBytes[0] -eq 0xEF -and
+            $keyFileBytes[1] -eq 0xBB -and $keyFileBytes[2] -eq 0xBF) { 3 } else { 0 }
+        $EncryptionKey = $strictUtf8.GetString($keyFileBytes, $offset, $keyFileBytes.Length - $offset)
+        # Совпадает с container secret loader: удаляется ровно один терминальный LF/CRLF,
+        # но внутренний newline и одиночный CR остаются и затем отклоняются как control.
+        if ($EncryptionKey.EndsWith("`r`n", [StringComparison]::Ordinal)) {
+            $EncryptionKey = $EncryptionKey.Substring(0, $EncryptionKey.Length - 2)
+        } elseif ($EncryptionKey.EndsWith("`n", [StringComparison]::Ordinal)) {
+            $EncryptionKey = $EncryptionKey.Substring(0, $EncryptionKey.Length - 1)
+        }
+    }
+
     $keyHasControl = $false
     $keyHasInvalidSurrogate = $false
     $keyCharacters = $EncryptionKey.ToCharArray()
@@ -55,7 +97,6 @@ try {
 
     # Строгая UTF-8 кодировка не допускает replacement bytes; временное представление
     # ключа очищается в finally вместе с результатом PBKDF2.
-    $strictUtf8 = [Text.UTF8Encoding]::new($false, $true)
     $passwordBytes = $strictUtf8.GetBytes($EncryptionKey)
     $key = [Security.Cryptography.Rfc2898DeriveBytes]::Pbkdf2(
         $passwordBytes, $salt, 200000, [Security.Cryptography.HashAlgorithmName]::SHA256, 32)
@@ -98,10 +139,14 @@ try {
     Remove-Item -LiteralPath $OutputZip -ErrorAction SilentlyContinue
     throw
 } finally {
+    if ($null -ne $keyCharacters) { [Array]::Clear($keyCharacters, 0, $keyCharacters.Length) }
+    if ($null -ne $keyFileBytes) { [Security.Cryptography.CryptographicOperations]::ZeroMemory($keyFileBytes) }
     if ($null -ne $passwordBytes) { [Security.Cryptography.CryptographicOperations]::ZeroMemory($passwordBytes) }
     if ($null -ne $key) { [Security.Cryptography.CryptographicOperations]::ZeroMemory($key) }
     if ($null -ne $aes) { $aes.Dispose() }
     if ($null -ne $reader) { $reader.Dispose() }
     if ($null -ne $inputStream) { $inputStream.Dispose() }
     if ($null -ne $outputStream) { $outputStream.Dispose() }
+    if ($null -ne $keyStream) { $keyStream.Dispose() }
+    $EncryptionKey = $null
 }
