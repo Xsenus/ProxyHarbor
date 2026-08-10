@@ -11,6 +11,68 @@ public sealed class DatabaseSeederIntegrationTests
 {
     [Fact]
     [Trait("Category", "PostgresIntegration")]
+    public async Task CleanupFailuresPreservePrimaryStartupFailureAndDiscardLockSession()
+    {
+        var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
+        if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
+
+        var schema = $"proxyharbor_startup_cleanup_{Guid.NewGuid():N}";
+        var builder = new NpgsqlConnectionStringBuilder(baseConnectionString) { SearchPath = schema };
+        await using var admin = new NpgsqlConnection(baseConnectionString);
+        await admin.OpenAsync();
+        await using (var create = new NpgsqlCommand($"CREATE SCHEMA {schema}", admin))
+            await create.ExecuteNonQueryAsync();
+
+        try
+        {
+            var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+                .UseNpgsql(builder.ConnectionString)
+                .Options;
+            var primaryFailure = new InvalidOperationException("Deterministic primary startup failure.");
+
+            InvalidOperationException thrown;
+            await using (var db = new ProxyHarborDbContext(options))
+            {
+                thrown = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                    DatabaseSeeder.InitializeAsync(
+                        db,
+                        new DatabaseSeederExecutionHooks(
+                            AfterMigrationLockAcquired: () => throw primaryFailure,
+                            BeforeMigrationLockRelease: () =>
+                                throw new IOException("Deterministic unlock failure."),
+                            BeforeConnectionClose: () =>
+                                throw new IOException("Deterministic close failure.")),
+                        CancellationToken.None));
+            }
+
+            Assert.Same(primaryFailure, thrown);
+            var cleanupEvidence = Assert.IsType<string>(
+                thrown.Data[DatabaseSeeder.StartupCleanupFailureDataKey]);
+            Assert.Equal("unlock: IOException | close: IOException", cleanupEvidence);
+
+            // Pooling=false гарантирует новую физическую backend-сессию. Если failed cleanup
+            // вернул прежнего владельца lock в pool или не закрыл его, try-lock здесь вернёт false.
+            var probeBuilder = new NpgsqlConnectionStringBuilder(builder.ConnectionString) { Pooling = false };
+            await using var probe = new NpgsqlConnection(probeBuilder.ConnectionString);
+            await probe.OpenAsync();
+            await using var lockCommand = new NpgsqlCommand(
+                "SELECT pg_try_advisory_lock(@key)", probe);
+            lockCommand.Parameters.AddWithValue("key", DatabaseSeeder.MigrationLockKey);
+            Assert.True((bool)(await lockCommand.ExecuteScalarAsync() ?? false));
+            await using var unlockCommand = new NpgsqlCommand(
+                "SELECT pg_advisory_unlock(@key)", probe);
+            unlockCommand.Parameters.AddWithValue("key", DatabaseSeeder.MigrationLockKey);
+            Assert.True((bool)(await unlockCommand.ExecuteScalarAsync() ?? false));
+        }
+        finally
+        {
+            await using var drop = new NpgsqlCommand($"DROP SCHEMA {schema} CASCADE", admin);
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
     public async Task ValidationTelemetryMigrationBackfillsHistoricalChecks()
     {
         var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");

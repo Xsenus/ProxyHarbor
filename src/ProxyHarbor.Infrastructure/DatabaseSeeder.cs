@@ -1,3 +1,4 @@
+using System.Runtime.ExceptionServices;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using ProxyHarbor.Domain;
@@ -7,56 +8,127 @@ namespace ProxyHarbor.Infrastructure;
 /// <summary>Применяет миграции и синхронизирует встроенный каталог, не удаляя пользовательские источники.</summary>
 public static class DatabaseSeeder
 {
-    private const long MigrationLockKey = 0x5052484D49475203;
+    internal const long MigrationLockKey = 0x5052484D49475203;
+    internal const string StartupCleanupFailureDataKey = "ProxyHarbor.DatabaseSeeder.StartupCleanupFailure";
     private static readonly TimeSpan MigrationLockPollInterval = TimeSpan.FromMilliseconds(100);
 
     /// <summary>Добавляет недостающие feed'ы и обновляет их метаданные, сохраняя выбор Enabled/Disabled.</summary>
     public static Task InitializeAsync(ProxyHarborDbContext db, CancellationToken cancellationToken = default) =>
-        ExecuteWithMigrationLockAsync(db, MigrateAndSeedAsync, cancellationToken);
+        ExecuteWithMigrationLockAsync(db, MigrateAndSeedAsync, hooks: null, cancellationToken);
+
+    /// <summary>Внутренний overload с lifecycle hooks для детерминированных failure-canary.</summary>
+    internal static Task InitializeAsync(
+        ProxyHarborDbContext db,
+        DatabaseSeederExecutionHooks hooks,
+        CancellationToken cancellationToken = default) =>
+        ExecuteWithMigrationLockAsync(db, MigrateAndSeedAsync, hooks, cancellationToken);
 
     /// <summary>Применяет только DDL migrations под общей startup-блокировкой, не изменяя строки приложения.</summary>
     public static Task MigrateSchemaAsync(ProxyHarborDbContext db, CancellationToken cancellationToken = default) =>
         ExecuteWithMigrationLockAsync(
             db,
             static (context, token) => context.Database.MigrateAsync(token),
+            hooks: null,
             cancellationToken);
 
     private static async Task ExecuteWithMigrationLockAsync(
         ProxyHarborDbContext db,
         Func<ProxyHarborDbContext, CancellationToken, Task> operation,
+        DatabaseSeederExecutionHooks? hooks,
         CancellationToken cancellationToken)
     {
         var connection = (NpgsqlConnection)db.Database.GetDbConnection();
         var closeWhenFinished = connection.State != System.Data.ConnectionState.Open;
         if (closeWhenFinished) await db.Database.OpenConnectionAsync(cancellationToken);
+        var lockAcquired = false;
+        Exception? primaryFailure = null;
         try
         {
             // EF защищает отдельные migration-команды транзакциями, но две одновременно стартующие
             // реплики всё равно могут увидеть один набор pending migrations. Сессионная блокировка
             // сериализует и миграции, и последующий idempotent seed для всех реплик общей БД.
-            try
-            {
-                await SetMigrationLockAsync(connection, acquire: true, cancellationToken);
-            }
-            catch
+            await SetMigrationLockAsync(connection, acquire: true, cancellationToken);
+            lockAcquired = true;
+            hooks?.AfterMigrationLockAcquired?.Invoke();
+            await operation(db, cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            primaryFailure = exception;
+            if (!lockAcquired)
             {
                 // При неоднозначном сетевом исходе сервер мог получить lock до отмены клиента.
                 // Текущая сессия должна быть физически закрыта, а не возвращена в pool.
                 NpgsqlConnection.ClearPool(connection);
-                throw;
-            }
-            try
-            {
-                await operation(db, cancellationToken);
-            }
-            finally
-            {
-                await SetMigrationLockAsync(connection, acquire: false, CancellationToken.None);
             }
         }
-        finally
+
+        Exception? releaseFailure = null;
+        if (lockAcquired)
         {
-            if (closeWhenFinished) await db.Database.CloseConnectionAsync();
+            try
+            {
+                hooks?.BeforeMigrationLockRelease?.Invoke();
+                await SetMigrationLockAsync(connection, acquire: false, CancellationToken.None);
+            }
+            catch (Exception exception)
+            {
+                releaseFailure = exception;
+                // Не возвращаем потенциального владельца session lock в общий pool.
+                NpgsqlConnection.ClearPool(connection);
+                if (primaryFailure is not null)
+                    AddCleanupFailure(primaryFailure, "unlock", exception);
+            }
+        }
+
+        Exception? closeFailure = null;
+        var discardSession = (!lockAcquired && primaryFailure is not null) || releaseFailure is not null;
+        if (closeWhenFinished || discardSession)
+        {
+            try
+            {
+                hooks?.BeforeConnectionClose?.Invoke();
+                if (discardSession)
+                    await connection.DisposeAsync();
+                else
+                    await db.Database.CloseConnectionAsync();
+            }
+            catch (Exception exception)
+            {
+                closeFailure = exception;
+                NpgsqlConnection.ClearPool(connection);
+                var failureToPreserve = primaryFailure ?? releaseFailure ?? exception;
+                if (failureToPreserve != exception)
+                    AddCleanupFailure(failureToPreserve, "close", exception);
+                try
+                {
+                    await connection.DisposeAsync();
+                }
+                catch (Exception disposeFailure)
+                {
+                    AddCleanupFailure(failureToPreserve, "dispose", disposeFailure);
+                }
+            }
+        }
+
+        var failure = primaryFailure ?? releaseFailure ?? closeFailure;
+        if (failure is not null) ExceptionDispatchInfo.Capture(failure).Throw();
+    }
+
+    /// <summary>Добавляет bounded cleanup-диагностику, никогда не заменяя primary exception.</summary>
+    private static void AddCleanupFailure(Exception primaryFailure, string stage, Exception cleanupFailure)
+    {
+        try
+        {
+            var detail = $"{stage}: {cleanupFailure.GetType().Name}";
+            primaryFailure.Data[StartupCleanupFailureDataKey] =
+                primaryFailure.Data[StartupCleanupFailureDataKey] is string previous
+                    ? $"{previous} | {detail}"
+                    : detail;
+        }
+        catch (Exception)
+        {
+            // Нестандартное read-only Exception.Data не может скрыть primary startup failure.
         }
     }
 
@@ -136,3 +208,12 @@ public static class DatabaseSeeder
         }
     }
 }
+
+/// <summary>
+/// Внутренние точки наблюдения startup lifecycle. Production-код их не передаёт; тесты
+/// используют hooks только для воспроизводимых unlock/close failure-сценариев.
+/// </summary>
+internal sealed record DatabaseSeederExecutionHooks(
+    Action? AfterMigrationLockAcquired = null,
+    Action? BeforeMigrationLockRelease = null,
+    Action? BeforeConnectionClose = null);
