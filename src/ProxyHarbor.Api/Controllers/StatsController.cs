@@ -16,7 +16,8 @@ public sealed class StatsController(
 {
     [HttpGet]
     [OutputCache(PolicyName = "public-summary")]
-    public async Task<IActionResult> Get(CancellationToken cancellationToken)
+    [ProducesResponseType<StatsResponse>(StatusCodes.Status200OK)]
+    public async Task<ActionResult<StatsResponse>> Get(CancellationToken cancellationToken)
     {
         await using var proxyDb = await dbFactory.CreateDbContextAsync(cancellationToken);
         await using var sourceDb = await dbFactory.CreateDbContextAsync(cancellationToken);
@@ -47,7 +48,7 @@ public sealed class StatsController(
             Failing = x.Count(source => source.ConsecutiveFailures > 0),
             RepeatedlyFailing = x.Count(source => source.ConsecutiveFailures >= 3),
             Truncated = x.Count(source => source.LastResultTruncated)
-        }).FirstOrDefaultAsync(cancellationToken);
+        }).SingleOrDefaultAsync(cancellationToken);
         var lastRunTask = runDb.Runs.AsNoTracking().OrderByDescending(x => x.StartedAt)
             .FirstOrDefaultAsync(cancellationToken);
         await Task.WhenAll(proxyTask, sourceTask, lastRunTask);
@@ -58,27 +59,77 @@ public sealed class StatsController(
         var alive = proxyRows.Sum(row => row.FreshAlive);
         var latencySamples = proxyRows.Sum(row => row.FreshLatencySamples);
         var latencyTotal = proxyRows.Sum(row => row.FreshLatencyTotal);
-        var byProtocol = proxyRows.GroupBy(row => row.Protocol).Select(group => new
-        {
-            protocol = group.Key,
-            count = group.Sum(row => row.FreshAlive)
-        }).Where(row => row.count > 0).ToList();
-        return Ok(new
-        {
+        var byProtocol = proxyRows.GroupBy(row => row.Protocol)
+            .Select(group => new ProtocolCountResponse(group.Key, group.Sum(row => row.FreshAlive)))
+            .Where(row => row.Count > 0)
+            .ToArray();
+        return Ok(new StatsResponse(
             alive,
-            staleAlive = proxyRows.Sum(row => row.StaleAlive),
-            pending = proxyRows.Where(row => row.Status == ProxyStatus.Pending).Sum(row => row.Total),
-            dead = proxyRows.Where(row => row.Status == ProxyStatus.Dead).Sum(row => row.Total),
-            dueForCheck = proxyRows.Sum(row => row.Due),
-            checksInProgress = proxyRows.Sum(row => row.Leased),
-            scheduledChecks = proxyRows.Sum(row => row.Scheduled),
-            averageLatencyMs = latencySamples == 0 ? (double?)null : (double)latencyTotal / latencySamples,
-            sources = sourceHealth?.Enabled ?? 0,
-            failingSources = sourceHealth?.Failing ?? 0,
-            repeatedlyFailingSources = sourceHealth?.RepeatedlyFailing ?? 0,
-            truncatedSources = sourceHealth?.Truncated ?? 0,
+            proxyRows.Sum(row => row.StaleAlive),
+            proxyRows.Where(row => row.Status == ProxyStatus.Pending).Sum(row => row.Total),
+            proxyRows.Where(row => row.Status == ProxyStatus.Dead).Sum(row => row.Total),
+            proxyRows.Sum(row => row.Due),
+            proxyRows.Sum(row => row.Leased),
+            proxyRows.Sum(row => row.Scheduled),
+            latencySamples == 0 ? null : (double)latencyTotal / latencySamples,
+            sourceHealth?.Enabled ?? 0,
+            sourceHealth?.Failing ?? 0,
+            sourceHealth?.RepeatedlyFailing ?? 0,
+            sourceHealth?.Truncated ?? 0,
             byProtocol,
-            lastRun
-        });
+            lastRun is null ? null : PublicCollectionRunResponse.From(lastRun)));
     }
+}
+
+/// <summary>Стабильная публичная сводка без прямой сериализации persistence-сущностей.</summary>
+public sealed record StatsResponse(
+    int Alive,
+    int StaleAlive,
+    int Pending,
+    int Dead,
+    int DueForCheck,
+    int ChecksInProgress,
+    int ScheduledChecks,
+    double? AverageLatencyMs,
+    int Sources,
+    int FailingSources,
+    int RepeatedlyFailingSources,
+    int TruncatedSources,
+    IReadOnlyList<ProtocolCountResponse> ByProtocol,
+    PublicCollectionRunResponse? LastRun);
+
+/// <summary>Число свежих живых прокси одного протокола.</summary>
+public sealed record ProtocolCountResponse(ProxyProtocol Protocol, int Count);
+
+/// <summary>
+/// Публичная часть последнего collection run. Внутренние идентификаторы и текст ошибок
+/// намеренно исключены: они принадлежат административной диагностике.
+/// </summary>
+public sealed record PublicCollectionRunResponse(
+    DateTimeOffset StartedAt,
+    DateTimeOffset? FinishedAt,
+    int SourcesProcessed,
+    int SourcesSucceeded,
+    int SourcesFailed,
+    int SourcesSkipped,
+    int SourcesTruncated,
+    int CandidatesFound,
+    bool CandidateLimitReached,
+    int NewProxies,
+    int AliveProxies,
+    string Status)
+{
+    internal static PublicCollectionRunResponse From(CollectionRun run) => new(
+        run.StartedAt,
+        run.FinishedAt,
+        run.SourcesProcessed,
+        run.SourcesSucceeded,
+        run.SourcesFailed,
+        run.SourcesSkipped,
+        run.SourcesTruncated,
+        run.CandidatesFound,
+        run.CandidateLimitReached,
+        run.NewProxies,
+        run.AliveProxies,
+        run.Status);
 }

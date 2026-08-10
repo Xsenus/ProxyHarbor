@@ -313,7 +313,9 @@ jobs:
             if [ "$attempt" -eq 90 ]; then exit 1; fi
             sleep 2
           done
-          curl --fail --silent http://127.0.0.1:8080/api/v1/stats
+          stats=$(curl --fail --silent http://127.0.0.1:8080/api/v1/stats)
+          echo "$stats" | jq --exit-status \
+            '(.alive | type) == "number" and (.byProtocol | type) == "array" and has("lastRun")'
           metrics=$(curl --fail --silent http://127.0.0.1:8080/metrics)
           echo "$metrics" | grep 'proxyharbor_sources_enabled 81'
           echo "$metrics" | grep 'proxyharbor_source_catalog_complete 1'
@@ -340,6 +342,10 @@ jobs:
             '.components.securitySchemes.AdminApiKey.type == "apiKey" and
              (.paths["/api/v1/admin/sources"].get.security[0] | has("AdminApiKey")) and
              (.paths["/api/v1/proxies"].get.security == null) and
+             .paths["/api/v1/stats"].get.responses["200"].content["application/json"].schema["$ref"] ==
+               "#/components/schemas/StatsResponse" and
+             (.components.schemas.PublicCollectionRunResponse.properties | has("id") | not) and
+             (.components.schemas.PublicCollectionRunResponse.properties | has("error") | not) and
              .paths["/api/v1/admin/validate"].post.responses["200"].content["application/json"].schema["$ref"] ==
                "#/components/schemas/ValidationTriggerResponse" and
              .paths["/api/v1/admin/backup"].post.responses["200"].content["application/json"].schema["$ref"] ==
@@ -604,12 +610,18 @@ jobs:
             http://127.0.0.1:5080/api/v1/proxies
           if grep --ignore-case '^Access-Control-Allow-Origin:' "$security_headers"; then exit 1; fi
           rm "$security_headers"
-          curl --fail --silent http://127.0.0.1:5080/api/v1/stats
+          stats=$(curl --fail --silent http://127.0.0.1:5080/api/v1/stats)
+          echo "$stats" | jq --exit-status \
+            '(.alive | type) == "number" and (.byProtocol | type) == "array" and has("lastRun")'
           openapi=$(curl --fail --silent http://127.0.0.1:5080/openapi/v1.json)
           echo "$openapi" | jq --exit-status '
             .components.securitySchemes.AdminApiKey.type == "apiKey" and
             .components.securitySchemes.AdminApiKey.name == "X-Admin-Key" and
             .paths["/api/v1/admin/sources"].post.security[0].AdminApiKey == [] and
+            .paths["/api/v1/stats"].get.responses["200"].content["application/json"].schema["$ref"] ==
+              "#/components/schemas/StatsResponse" and
+            (.components.schemas.PublicCollectionRunResponse.properties | has("id") | not) and
+            (.components.schemas.PublicCollectionRunResponse.properties | has("error") | not) and
             (.paths["/api/v1/admin/sources"].post.responses | keys | sort) == ["201", "400", "401", "409"] and
             (.paths["/api/v1/admin/sources/{id}"].put.responses | keys | sort) == ["204", "400", "401", "404", "409"] and
             (.paths["/api/v1/admin/sources/{id}"].delete.responses | keys | sort) == ["204", "401", "404", "409"] and

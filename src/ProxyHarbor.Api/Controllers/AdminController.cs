@@ -170,7 +170,7 @@ public sealed class AdminController(
             scheduled = x.Count(proxy => proxy.NextCheckAt > now),
             repeatedlyFailing = x.Count(proxy => proxy.ConsecutiveFailedChecks >= 3),
             lastAttemptAt = x.Max(proxy => proxy.LastValidationAttemptAt)
-        }).FirstOrDefaultAsync(token);
+        }).SingleOrDefaultAsync(token);
         var validationRuns = await db.ValidationRuns.AsNoTracking()
             .Where(run => run.FinishedAt >= validationWindowStart || run.Status == "running")
             .ToListAsync(token);

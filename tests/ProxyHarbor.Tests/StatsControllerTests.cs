@@ -1,4 +1,6 @@
+using System.Reflection;
 using System.Text.Json;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
@@ -12,6 +14,8 @@ namespace ProxyHarbor.Tests;
 /// <summary>Фиксирует корректность сводки после объединения агрегатов большой таблицы.</summary>
 public sealed class StatsControllerTests
 {
+    private static readonly JsonSerializerOptions WebJsonOptions = new(JsonSerializerDefaults.Web);
+
     [Fact]
     public async Task SummarySeparatesFreshStaleAndScheduledProxies()
     {
@@ -37,28 +41,48 @@ public sealed class StatsControllerTests
                 Url = "https://example.com/list",
                 LastResultTruncated = true
             });
-            seed.Runs.Add(new CollectionRun { StartedAt = now, Status = "completed", FinishedAt = now });
+            seed.Runs.Add(new CollectionRun
+            {
+                StartedAt = now,
+                Status = "completed",
+                FinishedAt = now,
+                Error = "internal-source-secret-must-not-be-public"
+            });
             await seed.SaveChangesAsync();
         }
         var controller = new StatsController(
             new TestDbFactory(options), Options.Create(new CollectorOptions { PublicFreshnessMinutes = 15 }));
 
-        var result = Assert.IsType<OkObjectResult>(await controller.Get(CancellationToken.None));
-        using var json = JsonDocument.Parse(JsonSerializer.Serialize(result.Value));
-        var rootElement = json.RootElement;
+        var action = await controller.Get(CancellationToken.None);
+        var result = Assert.IsType<StatsResponse>(Assert.IsType<OkObjectResult>(action.Result).Value);
 
-        Assert.Equal(1, rootElement.GetProperty("alive").GetInt32());
-        Assert.Equal(1, rootElement.GetProperty("staleAlive").GetInt32());
-        Assert.Equal(1, rootElement.GetProperty("pending").GetInt32());
-        Assert.Equal(1, rootElement.GetProperty("dead").GetInt32());
-        Assert.Equal(1, rootElement.GetProperty("dueForCheck").GetInt32());
-        Assert.Equal(1, rootElement.GetProperty("checksInProgress").GetInt32());
-        Assert.Equal(2, rootElement.GetProperty("scheduledChecks").GetInt32());
-        Assert.Equal(100, rootElement.GetProperty("averageLatencyMs").GetDouble());
-        Assert.Equal(1, rootElement.GetProperty("sources").GetInt32());
-        Assert.Equal(1, rootElement.GetProperty("truncatedSources").GetInt32());
-        var protocol = Assert.Single(rootElement.GetProperty("byProtocol").EnumerateArray());
-        Assert.Equal(1, protocol.GetProperty("count").GetInt32());
+        Assert.Equal(1, result.Alive);
+        Assert.Equal(1, result.StaleAlive);
+        Assert.Equal(1, result.Pending);
+        Assert.Equal(1, result.Dead);
+        Assert.Equal(1, result.DueForCheck);
+        Assert.Equal(1, result.ChecksInProgress);
+        Assert.Equal(2, result.ScheduledChecks);
+        Assert.Equal(100, result.AverageLatencyMs);
+        Assert.Equal(1, result.Sources);
+        Assert.Equal(1, result.TruncatedSources);
+        Assert.Equal(1, Assert.Single(result.ByProtocol).Count);
+        Assert.Equal("completed", Assert.IsType<PublicCollectionRunResponse>(result.LastRun).Status);
+        var wireJson = JsonSerializer.Serialize(result, WebJsonOptions);
+        Assert.Contains("\"lastRun\":", wireJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("internal-source-secret-must-not-be-public", wireJson, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SuccessMetadataPublishesNamedStatsSchemaWithoutPersistenceEntity()
+    {
+        var success = typeof(StatsController).GetMethod(nameof(StatsController.Get))!
+            .GetCustomAttributes<ProducesResponseTypeAttribute>()
+            .Single(attribute => attribute.StatusCode == StatusCodes.Status200OK);
+
+        Assert.Equal(typeof(StatsResponse), success.Type);
+        Assert.Null(typeof(PublicCollectionRunResponse).GetProperty(nameof(CollectionRun.Id)));
+        Assert.Null(typeof(PublicCollectionRunResponse).GetProperty(nameof(CollectionRun.Error)));
     }
 
     private static ProxyEndpoint Endpoint(

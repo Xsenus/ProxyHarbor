@@ -40,7 +40,7 @@ public sealed class MetricsController(
             Leased = x.Count(proxy => proxy.CheckLeaseUntil >= now),
             NeverAttempted = x.Count(proxy => proxy.LastValidationAttemptAt == null),
             LastAttemptAt = x.Max(proxy => proxy.LastValidationAttemptAt)
-        }).FirstOrDefaultAsync(token);
+        }).SingleOrDefaultAsync(token);
         var validationRuns = await db.ValidationRuns.AsNoTracking()
             .Where(run => run.FinishedAt >= validationWindowStart || run.Status == "running")
             .ToListAsync(token);
@@ -59,7 +59,7 @@ public sealed class MetricsController(
             Stale = group.Count(source => source.Enabled && source.LastFetchedAt != null &&
                 source.LastFetchedAt < sourceFreshAfter),
             Truncated = group.Count(source => source.Enabled && source.LastResultTruncated)
-        }).FirstOrDefaultAsync(token);
+        }).SingleOrDefaultAsync(token);
         // Пользователь может добавить сколько угодно собственных feed'ов. В память загружаются
         // только максимум 81 каноническая запись, нужная для catalog-specific расчёта.
         var builtInUrls = BuiltInSourceCatalog.Sources.Select(source => source.Url).ToArray();
