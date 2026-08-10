@@ -1,7 +1,10 @@
+using System.Text;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Npgsql;
+using ProxyHarbor.Api;
 using ProxyHarbor.Api.Controllers;
 using ProxyHarbor.Domain;
 using ProxyHarbor.Infrastructure;
@@ -14,7 +17,7 @@ public sealed class ProxyPublicationPostgresIntegrationTests
 {
     [Fact]
     [Trait("Category", "PostgresIntegration")]
-    public async Task SeekPredicateTraversesDeterministicOrderOnPostgres()
+    public async Task SeekListAndStreamingExportTraverseDeterministicOrderOnPostgres()
     {
         var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
         if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
@@ -59,12 +62,43 @@ public sealed class ProxyPublicationPostgresIntegrationTests
                 Assert.IsType<OkObjectResult>(secondAction.Result).Value);
             Assert.Equal("9.9.9.9", Assert.Single(secondPage.Items).Host);
             Assert.False(secondPage.HasMore);
+
+            await using var firstOutput = new MemoryStream();
+            var firstExport = ExportController(factory, firstOutput);
+            Assert.IsType<EmptyResult>(await firstExport.ExportSeek(
+                "txt", null, null, null, CancellationToken.None, limit: 2));
+            Assert.Equal(
+                ["http://1.1.1.1:8080", "http://8.8.8.8:8080"],
+                Encoding.UTF8.GetString(firstOutput.ToArray())
+                    .Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries));
+            var exportCursor = firstExport.Response.Headers["X-Next-Cursor"].ToString();
+            Assert.Equal(PublicationCursor.EncodedLength, exportCursor.Length);
+
+            await using var secondOutput = new MemoryStream();
+            var secondExport = ExportController(factory, secondOutput);
+            Assert.IsType<EmptyResult>(await secondExport.ExportSeek(
+                "txt", null, null, null, CancellationToken.None, limit: 2, after: exportCursor));
+            Assert.Equal("http://9.9.9.9:8080", Encoding.UTF8.GetString(secondOutput.ToArray()).Trim());
+            Assert.Equal("false", secondExport.Response.Headers["X-Export-Truncated"]);
         }
         finally
         {
             await using var drop = new NpgsqlCommand($"DROP SCHEMA IF EXISTS {schema} CASCADE", admin);
             await drop.ExecuteNonQueryAsync();
         }
+    }
+
+    private static ProxiesController ExportController(
+        IDbContextFactory<ProxyHarborDbContext> factory,
+        Stream output)
+    {
+        var controller = new ProxiesController(
+            factory, Options.Create(new CollectorOptions { PublicFreshnessMinutes = 15 }));
+        controller.ControllerContext = new ControllerContext
+        {
+            HttpContext = new DefaultHttpContext { Response = { Body = output } }
+        };
+        return controller;
     }
 
     private static ProxyEndpoint Endpoint(

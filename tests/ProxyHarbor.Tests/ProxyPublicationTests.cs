@@ -238,7 +238,7 @@ public sealed class ProxyPublicationTests
 
         var terminalController = Controller(options, out var terminalOutput);
         Assert.IsType<EmptyResult>(await terminalController.Export(
-            "txt", null, null, null, CancellationToken.None, limit: 50_000, offset: int.MaxValue));
+            "txt", null, null, null, CancellationToken.None, limit: 50_000, offset: 3));
         Assert.Empty(terminalOutput.ToArray());
         Assert.Equal("false", terminalController.Response.Headers["X-Export-Truncated"]);
         Assert.False(terminalController.Response.Headers.ContainsKey("X-Next-Offset"));
@@ -392,8 +392,12 @@ public sealed class ProxyPublicationTests
         Assert.False(secondController.Response.Headers.ContainsKey("X-Next-Cursor"));
     }
 
-    [Fact]
-    public async Task XmlExportPropagatesRequestCancellationIntoBlockedResponseWrite()
+    [Theory]
+    [InlineData("json")]
+    [InlineData("txt")]
+    [InlineData("csv")]
+    [InlineData("xml")]
+    public async Task EveryExportFormatPropagatesRequestCancellationIntoBlockedResponseWrite(string format)
     {
         var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
             .UseInMemoryDatabase($"xml-cancellation-{Guid.NewGuid():N}")
@@ -412,7 +416,7 @@ public sealed class ProxyPublicationTests
         };
         using var cancellation = new CancellationTokenSource();
 
-        var export = controller.Export("xml", null, null, null, cancellation.Token, limit: 1);
+        var export = controller.Export(format, null, null, null, cancellation.Token, limit: 1);
         var receivedToken = await output.WriteStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
         Assert.True(receivedToken.CanBeCanceled);
         await cancellation.CancelAsync();
@@ -435,6 +439,23 @@ public sealed class ProxyPublicationTests
 
         var problem = Assert.IsType<ProblemDetails>(Assert.IsType<BadRequestObjectResult>(action.Result).Value);
         Assert.Equal(400, problem.Status);
+    }
+
+    [Fact]
+    public async Task ExtremeLegacyExportOffsetIsRejectedBeforeDatabaseScan()
+    {
+        var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+            .UseInMemoryDatabase($"export-offset-{Guid.NewGuid():N}")
+            .Options;
+        var controller = Controller(options, out var output);
+
+        var result = await controller.Export(
+            "txt", null, null, null, CancellationToken.None, limit: 1, offset: 5_000_001);
+
+        var problem = Assert.IsType<ProblemDetails>(Assert.IsType<BadRequestObjectResult>(result).Value);
+        Assert.Equal(400, problem.Status);
+        Assert.Contains("seek", problem.Detail, StringComparison.Ordinal);
+        Assert.Empty(output.ToArray());
     }
 
     private static ProxyEndpoint Endpoint(string host, ProxyStatus status, DateTimeOffset checkedAt) => new()

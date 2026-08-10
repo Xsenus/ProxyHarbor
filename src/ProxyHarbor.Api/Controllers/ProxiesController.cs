@@ -21,6 +21,7 @@ public sealed class ProxiesController(
     IOptions<CollectorOptions> collectorOptions) : ControllerBase
 {
     private const int MaxExportPageSize = 50_000;
+    private const int MaxLegacyOffset = 5_000_000;
     private const int ConcurrentExportLimit = 2;
     private static readonly UTF8Encoding Utf8NoBom = new(false);
     private static readonly SemaphoreSlim ExportConcurrencyGate = new(ConcurrentExportLimit, ConcurrentExportLimit);
@@ -110,9 +111,18 @@ public sealed class ProxiesController(
         [FromQuery, Range(typeof(decimal), "0", "100")] decimal? minSuccessRate,
         CancellationToken cancellationToken,
         [FromQuery, Range(1, MaxExportPageSize)] int limit = MaxExportPageSize,
-        [FromQuery, Range(0, int.MaxValue)] int offset = 0)
-        => await ExportCore(
+        [FromQuery, Range(0, MaxLegacyOffset)] int offset = 0)
+    {
+        if (offset > MaxLegacyOffset)
+            return BadRequest(new ProblemDetails
+            {
+                Title = "Слишком глубокий экспорт",
+                Detail = "Используйте /export/{format}/seek; максимальное legacy-смещение — 5 000 000 записей.",
+                Status = StatusCodes.Status400BadRequest
+            });
+        return await ExportCore(
             format, protocol, maxLatencyMs, minSuccessRate, limit, offset, after: null, cancellationToken);
+    }
 
     /// <summary>Потоково экспортирует keyset-страницу с постоянной стоимостью продолжения.</summary>
     [HttpGet("export/{format}/seek")]
@@ -180,19 +190,24 @@ public sealed class ProxiesController(
             var ordered = OrderForPublication(query);
             var legacyOffset = offset ?? 0;
             var nextOffset = (long)legacyOffset + limit;
-            // Предварительные index-only boundary-запросы не материализуют body и
-            // позволяют выставить continuation headers до первой потоковой записи.
+            // Предварительный index-only boundary-запрос не материализует body и
+            // позволяет выставить continuation headers до первой потоковой записи.
             var pageQuery = seekMode ? ordered : ordered.Skip(legacyOffset);
-            var hasMore = seekMode
-                ? await pageQuery.Skip(limit).AnyAsync(cancellationToken)
-                : nextOffset <= int.MaxValue && await ordered.Skip((int)nextOffset).AnyAsync(cancellationToken);
+            bool hasMore;
             string? nextCursor = null;
-            if (seekMode && hasMore)
+            if (seekMode)
             {
-                var boundary = await pageQuery.Skip(limit - 1)
+                // Последняя включённая строка и один look-ahead дают hasMore и cursor
+                // одним round-trip вместо двух одинаковых проходов по индексу.
+                var boundary = await pageQuery.Skip(limit - 1).Take(2)
                     .Select(x => new PublicationPosition(x.LatencyMs!.Value, x.SuccessfulChecks, x.Id))
-                    .FirstAsync(cancellationToken);
-                nextCursor = PublicationCursor.Encode(boundary, fingerprint);
+                    .ToListAsync(cancellationToken);
+                hasMore = boundary.Count == 2;
+                if (hasMore) nextCursor = PublicationCursor.Encode(boundary[0], fingerprint);
+            }
+            else
+            {
+                hasMore = await ordered.Skip((int)nextOffset).AnyAsync(cancellationToken);
             }
             var proxies = pageQuery.Take(limit)
                 .AsAsyncEnumerable().Select(ProxyDto.From);
@@ -244,7 +259,8 @@ public sealed class ProxiesController(
 
     private static async Task WriteTextAsync(Stream output, IAsyncEnumerable<ProxyDto> proxies, CancellationToken token)
     {
-        await using var writer = new StreamWriter(output, Utf8NoBom, 64 * 1024, leaveOpen: true);
+        using var cancellationBoundOutput = new CancellationBoundOutputStream(output, token);
+        await using var writer = new StreamWriter(cancellationBoundOutput, Utf8NoBom, 64 * 1024, leaveOpen: true);
         await foreach (var proxy in proxies.WithCancellation(token))
             await writer.WriteLineAsync(proxy.Url.AsMemory(), token);
         await writer.FlushAsync(token);
@@ -252,7 +268,8 @@ public sealed class ProxiesController(
 
     private static async Task WriteCsvAsync(Stream output, IAsyncEnumerable<ProxyDto> proxies, CancellationToken token)
     {
-        await using var writer = new StreamWriter(output, Utf8NoBom, 64 * 1024, leaveOpen: true);
+        using var cancellationBoundOutput = new CancellationBoundOutputStream(output, token);
+        await using var writer = new StreamWriter(cancellationBoundOutput, Utf8NoBom, 64 * 1024, leaveOpen: true);
         await writer.WriteLineAsync("protocol,host,port,latencyMs,successRate,lastCheckedAt,url,exitIp".AsMemory(), token);
         await foreach (var proxy in proxies.WithCancellation(token))
         {
@@ -279,7 +296,7 @@ public sealed class ProxiesController(
         // избыточный Flush, сохраняя запрет на любые синхронные записи.
         // XmlWriter async API не принимает CancellationToken для отдельных записей.
         // Адаптер поэтому навязывает request token каждому обращению к Response.Body.
-        using var asyncOutput = new AsyncXmlOutputStream(output, token);
+        using var asyncOutput = new CancellationBoundOutputStream(output, token);
         using var writer = XmlWriter.Create(asyncOutput, new XmlWriterSettings
         {
             Async = true,
@@ -358,8 +375,11 @@ public sealed class ProxiesController(
         return $"\"{value.Replace("\"", "\"\"", StringComparison.Ordinal)}\"";
     }
 
-    /// <summary>Адаптирует финальный Dispose XmlWriter к async-only HTTP response stream.</summary>
-    private sealed class AsyncXmlOutputStream(Stream inner, CancellationToken requestToken) : Stream
+    /// <summary>
+    /// Навязывает request token каждому async write/flush, включая финальный flush из
+    /// DisposeAsync writer'а, чтобы отключившийся клиент немедленно освобождал export slot.
+    /// </summary>
+    private sealed class CancellationBoundOutputStream(Stream inner, CancellationToken requestToken) : Stream
     {
         public override bool CanRead => false;
         public override bool CanSeek => false;

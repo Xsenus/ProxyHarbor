@@ -7,6 +7,8 @@
 
 ### Changed
 
+- JSON/XML/TXT/CSV exports теперь гарантированно привязывают каждую запись и финальный writer flush к request cancellation, поэтому оборванный медленный клиент сразу освобождает ограниченный export slot.
+- Legacy export fail-fast отклоняет OFFSET свыше 5 млн, а seek вычисляет hasMore и следующий cursor одним index-only boundary-запросом вместо двух.
 - Исходящие source, origin и Telegram HTTP-клиенты принудительно работают без системного proxy, поэтому DNS-rebinding connect-gate нельзя обойти переносом разрешения target на посредника.
 - Потоковое PHB2/PHB3 шифрование и restore переиспользуют bounded buffers на протяжении всего архива, устраняя по две Large Object Heap allocation на каждый блок с сохранением криптографической очистки plaintext.
 - Создание backup теперь fail-closed требует bounded 32–1024-символьный ключ и абсолютный не-корневой каталог; restore сохраняет 16-символьную legacy-совместимость.
