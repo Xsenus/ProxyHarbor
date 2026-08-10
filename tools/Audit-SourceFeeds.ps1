@@ -28,6 +28,7 @@ $report = [ordered]@{
     succeeded = 0
     failed = 0
     staleEvidence = 0
+    futureEvidence = 0
     truncated = 0
     candidateLimitReached = $null
     parsedItems = 0
@@ -76,10 +77,17 @@ try {
     # identity владельца (GitHub owner либо отдельный DNS hostname), отданной API.
     $providers = @($builtIn | ForEach-Object ProviderIdentity | Where-Object { $_ } | Sort-Object -Unique)
     $staleEvidence = @()
+    $futureEvidence = @()
     if ($collection) {
         $collectionStartedAt = [DateTimeOffset]$collection.StartedAt
+        $collectionFinishedAt = [DateTimeOffset]$collection.FinishedAt
         $staleEvidence = @($enabled | Where-Object {
             -not $_.LastFetchedAt -or [DateTimeOffset]$_.LastFetchedAt -lt $collectionStartedAt
+        })
+        # Односторонняя freshness-проверка пропустила бы повреждённую/сохранённую дату
+        # из будущего и ошибочно приписала старое состояние текущему forced-run.
+        $futureEvidence = @($enabled | Where-Object {
+            $_.LastFetchedAt -and [DateTimeOffset]$_.LastFetchedAt -gt $collectionFinishedAt
         })
     }
 
@@ -113,6 +121,7 @@ try {
     $report.succeeded = $enabled.Count - $failed.Count
     $report.failed = $failed.Count
     $report.staleEvidence = $staleEvidence.Count
+    $report.futureEvidence = $futureEvidence.Count
     $report.truncated = $truncated.Count
     $report.parsedItems = ($enabled | Measure-Object -Property LastItemCount -Sum).Sum
     $report.builtInSources = $builtIn.Count
@@ -124,9 +133,10 @@ try {
 
     $ordered | Select-Object Name, Provider, ProviderIdentity, IsBuiltIn, DefaultProtocol, LastItemCount, LastResultTruncated, ConsecutiveFailures, LastFetchedAt, NextFetchAt, LastError | Format-Table -AutoSize
 
-    if ($failed.Count -gt 0 -or $staleEvidence.Count -gt 0 -or $truncated.Count -gt 0 -or
+    if ($failed.Count -gt 0 -or $staleEvidence.Count -gt 0 -or $futureEvidence.Count -gt 0 -or
+        $truncated.Count -gt 0 -or
         $report.candidateLimitReached -eq $true -or $catalogErrors.Count -gt 0 -or $countersMatch -eq $false) {
-        throw "Source-аудит недостоверен или неполон: failed=$($failed.Count), stale=$($staleEvidence.Count), truncated=$($truncated.Count), skipped=$($report.sourcesSkipped), candidates=$($report.candidatesFound), candidateLimit=$($report.candidateLimitReached), countersMatch=$countersMatch, catalogErrors=$($catalogErrors.Count)."
+        throw "Source-аудит недостоверен или неполон: failed=$($failed.Count), stale=$($staleEvidence.Count), future=$($futureEvidence.Count), truncated=$($truncated.Count), skipped=$($report.sourcesSkipped), candidates=$($report.candidatesFound), candidateLimit=$($report.candidateLimitReached), countersMatch=$countersMatch, catalogErrors=$($catalogErrors.Count)."
     }
 
     $report.success = $true
