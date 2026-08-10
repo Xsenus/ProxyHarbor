@@ -171,6 +171,71 @@ public sealed class BackupRestoreRoundTripIntegrationTests
                 await AssertTargetMarkersSurvivedAsync(targetOptions);
             }
 
+            // Secondary cleanup failure must not hide the primary cancellation or turn its
+            // process contract from exit 130 into a generic exit 1. The retained plaintext
+            // directory is removed explicitly by this deterministic failure-canary.
+            using (var stoppingWithCleanupFailure = new CancellationTokenSource())
+            {
+                string? restoreTemporaryDirectory = null;
+                var hooks = new RestoreExecutionHooks(
+                    TemporaryDirectoryCreated: directory => restoreTemporaryDirectory = directory,
+                    RowImported: (entryName, importedCount) =>
+                    {
+                        if (entryName == "database/proxies.json" && importedCount == 1)
+                            stoppingWithCleanupFailure.Cancel();
+                    },
+                    DeleteTemporaryDirectory: _ => throw new IOException("Deterministic cleanup failure."));
+
+                try
+                {
+                    var cancelledExitCode = await RestoreApplication.RunAsync([
+                        "--input", encryptedPath,
+                        "--connection", targetConnection,
+                        "--encryption-key-file", restoreKeyFile,
+                        "--replace-existing-data"], hooks, stoppingWithCleanupFailure.Token);
+
+                    Assert.Equal(130, cancelledExitCode);
+                    Assert.NotNull(restoreTemporaryDirectory);
+                    Assert.True(Directory.Exists(restoreTemporaryDirectory));
+                    await AssertTargetMarkersSurvivedAsync(targetOptions);
+                }
+                finally
+                {
+                    if (restoreTemporaryDirectory is not null && Directory.Exists(restoreTemporaryDirectory))
+                        Directory.Delete(restoreTemporaryDirectory, recursive: true);
+                }
+            }
+
+            // Если primary failure не было, невозможность удалить plaintext должна сделать
+            // команду неуспешной. Транзакция уже могла закоммититься, поэтому runbook требует
+            // сначала проверить целевую БД, а не запускать destructive restore повторно вслепую.
+            string? completedRestoreTemporaryDirectory = null;
+            try
+            {
+                var cleanupFailureExitCode = await RestoreApplication.RunAsync([
+                    "--input", encryptedPath,
+                    "--connection", targetConnection,
+                    "--encryption-key-file", restoreKeyFile,
+                    "--replace-existing-data"],
+                    new RestoreExecutionHooks(
+                        TemporaryDirectoryCreated: directory => completedRestoreTemporaryDirectory = directory,
+                        DeleteTemporaryDirectory: _ => throw new IOException("Deterministic cleanup failure.")),
+                    CancellationToken.None);
+
+                Assert.Equal(1, cleanupFailureExitCode);
+                Assert.NotNull(completedRestoreTemporaryDirectory);
+                Assert.True(Directory.Exists(completedRestoreTemporaryDirectory));
+                await VerifyRestoredSnapshotAsync(targetOptions);
+            }
+            finally
+            {
+                if (completedRestoreTemporaryDirectory is not null &&
+                    Directory.Exists(completedRestoreTemporaryDirectory))
+                {
+                    Directory.Delete(completedRestoreTemporaryDirectory, recursive: true);
+                }
+            }
+
             var exitCode = await RestoreApplication.RunAsync([
                 "--input", encryptedPath,
                 "--connection", targetConnection,

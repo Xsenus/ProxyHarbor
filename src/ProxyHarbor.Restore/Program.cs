@@ -13,6 +13,8 @@ return await RestoreApplication.RunWithConsoleCancellationAsync(args);
 /// <summary>Изолированная CLI-команда полного восстановления БД из зашифрованного backup.</summary>
 internal static class RestoreApplication
 {
+    private const string TemporaryDirectoryCleanupFailedKey = "ProxyHarbor.Restore.TemporaryDirectoryCleanupFailed";
+
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         PropertyNameCaseInsensitive = true
@@ -58,6 +60,7 @@ internal static class RestoreApplication
         RestoreExecutionHooks? hooks,
         CancellationToken cancellationToken)
     {
+        var temporaryDirectoryCleanupFailed = false;
         try
         {
             var options = RestoreOptions.Parse(args);
@@ -70,6 +73,9 @@ internal static class RestoreApplication
             options.Validate();
             var temporaryDirectory = Path.Combine(Path.GetTempPath(), $"proxyharbor-restore-{Guid.NewGuid():N}");
             Directory.CreateDirectory(temporaryDirectory);
+            RestoreCounts? counts = null;
+            var inspectionCompleted = false;
+            Exception? primaryFailure = null;
             try
             {
                 hooks?.TemporaryDirectoryCreated?.Invoke(temporaryDirectory);
@@ -80,30 +86,89 @@ internal static class RestoreApplication
                 if (options.InspectSettings)
                 {
                     await WriteSettingsInspectionAsync(zipPath, cancellationToken);
-                    return 0;
+                    inspectionCompleted = true;
                 }
-                var counts = await RestoreDatabaseAsync(
-                    zipPath, options.ConnectionString!, hooks, cancellationToken);
-                Console.WriteLine($"Восстановление завершено: {counts.Proxies:N0} прокси, {counts.Sources:N0} источников, " +
-                    $"{counts.Runs:N0} циклов сбора, {counts.ValidationRuns:N0} validation-партий, " +
-                    $"{counts.BackupRuns:N0} циклов backup.");
-                return 0;
+                else
+                {
+                    counts = await RestoreDatabaseAsync(
+                        zipPath, options.ConnectionString!, hooks, cancellationToken);
+                }
+            }
+            catch (Exception exception)
+            {
+                // Вторичная ошибка cleanup не должна менять тип, stack trace и exit code
+                // исходного сбоя restore (особенно OperationCanceledException => 130).
+                primaryFailure = exception;
+                throw;
             }
             finally
             {
-                // Расшифрованный ZIP содержит данные БД и никогда не должен оставаться во временном каталоге.
-                Directory.Delete(temporaryDirectory, recursive: true);
+                temporaryDirectoryCleanupFailed =
+                    DeleteTemporaryDirectory(temporaryDirectory, hooks, primaryFailure);
             }
+
+            if (inspectionCompleted) return 0;
+
+            // Успех выводится только после подтверждённого удаления plaintext snapshot.
+            Console.WriteLine($"Восстановление завершено: {counts!.Proxies:N0} прокси, {counts.Sources:N0} источников, " +
+                $"{counts.Runs:N0} циклов сбора, {counts.ValidationRuns:N0} validation-партий, " +
+                $"{counts.BackupRuns:N0} циклов backup.");
+            return 0;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            Console.Error.WriteLine("Восстановление прервано; транзакция отменена, временные данные удалены.");
+            Console.Error.WriteLine(temporaryDirectoryCleanupFailed
+                ? "Восстановление прервано; транзакция отменена, но удаление временных данных требует внимания оператора."
+                : "Восстановление прервано; транзакция отменена, временные данные удалены.");
             return 130;
         }
         catch (Exception exception)
         {
             Console.Error.WriteLine($"Восстановление отменено: {exception.Message}");
             return 1;
+        }
+    }
+
+    /// <summary>
+    /// Удаляет каталог с расшифрованным ZIP. При уже возникшей ошибке restore cleanup остаётся
+    /// best-effort и не скрывает первичное исключение; без первичной ошибки сбой удаления
+    /// делает команду неуспешной, поскольку plaintext мог остаться на диске.
+    /// </summary>
+    private static bool DeleteTemporaryDirectory(
+        string temporaryDirectory,
+        RestoreExecutionHooks? hooks,
+        Exception? primaryFailure)
+    {
+        try
+        {
+            if (hooks?.DeleteTemporaryDirectory is { } deleteTemporaryDirectory)
+                deleteTemporaryDirectory(temporaryDirectory);
+            else
+                Directory.Delete(temporaryDirectory, recursive: true);
+            return false;
+        }
+        catch (Exception cleanupFailure)
+        {
+            if (primaryFailure is null)
+            {
+                throw new IOException(
+                    "Операция restore завершена, но не удалось удалить временный каталог с " +
+                    $"расшифрованным snapshot. Удалите его вручную: '{temporaryDirectory}'.",
+                    cleanupFailure);
+            }
+
+            try
+            {
+                primaryFailure.Data[TemporaryDirectoryCleanupFailedKey] = true;
+            }
+            catch (Exception)
+            {
+                // Нестандартное read-only Exception.Data тоже не может заменить primary failure.
+            }
+            Console.Error.WriteLine(
+                "ВНИМАНИЕ: не удалось удалить временный каталог с расшифрованным snapshot. " +
+                $"Удалите его вручную: '{temporaryDirectory}'.");
+            return true;
         }
     }
 
@@ -390,13 +455,14 @@ internal static class RestoreApplication
 }
 
 /// <summary>
-/// Внутренние точки наблюдения restore lifecycle. Нужны только тестам rollback/cleanup и не
-/// позволяют изменять данные или обходить production-проверки архива.
+/// Внутренние точки наблюдения restore lifecycle. Нужны только тестам rollback/cleanup;
+/// production CLI их не передаёт, а операции с БД и проверки архива они не подменяют.
 /// </summary>
 internal sealed record RestoreExecutionHooks(
     Action<string>? TemporaryDirectoryCreated = null,
     Action<string, int>? RowImported = null,
-    Action? BeforeCommit = null);
+    Action? BeforeCommit = null,
+    Action<string>? DeleteTemporaryDirectory = null);
 
 /// <summary>Проверяет семантические инварианты backup-строк до записи очередной COPY row.</summary>
 internal static class RestoreEntityValidator
