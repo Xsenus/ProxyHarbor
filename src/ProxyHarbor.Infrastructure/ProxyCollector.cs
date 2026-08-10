@@ -296,6 +296,9 @@ public sealed class ProxyCollector(
     {
         delayAsync ??= static (delay, cancellationToken) => Task.Delay(delay, cancellationToken);
         var retries = Math.Clamp(options.Value.SourceRetryCount, 0, 5);
+        // Старые версии могли сохранить PostgreSQL infinity, а недоверенный feed —
+        // прислать далёкое будущее. Такое значение не имеет права авторизовать 304.
+        var requestLastModifiedAt = NormalizeLastModified(httpLastModifiedAt, DateTimeOffset.UtcNow);
         for (var attempt = 0; ; attempt++)
         {
             try
@@ -303,7 +306,7 @@ public sealed class ProxyCollector(
                 using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
                 timeout.CancelAfter(TimeSpan.FromSeconds(Math.Max(2, options.Value.SourceTimeoutSeconds)));
                 using var response = await GetWithSafeRedirectsAsync(
-                    client, url, httpETag, httpLastModifiedAt, timeout.Token);
+                    client, url, httpETag, requestLastModifiedAt, timeout.Token);
                 if (((int)response.StatusCode == 429 || (int)response.StatusCode >= 500) && attempt < retries)
                 {
                     var retryAfter = response.Headers.RetryAfter?.Delta ??
@@ -318,16 +321,17 @@ public sealed class ProxyCollector(
                 }
 
                 var responseETag = GetBoundedETag(response);
-                var responseLastModifiedAt = response.Content.Headers.LastModified;
+                var responseLastModifiedAt = NormalizeLastModified(
+                    response.Content.Headers.LastModified, DateTimeOffset.UtcNow);
                 if (response.StatusCode == System.Net.HttpStatusCode.NotModified)
                 {
-                    if (httpETag is null && httpLastModifiedAt is null)
+                    if (httpETag is null && requestLastModifiedAt is null)
                         throw new InvalidDataException("Источник вернул 304 без отправленного conditional validator.");
                     return new SourceFetchResult(
                         Content: null,
                         NotModified: true,
                         responseETag ?? httpETag,
-                        responseLastModifiedAt ?? httpLastModifiedAt);
+                        responseLastModifiedAt ?? requestLastModifiedAt);
                 }
 
                 response.EnsureSuccessStatusCode();
@@ -406,6 +410,18 @@ public sealed class ProxyCollector(
         if (value is not null && (value.Length > 512 || value.Any(char.IsControl)))
             throw new InvalidDataException("ETag источника превышает лимит или содержит управляющие символы.");
         return value;
+    }
+
+    /// <summary>
+    /// HTTP cache date хранится только в UTC и не может быть PostgreSQL infinity,
+    /// доэпохальным либо более чем на сутки опережать часы collector'а.
+    /// </summary>
+    private static DateTimeOffset? NormalizeLastModified(DateTimeOffset? value, DateTimeOffset now)
+    {
+        if (value is null) return null;
+        var utc = value.Value.ToUniversalTime();
+        var latest = now.ToUniversalTime().AddDays(1);
+        return utc >= DateTimeOffset.UnixEpoch && utc <= latest ? utc : null;
     }
 
     private static async Task<int> BulkUpsertAsync(

@@ -244,6 +244,46 @@ public sealed class SourceReliabilityTests
     }
 
     [Fact]
+    public async Task UnsafeStoredLastModifiedIsNotSentAndCannotAuthorize304()
+    {
+        var handler = new SequencedHandler(new HttpResponseMessage(HttpStatusCode.NotModified));
+        using var client = new HttpClient(handler);
+        using var collector = new ProxyCollector(
+            null!, null!, Options.Create(new CollectorOptions { SourceRetryCount = 0 }),
+            NullLogger<ProxyCollector>.Instance);
+
+        await Assert.ThrowsAsync<InvalidDataException>(() => collector.FetchSourceStateAsync(
+            client,
+            "https://1.1.1.1/feed.txt",
+            httpETag: null,
+            DateTimeOffset.MaxValue,
+            CancellationToken.None));
+
+        Assert.Null(handler.LastIfModifiedSince);
+    }
+
+    [Fact]
+    public async Task UnsafeResponseLastModifiedIsNeverPersisted()
+    {
+        var response = new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("8.8.8.8:8080")
+        };
+        response.Content.Headers.LastModified = DateTimeOffset.MaxValue;
+        var handler = new SequencedHandler(response);
+        using var client = new HttpClient(handler);
+        using var collector = new ProxyCollector(
+            null!, null!, Options.Create(new CollectorOptions { SourceRetryCount = 0 }),
+            NullLogger<ProxyCollector>.Instance);
+
+        var result = await collector.FetchSourceStateAsync(
+            client, "https://1.1.1.1/feed.txt", null, null, CancellationToken.None);
+
+        Assert.Equal("8.8.8.8:8080", result.Content);
+        Assert.Null(result.HttpLastModifiedAt);
+    }
+
+    [Fact]
     public async Task ConditionalValidatorsNeverCrossRedirectOrPersistForRedirectedRepresentation()
     {
         var redirect = new HttpResponseMessage(HttpStatusCode.Found);
