@@ -76,7 +76,7 @@ public sealed class ProxyCheckSchedulerTests
     }
 
     [Fact]
-    public async Task LeaseHeartbeatRetriesAfterTransientRenewalFailure()
+    public async Task LeaseHeartbeatRetriesWhenFailureObserverAlsoThrows()
     {
         using var stop = new CancellationTokenSource();
         var attempts = 0;
@@ -93,7 +93,11 @@ public sealed class ProxyCheckSchedulerTests
                 stop.Cancel();
                 return Task.FromResult(1);
             },
-            _ => Interlocked.Increment(ref failures),
+            _ =>
+            {
+                Interlocked.Increment(ref failures);
+                throw new InvalidOperationException("Deterministic logging provider failure.");
+            },
             stop.Token).WaitAsync(TimeSpan.FromSeconds(1));
 
         Assert.Equal(2, attempts);

@@ -135,7 +135,7 @@ public sealed class ProxyCollector(
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException || !token.IsCancellationRequested)
                     {
-                        SourceFailed(logger, source.Name, ex);
+                        OperationalLogBoundary.Write(() => SourceFailed(logger, source.Name, ex));
                         sourceResults.Add(new SourceCollectionResult(
                             source.Id, source.Url, source.DefaultProtocol,
                             0, false, null, null, ContentFetched: false, ex.Message));
@@ -282,7 +282,7 @@ public sealed class ProxyCollector(
         catch (Exception auditException)
         {
             // Следующий cluster-lock-владелец восстановит оставшуюся running-строку.
-            CollectionAuditFailed(logger, auditException);
+            OperationalLogBoundary.Write(() => CollectionAuditFailed(logger, auditException));
         }
     }
 

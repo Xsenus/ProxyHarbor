@@ -113,7 +113,7 @@ public sealed class BackupService(
                 }
 
                 await CompleteAuditAsync(backupRun.Id, encryptedPath, sentToTelegram, options.HistoryRetentionDays);
-                BackupLogBoundary.Write(() => BackupCreated(logger, encryptedPath, null));
+                OperationalLogBoundary.Write(() => BackupCreated(logger, encryptedPath, null));
                 return encryptedPath;
             }
             catch (Exception exception)
@@ -126,7 +126,7 @@ public sealed class BackupService(
             {
                 var cleanupFailure = BackupFileCleanup.TryDelete(partialEncryptedPath);
                 if (cleanupFailure is not null)
-                    BackupLogBoundary.Write(() =>
+                    OperationalLogBoundary.Write(() =>
                         BackupCleanupFailed(logger, Path.GetFileName(partialEncryptedPath), cleanupFailure));
             }
         }
@@ -191,7 +191,7 @@ public sealed class BackupService(
         catch (Exception auditException)
         {
             // Сбой вторичного аудита не должен скрывать исходную причину отказа backup.
-            BackupLogBoundary.Write(() => BackupAuditFailed(logger, auditException));
+            OperationalLogBoundary.Write(() => BackupAuditFailed(logger, auditException));
         }
     }
 
@@ -665,25 +665,6 @@ internal static class BackupFileSplitter
 /// <summary>Постоянный operational отказ доставки, который не исправится быстрым retry.</summary>
 internal sealed class BackupDeliveryPolicyException(string message) : InvalidOperationException(message);
 
-/// <summary>
-/// Изолирует backup correctness от сторонних logging providers. Логирование является
-/// наблюдаемостью, поэтому его отказ не может заменить primary exception, превратить
-/// завершённый backup в ошибку API или остановить будущие циклы scheduler.
-/// </summary>
-internal static class BackupLogBoundary
-{
-    internal static void Write(Action write)
-    {
-        ArgumentNullException.ThrowIfNull(write);
-        try { write(); }
-        catch (Exception)
-        {
-            // У logging provider нет безопасного вторичного канала: повторная запись
-            // могла бы рекурсивно вызвать тот же отказ. Основной pipeline продолжается.
-        }
-    }
-}
-
 /// <summary>Запускает резервное копирование по расписанию только при явном включении.</summary>
 public sealed class BackupWorker(
     BackupService backup,
@@ -721,12 +702,12 @@ public sealed class BackupWorker(
             }
             catch (BackupDeliveryPolicyException exception)
             {
-                BackupLogBoundary.Write(() => BackupDeliveryPolicyRejected(logger, exception));
+                OperationalLogBoundary.Write(() => BackupDeliveryPolicyRejected(logger, exception));
                 outcome = CycleOutcome.DeliveryPolicyRejected;
             }
             catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
             {
-                BackupLogBoundary.Write(() => BackupFailed(logger, ex));
+                OperationalLogBoundary.Write(() => BackupFailed(logger, ex));
             }
 
             await Task.Delay(WaitChunk(NextDelay(options.Value.IntervalHours, outcome)), stoppingToken);
@@ -752,7 +733,7 @@ public sealed class BackupWorker(
             {
                 // Недоступная БД не должна завершать весь Generic Host. Повторяем чтение
                 // раньше суточного интервала, но с bounded паузой без tight loop.
-                BackupLogBoundary.Write(() => BackupScheduleReadFailed(logger, exception));
+                OperationalLogBoundary.Write(() => BackupScheduleReadFailed(logger, exception));
                 await Task.Delay(FailureRetryDelay, token);
             }
         }

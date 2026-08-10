@@ -14,6 +14,63 @@ public sealed class ProxyCollectorIntegrationTests
 {
     [Fact]
     [Trait("Category", "PostgresIntegration")]
+    public async Task FailedFeedRemainsLocalFailureWhenLoggerThrows()
+    {
+        var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
+        if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
+
+        var schema = $"proxyharbor_source_logging_{Guid.NewGuid():N}";
+        var builder = new NpgsqlConnectionStringBuilder(baseConnectionString) { SearchPath = schema };
+        await using var admin = new NpgsqlConnection(baseConnectionString);
+        await admin.OpenAsync();
+        await using (var create = new NpgsqlCommand($"CREATE SCHEMA {schema}", admin))
+            await create.ExecuteNonQueryAsync();
+        try
+        {
+            var dbOptions = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+                .UseNpgsql(builder.ConnectionString)
+                .Options;
+            var factory = new TestDbFactory(dbOptions);
+            await using (var seed = await factory.CreateDbContextAsync())
+            {
+                await seed.Database.MigrateAsync();
+                seed.Sources.Add(new ProxySource
+                {
+                    Name = "Failing feed",
+                    Url = "https://8.8.8.8/failing.txt",
+                    DefaultProtocol = ProxyProtocol.Http
+                });
+                await seed.SaveChangesAsync();
+            }
+
+            using var clients = new TestHttpClientFactory(new FailedFeedHandler());
+            using var collector = new ProxyCollector(
+                factory,
+                clients,
+                Options.Create(new CollectorOptions { SourceRetryCount = 0 }),
+                new ThrowingLogger<ProxyCollector>());
+
+            var run = await collector.CollectAsync(CancellationToken.None, forceAllSources: true);
+
+            Assert.Equal("completed", run.Status);
+            Assert.Equal(1, run.SourcesProcessed);
+            Assert.Equal(0, run.SourcesSucceeded);
+            Assert.Equal(1, run.SourcesFailed);
+            Assert.Equal(0, run.CandidatesFound);
+            await using var verify = await factory.CreateDbContextAsync();
+            var source = await verify.Sources.AsNoTracking().SingleAsync();
+            Assert.Equal(1, source.ConsecutiveFailures);
+            Assert.NotNull(source.LastError);
+        }
+        finally
+        {
+            await using var drop = new NpgsqlCommand($"DROP SCHEMA IF EXISTS {schema} CASCADE", admin);
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
     public async Task InFlightResultCannotOverwriteAReconfiguredSource()
     {
         var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
@@ -544,6 +601,14 @@ public sealed class ProxyCollectorIntegrationTests
             response.Content.Headers.LastModified = LastModifiedAt;
             return Task.FromResult(response);
         }
+    }
+
+    private sealed class FailedFeedHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));
     }
 
     private sealed class NotModifiedFeedHandler : HttpMessageHandler

@@ -85,7 +85,8 @@ public sealed class ProxyValidator(
                         catch (Exception exception)
                         {
                             // Неизвестная ошибка реализации не доказывает неисправность внешнего прокси.
-                            UnexpectedProbeFailure(logger, proxy.Key, exception);
+                            OperationalLogBoundary.Write(() =>
+                                UnexpectedProbeFailure(logger, proxy.Key, exception));
                             results.Add(new ProxyCheckResult(proxy.Id, false, null, null, false,
                                 "internal probe error", IsDeferred: true));
                         }
@@ -185,7 +186,7 @@ public sealed class ProxyValidator(
         catch (Exception auditException)
         {
             // После истечения proxy lease следующая реплика восстановит running-аудит.
-            ValidationAuditFailed(logger, id, auditException);
+            OperationalLogBoundary.Write(() => ValidationAuditFailed(logger, id, auditException));
         }
     }
 
@@ -280,7 +281,7 @@ public sealed class ProxyValidator(
                 {
                     // Один transient-сбой не отключает heartbeat навсегда: следующая
                     // периодическая попытка ещё может сохранить ownership до expiry.
-                    renewalFailed(exception);
+                    OperationalLogBoundary.Write(() => renewalFailed(exception));
                 }
             }
         }
@@ -298,7 +299,7 @@ public sealed class ProxyValidator(
         {
             // Исходная ошибка или отмена важнее вторичного cleanup-сбоя. Короткая
             // bounded-аренда остаётся последним механизмом автоматического восстановления.
-            LeaseReleaseFailed(logger, leaseId, exception);
+            OperationalLogBoundary.Write(() => LeaseReleaseFailed(logger, leaseId, exception));
         }
     }
 

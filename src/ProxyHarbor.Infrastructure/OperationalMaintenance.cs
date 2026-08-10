@@ -212,11 +212,12 @@ public sealed class OperationalMaintenanceWorker(
             {
                 var result = await maintenance.RunOnceAsync(stoppingToken);
                 if (result is not null)
-                    MaintenanceCompleted(logger, result.TotalRecovered, result.TotalDeleted, null);
+                    OperationalLogBoundary.Write(() =>
+                        MaintenanceCompleted(logger, result.TotalRecovered, result.TotalDeleted, null));
             }
             catch (Exception exception) when (!stoppingToken.IsCancellationRequested)
             {
-                MaintenanceFailed(logger, exception);
+                OperationalLogBoundary.Write(() => MaintenanceFailed(logger, exception));
             }
             await Task.Delay(Interval, stoppingToken);
         }

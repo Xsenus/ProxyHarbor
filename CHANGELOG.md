@@ -99,6 +99,7 @@
 
 ### Fixed
 
+- Collector, validator и operational-maintenance теперь используют общий non-throwing logging boundary: отказ provider не превращает единичный сломанный feed в failed collection, не срывает deferred proxy result/lease heartbeat/cleanup и не завершает background worker после успешного цикла. PostgreSQL-canary подтверждает честный `completed` run с одним failed source, а heartbeat-canary продолжает renewal после одновременного сбоя БД и error observer.
 - Все BackupService/BackupWorker log-вызовы изолированы non-throwing boundary: неисправный logging provider больше не заменяет первичный отказ БД/шифрования/Telegram, не превращает завершённый PHB3 с `completed` audit в ошибку API и не останавливает будущие scheduler-циклы; PostgreSQL-canary воспроизводит успешный backup при logger, бросающем на каждой записи.
 - Потоковый PostgreSQL export теперь использует отдельный non-retrying DbContext: `RepeatableRead` сохраняет единый snapshot для continuation headers и body, а EF retry не может повторить транзакцию после частичной отправки HTTP-ответа.
 - Принудительный admin/source-аудит теперь отключает HTTP validators и требует свежий `LastContentFetchedAt` каждого feed внутри run window; исторический `304` больше не может имитировать полный повторный parse.

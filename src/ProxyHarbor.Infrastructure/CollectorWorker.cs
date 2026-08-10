@@ -33,7 +33,7 @@ public sealed class CollectorWorker(ProxyCollector collector, IOptions<Collector
             }
             catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
             {
-                CollectionFailed(logger, ex);
+                OperationalLogBoundary.Write(() => CollectionFailed(logger, ex));
             }
 
             var elapsed = TimeProvider.System.GetElapsedTime(startedAt);
@@ -88,7 +88,7 @@ public sealed class ValidatorWorker(
             }
             catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
             {
-                ValidationFailed(logger, ex);
+                OperationalLogBoundary.Write(() => ValidationFailed(logger, ex));
                 await validationWakeSignal.WaitAsync(TimeSpan.FromSeconds(15), stoppingToken);
             }
         }

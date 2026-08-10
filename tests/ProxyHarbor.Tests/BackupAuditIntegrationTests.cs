@@ -2,7 +2,6 @@ using System.IO.Compression;
 using System.Net;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Npgsql;
@@ -489,20 +488,6 @@ public sealed class BackupAuditIntegrationTests
             await using var drop = new NpgsqlCommand($"DROP SCHEMA IF EXISTS {schema} CASCADE", admin);
             await drop.ExecuteNonQueryAsync();
         }
-    }
-
-    private sealed class ThrowingLogger<T> : ILogger<T>
-    {
-        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
-        public bool IsEnabled(LogLevel logLevel) => true;
-
-        public void Log<TState>(
-            LogLevel logLevel,
-            EventId eventId,
-            TState state,
-            Exception? exception,
-            Func<TState, Exception?, string> formatter) =>
-            throw new InvalidOperationException("Deterministic logging provider failure.");
     }
 
     private sealed class TestDbFactory(DbContextOptions<ProxyHarborDbContext> options)

@@ -16,12 +16,12 @@ public sealed class BackupPipelineTests
     private const string EncryptionKey = "pipeline-test-encryption-key-32-chars";
 
     [Fact]
-    public void LoggingBoundaryCannotEscapeIntoBackupPipeline()
+    public void OperationalLoggingBoundaryCannotEscapeIntoPipeline()
     {
         var providerFailure = new InvalidOperationException("Deterministic logging provider failure.");
         var calls = 0;
 
-        var escaped = Record.Exception(() => BackupLogBoundary.Write(() =>
+        var escaped = Record.Exception(() => OperationalLogBoundary.Write(() =>
         {
             calls++;
             throw providerFailure;
