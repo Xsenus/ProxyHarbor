@@ -90,6 +90,7 @@ jobs:
           echo "$rendered" | jq --exit-status '
             .services.api.image == "ghcr.io/example/proxyharbor-api:1.2.3" and
             .services.api.build == null and
+            .services.api.environment.AllowedHosts == "release.example.test" and
             .services.restore.image == "ghcr.io/example/proxyharbor-restore:1.2.3" and
             .services.restore.build == null and
             .services.web.image == "ghcr.io/example/proxyharbor-web:1.2.3" and

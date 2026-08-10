@@ -21,6 +21,9 @@ if (!builder.Environment.IsDevelopment())
     if (!AdminApiKeyPolicy.IsValid(adminKey))
         throw new InvalidOperationException(
             "В Production Security__AdminApiKey должен содержать 24–256 значимых Unicode-символов без управляющих знаков и некорректных surrogate.");
+    if (!ProductionHostPolicy.IsValid(builder.Configuration["AllowedHosts"]))
+        throw new InvalidOperationException(
+            "В Production AllowedHosts должен содержать 1–32 явных ASCII host pattern без порта; allow-all '*' запрещён.");
 }
 
 builder.Services.AddProxyHarborInfrastructure(builder.Configuration);

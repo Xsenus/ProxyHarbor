@@ -1,4 +1,9 @@
 services:
+  # Kestrel Host Filtering получает тот же единственный hostname, что и TLS gateway.
+  api:
+    environment:
+      AllowedHosts: ${PUBLIC_HOST:?set PUBLIC_HOST to the public DNS name}
+
   # В production frontend доступен только через TLS gateway.
   web:
     ports: !reset []

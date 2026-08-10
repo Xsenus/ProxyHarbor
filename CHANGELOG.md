@@ -53,6 +53,7 @@
 
 ### Fixed
 
+- Production больше не наследует `AllowedHosts="*"`: startup требует bounded explicit/scoped ASCII host allowlist, Compose связывает его с TLS `PUBLIC_HOST`, а PostgreSQL/API smoke и source audit задают loopback hosts явно; CI прямым запросом с поддельным Host доказывает ответ Kestrel 400.
 - Admin source create/update и `SourceRequest` используют единый bounded non-throwing HTTPS parser до DNS и обращения к БД; malformed значение вроде `https://[` и Unicode URL, разрастающийся после normalization свыше DB-лимита, теперь стабильно возвращают 400 вместо необработанного исключения/500 и не изменяют существующий источник.
 - Control endpoint теперь fail-fast требует canonical ASCII `ProbeHost` и уже escaped origin-form `ProbePath`: Unicode/space, network-path `//`, fragment и невалидные percent escapes больше не проходят startup и не превращают всю validation-очередь в массовые ошибки либо `Deferred`; публичные canonical IPv4/IPv6 остаются допустимыми.
 - Telegram backup-конфигурация теперь fail-fast проверяет bounded path-safe ASCII token и совместимый с Alertmanager ненулевой signed 64-bit chat ID; при включённом scheduler доставка обязательна, URI/control-character ошибки и local-only misconfiguration больше не откладываются до первого production backup, а CI использует синтаксически валидный заведомо фиктивный token.
