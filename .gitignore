@@ -13,5 +13,6 @@ backups/
 .vscode/
 coverage/
 TestResults/
+TestResults-*/
 .tmp-postgres/
 src/proxyharbor-web/src/assets/

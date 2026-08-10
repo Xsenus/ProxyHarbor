@@ -11,6 +11,20 @@ namespace ProxyHarbor.Tests;
 /// <summary>Фиксирует fail-closed health-gate и кэширование control endpoint.</summary>
 public sealed class OriginIpProviderTests
 {
+    [Theory]
+    [InlineData("Collector:DeadRetryMaxHours", "DeadRetryMaxHours")]
+    [InlineData("Collector:SourceFailureBackoffMaxHours", "SourceFailureBackoffMaxHours")]
+    [InlineData("Collector:DeadRetentionDays", "DeadRetentionDays")]
+    public void InfrastructureOptionsRejectExtremeDurationsWithValidationError(string key, string failureName)
+    {
+        using var provider = BuildOptionsProvider(key, int.MaxValue.ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+        var exception = Assert.Throws<OptionsValidationException>(() =>
+            _ = provider.GetRequiredService<IOptions<CollectorOptions>>().Value);
+
+        Assert.Contains(exception.Failures, failure => failure.Contains(failureName, StringComparison.Ordinal));
+    }
+
     [Fact]
     public void InfrastructureOptionsRejectPrivateControlIp()
     {

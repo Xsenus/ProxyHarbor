@@ -53,6 +53,7 @@
 
 ### Fixed
 
+- Cross-field validation интервалов collector больше не создаёт `TimeSpan` из ещё не проверенных значений: экстремальные `DeadRetryMaxHours`, `SourceFailureBackoffMaxHours` и `DeadRetentionDays` теперь детерминированно дают `OptionsValidationException` с полным списком ошибок вместо необработанного arithmetic exception на startup.
 - `Collector__ProbeHost` теперь использует общий строгий DNS-label parser вместо широкой `Uri.CheckHostName`: underscore, terminal dot, пустые labels, дефис по краям, неоднозначный dotted numeric host и ненормализованные IP literals fail-fast отклоняются до запуска validation workers; production `AllowedHosts` повторно использует тот же DNS-контракт и требует canonical IP literals.
 - Production больше не наследует `AllowedHosts="*"`: startup требует bounded explicit/scoped ASCII host allowlist, Compose связывает его с TLS `PUBLIC_HOST`, а PostgreSQL/API smoke и source audit задают loopback hosts явно; CI прямым запросом с поддельным Host доказывает ответ Kestrel 400.
 - Admin source create/update и `SourceRequest` используют единый bounded non-throwing HTTPS parser до DNS и обращения к БД; malformed значение вроде `https://[` и Unicode URL, разрастающийся после normalization свыше DB-лимита, теперь стабильно возвращают 400 вместо необработанного исключения/500 и не изменяют существующий источник.

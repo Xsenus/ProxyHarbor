@@ -20,7 +20,8 @@ public static class ServiceCollectionExtensions
             .Validate(x => x.PublicFreshnessMinutes >= x.ValidationIntervalMinutes, "PublicFreshnessMinutes не может быть меньше ValidationIntervalMinutes")
             .Validate(x => x.DeadRetryBaseMinutes is >= 1 and <= 1_440, "DeadRetryBaseMinutes: 1..1440")
             .Validate(x => x.DeadRetryMaxHours is >= 1 and <= 720, "DeadRetryMaxHours: 1..720")
-            .Validate(x => TimeSpan.FromMinutes(x.DeadRetryBaseMinutes) <= TimeSpan.FromHours(x.DeadRetryMaxHours), "DeadRetryBaseMinutes не может превышать DeadRetryMaxHours")
+            .Validate(x => (long)x.DeadRetryBaseMinutes <= (long)x.DeadRetryMaxHours * 60,
+                "DeadRetryBaseMinutes не может превышать DeadRetryMaxHours")
             .Validate(x => x.ValidationConcurrency is >= 1 and <= 1_000, "ValidationConcurrency: 1..1000")
             .Validate(x => x.ValidationBatchSize is >= 1 and <= 100_000, "ValidationBatchSize: 1..100000")
             .Validate(x => x.ProbeTimeoutSeconds is >= 1 and <= 120, "ProbeTimeoutSeconds: 1..120")
@@ -29,12 +30,12 @@ public static class ServiceCollectionExtensions
             .Validate(x => x.SourceRetryCount is >= 0 and <= 5, "SourceRetryCount: 0..5")
             .Validate(x => x.SourceFailureBackoffBaseMinutes is >= 1 and <= 1_440, "SourceFailureBackoffBaseMinutes: 1..1440")
             .Validate(x => x.SourceFailureBackoffMaxHours is >= 1 and <= 720, "SourceFailureBackoffMaxHours: 1..720")
-            .Validate(x => TimeSpan.FromMinutes(x.SourceFailureBackoffBaseMinutes) <= TimeSpan.FromHours(x.SourceFailureBackoffMaxHours),
+            .Validate(x => (long)x.SourceFailureBackoffBaseMinutes <= (long)x.SourceFailureBackoffMaxHours * 60,
                 "SourceFailureBackoffBaseMinutes не может превышать SourceFailureBackoffMaxHours")
             .Validate(x => x.MaxProxiesPerSource is >= 1 and <= 1_000_000, "MaxProxiesPerSource: 1..1000000")
             .Validate(x => x.MaxCandidatesPerRun is >= 1 and <= 5_000_000, "MaxCandidatesPerRun: 1..5000000")
             .Validate(x => x.LastSeenRefreshMinutes is >= 1 and <= 10_080, "LastSeenRefreshMinutes: 1..10080")
-            .Validate(x => TimeSpan.FromMinutes(x.LastSeenRefreshMinutes) <= TimeSpan.FromDays(x.DeadRetentionDays),
+            .Validate(x => (long)x.LastSeenRefreshMinutes <= (long)x.DeadRetentionDays * 24 * 60,
                 "LastSeenRefreshMinutes не может превышать DeadRetentionDays")
             .Validate(x => x.DeadRetentionDays is >= 1 and <= 365, "DeadRetentionDays: 1..365")
             .Validate(x => x.RunRetentionDays is >= 1 and <= 3_650, "RunRetentionDays: 1..3650")
