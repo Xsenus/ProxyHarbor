@@ -30,6 +30,23 @@ foreach ($workflowName in 'ci.yml', 'release.yml') {
     }
 }
 
+# Container smoke обязан отключать фиктивную Telegram-доставку до реального
+# backup-вызова и проверять как API-ответ, так и сохранённый audit. Иначе CI
+# обращается к Bot API с заведомо неверным token и падает не по причине продукта.
+$ciWorkflow = Get-Content -LiteralPath (Join-Path $repositoryRoot '.github/workflows/ci.yml') -Raw
+$requiredContainerSmokeFragments = @(
+    'TELEGRAM_BOT_TOKEN= TELEGRAM_CHAT_ID= docker compose \',
+    'up --detach --no-deps --force-recreate api',
+    'echo "$backup_response" | jq --exit-status ''.sentToTelegram == false''',
+    '.recentBackups[0].telegramConfigured == false',
+    '.recentBackups[0].sentToTelegram == false'
+)
+foreach ($fragment in $requiredContainerSmokeFragments) {
+    if (-not $ciWorkflow.Contains($fragment, [StringComparison]::Ordinal)) {
+        throw "CI container-smoke потерял обязательный backup-фрагмент: $fragment"
+    }
+}
+
 # Неверный архив обязан быть отклонён до распаковки. Fixture находится в
 # отдельном GUID-каталоге и не может пересечься с пользовательскими файлами.
 $fixtureRoot = Join-Path ([IO.Path]::GetTempPath()) "proxyharbor-actionlint-contract-$([Guid]::NewGuid().ToString('N'))"
@@ -54,4 +71,4 @@ try {
     }
 }
 
-Write-Host 'Actionlint contracts пройдены: version/hash pins, CI+release wiring и fail-closed archive rejection.' -ForegroundColor Green
+Write-Host 'Actionlint contracts пройдены: version/hash pins, CI+release wiring, backup smoke и fail-closed archive rejection.' -ForegroundColor Green

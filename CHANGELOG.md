@@ -50,6 +50,10 @@
 - Collector парсит параллельные feed'ы прямо в общий bounded-набор через компактные IP value-key без per-source materialized списков и удерживаемых строк.
 - Источники сохраняют `ETag`/`Last-Modified` и используют conditional HTTP revalidation; подтверждённый `304` обновляет freshness без повторной загрузки и парсинга feed'а.
 
+### Fixed
+
+- Container smoke больше не пытается отправить тестовый backup в настоящий Telegram с фиктивным token: API пересоздаётся с пустыми Telegram secret-файлами, а ответ и `BackupRun` обязаны подтвердить локальный completed-архив.
+
 ## [1.0.0] - 2026-08-10
 
 ### Added

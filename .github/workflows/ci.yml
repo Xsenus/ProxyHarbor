@@ -345,7 +345,11 @@ jobs:
             --data-binary "@$oversized_body" http://127.0.0.1:8080/api/v1/admin/sources)
           rm "$oversized_body"
           test "$oversized_status" -eq 413
-          docker compose restart api
+          # Fake Telegram secrets выше нужны для проверки secret mounts, но manual
+          # backup не должен обращаться к реальному Bot API. Пересоздаём только API
+          # с пустыми secret-файлами и тем самым тестируем локальный delivery-mode.
+          TELEGRAM_BOT_TOKEN= TELEGRAM_CHAT_ID= docker compose \
+            up --detach --no-deps --force-recreate api
           for attempt in {1..60}; do
             if curl --fail --silent http://127.0.0.1:8080/health/ready; then break; fi
             if [ "$attempt" -eq 60 ]; then exit 1; fi
@@ -355,9 +359,18 @@ jobs:
           backup_response=$(curl --fail --silent --request POST \
             --header 'X-Admin-Key: ci-admin-key-at-least-24-chars' \
             http://127.0.0.1:8080/api/v1/admin/backup)
+          echo "$backup_response" | jq --exit-status '.sentToTelegram == false'
           backup_file=$(echo "$backup_response" | jq --raw-output '.created')
           test -n "$backup_file"
           test "$backup_file" != 'null'
+          backup_diagnostics=$(curl --fail --silent \
+            --header 'X-Admin-Key: ci-admin-key-at-least-24-chars' \
+            http://127.0.0.1:8080/api/v1/admin/diagnostics)
+          echo "$backup_diagnostics" | jq --exit-status \
+            '.recentBackups[0].status == "completed" and
+             .recentBackups[0].telegramConfigured == false and
+             .recentBackups[0].sentToTelegram == false and
+             .recentBackups[0].sizeBytes > 0'
           docker compose stop web api
           docker compose exec -T postgres psql --username proxyharbor --dbname proxyharbor \
             --set ON_ERROR_STOP=1 --command 'DELETE FROM "Sources";'
