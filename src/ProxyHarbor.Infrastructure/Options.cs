@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 
 namespace ProxyHarbor.Infrastructure;
@@ -48,6 +49,24 @@ public sealed class BackupOptions
     public string? TelegramBotToken { get; set; }
     public string? TelegramChatId { get; set; }
     public int MaxTelegramFileSizeMb { get; set; } = 49;
+
+    /// <summary>Проверяет bounded path-safe ASCII token без недокументированных предположений о его структуре.</summary>
+    public static bool IsTelegramBotTokenValid(string? token)
+    {
+        return token is { Length: >= 20 and <= 256 } &&
+            token.All(character => character is >= '!' and <= '~' and
+                not ('/' or '\\' or '?' or '#' or '%'));
+    }
+
+    /// <summary>Общий API/Alertmanager secret обязан быть ненулевым signed 64-bit chat ID.</summary>
+    public static bool IsTelegramChatIdValid(string? chatId)
+    {
+        if (string.IsNullOrWhiteSpace(chatId) || chatId.Length > 20) return false;
+        var digits = chatId[0] == '-' ? chatId.AsSpan(1) : chatId.AsSpan();
+        return digits.Length > 0 && digits.IndexOfAnyExceptInRange('0', '9') < 0 &&
+            long.TryParse(chatId, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var value) &&
+            value != 0;
+    }
 
     /// <summary>Новые снимки требуют сильный bounded ключ без неоднозначных управляющих символов.</summary>
     public static bool IsNewEncryptionKeyValid(string? key) =>

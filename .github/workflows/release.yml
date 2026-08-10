@@ -77,7 +77,7 @@ jobs:
           POSTGRES_PASSWORD: release-verify-password
           ADMIN_API_KEY: release-verify-admin-key-at-least-24-chars
           BACKUP_ENCRYPTION_KEY: release-verify-encryption-key-at-least-32-chars
-          TELEGRAM_BOT_TOKEN: release-verify-telegram-token
+          TELEGRAM_BOT_TOKEN: 9000000000000000000:CI_ONLY_PLACEHOLDER_NOT_A_REAL_TOKEN
           TELEGRAM_CHAT_ID: "123456"
           PUBLIC_HOST: release.example.test
           ACME_EMAIL: release@example.test

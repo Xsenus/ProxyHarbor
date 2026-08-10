@@ -52,6 +52,7 @@
 
 ### Fixed
 
+- Telegram backup-конфигурация теперь fail-fast проверяет bounded path-safe ASCII token и совместимый с Alertmanager ненулевой signed 64-bit chat ID; при включённом scheduler доставка обязательна, URI/control-character ошибки и local-only misconfiguration больше не откладываются до первого production backup, а CI использует синтаксически валидный заведомо фиктивный token.
 - PowerShell decryptor больше не имеет TOCTOU между проверкой и созданием `OutputZip`: plaintext пишется в уникальный sibling `.partial`, после `Flush(true)` публикуется атомарным move без overwrite, существующий файл сохраняется, partial очищается при отказе аутентификации, а ошибка его удаления больше не замалчивается.
 - PowerShell decryptor поддерживает отдельный `-EncryptionKeyFile` parameter set, через единый descriptor читает абсолютный неизменившийся обычный файл не больше 16 КиБ, строго декодирует UTF-8/BOM, удаляет ровно один терминальный CRLF/LF и обнуляет raw/char/PBKDF2 buffers; README больше не помещает backup-ключ в command history/process arguments.
 - Restore CLI прокидывает Ctrl+C/container SIGTERM во все decrypt/COPY/transaction операции, возвращает exit code 130 после rollback и удаления временного plaintext; новый `--encryption-key-file` читает абсолютный bounded UTF-8 secret без process-argument leakage и отвергает неоднозначную пару с inline-ключом.

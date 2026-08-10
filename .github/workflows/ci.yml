@@ -133,7 +133,7 @@ jobs:
           BACKUP_ENCRYPTION_KEY: ci-encryption-key-at-least-32-chars
           PUBLIC_HOST: localhost
           ACME_EMAIL: ci@example.com
-          TELEGRAM_BOT_TOKEN: ci-telegram-token
+          TELEGRAM_BOT_TOKEN: 9000000000000000000:CI_ONLY_PLACEHOLDER_NOT_A_REAL_TOKEN
           TELEGRAM_CHAT_ID: "123456"
           PROXYHARBOR_IMAGE_PREFIX: ghcr.io/example
           PROXYHARBOR_IMAGE_TAG: 1.2.3
@@ -167,7 +167,7 @@ jobs:
             (.services.api.secrets | length) == 5 and
             (.services.restore.secrets | length) == 2 and
             (.services.alertmanager.secrets | length) == 2'
-          for secret_value in ci-password ci-admin-key ci-encryption-key-at-least-32-chars ci-telegram-token 123456; do
+          for secret_value in ci-password ci-admin-key ci-encryption-key-at-least-32-chars 9000000000000000000:CI_ONLY_PLACEHOLDER_NOT_A_REAL_TOKEN 123456; do
             if echo "$production_config" | grep --fixed-strings "$secret_value"; then
               echo "Secret value leaked into rendered Compose configuration."
               exit 1
@@ -233,7 +233,7 @@ jobs:
           BACKGROUND_WORKERS_ENABLED: false
           PUBLIC_HOST: localhost
           ACME_EMAIL: ci@example.com
-          TELEGRAM_BOT_TOKEN: ci-telegram-token
+          TELEGRAM_BOT_TOKEN: 9000000000000000000:CI_ONLY_PLACEHOLDER_NOT_A_REAL_TOKEN
           TELEGRAM_CHAT_ID: "123456"
         run: |
           cleanup() {
@@ -259,7 +259,7 @@ jobs:
             container_id=$1
             environment=$(docker inspect --format '{{json .Config.Env}}' "$container_id")
             for secret_value in ci-password ci-admin-key-at-least-24-chars \
-              ci-encryption-key-at-least-32-chars ci-telegram-token 123456; do
+              ci-encryption-key-at-least-32-chars 9000000000000000000:CI_ONLY_PLACEHOLDER_NOT_A_REAL_TOKEN 123456; do
               if echo "$environment" | grep --fixed-strings "$secret_value"; then
                 echo "Secret value leaked into container environment."
                 exit 1

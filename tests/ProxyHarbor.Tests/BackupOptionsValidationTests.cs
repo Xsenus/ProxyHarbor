@@ -8,6 +8,8 @@ namespace ProxyHarbor.Tests;
 /// <summary>Фиксирует fail-closed startup-контракт новых зашифрованных backup.</summary>
 public sealed class BackupOptionsValidationTests
 {
+    private const string ValidTelegramToken = "9000000000000000000:CI_ONLY_PLACEHOLDER_NOT_A_REAL_TOKEN";
+
     [Fact]
     public void EnabledBackupRejectsKeyShorterThanThirtyTwoCharacters()
     {
@@ -96,14 +98,131 @@ public sealed class BackupOptionsValidationTests
             provider.GetRequiredService<IOptions<BackupOptions>>().Value);
     }
 
-    private static ServiceProvider BuildProvider(string key, string directory)
+    [Theory]
+    [InlineData("invalid-short-token")]
+    [InlineData("123456789:too-short")]
+    [InlineData("123456789:ABCDEFGHIJKLMNOPQRST/unsafe")]
+    [InlineData("123456789:ABCDEFGHIJKLMNOPQRST?unsafe")]
+    [InlineData("123456789:ABCDEFGHIJKLMNOPQRST\nunsafe")]
+    [InlineData("123456789:ABCDEFGHIJKLMNOPQRST\\unsafe")]
+    [InlineData("123456789:ABCDEFGHIJKLMNOPQRST%2Funsafe")]
+    public void RejectsMalformedTelegramBotToken(string token)
+    {
+        using var provider = BuildProvider(
+            new string('k', BackupOptions.MinimumEncryptionKeyLength),
+            Path.GetFullPath("backup-options-test"),
+            token,
+            "123456");
+
+        var exception = Assert.Throws<OptionsValidationException>(() =>
+            provider.GetRequiredService<IOptions<BackupOptions>>().Value);
+
+        Assert.Contains(exception.Failures,
+            failure => failure.Contains("TelegramBotToken", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("0")]
+    [InlineData("+123456")]
+    [InlineData("123 456")]
+    [InlineData("@channel")]
+    [InlineData("9223372036854775808")]
+    public void RejectsMalformedTelegramChatId(string chatId)
+    {
+        using var provider = BuildProvider(
+            new string('k', BackupOptions.MinimumEncryptionKeyLength),
+            Path.GetFullPath("backup-options-test"),
+            ValidTelegramToken,
+            chatId);
+
+        var exception = Assert.Throws<OptionsValidationException>(() =>
+            provider.GetRequiredService<IOptions<BackupOptions>>().Value);
+
+        Assert.Contains(exception.Failures,
+            failure => failure.Contains("TelegramChatId", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void RejectsHalfConfiguredTelegramDelivery()
+    {
+        using var provider = BuildProvider(
+            new string('k', BackupOptions.MinimumEncryptionKeyLength),
+            Path.GetFullPath("backup-options-test"),
+            ValidTelegramToken,
+            null);
+
+        var exception = Assert.Throws<OptionsValidationException>(() =>
+            provider.GetRequiredService<IOptions<BackupOptions>>().Value);
+
+        Assert.Contains(exception.Failures,
+            failure => failure.Contains("задаются только вместе", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void EnabledBackupRejectsMissingTelegramDelivery()
+    {
+        using var provider = BuildProvider(
+            new string('k', BackupOptions.MinimumEncryptionKeyLength),
+            Path.GetFullPath("backup-options-test"),
+            null,
+            null);
+
+        var exception = Assert.Throws<OptionsValidationException>(() =>
+            provider.GetRequiredService<IOptions<BackupOptions>>().Value);
+
+        Assert.Contains(exception.Failures,
+            failure => failure.Contains("доставка в Telegram обязательна", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void DisabledBackupAcceptsMissingTelegramDelivery()
+    {
+        using var provider = BuildProvider(
+            new string('k', BackupOptions.MinimumEncryptionKeyLength),
+            Path.GetFullPath("backup-options-test"),
+            null,
+            null,
+            enabled: false);
+
+        var options = provider.GetRequiredService<IOptions<BackupOptions>>().Value;
+
+        Assert.False(options.Enabled);
+        Assert.Null(options.TelegramBotToken);
+        Assert.Null(options.TelegramChatId);
+    }
+
+    [Theory]
+    [InlineData("123456")]
+    [InlineData("-1001234567890")]
+    public void AcceptsValidTelegramDeliveryCoordinates(string chatId)
+    {
+        using var provider = BuildProvider(
+            new string('k', BackupOptions.MinimumEncryptionKeyLength),
+            Path.GetFullPath("backup-options-test"),
+            ValidTelegramToken,
+            chatId);
+
+        var options = provider.GetRequiredService<IOptions<BackupOptions>>().Value;
+
+        Assert.Equal(ValidTelegramToken, options.TelegramBotToken);
+        Assert.Equal(chatId, options.TelegramChatId);
+    }
+
+    private static ServiceProvider BuildProvider(
+        string key,
+        string directory,
+        string? telegramBotToken = ValidTelegramToken,
+        string? telegramChatId = "123456",
+        bool enabled = true)
     {
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
             ["ConnectionStrings:Postgres"] = "Host=localhost;Database=proxyharbor;Username=proxyharbor",
-            ["Backup:Enabled"] = "true",
+            ["Backup:Enabled"] = enabled ? "true" : "false",
             ["Backup:EncryptionKey"] = key,
-            ["Backup:Directory"] = directory
+            ["Backup:Directory"] = directory,
+            ["Backup:TelegramBotToken"] = telegramBotToken,
+            ["Backup:TelegramChatId"] = telegramChatId
         }).Build();
         var services = new ServiceCollection();
         services.AddProxyHarborInfrastructure(configuration);
