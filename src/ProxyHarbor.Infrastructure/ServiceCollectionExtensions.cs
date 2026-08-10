@@ -90,6 +90,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ProxyProbeService>();
         services.AddSingleton<ProbeControlHealth>();
         services.AddSingleton<OriginIpProvider>();
+        services.AddSingleton<ValidationWakeSignal>();
         services.AddSingleton<ProxyValidator>();
         services.AddSingleton<BackupService>();
         services.AddHostedService<CollectorWorker>();

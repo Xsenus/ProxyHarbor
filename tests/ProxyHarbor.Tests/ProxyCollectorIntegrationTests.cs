@@ -68,6 +68,7 @@ public sealed class ProxyCollectorIntegrationTests
                         .SetProperty(source => source.HttpETag, (string?)null), token);
             });
             using var clients = new TestHttpClientFactory(handler);
+            var validationWakeSignal = new ValidationWakeSignal();
             using var collector = new ProxyCollector(
                 factory,
                 clients,
@@ -77,12 +78,16 @@ public sealed class ProxyCollectorIntegrationTests
                     MaxProxiesPerSource = 10,
                     MaxCandidatesPerRun = 10
                 }),
-                NullLogger<ProxyCollector>.Instance);
+                NullLogger<ProxyCollector>.Instance,
+                validationWakeSignal);
 
             var run = await collector.CollectAsync(CancellationToken.None, forceAllSources: true);
 
             Assert.Equal("completed", run.Status);
             Assert.Equal(1, run.SourcesSucceeded);
+            Assert.Equal(1, run.CandidatesFound);
+            await validationWakeSignal.WaitAsync(TimeSpan.FromMinutes(1), CancellationToken.None)
+                .WaitAsync(TimeSpan.FromSeconds(1));
             await using var verify = await factory.CreateDbContextAsync();
             var source = await verify.Sources.AsNoTracking().SingleAsync(item => item.Id == sourceId);
             Assert.Equal("https://1.1.1.1/new.txt", source.Url);

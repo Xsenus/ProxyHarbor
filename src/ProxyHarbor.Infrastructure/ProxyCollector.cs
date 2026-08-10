@@ -14,7 +14,8 @@ public sealed class ProxyCollector(
     IDbContextFactory<ProxyHarborDbContext> dbFactory,
     IHttpClientFactory httpClientFactory,
     IOptions<CollectorOptions> options,
-    ILogger<ProxyCollector> logger) : IDisposable
+    ILogger<ProxyCollector> logger,
+    ValidationWakeSignal? validationWakeSignal = null) : IDisposable
 {
     private const int MaxSourceBytes = 10_000_000;
     private static readonly TimeSpan AuditWriteTimeout = TimeSpan.FromSeconds(15);
@@ -174,6 +175,9 @@ public sealed class ProxyCollector(
                 var now = DateTimeOffset.UtcNow;
                 var added = await BulkUpsertAsync(
                     db, candidates.Items, now, options.Value.LastSeenRefreshMinutes, cancellationToken);
+                // Bounded signal не накапливает по событию на каждый feed/endpoint:
+                // одного wake достаточно, чтобы validator немедленно начал draining due-очереди.
+                if (candidates.Count > 0) validationWakeSignal?.Pulse();
 
                 run.FinishedAt = now;
                 run.SourcesProcessed = sourceResults.Count;
