@@ -286,6 +286,26 @@ describe('ProxyHarbor UI', () => {
     expect(trigger).toHaveFocus()
   })
 
+  it('keeps keyboard focus inside the admin dialog', async () => {
+    render(<App />)
+    await screen.findByText('система активна')
+    const trigger = screen.getByRole('button', { name: /^Управление$/ })
+    fireEvent.click(trigger)
+
+    const keyInput = screen.getByLabelText('Ключ администратора')
+    await waitFor(() => expect(keyInput).toHaveFocus())
+    expect(trigger.closest('header')).toHaveAttribute('inert')
+
+    // Имитируем расширение/скрипт, программно вынесший focus за modal.
+    trigger.focus()
+    fireEvent.keyDown(document, { key: 'Tab' })
+    expect(screen.getByRole('button', { name: 'Закрыть' })).toHaveFocus()
+
+    trigger.focus()
+    fireEvent.keyDown(document, { key: 'Tab', shiftKey: true })
+    expect(screen.getByLabelText('Приоритет источника')).toHaveFocus()
+  })
+
   it('keeps export links synchronized with public filters', async () => {
     render(<App />)
     await screen.findByText('система активна')
