@@ -5,6 +5,10 @@
 
 ## [Unreleased]
 
+### Security
+
+- Добавлен fail-closed Gitleaks scan всей Git-истории с закреплёнными версией и SHA-256 архива, redaction вывода и контрактной проверкой CI/release wiring.
+
 ### Added
 
 - Локальный cross-platform transport-canary проверяет полный HTTP/HTTPS/SOCKS4a/SOCKS5 proxy probe `handshake → TLS 1.2/1.3 → bounded HTTP framing → canonical exit IP → anonymity`; keep-alive остаётся открытым до завершения проверки, недоверенный сертификат отклоняется системной TLS-валидацией, зависший CONNECT становится bounded `timeout`, а caller cancellation пробрасывается без ложного Dead.

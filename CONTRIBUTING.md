@@ -10,6 +10,7 @@ dotnet test ProxyHarbor.slnx -c Release --no-build
 dotnet format ProxyHarbor.slnx --verify-no-changes --no-restore
 ./tools/Test-ActionlintContracts.ps1
 ./tools/Invoke-Actionlint.ps1
+./tools/Test-GitleaksContracts.ps1
 cd src/proxyharbor-web
 npm ci
 npm run lint
@@ -29,6 +30,8 @@ PostgreSQL integration-тесты используют одну внешнюю �
 - перед PR выполните `tools/Audit-SourceFeeds.ps1` на отдельной тестовой БД.
 
 Не добавляйте сами списки прокси, токены, `.env`, backup-файлы и production-дампы в Git.
+
+Full-history secret scan запускается в Linux x64 CI через `tools/Invoke-Gitleaks.ps1`. Если секрет когда-либо попал в commit, одного удаления из последующего commit недостаточно: немедленно отзовите его и очистите историю согласованным способом до публикации.
 
 ## Release changes
 

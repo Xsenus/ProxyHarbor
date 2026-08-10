@@ -12,6 +12,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { fetch-depth: 0 }
+      - name: Verify repository history contains no secrets
+        shell: pwsh
+        run: ./tools/Invoke-Gitleaks.ps1
       - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
         with: { dotnet-version: '10.0.302' }
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -81,6 +85,9 @@ jobs:
       - name: Verify workflow supply-chain pins
         shell: pwsh
         run: ./tools/Test-WorkflowSecurity.ps1
+      - name: Verify secret-scanner contracts
+        shell: pwsh
+        run: ./tools/Test-GitleaksContracts.ps1
       - name: Verify supply-chain scanner contracts
         shell: pwsh
         run: ./tools/Test-WorkflowSecurityContracts.ps1

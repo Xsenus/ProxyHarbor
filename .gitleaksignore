@@ -1,0 +1,15 @@
+# Проверенные тестовые значения из ранней истории. Исключения точечные: commit + file + rule + line.
+471013529f890a683e3cf180d71b2209bb3006bc:.github/workflows/ci.yml:curl-auth-header:366
+a25100acd58e2d9022095bcb4790713e49bc8662:.github/workflows/ci.yml:curl-auth-header:281
+103f19726dfbc3d2c7cc83f3005c7f7efa4f1d3c:.github/workflows/ci.yml:curl-auth-header:178
+f313e6dda3ce8e835ef14aa993a21bb01c936af8:tests/ProxyHarbor.Tests/BackupAuditIntegrationTests.cs:generic-api-key:16
+c88eb47f94e8f11eab6bfe732f2438ff2367b277:.github/workflows/ci.yml:curl-auth-header:117
+eeca21e230a943c1f0a3df7059f2e1a32eccadbf:tests/ProxyHarbor.Tests/BackupRestoreRoundTripIntegrationTests.cs:generic-api-key:17
+0814186235363a5f998825da0f0c1ff2b95d3db8:.github/workflows/ci.yml:curl-auth-header:148
+0814186235363a5f998825da0f0c1ff2b95d3db8:tests/ProxyHarbor.Tests/BackupAuditIntegrationTests.cs:generic-api-key:51
+673ad27474e12acd3753461cd53b850c5955d595:.github/workflows/ci.yml:generic-api-key:34
+673ad27474e12acd3753461cd53b850c5955d595:.github/workflows/ci.yml:generic-api-key:41
+673ad27474e12acd3753461cd53b850c5955d595:.github/workflows/ci.yml:curl-auth-header:94
+673ad27474e12acd3753461cd53b850c5955d595:.github/workflows/ci.yml:curl-auth-header:101
+673ad27474e12acd3753461cd53b850c5955d595:.github/workflows/ci.yml:curl-auth-header:106
+673ad27474e12acd3753461cd53b850c5955d595:.github/workflows/ci.yml:curl-auth-header:118
