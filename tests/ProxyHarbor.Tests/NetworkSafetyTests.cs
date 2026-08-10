@@ -1,3 +1,5 @@
+using System.Net;
+using System.Net.Sockets;
 using ProxyHarbor.Infrastructure;
 
 namespace ProxyHarbor.Tests;
@@ -102,5 +104,101 @@ public sealed class NetworkSafetyTests
     {
         await Assert.ThrowsAsync<IOException>(() =>
             PublicProxyConnector.ConnectAsync(host, 8080, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task FinalConnectionGateRejectsMixedDnsBeforeOpeningAnySocket()
+    {
+        var connectAttempts = 0;
+
+        var exception = await Assert.ThrowsAsync<HttpRequestException>(() =>
+            PublicNetworkConnector.ConnectCoreAsync(
+                new DnsEndPoint("feed.example", 443),
+                static (_, _) => Task.FromResult(new[]
+                {
+                    IPAddress.Parse("8.8.8.8"),
+                    IPAddress.Loopback
+                }),
+                (_, _, _) =>
+                {
+                    connectAttempts++;
+                    return ValueTask.FromResult<Stream>(new MemoryStream());
+                },
+                CancellationToken.None).AsTask());
+
+        Assert.Contains("локальный или служебный", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(0, connectAttempts);
+    }
+
+    [Fact]
+    public async Task FinalConnectionGateBoundsMaliciousDnsFanOut()
+    {
+        var addresses = Enumerable.Range(1, 33)
+            .Select(index => IPAddress.Parse($"8.8.8.{index}"))
+            .ToArray();
+        var connectAttempts = 0;
+
+        var exception = await Assert.ThrowsAsync<HttpRequestException>(() =>
+            PublicNetworkConnector.ConnectCoreAsync(
+                new DnsEndPoint("fanout.example", 443),
+                (_, _) => Task.FromResult(addresses),
+                (_, _, _) =>
+                {
+                    connectAttempts++;
+                    return ValueTask.FromResult<Stream>(new MemoryStream());
+                },
+                CancellationToken.None).AsTask());
+
+        Assert.Contains("лимит 32", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(0, connectAttempts);
+    }
+
+    [Fact]
+    public async Task FinalConnectionGateFallsBackAcrossPublicAddressesOnly()
+    {
+        var first = IPAddress.Parse("8.8.8.8");
+        var second = IPAddress.Parse("1.1.1.1");
+        var attempts = new List<IPAddress>();
+        using var expected = new MemoryStream();
+
+        var actual = await PublicNetworkConnector.ConnectCoreAsync(
+            new DnsEndPoint("fallback.example", 443),
+            (_, _) => Task.FromResult(new[] { first, second }),
+            (address, _, _) =>
+            {
+                attempts.Add(address);
+                return address.Equals(first)
+                    ? ValueTask.FromException<Stream>(new SocketException((int)SocketError.ConnectionRefused))
+                    : ValueTask.FromResult<Stream>(expected);
+            },
+            CancellationToken.None);
+
+        Assert.Same(expected, actual);
+        Assert.Equal(new[] { first, second }, attempts);
+    }
+
+    [Fact]
+    public async Task FinalConnectionGateDoesNotFallbackAfterCallerCancellation()
+    {
+        using var cancellation = new CancellationTokenSource();
+        await cancellation.CancelAsync();
+        var attempts = 0;
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            PublicNetworkConnector.ConnectCoreAsync(
+                new DnsEndPoint("cancel.example", 443),
+                static (_, _) => Task.FromResult(new[]
+                {
+                    IPAddress.Parse("8.8.8.8"),
+                    IPAddress.Parse("1.1.1.1")
+                }),
+                (_, _, token) =>
+                {
+                    attempts++;
+                    return ValueTask.FromException<Stream>(new OperationCanceledException(token));
+                },
+                cancellation.Token).AsTask());
+
+        Assert.Equal(1, attempts);
     }
 }

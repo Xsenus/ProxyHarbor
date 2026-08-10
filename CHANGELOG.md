@@ -20,6 +20,7 @@
 
 ### Changed
 
+- Финальный source connect ограничивает один DNS-ответ максимум 32 публичными адресами до открытия socket; mixed private/public и oversized fan-out отклоняются fail-closed, а детерминированный gate доказывает public-only fallback и немедленную caller cancellation.
 - `/health/ready` больше не кэширует успешный ответ и выполняет zero-row schema probe всех пяти operational tables и актуальных колонок; доступный PostgreSQL с удалённой/устаревшей схемой теперь немедленно возвращает `503`, а не ложный `healthy`.
 - PHB3 writer после финального аутентифицированного маркера выполняет единственный `Flush(true)` до self-verification и atomic publish: completed audit, retention и Telegram больше не могут опередить durable запись ciphertext при power-loss, при этом каждый мегабайтный блок не переводится в дорогой `WriteThrough`.
 - Frontend lockfile обновлён до совместимых `@testing-library/jest-dom` 7.0.1 и `lucide-react` 1.31.0; повторный NPM/NuGet audit не обнаружил известных уязвимостей.

@@ -102,6 +102,8 @@ public static class NetworkSafety
 /// <summary>Повторно проверяет DNS прямо в момент TCP-соединения и тем самым блокирует DNS rebinding.</summary>
 public static class PublicNetworkConnector
 {
+    private const int MaxResolvedAddresses = 32;
+
     /// <summary>
     /// Закрепляет handler за прямым соединением через проверяемый connect callback.
     /// Системный HTTP proxy намеренно запрещён: иначе DNS target разрешает proxy,
@@ -116,31 +118,60 @@ public static class PublicNetworkConnector
         return handler;
     }
 
-    public static async ValueTask<Stream> ConnectAsync(SocketsHttpConnectionContext context, CancellationToken token)
+    public static ValueTask<Stream> ConnectAsync(SocketsHttpConnectionContext context, CancellationToken token) =>
+        ConnectCoreAsync(
+            context.DnsEndPoint,
+            static (host, cancellationToken) => Dns.GetHostAddressesAsync(host, cancellationToken),
+            OpenStreamAsync,
+            token);
+
+    /// <summary>Изолированное ядро позволяет доказать DNS/connect семантику без внешней сети.</summary>
+    internal static async ValueTask<Stream> ConnectCoreAsync(
+        DnsEndPoint endpoint,
+        Func<string, CancellationToken, Task<IPAddress[]>> resolveAsync,
+        Func<IPAddress, int, CancellationToken, ValueTask<Stream>> connectAsync,
+        CancellationToken token)
     {
-        var addresses = await Dns.GetHostAddressesAsync(context.DnsEndPoint.Host, token);
+        var addresses = await resolveAsync(endpoint.Host, token);
         var publicAddresses = addresses.Where(NetworkSafety.IsPublicAddress).ToArray();
-        if (publicAddresses.Length == 0 || publicAddresses.Length != addresses.Length)
-            throw new HttpRequestException("DNS источника содержит локальный или служебный адрес.");
+        if (publicAddresses.Length == 0 || publicAddresses.Length != addresses.Length ||
+            publicAddresses.Length > MaxResolvedAddresses)
+            throw new HttpRequestException(
+                $"DNS источника пуст, содержит локальный или служебный адрес либо превышает лимит {MaxResolvedAddresses}.");
 
         Exception? lastError = null;
         foreach (var address in publicAddresses)
         {
-            var socket = new Socket(address.AddressFamily, SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
             try
             {
-                await socket.ConnectAsync(new IPEndPoint(address, context.DnsEndPoint.Port), token);
-                return new NetworkStream(socket, ownsSocket: true);
+                return await connectAsync(address, endpoint.Port, token);
             }
             catch (Exception ex) when (ex is SocketException or OperationCanceledException)
             {
-                socket.Dispose();
                 if (ex is OperationCanceledException) throw;
                 lastError = ex;
             }
         }
 
         throw new HttpRequestException("Не удалось соединиться ни с одним публичным адресом источника.", lastError);
+    }
+
+    private static async ValueTask<Stream> OpenStreamAsync(
+        IPAddress address,
+        int port,
+        CancellationToken token)
+    {
+        var socket = new Socket(address.AddressFamily, SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
+        try
+        {
+            await socket.ConnectAsync(new IPEndPoint(address, port), token);
+            return new NetworkStream(socket, ownsSocket: true);
+        }
+        catch
+        {
+            socket.Dispose();
+            throw;
+        }
     }
 }
 
