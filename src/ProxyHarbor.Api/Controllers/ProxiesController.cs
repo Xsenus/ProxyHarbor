@@ -25,8 +25,10 @@ public sealed class ProxiesController(
     private const int MaxExportPageSize = 50_000;
     private const int MaxLegacyOffset = 5_000_000;
     private const int ConcurrentExportLimit = 2;
+    private static readonly TimeSpan MaxExportDuration = TimeSpan.FromMinutes(5);
     private static readonly UTF8Encoding Utf8NoBom = new(false);
     private static readonly SemaphoreSlim ExportConcurrencyGate = new(ConcurrentExportLimit, ConcurrentExportLimit);
+    private readonly TimeSpan _exportTimeout = MaxExportDuration;
     private static readonly JsonSerializerOptions ExportJsonOptions = new(JsonSerializerDefaults.Web)
     {
         Converters = { new JsonStringEnumConverter() }
@@ -41,6 +43,18 @@ public sealed class ProxiesController(
         IOptions<CollectorOptions> testCollectorOptions)
         : this(testDbFactory, testCollectorOptions, new TestExportDbContextFactory(testDbFactory))
     {
+    }
+
+    /// <summary>Позволяет transport-тесту ускорить только lifetime export, сохраняя production default.</summary>
+    internal ProxiesController(
+        IDbContextFactory<ProxyHarborDbContext> testDbFactory,
+        IOptions<CollectorOptions> testCollectorOptions,
+        IProxyExportDbContextFactory testExportDbFactory,
+        TimeSpan exportTimeout)
+        : this(testDbFactory, testCollectorOptions, testExportDbFactory)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(exportTimeout, TimeSpan.Zero);
+        _exportTimeout = exportTimeout;
     }
 
     /// <summary>Возвращает страницу только живых прокси, отсортированную по задержке.</summary>
@@ -205,12 +219,17 @@ public sealed class ProxiesController(
 
         try
         {
-            await using var db = await exportDbFactory.CreateDbContextAsync(cancellationToken);
+            // Медленный клиент не может бесконечно удерживать один из двух slots и старый
+            // PostgreSQL MVCC snapshot. Один token ограничивает SQL, чтение и response writes.
+            using var exportLifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            exportLifetime.CancelAfter(_exportTimeout);
+            var exportToken = exportLifetime.Token;
+            await using var db = await exportDbFactory.CreateDbContextAsync(exportToken);
             // Boundary headers и streaming body обязаны видеть один набор строк. Иначе
             // validation update между двумя SQL-командами способен выдать cursor от одной
             // страницы, а тело — от другой. InMemory unit provider транзакций не имеет.
             await using var snapshot = db.Database.IsRelational()
-                ? await db.Database.BeginTransactionAsync(IsolationLevel.RepeatableRead, cancellationToken)
+                ? await db.Database.BeginTransactionAsync(IsolationLevel.RepeatableRead, exportToken)
                 : null;
             var freshAfter = DateTimeOffset.UtcNow.AddMinutes(-collectorOptions.Value.PublicFreshnessMinutes);
             var query = ApplyFilters(db.Proxies.AsNoTracking().Where(x =>
@@ -234,13 +253,13 @@ public sealed class ProxiesController(
                 // одним round-trip вместо двух одинаковых проходов по индексу.
                 var boundary = await pageQuery.Skip(limit - 1).Take(2)
                     .Select(x => new PublicationPosition(x.LatencyMs!.Value, x.SuccessfulChecks, x.Id))
-                    .ToListAsync(cancellationToken);
+                    .ToListAsync(exportToken);
                 hasMore = boundary.Count == 2;
                 if (hasMore) nextCursor = PublicationCursor.Encode(boundary[0], fingerprint);
             }
             else
             {
-                hasMore = await ordered.Skip((int)nextOffset).AnyAsync(cancellationToken);
+                hasMore = await ordered.Skip((int)nextOffset).AnyAsync(exportToken);
             }
             var proxies = pageQuery.Take(limit)
                 .AsAsyncEnumerable().Select(ProxyDto.From);
@@ -264,15 +283,27 @@ public sealed class ProxiesController(
             if (!seekMode && hasMore)
                 Response.Headers["X-Next-Offset"] = nextOffset.ToString(CultureInfo.InvariantCulture);
 
+            // Фиксируем continuation headers до первой записи. После этого timeout
+            // корректно обрывает уже начатый stream вместо попытки заменить его ProblemDetails.
+            await Response.StartAsync(exportToken);
             switch (normalizedFormat)
             {
-                case "json": await WriteJsonAsync(Response.Body, proxies, cancellationToken); break;
-                case "txt": await WriteTextAsync(Response.Body, proxies, cancellationToken); break;
-                case "csv": await WriteCsvAsync(Response.Body, proxies, cancellationToken); break;
-                case "xml": await WriteXmlAsync(Response.Body, proxies, cancellationToken); break;
+                case "json": await WriteJsonAsync(Response.Body, proxies, exportToken); break;
+                case "txt": await WriteTextAsync(Response.Body, proxies, exportToken); break;
+                case "csv": await WriteCsvAsync(Response.Body, proxies, exportToken); break;
+                case "xml": await WriteXmlAsync(Response.Body, proxies, exportToken); break;
             }
-            if (snapshot is not null) await snapshot.CommitAsync(cancellationToken);
+            if (snapshot is not null) await snapshot.CommitAsync(exportToken);
             return new EmptyResult();
+        }
+        catch (OperationCanceledException) when (
+            !cancellationToken.IsCancellationRequested && !Response.HasStarted)
+        {
+            // Lifetime истёк ещё до начала body: клиент получает повторяемый bounded отказ.
+            Response.Headers.RetryAfter = "5";
+            return Problem(
+                "Экспорт превысил максимальное время формирования; уменьшите limit и повторите запрос.",
+                statusCode: StatusCodes.Status503ServiceUnavailable);
         }
         finally { ExportConcurrencyGate.Release(); }
     }

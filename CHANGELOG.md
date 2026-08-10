@@ -100,6 +100,7 @@
 
 ### Fixed
 
+- Streaming export теперь имеет общий пятиминутный lifetime от открытия DB snapshot до финального commit: тот же token ограничивает boundary SQL, async enumeration и response writes, поэтому медленный клиент не может часами удерживать один из двух глобальных slots и старый `REPEATABLE READ` snapshot, мешающий PostgreSQL VACUUM; deterministic backpressure-test доказывает автоматическую отмену без client disconnect.
 - Публичный production Compose теперь безусловно задаёт `Backup__Enabled=true`: забытая или ложная environment-переменная больше не позволяет успешно развернуть сервис без зашифрованного backup и подтверждённой Telegram-доставки; отсутствие любого обязательного secret fail-closed останавливает startup, а CI/release проверяют итоговый merged Compose.
 - Validation claim получил concurrent expression-index, точно совпадающий с приоритетом `Alive → Pending → Dead` и порядком `NextCheckAt/LastCheckedAt`: на воспроизводимой очереди из 300 000 строк PostgreSQL сменил внешний disk sort 29 МБ и 364,8 мс на ordered index scan 4,6 мс без изменения lease/fairness семантики.
 - Proxy probe теперь bounded обрабатывает до восьми последовательных HTTP `1xx` перед финальным control-ответом: валидные `100/102/103` больше не превращают рабочий прокси в `Deferred`, а `101`, framing тела, бесконечная informational-цепочка, неоднозначный `Transfer-Encoding` и неканоническая status-line отклоняются fail-closed.

@@ -426,6 +426,39 @@ public sealed class ProxyPublicationTests
     }
 
     [Fact]
+    public async Task ExportLifetimeCancelsClientThatHoldsSnapshotWithoutDisconnecting()
+    {
+        var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+            .UseInMemoryDatabase($"export-lifetime-{Guid.NewGuid():N}")
+            .Options;
+        await using (var seed = new ProxyHarborDbContext(options))
+        {
+            seed.Proxies.Add(Endpoint("1.1.1.1", ProxyStatus.Alive, DateTimeOffset.UtcNow));
+            await seed.SaveChangesAsync();
+        }
+        var factory = new TestDbFactory(options);
+        var controller = new ProxiesController(
+            factory,
+            Options.Create(new CollectorOptions { PublicFreshnessMinutes = 15 }),
+            factory,
+            TimeSpan.FromSeconds(1));
+        await using var output = new BlockingAsyncWriteStream();
+        controller.ControllerContext = new ControllerContext
+        {
+            HttpContext = new DefaultHttpContext { Response = { Body = output } }
+        };
+
+        var export = controller.Export("txt", null, null, null, CancellationToken.None, limit: 1);
+        var receivedToken = await output.WriteStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var timeoutResult = Assert.IsType<ObjectResult>(
+            await export.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal(StatusCodes.Status503ServiceUnavailable, timeoutResult.StatusCode);
+        Assert.Equal("5", controller.Response.Headers.RetryAfter);
+        Assert.True(receivedToken.IsCancellationRequested);
+    }
+
+    [Fact]
     public async Task ExtremePageNumberIsRejectedBeforeDatabaseOffsetOverflows()
     {
         var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
@@ -485,7 +518,7 @@ public sealed class ProxyPublicationTests
     }
 
     private sealed class TestDbFactory(DbContextOptions<ProxyHarborDbContext> options)
-        : IDbContextFactory<ProxyHarborDbContext>
+        : IDbContextFactory<ProxyHarborDbContext>, IProxyExportDbContextFactory
     {
         public ProxyHarborDbContext CreateDbContext() => new(options);
         public Task<ProxyHarborDbContext> CreateDbContextAsync(CancellationToken cancellationToken = default) =>
