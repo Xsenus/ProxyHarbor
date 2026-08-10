@@ -75,6 +75,13 @@ public static class BackupEncryption
             await WriteInt32Async(output, 0, token);
             await output.WriteAsync(nonce, token);
             await output.WriteAsync(tag, token);
+
+            // Один fsync после финального аутентифицированного маркера гарантирует,
+            // что последующая self-verification читает уже durable ciphertext. Режим
+            // WriteThrough на каждом мегабайтном блоке здесь намеренно не используется:
+            // он резко снижал бы скорость больших backup без дополнительной гарантии.
+            await output.FlushAsync(token);
+            output.Flush(flushToDisk: true);
         }
         catch
         {

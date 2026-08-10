@@ -12,6 +12,7 @@
 
 ### Changed
 
+- PHB3 writer после финального аутентифицированного маркера выполняет единственный `Flush(true)` до self-verification и atomic publish: completed audit, retention и Telegram больше не могут опередить durable запись ciphertext при power-loss, при этом каждый мегабайтный блок не переводится в дорогой `WriteThrough`.
 - Frontend lockfile обновлён до совместимых `@testing-library/jest-dom` 7.0.1 и `lucide-react` 1.31.0; повторный NPM/NuGet audit не обнаружил известных уязвимостей.
 - Сборка Telegram backup-частей теперь fail-closed проверяет единый base-name/total, непрерывность `1..N`, размеры и атомарное создание output; CI отклоняет missing, mixed и malformed наборы.
 - Source-feed audit artifact теперь сохраняет длительность сбора, processed/skipped, unique candidates и new proxies; forced-аудит fail-closed отклоняет любой skip, пустую очередь кандидатов и несогласованные счётчики.

@@ -1,6 +1,11 @@
 $ErrorActionPreference = 'Stop'
 
 $decryptor = Join-Path $PSScriptRoot 'Decrypt-Backup.ps1'
+$encryptionSource = Join-Path (Split-Path -Parent $PSScriptRoot) 'src/ProxyHarbor.Infrastructure/BackupEncryption.cs'
+$encryptionCode = Get-Content -LiteralPath $encryptionSource -Raw
+if ($encryptionCode -notmatch 'await output\.FlushAsync\(token\);\s*output\.Flush\(flushToDisk: true\);') {
+    throw 'PHB3 writer обязан выполнить FlushAsync и durable Flush(true) до возврата.'
+}
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) "proxyharbor-backup-key-$([Guid]::NewGuid().ToString('N'))"
 $missingInput = Join-Path $testRoot 'missing.phb'
 $legacyInput = Join-Path $testRoot 'legacy-unicode.phb'
@@ -184,7 +189,7 @@ try {
     }
     Assert-NoRestorePartial
 
-    Write-Host 'Контракты key-file, атомарной публикации и PHB2-совместимости резервных копий пройдены.' -ForegroundColor Green
+    Write-Host 'Контракты durable PHB3 writer, key-file, атомарной публикации и PHB2-совместимости резервных копий пройдены.' -ForegroundColor Green
 } finally {
     if (Test-Path -LiteralPath $testRoot) { Remove-Item -LiteralPath $testRoot -Recurse -Force }
 }
