@@ -85,6 +85,10 @@ jobs:
             "- Providers: $($report.providers)/$($report.expectedProviders)" >> $env:GITHUB_STEP_SUMMARY
             "- Catalog complete: $($report.catalogComplete)" >> $env:GITHUB_STEP_SUMMARY
             "- Parsed entries: $($report.parsedItems)" >> $env:GITHUB_STEP_SUMMARY
+            "- Unique candidates: $($report.candidatesFound)" >> $env:GITHUB_STEP_SUMMARY
+            "- New proxies: $($report.newProxies)" >> $env:GITHUB_STEP_SUMMARY
+            "- Collection duration: $($report.collectionDurationMs) ms" >> $env:GITHUB_STEP_SUMMARY
+            "- Sources skipped: $($report.sourcesSkipped)" >> $env:GITHUB_STEP_SUMMARY
             "- Failed: $($report.failed)" >> $env:GITHUB_STEP_SUMMARY
             "- Truncated feeds: $($report.truncated)" >> $env:GITHUB_STEP_SUMMARY
             "- Global candidate limit reached: $($report.candidateLimitReached)" >> $env:GITHUB_STEP_SUMMARY

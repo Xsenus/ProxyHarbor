@@ -13,7 +13,7 @@ function Get-FreeTcpPort {
     finally { $listener.Stop() }
 }
 
-function Start-SourceAuditMock([int]$Port, [ValidateSet('success', 'saved-state', 'stale', 'identity-missing', 'http-failure')][string]$Mode) {
+function Start-SourceAuditMock([int]$Port, [ValidateSet('success', 'saved-state', 'stale', 'identity-missing', 'zero-candidates', 'skipped', 'http-failure')][string]$Mode) {
     # Start-Job используется намеренно: вызываемый audit остаётся отдельным обычным
     # PowerShell script и проходит тот же HTTP/JSON путь, что в GitHub Actions.
     return Start-Job -ArgumentList $Port, $Mode -ScriptBlock {
@@ -37,7 +37,10 @@ function Start-SourceAuditMock([int]$Port, [ValidateSet('success', 'saved-state'
                 } elseif ($context.Request.HttpMethod -eq 'POST') {
                     $handled++
                     $status = 200
-                    $json = '{"id":"11111111-1111-1111-1111-111111111111","startedAt":"2026-08-09T12:00:00Z","finishedAt":"2026-08-09T12:00:05Z","sourcesProcessed":1,"sourcesSucceeded":1,"sourcesFailed":0,"sourcesTruncated":0,"candidateLimitReached":false,"status":"completed"}'
+                    $candidatesFound = if ($Mode -eq 'zero-candidates') { 0 } else { 7 }
+                    $newProxies = if ($Mode -eq 'zero-candidates') { 0 } else { 5 }
+                    $sourcesSkipped = if ($Mode -eq 'skipped') { 1 } else { 0 }
+                    $json = '{"id":"11111111-1111-1111-1111-111111111111","startedAt":"2026-08-09T12:00:00Z","finishedAt":"2026-08-09T12:00:05Z","sourcesProcessed":1,"sourcesSucceeded":1,"sourcesFailed":0,"sourcesSkipped":' + $sourcesSkipped + ',"sourcesTruncated":0,"candidatesFound":' + $candidatesFound + ',"newProxies":' + $newProxies + ',"candidateLimitReached":false,"status":"completed"}'
                 } else {
                     $handled++
                     $status = 200
@@ -109,7 +112,10 @@ function Invoke-SourceAuditCase(
                 -not $report.collectionTriggered -and -not $report.collectionId -and
                     $null -eq $report.collectionCountersMatch
             } else {
-                $report.collectionTriggered -and $report.collectionId -and $report.collectionCountersMatch
+                $report.collectionTriggered -and $report.collectionId -and $report.collectionCountersMatch -and
+                    $report.collectionDurationMs -eq 5000 -and $report.sourcesProcessed -eq 1 -and
+                    $report.sourcesSkipped -eq 0 -and $report.candidatesFound -eq 7 -and
+                    $report.newProxies -eq 5
             }
             if ($rejected -or -not $report.success -or -not $collectionEvidenceValid -or
                 $report.staleEvidence -ne 0 -or $report.error) {
@@ -131,13 +137,21 @@ try {
     $savedState = Invoke-SourceAuditCase -Name 'saved-state' -Mode 'saved-state' -ShouldSucceed $true -SkipCollection $true
     $stale = Invoke-SourceAuditCase -Name 'stale' -Mode 'stale' -ShouldSucceed $false
     $identityMissing = Invoke-SourceAuditCase -Name 'identity-missing' -Mode 'identity-missing' -ShouldSucceed $false
+    $zeroCandidates = Invoke-SourceAuditCase -Name 'zero-candidates' -Mode 'zero-candidates' -ShouldSucceed $false
+    $skipped = Invoke-SourceAuditCase -Name 'skipped' -Mode 'skipped' -ShouldSucceed $false
     $httpFailure = Invoke-SourceAuditCase -Name 'http-failure' -Mode 'http-failure' -ShouldSucceed $false
     if ($stale.staleEvidence -ne 1) { throw 'Stale-контракт не указал ровно один устаревший feed.' }
     if ($identityMissing.providers -ne 0 -or $identityMissing.catalogComplete) {
         throw 'Отсутствующая origin identity не должна засчитываться как независимый provider.'
     }
     if ($httpFailure.collectionId) { throw 'Ранний HTTP-сбой не должен выглядеть как запущенный collection-run.' }
-    Write-Host 'Source-audit contracts пройдены: current-run success, explicit saved-state mode, stale evidence rejection, provider-identity enforcement, early HTTP failure report.' -ForegroundColor Green
+    if ($zeroCandidates.candidatesFound -ne 0 -or $zeroCandidates.collectionCountersMatch) {
+        throw 'Пустой набор уникальных кандидатов не должен проходить полный source-аудит.'
+    }
+    if ($skipped.sourcesSkipped -ne 1 -or $skipped.collectionCountersMatch) {
+        throw 'Forced source-аудит не должен принимать пропущенный feed.'
+    }
+    Write-Host 'Source-audit contracts пройдены: current-run counters, saved-state mode, stale/identity/empty/skip rejection и early HTTP failure report.' -ForegroundColor Green
 } finally {
     # Каталог создаётся под системным temp с непредсказуемым GUID и удаляется
     # только по точному пути, сформированному этим тестом.

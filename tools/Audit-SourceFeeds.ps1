@@ -16,8 +16,13 @@ $report = [ordered]@{
     collectionId = $null
     collectionStartedAt = $null
     collectionFinishedAt = $null
+    collectionDurationMs = $null
     collectionStatus = $null
     collectionCountersMatch = $null
+    sourcesProcessed = $null
+    sourcesSkipped = $null
+    candidatesFound = $null
+    newProxies = $null
     total = 0
     enabled = 0
     succeeded = 0
@@ -50,7 +55,13 @@ try {
         $report.collectionId = $collection.Id
         $report.collectionStartedAt = ([DateTimeOffset]$collection.StartedAt).ToString('O')
         $report.collectionFinishedAt = ([DateTimeOffset]$collection.FinishedAt).ToString('O')
+        $report.collectionDurationMs = [long]([DateTimeOffset]$collection.FinishedAt -
+            [DateTimeOffset]$collection.StartedAt).TotalMilliseconds
         $report.collectionStatus = $collection.Status
+        $report.sourcesProcessed = [int]$collection.SourcesProcessed
+        $report.sourcesSkipped = [int]$collection.SourcesSkipped
+        $report.candidatesFound = [int]$collection.CandidatesFound
+        $report.newProxies = [int]$collection.NewProxies
         $report.candidateLimitReached = [bool]$collection.CandidateLimitReached
     }
 
@@ -88,7 +99,12 @@ try {
         $countersMatch = [int]$collection.SourcesProcessed -eq $enabled.Count -and
             [int]$collection.SourcesSucceeded -eq ($enabled.Count - $failed.Count) -and
             [int]$collection.SourcesFailed -eq $failed.Count -and
-            [int]$collection.SourcesTruncated -eq $truncated.Count
+            [int]$collection.SourcesTruncated -eq $truncated.Count -and
+            [int]$collection.SourcesSkipped -eq 0 -and
+            [int]$collection.CandidatesFound -gt 0 -and
+            [int]$collection.NewProxies -ge 0 -and
+            [int]$collection.NewProxies -le [int]$collection.CandidatesFound -and
+            $report.collectionDurationMs -ge 0
     }
 
     $report.collectionCountersMatch = $countersMatch
@@ -110,11 +126,14 @@ try {
 
     if ($failed.Count -gt 0 -or $staleEvidence.Count -gt 0 -or $truncated.Count -gt 0 -or
         $report.candidateLimitReached -eq $true -or $catalogErrors.Count -gt 0 -or $countersMatch -eq $false) {
-        throw "Source-аудит недостоверен или неполон: failed=$($failed.Count), stale=$($staleEvidence.Count), truncated=$($truncated.Count), candidateLimit=$($report.candidateLimitReached), countersMatch=$countersMatch, catalogErrors=$($catalogErrors.Count)."
+        throw "Source-аудит недостоверен или неполон: failed=$($failed.Count), stale=$($staleEvidence.Count), truncated=$($truncated.Count), skipped=$($report.sourcesSkipped), candidates=$($report.candidatesFound), candidateLimit=$($report.candidateLimitReached), countersMatch=$countersMatch, catalogErrors=$($catalogErrors.Count)."
     }
 
     $report.success = $true
-    Write-Host "Аудит пройден без усечения: $($report.succeeded)/$($report.enabled) активных источников, $($report.builtInSources) встроенных feed'ов от $($report.providers) провайдеров вернули $($report.parsedItems) распознанных записей." -ForegroundColor Green
+    $collectionSummary = if ($collection) {
+        ", $($report.candidatesFound) уникальных кандидатов за $($report.collectionDurationMs) мс"
+    } else { '' }
+    Write-Host "Аудит пройден без усечения: $($report.succeeded)/$($report.enabled) активных источников, $($report.builtInSources) встроенных feed'ов от $($report.providers) провайдеров вернули $($report.parsedItems) распознанных записей$collectionSummary." -ForegroundColor Green
 } catch {
     $report.error = $_.Exception.Message
     throw
