@@ -7,6 +7,7 @@
 
 ### Added
 
+- Backup pipeline получил симметричные bounded failure-canary: сбой ZIP producer обязан отменить PHB3 encryptor без потери исходного исключения и partial-файла, а мгновенный сбой encryptor — отменить зависший DB producer без deadlock.
 - PostgreSQL restore cancellation-canary останавливает процесс как после первой реально записанной binary `COPY` row, так и после завершения всех пяти `COPY` непосредственно перед `COMMIT`; оба сценария доказывают полный rollback исходной БД, отсутствие частично импортированных данных, стандартный exit code 130 и удаление расшифрованного временного ZIP.
 - PostgreSQL backup shutdown-canary отменяет процесс строго во время Telegram upload, затем требует закрытые file handles, отсутствие `.partial/.part*`, криптографически пригодный локальный PHB3, завершённый `failed` audit и отсутствие Telegram secrets в error.
 - PostgreSQL status-evidence trust boundary гарантирует, что публичный `Alive` имеет `LastCheckedAt`, измеренную latency и хотя бы одну успешную проверку, а `Dead` — дату и неуспешную проверку; rollout возвращает неподтверждённые legacy-строки в немедленную `Pending`-очередь до неблокирующей валидации constraint.

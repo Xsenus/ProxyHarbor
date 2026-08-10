@@ -101,6 +101,69 @@ public sealed class BackupPipelineTests
         }
     }
 
+    [Fact]
+    public async Task ProducerFailureCancelsEncryptorAndPreservesOriginalException()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"proxyharbor-pipeline-producer-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var factory = new FailingDbFactory();
+            var options = new BackupOptions { Directory = directory, EncryptionKey = EncryptionKey };
+            using var service = CreateService(factory, options);
+            var partialPath = Path.Combine(directory, "producer-failure.phbackup.partial");
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                service.CreateEncryptedSnapshotAsync(
+                    partialPath, Guid.NewGuid(), options, telegramConfigured: false, CancellationToken.None)
+                    .WaitAsync(TimeSpan.FromSeconds(5)));
+
+            Assert.Same(factory.Failure, exception);
+            Assert.False(File.Exists(partialPath));
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task EncryptorFailureCancelsBlockedProducerWithoutHanging()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"proxyharbor-pipeline-encryptor-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var factory = new CancellationAwareHangingDbFactory();
+            var options = new BackupOptions { Directory = directory, EncryptionKey = EncryptionKey };
+            using var service = CreateService(factory, options);
+
+            // Каталог нельзя открыть как ciphertext-файл: encryptor падает сразу, пока
+            // producer ожидает контекст БД и может завершиться только через linked cancellation.
+            var exception = await Record.ExceptionAsync(() => service.CreateEncryptedSnapshotAsync(
+                directory, Guid.NewGuid(), options, telegramConfigured: false, CancellationToken.None)
+                .WaitAsync(TimeSpan.FromSeconds(5)));
+
+            Assert.True(exception is UnauthorizedAccessException or IOException, exception?.ToString());
+            await factory.Cancelled.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    private static BackupService CreateService(
+        IDbContextFactory<ProxyHarborDbContext> factory,
+        BackupOptions options) =>
+        new(
+            factory,
+            new UnusedHttpClientFactory(),
+            Options.Create(options),
+            Options.Create(new CollectorOptions()),
+            new ConfigurationBuilder().Build(),
+            NullLogger<BackupService>.Instance);
+
     private sealed class TestDbFactory(DbContextOptions<ProxyHarborDbContext> options)
         : IDbContextFactory<ProxyHarborDbContext>
     {
@@ -112,5 +175,41 @@ public sealed class BackupPipelineTests
     private sealed class UnusedHttpClientFactory : IHttpClientFactory
     {
         public HttpClient CreateClient(string name) => throw new InvalidOperationException("HTTP не должен использоваться.");
+    }
+
+    /// <summary>Детерминированно ломает ZIP producer до первой строки БД.</summary>
+    private sealed class FailingDbFactory : IDbContextFactory<ProxyHarborDbContext>
+    {
+        internal InvalidOperationException Failure { get; } = new("sentinel producer failure");
+
+        public ProxyHarborDbContext CreateDbContext() => throw Failure;
+
+        public Task<ProxyHarborDbContext> CreateDbContextAsync(CancellationToken cancellationToken = default) =>
+            Task.FromException<ProxyHarborDbContext>(Failure);
+    }
+
+    /// <summary>Доказывает, что сбой encryptor действительно отменяет зависший producer.</summary>
+    private sealed class CancellationAwareHangingDbFactory : IDbContextFactory<ProxyHarborDbContext>
+    {
+        internal TaskCompletionSource Cancelled { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public ProxyHarborDbContext CreateDbContext() =>
+            throw new InvalidOperationException("Синхронное создание контекста не ожидается.");
+
+        public async Task<ProxyHarborDbContext> CreateDbContextAsync(
+            CancellationToken cancellationToken = default)
+        {
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                throw new InvalidOperationException("Недостижимый код hanging DB factory.");
+            }
+            catch (OperationCanceledException)
+            {
+                Cancelled.TrySetResult();
+                throw;
+            }
+        }
     }
 }
