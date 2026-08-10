@@ -1,5 +1,6 @@
 using System.IO.Compression;
 using System.Net;
+using System.Net.Http.Headers;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
@@ -93,7 +94,7 @@ internal static class RestoreApplication
                 archive,
                 "database/sources.json",
                 connection,
-                """COPY "Sources" ("Id", "Name", "Url", "DefaultProtocol", "Enabled", "Priority", "LastFetchedAt", "LastSucceededAt", "NextFetchAt", "LastItemCount", "LastResultTruncated", "ConsecutiveFailures", "LastError") FROM STDIN (FORMAT BINARY)""",
+                """COPY "Sources" ("Id", "Name", "Url", "DefaultProtocol", "Enabled", "Priority", "LastFetchedAt", "LastSucceededAt", "NextFetchAt", "HttpETag", "HttpLastModifiedAt", "LastItemCount", "LastResultTruncated", "ConsecutiveFailures", "LastError") FROM STDIN (FORMAT BINARY)""",
                 RestoreEntityValidator.ValidateSource,
                 WriteSourceAsync,
                 token);
@@ -191,6 +192,8 @@ internal static class RestoreApplication
         await WriteNullableValueAsync(writer, entity.LastFetchedAt, token);
         await WriteNullableValueAsync(writer, entity.LastSucceededAt, token);
         await WriteNullableValueAsync(writer, entity.NextFetchAt, token);
+        await WriteNullableReferenceAsync(writer, entity.HttpETag, token);
+        await WriteNullableValueAsync(writer, entity.HttpLastModifiedAt, token);
         await writer.WriteAsync(entity.LastItemCount, token);
         await writer.WriteAsync(entity.LastResultTruncated, token);
         await writer.WriteAsync(entity.ConsecutiveFailures, token);
@@ -315,6 +318,9 @@ internal static class RestoreEntityValidator
         if (entity.Priority is < -10_000 or > 10_000) Invalid("source.priority выходит за диапазон -10000..10000.");
         RequireNonNegative(entity.LastItemCount, "source.lastItemCount");
         RequireNonNegative(entity.ConsecutiveFailures, "source.consecutiveFailures");
+        RequireOptionalText(entity.HttpETag, 512, "source.httpETag");
+        if (entity.HttpETag is not null && !EntityTagHeaderValue.TryParse(entity.HttpETag, out _))
+            Invalid("source.httpETag имеет некорректный HTTP-формат.");
         RequireOptionalText(entity.LastError, 500, "source.lastError", allowControlCharacters: true);
         if (entity.LastSucceededAt is not null &&
             (entity.LastFetchedAt is null || entity.LastSucceededAt > entity.LastFetchedAt))

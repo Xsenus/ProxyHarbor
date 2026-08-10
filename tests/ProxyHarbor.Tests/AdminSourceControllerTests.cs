@@ -181,7 +181,9 @@ public sealed class AdminSourceControllerTests
             LastItemCount = 10,
             LastResultTruncated = true,
             ConsecutiveFailures = 3,
-            LastError = "old failure"
+            LastError = "old failure",
+            HttpETag = "\"old-version\"",
+            HttpLastModifiedAt = DateTimeOffset.UtcNow.AddHours(-1)
         };
         await SeedAsync(options, source);
         var controller = Controller(options);
@@ -201,6 +203,8 @@ public sealed class AdminSourceControllerTests
         Assert.False(updated.LastResultTruncated);
         Assert.Equal(0, updated.ConsecutiveFailures);
         Assert.Null(updated.LastError);
+        Assert.Null(updated.HttpETag);
+        Assert.Null(updated.HttpLastModifiedAt);
     }
 
     [Fact]

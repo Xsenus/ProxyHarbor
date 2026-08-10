@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Headers;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using ProxyHarbor.Domain;
@@ -169,6 +170,75 @@ public sealed class SourceReliabilityTests
         Assert.Equal(2, handler.Requests);
     }
 
+    [Fact]
+    public async Task ConditionalRequestAccepts304AndRefreshesResponseValidators()
+    {
+        var response = new HttpResponseMessage(HttpStatusCode.NotModified);
+        response.Headers.ETag = new EntityTagHeaderValue("\"feed-v2\"");
+        response.Content.Headers.LastModified = new DateTimeOffset(2026, 8, 9, 12, 0, 0, TimeSpan.Zero);
+        var handler = new SequencedHandler(response);
+        using var client = new HttpClient(handler);
+        using var collector = new ProxyCollector(
+            null!, null!, Options.Create(new CollectorOptions { SourceRetryCount = 0 }),
+            NullLogger<ProxyCollector>.Instance);
+        var previousModifiedAt = new DateTimeOffset(2026, 8, 9, 11, 0, 0, TimeSpan.Zero);
+
+        var result = await collector.FetchSourceStateAsync(
+            client,
+            "https://1.1.1.1/feed.txt",
+            "W/\"feed-v1\"",
+            previousModifiedAt,
+            CancellationToken.None);
+
+        Assert.True(result.NotModified);
+        Assert.Null(result.Content);
+        Assert.Equal("\"feed-v2\"", result.HttpETag);
+        Assert.Equal(response.Content.Headers.LastModified, result.HttpLastModifiedAt);
+        Assert.Equal("W/\"feed-v1\"", handler.LastIfNoneMatch);
+        Assert.Equal(previousModifiedAt, handler.LastIfModifiedSince);
+    }
+
+    [Fact]
+    public async Task Unsolicited304AndMalformedStoredETagAreRejected()
+    {
+        var handler = new SequencedHandler(new HttpResponseMessage(HttpStatusCode.NotModified));
+        using var client = new HttpClient(handler);
+        using var collector = new ProxyCollector(
+            null!, null!, Options.Create(new CollectorOptions { SourceRetryCount = 0 }),
+            NullLogger<ProxyCollector>.Instance);
+
+        await Assert.ThrowsAsync<InvalidDataException>(() => collector.FetchSourceStateAsync(
+            client, "https://1.1.1.1/feed.txt", null, null, CancellationToken.None));
+        await Assert.ThrowsAsync<InvalidDataException>(() => collector.FetchSourceStateAsync(
+            client, "https://1.1.1.1/feed.txt", "not-an-etag", null, CancellationToken.None));
+
+        Assert.Equal(1, handler.Requests);
+    }
+
+    [Fact]
+    public async Task SuccessfulResponseReturnsBoundedCacheValidators()
+    {
+        var response = new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("8.8.8.8:8080")
+        };
+        response.Headers.ETag = new EntityTagHeaderValue("\"feed-v1\"");
+        response.Content.Headers.LastModified = new DateTimeOffset(2026, 8, 9, 10, 0, 0, TimeSpan.Zero);
+        var handler = new SequencedHandler(response);
+        using var client = new HttpClient(handler);
+        using var collector = new ProxyCollector(
+            null!, null!, Options.Create(new CollectorOptions { SourceRetryCount = 0 }),
+            NullLogger<ProxyCollector>.Instance);
+
+        var result = await collector.FetchSourceStateAsync(
+            client, "https://1.1.1.1/feed.txt", null, null, CancellationToken.None);
+
+        Assert.Equal("8.8.8.8:8080", result.Content);
+        Assert.False(result.NotModified);
+        Assert.Equal("\"feed-v1\"", result.HttpETag);
+        Assert.Equal(response.Content.Headers.LastModified, result.HttpLastModifiedAt);
+    }
+
     [Theory]
     [InlineData(1, 15)]
     [InlineData(2, 30)]
@@ -199,12 +269,16 @@ public sealed class SourceReliabilityTests
     {
         private int _index;
         internal int Requests => _index;
+        internal string? LastIfNoneMatch { get; private set; }
+        internal DateTimeOffset? LastIfModifiedSince { get; private set; }
 
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
             CancellationToken cancellationToken)
         {
             var index = Interlocked.Increment(ref _index) - 1;
+            LastIfNoneMatch = request.Headers.IfNoneMatch.SingleOrDefault()?.ToString();
+            LastIfModifiedSince = request.Headers.IfModifiedSince;
             return Task.FromResult(responses[index]);
         }
     }

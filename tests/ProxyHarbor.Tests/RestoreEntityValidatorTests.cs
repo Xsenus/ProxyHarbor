@@ -176,6 +176,8 @@ public sealed class RestoreEntityValidatorTests
         Url = "https://8.8.8.8/feed.txt",
         DefaultProtocol = ProxyProtocol.Http,
         Priority = 100,
+        HttpETag = "W/\"valid-v1\"",
+        HttpLastModifiedAt = DateTimeOffset.UtcNow.AddHours(-1),
         LastError = "System.Exception: failure\n   at collector"
     };
 }

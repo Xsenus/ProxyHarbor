@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Net.Http.Headers;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -15,6 +16,7 @@ public sealed class ProxyCollector(
     IOptions<CollectorOptions> options,
     ILogger<ProxyCollector> logger) : IDisposable
 {
+    private const int MaxSourceBytes = 10_000_000;
     private static readonly TimeSpan AuditWriteTimeout = TimeSpan.FromSeconds(15);
     private static readonly Action<ILogger, string, Exception?> SourceFailed =
         LoggerMessage.Define<string>(LogLevel.Warning, new EventId(1001, "SourceFailed"), "Не удалось получить источник {Source}");
@@ -56,7 +58,7 @@ public sealed class ProxyCollector(
                 var sources = allSources.Where(source =>
                     SourceFetchSchedule.IsDue(source.NextFetchAt, collectionStartedAt, forceAllSources)).ToList();
                 var candidates = new BoundedProxyCandidateSet(options.Value.MaxCandidatesPerRun);
-                var sourceResults = new ConcurrentBag<(Guid Id, int Count, bool Truncated, string? Error)>();
+                var sourceResults = new ConcurrentBag<SourceCollectionResult>();
                 var client = httpClientFactory.CreateClient("sources");
 
                 await Parallel.ForEachAsync(sources, new ParallelOptions
@@ -67,7 +69,28 @@ public sealed class ProxyCollector(
                 {
                     try
                     {
-                        var content = await FetchSourceAsync(client, source.Url, token);
+                        var fetched = await FetchSourceStateAsync(
+                            client,
+                            source.Url,
+                            source.HttpETag,
+                            source.HttpLastModifiedAt,
+                            token);
+                        if (fetched.NotModified)
+                        {
+                            if (source.LastSucceededAt is null || source.LastItemCount <= 0)
+                                throw new InvalidDataException(
+                                    "Источник вернул 304 без сохранённого успешного непустого результата.");
+                            sourceResults.Add(new SourceCollectionResult(
+                                source.Id,
+                                source.LastItemCount,
+                                source.LastResultTruncated,
+                                fetched.HttpETag,
+                                fetched.HttpLastModifiedAt,
+                                Error: null));
+                            return;
+                        }
+                        var content = fetched.Content ??
+                            throw new InvalidDataException("Успешный ответ источника не содержит body.");
                         // Лимит применяется внутри parser: крупный недоверенный feed не может сначала
                         // построить неограниченную коллекцию, которая будет усечена только здесь.
                         var publishCandidates = true;
@@ -84,12 +107,19 @@ public sealed class ProxyCollector(
                                 // per-source count/truncation, без дальнейшей нагрузки на общий set.
                                 if (candidates.LimitReached) publishCandidates = false;
                             });
-                        sourceResults.Add((source.Id, parsed.Count, parsed.Truncated, null));
+                        sourceResults.Add(new SourceCollectionResult(
+                            source.Id,
+                            parsed.Count,
+                            parsed.Truncated,
+                            fetched.HttpETag,
+                            fetched.HttpLastModifiedAt,
+                            Error: null));
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException || !token.IsCancellationRequested)
                     {
                         SourceFailed(logger, source.Name, ex);
-                        sourceResults.Add((source.Id, 0, false, ex.Message));
+                        sourceResults.Add(new SourceCollectionResult(
+                            source.Id, 0, false, null, null, ex.Message));
                     }
                 });
 
@@ -109,6 +139,8 @@ public sealed class ProxyCollector(
                         source.LastSucceededAt = fetchedAt;
                         source.ConsecutiveFailures = 0;
                         source.NextFetchAt = null;
+                        source.HttpETag = result.HttpETag;
+                        source.HttpLastModifiedAt = result.HttpLastModifiedAt;
                     }
                     else
                     {
@@ -187,6 +219,19 @@ public sealed class ProxyCollector(
         CancellationToken token,
         Func<TimeSpan, CancellationToken, Task>? delayAsync = null)
     {
+        var result = await FetchSourceStateAsync(
+            client, url, httpETag: null, httpLastModifiedAt: null, token, delayAsync);
+        return result.Content ?? throw new InvalidDataException("Источник неожиданно вернул 304 без validators.");
+    }
+
+    internal async Task<SourceFetchResult> FetchSourceStateAsync(
+        HttpClient client,
+        string url,
+        string? httpETag,
+        DateTimeOffset? httpLastModifiedAt,
+        CancellationToken token,
+        Func<TimeSpan, CancellationToken, Task>? delayAsync = null)
+    {
         delayAsync ??= static (delay, cancellationToken) => Task.Delay(delay, cancellationToken);
         var retries = Math.Clamp(options.Value.SourceRetryCount, 0, 5);
         for (var attempt = 0; ; attempt++)
@@ -195,7 +240,8 @@ public sealed class ProxyCollector(
             {
                 using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
                 timeout.CancelAfter(TimeSpan.FromSeconds(Math.Max(2, options.Value.SourceTimeoutSeconds)));
-                using var response = await GetWithSafeRedirectsAsync(client, url, timeout.Token);
+                using var response = await GetWithSafeRedirectsAsync(
+                    client, url, httpETag, httpLastModifiedAt, timeout.Token);
                 if (((int)response.StatusCode == 429 || (int)response.StatusCode >= 500) && attempt < retries)
                 {
                     var retryAfter = response.Headers.RetryAfter?.Delta ??
@@ -209,11 +255,28 @@ public sealed class ProxyCollector(
                     continue;
                 }
 
+                var responseETag = GetBoundedETag(response);
+                var responseLastModifiedAt = response.Content.Headers.LastModified;
+                if (response.StatusCode == System.Net.HttpStatusCode.NotModified)
+                {
+                    if (httpETag is null && httpLastModifiedAt is null)
+                        throw new InvalidDataException("Источник вернул 304 без отправленного conditional validator.");
+                    return new SourceFetchResult(
+                        Content: null,
+                        NotModified: true,
+                        responseETag ?? httpETag,
+                        responseLastModifiedAt ?? httpLastModifiedAt);
+                }
+
                 response.EnsureSuccessStatusCode();
                 SourceFeedParser.EnsureSupportedMediaType(response.Content.Headers.ContentType?.MediaType);
-                if (response.Content.Headers.ContentLength is > 10_000_000)
+                if (response.Content.Headers.ContentLength is > MaxSourceBytes)
                     throw new InvalidOperationException("Источник превышает лимит 10 МБ.");
-                return await ReadLimitedAsync(response.Content, 10_000_000, timeout.Token);
+                return new SourceFetchResult(
+                    await ReadLimitedAsync(response.Content, MaxSourceBytes, timeout.Token),
+                    NotModified: false,
+                    responseETag,
+                    responseLastModifiedAt);
             }
             catch (Exception ex) when (attempt < retries && SourceHttpRetry.IsRetryable(ex, token))
             {
@@ -223,15 +286,26 @@ public sealed class ProxyCollector(
         }
     }
 
-    private static async Task<HttpResponseMessage> GetWithSafeRedirectsAsync(HttpClient client, string url, CancellationToken token)
+    private static async Task<HttpResponseMessage> GetWithSafeRedirectsAsync(
+        HttpClient client,
+        string url,
+        string? httpETag,
+        DateTimeOffset? httpLastModifiedAt,
+        CancellationToken token)
     {
+        EntityTagHeaderValue? parsedETag = null;
+        if (httpETag is not null && !EntityTagHeaderValue.TryParse(httpETag, out parsedETag))
+            throw new InvalidDataException("Сохранённый ETag источника имеет некорректный формат.");
         var current = new Uri(url, UriKind.Absolute);
         for (var redirect = 0; redirect <= 3; redirect++)
         {
             if (!await NetworkSafety.IsSafePublicHttpsUrlAsync(current.AbsoluteUri, token))
                 throw new HttpRequestException("Источник или его перенаправление ведёт в запрещённую сеть.");
 
-            var response = await client.GetAsync(current, HttpCompletionOption.ResponseHeadersRead, token);
+            using var request = new HttpRequestMessage(HttpMethod.Get, current);
+            if (parsedETag is not null) request.Headers.IfNoneMatch.Add(parsedETag);
+            if (httpLastModifiedAt is not null) request.Headers.IfModifiedSince = httpLastModifiedAt;
+            var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token);
             if ((int)response.StatusCode is not (301 or 302 or 303 or 307 or 308)) return response;
 
             var location = response.Headers.Location;
@@ -241,6 +315,14 @@ public sealed class ProxyCollector(
         }
 
         throw new HttpRequestException("Источник превысил лимит в три перенаправления.");
+    }
+
+    private static string? GetBoundedETag(HttpResponseMessage response)
+    {
+        var value = response.Headers.ETag?.ToString();
+        if (value is not null && (value.Length > 512 || value.Any(char.IsControl)))
+            throw new InvalidDataException("ETag источника превышает лимит или содержит управляющие символы.");
+        return value;
     }
 
     private static async Task<int> BulkUpsertAsync(
@@ -314,7 +396,22 @@ public sealed class ProxyCollector(
             await output.WriteAsync(buffer.AsMemory(0, read), token);
         }
     }
+
+    private sealed record SourceCollectionResult(
+        Guid Id,
+        int Count,
+        bool Truncated,
+        string? HttpETag,
+        DateTimeOffset? HttpLastModifiedAt,
+        string? Error);
 }
+
+/// <summary>HTTP payload либо подтверждение неизменности feed'а вместе с новыми validators.</summary>
+internal sealed record SourceFetchResult(
+    string? Content,
+    bool NotModified,
+    string? HttpETag,
+    DateTimeOffset? HttpLastModifiedAt);
 
 /// <summary>Проверяет семантическую пригодность HTTP-ответа, а не только код 2xx.</summary>
 internal static class SourceFeedParser

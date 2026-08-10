@@ -192,6 +192,8 @@ public sealed class BackupRestoreRoundTripIntegrationTests
         builtIn.LastResultTruncated = true;
         builtIn.ConsecutiveFailures = 2;
         builtIn.LastError = "representative source error";
+        builtIn.HttpETag = "\"built-in-v1\"";
+        builtIn.HttpLastModifiedAt = SnapshotTime.AddHours(-2);
         db.Sources.Add(ExpectedCustomSource());
         db.Proxies.Add(ExpectedProxy());
         db.Runs.Add(ExpectedCollectionRun());
@@ -220,6 +222,8 @@ public sealed class BackupRestoreRoundTripIntegrationTests
         Assert.True(builtIn.LastResultTruncated);
         Assert.Equal(2, builtIn.ConsecutiveFailures);
         Assert.Equal("representative source error", builtIn.LastError);
+        Assert.Equal("\"built-in-v1\"", builtIn.HttpETag);
+        Assert.Equal(SnapshotTime.AddHours(-2), builtIn.HttpLastModifiedAt);
 
         var run = await db.Runs.AsNoTracking().SingleAsync();
         Assert.Equivalent(ExpectedCollectionRun(), run, strict: true);
@@ -270,7 +274,9 @@ public sealed class BackupRestoreRoundTripIntegrationTests
         LastItemCount = 17,
         LastResultTruncated = true,
         ConsecutiveFailures = 3,
-        LastError = "custom source error"
+        LastError = "custom source error",
+        HttpETag = "W/\"custom-v1\"",
+        HttpLastModifiedAt = SnapshotTime.AddHours(-3)
     };
 
     private static CollectionRun ExpectedCollectionRun() => new()

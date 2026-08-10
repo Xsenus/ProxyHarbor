@@ -96,6 +96,22 @@ public sealed class ProxyCollectorIntegrationTests
                 Assert.True(completed.CandidateLimitReached);
             }
 
+            using (var clients = new TestHttpClientFactory(new NotModifiedFeedHandler()))
+            using (var collector = new ProxyCollector(
+                factory, clients, Options.Create(settings), NullLogger<ProxyCollector>.Instance))
+            {
+                var unchanged = await collector.CollectAsync(CancellationToken.None, forceAllSources: true);
+
+                Assert.Equal("completed", unchanged.Status);
+                Assert.Equal(1, unchanged.SourcesProcessed);
+                Assert.Equal(1, unchanged.SourcesSucceeded);
+                Assert.Equal(0, unchanged.SourcesFailed);
+                Assert.Equal(0, unchanged.CandidatesFound);
+                Assert.Equal(0, unchanged.NewProxies);
+                Assert.Equal(1, unchanged.SourcesTruncated);
+                Assert.False(unchanged.CandidateLimitReached);
+            }
+
             var hangingHandler = new HangingFeedHandler();
             using (var clients = new TestHttpClientFactory(hangingHandler))
             using (var collector = new ProxyCollector(
@@ -110,12 +126,12 @@ public sealed class ProxyCollectorIntegrationTests
 
             await using var verify = await factory.CreateDbContextAsync();
             var runs = await verify.Runs.AsNoTracking().OrderBy(run => run.StartedAt).ToListAsync();
-            Assert.Equal(3, runs.Count);
+            Assert.Equal(4, runs.Count);
             var abandoned = runs.Single(run => run.Id == abandonedId);
             Assert.Equal("failed", abandoned.Status);
             Assert.NotNull(abandoned.FinishedAt);
             Assert.Contains("прерван", abandoned.Error, StringComparison.OrdinalIgnoreCase);
-            Assert.Single(runs, run => run.Status == "completed" && run.FinishedAt != null);
+            Assert.Equal(2, runs.Count(run => run.Status == "completed" && run.FinishedAt != null));
             var failed = Assert.Single(runs, run => run.Id != abandonedId && run.Status == "failed");
             Assert.NotNull(failed.FinishedAt);
             Assert.Contains("CanceledException", failed.Error, StringComparison.Ordinal);
@@ -129,6 +145,8 @@ public sealed class ProxyCollectorIntegrationTests
             Assert.Equal(0, source.ConsecutiveFailures);
             Assert.Null(source.LastError);
             Assert.NotNull(source.LastSucceededAt);
+            Assert.Equal("\"feed-v2\"", source.HttpETag);
+            Assert.Equal(StaticFeedHandler.LastModifiedAt, source.HttpLastModifiedAt);
         }
         finally
         {
@@ -160,13 +178,36 @@ public sealed class ProxyCollectorIntegrationTests
 
     private sealed class StaticFeedHandler : HttpMessageHandler
     {
+        internal static readonly DateTimeOffset LastModifiedAt =
+            new(2026, 8, 9, 10, 0, 0, TimeSpan.Zero);
+
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
-            CancellationToken cancellationToken) =>
-            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            CancellationToken cancellationToken)
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent("1.1.1.1:80\n8.8.8.8:81\n1.1.1.1:80\n9.9.9.9:82")
-            });
+            };
+            response.Headers.ETag = new System.Net.Http.Headers.EntityTagHeaderValue("\"feed-v1\"");
+            response.Content.Headers.LastModified = LastModifiedAt;
+            return Task.FromResult(response);
+        }
+    }
+
+    private sealed class NotModifiedFeedHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            Assert.Equal("\"feed-v1\"", request.Headers.IfNoneMatch.Single().ToString());
+            Assert.Equal(StaticFeedHandler.LastModifiedAt, request.Headers.IfModifiedSince);
+            var response = new HttpResponseMessage(HttpStatusCode.NotModified);
+            response.Headers.ETag = new System.Net.Http.Headers.EntityTagHeaderValue("\"feed-v2\"");
+            response.Content.Headers.LastModified = StaticFeedHandler.LastModifiedAt;
+            return Task.FromResult(response);
+        }
     }
 
     private sealed class HangingFeedHandler : HttpMessageHandler

@@ -92,6 +92,8 @@ public sealed class AdminController(
             source.LastResultTruncated = false;
             source.ConsecutiveFailures = 0;
             source.LastError = null;
+            source.HttpETag = null;
+            source.HttpLastModifiedAt = null;
         }
         if (endpointChanged || reenabled) source.NextFetchAt = null;
         try { await db.SaveChangesAsync(token); }

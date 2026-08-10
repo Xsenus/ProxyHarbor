@@ -58,6 +58,10 @@ public sealed class ProxySource
     public DateTimeOffset? LastSucceededAt { get; set; }
     /// <summary>Неудачный источник не опрашивается background worker до этого момента; admin-аудит игнорирует паузу.</summary>
     public DateTimeOffset? NextFetchAt { get; set; }
+    /// <summary>Последний серверный ETag для условной повторной загрузки неизменившегося feed'а.</summary>
+    public string? HttpETag { get; set; }
+    /// <summary>Последний Last-Modified для fallback conditional request при отсутствии ETag.</summary>
+    public DateTimeOffset? HttpLastModifiedAt { get; set; }
     public int LastItemCount { get; set; }
     /// <summary>Последний успешный ответ содержал больше уникальных адресов, чем разрешено сохранить из одного feed.</summary>
     public bool LastResultTruncated { get; set; }

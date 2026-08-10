@@ -64,6 +64,7 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
         source.HasIndex(x => new { x.Enabled, x.NextFetchAt });
         source.Property(x => x.Name).HasMaxLength(120);
         source.Property(x => x.Url).HasMaxLength(2048);
+        source.Property(x => x.HttpETag).HasMaxLength(512);
         source.Property(x => x.LastError).HasMaxLength(500);
         source.ToTable(table =>
         {
