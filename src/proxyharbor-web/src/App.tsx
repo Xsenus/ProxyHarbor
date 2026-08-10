@@ -407,7 +407,7 @@ export default function App() {
   }, [adminOpen, closeAdmin])
 
   const runAdminAction = async (name: 'collect' | 'validate' | 'backup') => {
-    if (!adminAuthenticated) return
+    if (!adminAuthenticated || action || sourceBusy) return
     const sessionId = adminSessionIdRef.current
     const controller = new AbortController()
     adminMutationAbortRefs.current.add(controller)
@@ -432,7 +432,7 @@ export default function App() {
 
   const saveSource = async (event: React.FormEvent) => {
     event.preventDefault()
-    if (!adminAuthenticated) return
+    if (!adminAuthenticated || action || sourceBusy) return
     const sessionId = adminSessionIdRef.current
     const controller = new AbortController()
     adminMutationAbortRefs.current.add(controller)
@@ -461,7 +461,7 @@ export default function App() {
   }
 
   const toggleSource = async (source: Source) => {
-    if (!adminAuthenticated) return
+    if (!adminAuthenticated || action || sourceBusy) return
     const sessionId = adminSessionIdRef.current
     const controller = new AbortController()
     adminMutationAbortRefs.current.add(controller)
@@ -489,7 +489,7 @@ export default function App() {
   }
 
   const removeSource = async (source: Source) => {
-    if (!adminAuthenticated) return
+    if (!adminAuthenticated || action || sourceBusy) return
     if (!window.confirm(`Удалить или отключить источник «${source.name}»?`)) return
     const sessionId = adminSessionIdRef.current
     const controller = new AbortController()
@@ -521,6 +521,7 @@ export default function App() {
   const freshness = stats?.lastRun?.startedAt ? timeAgo(stats.lastRun.startedAt) : 'ожидается'
   const latestCollection = diagnostics?.recentRuns[0]
   const latestBackup = diagnostics?.recentBackups[0]
+  const adminMutationBusy = !!action || !!sourceBusy
 
   return <div className="app-shell">
     <header aria-hidden={adminOpen || undefined} inert={adminOpen || undefined}>
@@ -584,9 +585,9 @@ export default function App() {
         <form className="key-input" aria-label="Вход администратора" onSubmit={event => { event.preventDefault(); void loadAdminData(true) }}><KeyRound size={18}/><input ref={adminKeyRef} type="password" aria-label="Ключ администратора" placeholder="X-Admin-Key" autoComplete="off" autoCapitalize="none" spellCheck={false} maxLength={256} value={adminKey} onChange={e => changeAdminKey(e.target.value)}/><button type="submit" disabled={adminLoading}>{adminLoading ? 'Проверяем…' : 'Войти'}</button>{adminAuthenticated && <button type="button" className="logout" onClick={logoutAdmin}>Выйти</button>}</form>
         {adminError && <div className="admin-notice" role="alert"><X size={16}/>{adminError}</div>}
         <div className="admin-actions">
-          <button ref={firstAdminActionRef} onClick={() => runAdminAction('collect')} disabled={!adminAuthenticated || !!action}><Play/> {action === 'collect' ? 'Собираем…' : 'Запустить сбор'}</button>
-          <button onClick={() => runAdminAction('validate')} disabled={!adminAuthenticated || !!action}><Check/> {action === 'validate' ? 'Проверяем…' : 'Проверить пакет'}</button>
-          <button onClick={() => runAdminAction('backup')} disabled={!adminAuthenticated || !!action}><Database/> {action === 'backup' ? 'Копируем…' : 'Создать backup'}</button>
+          <button ref={firstAdminActionRef} onClick={() => runAdminAction('collect')} disabled={!adminAuthenticated || adminMutationBusy}><Play/> {action === 'collect' ? 'Собираем…' : 'Запустить сбор'}</button>
+          <button onClick={() => runAdminAction('validate')} disabled={!adminAuthenticated || adminMutationBusy}><Check/> {action === 'validate' ? 'Проверяем…' : 'Проверить пакет'}</button>
+          <button onClick={() => runAdminAction('backup')} disabled={!adminAuthenticated || adminMutationBusy}><Database/> {action === 'backup' ? 'Копируем…' : 'Создать backup'}</button>
         </div>
         {adminAuthenticated && <section className="admin-diagnostics" aria-label="Диагностика сервиса">
           <div className="diagnostics-heading"><h3>Диагностика</h3><button aria-label="Обновить диагностику" onClick={() => void loadAdminData()} disabled={adminLoading}><RefreshCw className={adminLoading ? 'spin' : ''}/></button></div>
@@ -609,12 +610,12 @@ export default function App() {
           <input required type="url" maxLength={2048} pattern="https://.*" aria-label="HTTPS URL источника" placeholder="https://example.org/proxies.txt" value={sourceDraft.url} onChange={e => setSourceDraft({...sourceDraft, url: e.target.value})}/>
           <select aria-label="Протокол источника" value={sourceDraft.protocol} onChange={e => setSourceDraft({...sourceDraft, protocol: e.target.value as Protocol})}>{protocols.map(item => <option key={item} value={item}>{label(item)}</option>)}</select>
           <input type="number" min={-10000} max={10000} aria-label="Приоритет источника" value={sourceDraft.priority} onChange={e => setSourceDraft({...sourceDraft, priority: Number(e.target.value)})}/>
-          <button type="submit" disabled={!adminAuthenticated || !!sourceBusy}>{sourceBusy === 'new' ? 'Добавляем…' : 'Добавить'}</button>
+          <button type="submit" disabled={!adminAuthenticated || adminMutationBusy}>{sourceBusy === 'new' ? 'Добавляем…' : 'Добавить'}</button>
         </form>
         <h3>Источники <span>{sources.length}</span></h3>
         <div className="source-list">{sources.map(source => <article key={source.id}>
           <div><b>{source.name}</b><small>{source.defaultProtocol} · {source.lastItemCount.toLocaleString('ru-RU')} адресов{source.lastContentFetchedAt ? ` · полный feed ${new Date(source.lastContentFetchedAt).toLocaleString('ru-RU')}` : ' · полный feed ещё не получен'}{source.lastResultTruncated ? ' · результат усечён' : ''}{source.consecutiveFailures > 0 ? ` · сбоев подряд: ${source.consecutiveFailures}` : ''}{source.nextFetchAt ? ` · повтор ${timeUntil(source.nextFetchAt)}` : ''}</small></div>
-          <div className="source-controls"><span title={source.isBuiltIn ? `Встроенный источник · ${source.provider} · ${source.providerIdentity} · ранг ${source.catalogRank}` : 'Пользовательский источник'} className="source-kind">{source.isBuiltIn ? source.provider : 'свой'}</span><span title={source.lastError} className={source.lastError ? 'source-error' : 'source-ok'}>{source.lastError ? 'ошибка' : source.enabled ? 'активен' : 'пауза'}</span><button disabled={sourceBusy === source.id} onClick={() => toggleSource(source)}>{source.enabled ? 'Пауза' : 'Включить'}</button>{!source.isBuiltIn && <button className="danger" disabled={sourceBusy === source.id} onClick={() => removeSource(source)}>Удалить</button>}</div>
+          <div className="source-controls"><span title={source.isBuiltIn ? `Встроенный источник · ${source.provider} · ${source.providerIdentity} · ранг ${source.catalogRank}` : 'Пользовательский источник'} className="source-kind">{source.isBuiltIn ? source.provider : 'свой'}</span><span title={source.lastError} className={source.lastError ? 'source-error' : 'source-ok'}>{source.lastError ? 'ошибка' : source.enabled ? 'активен' : 'пауза'}</span><button disabled={adminMutationBusy} onClick={() => toggleSource(source)}>{source.enabled ? 'Пауза' : 'Включить'}</button>{!source.isBuiltIn && <button className="danger" disabled={adminMutationBusy} onClick={() => removeSource(source)}>Удалить</button>}</div>
         </article>)}</div>
       </section>
     </div>}

@@ -228,6 +228,8 @@ describe('ProxyHarbor UI', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Создать backup' }))
     await waitFor(() => expect(backupRequest.signal).toBeDefined())
+    expect(screen.getByRole('button', { name: 'Добавить' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Проверить пакет' })).toBeDisabled()
     const adminReadsBeforeLogout = vi.mocked(fetch).mock.calls.filter(([input]) =>
       /\/api\/v1\/admin\/(sources|diagnostics)/.test(String(input))).length
     fireEvent.click(screen.getByRole('button', { name: 'Выйти' }))
@@ -241,6 +243,45 @@ describe('ProxyHarbor UI', () => {
     expect(screen.queryByLabelText('Диагностика сервиса')).not.toBeInTheDocument()
     expect(vi.mocked(fetch).mock.calls.filter(([input]) =>
       /\/api\/v1\/admin\/(sources|diagnostics)/.test(String(input)))).toHaveLength(adminReadsBeforeLogout)
+  })
+
+  it('blocks heavy admin actions while a source mutation is pending', async () => {
+    let resolveSourceCreate!: (response: Response) => void
+    const pendingSourceCreate = new Promise<Response>(resolve => { resolveSourceCreate = resolve })
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = String(input)
+      if (url.includes('/api/v1/stats')) return jsonResponse(stats)
+      if (url.includes('/api/v1/sources') && !url.includes('/admin/')) return jsonResponse(publicSourceCatalog)
+      if (url.includes('/api/v1/proxies')) return jsonResponse({ items: [], pageSize: 100, hasMore: false, nextCursor: null })
+      if (url.includes('/api/v1/admin/sources') && init?.method === 'POST') return pendingSourceCreate
+      if (url.includes('/api/v1/admin/sources')) return jsonResponse([])
+      if (url.includes('/api/v1/admin/diagnostics')) return jsonResponse({
+        serverTime: '2026-08-09T10:00:00Z', databaseBytes: 0,
+        validationQueue: { total: 0, leased: 0, neverChecked: 0, due: 0, scheduled: 0, repeatedlyFailing: 0 },
+        recentRuns: [], recentBackups: [],
+      })
+      return jsonResponse({ title: 'Unexpected request' }, 500)
+    })
+
+    render(<App />)
+    await screen.findByText('система активна')
+    fireEvent.click(screen.getByRole('button', { name: /^Управление$/ }))
+    fireEvent.change(screen.getByLabelText('Ключ администратора'), { target: { value: 'valid-admin-key' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Войти' }))
+    expect(await screen.findByLabelText('Диагностика сервиса')).toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText('Название источника'), { target: { value: 'Новый feed' } })
+    fireEvent.change(screen.getByLabelText('HTTPS URL источника'), { target: { value: 'https://example.org/proxies.txt' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Добавить' }))
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Добавляем…' })).toBeDisabled())
+    expect(screen.getByRole('button', { name: 'Запустить сбор' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Проверить пакет' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Создать backup' })).toBeDisabled()
+
+    resolveSourceCreate(jsonResponse({ id: 'new-source' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Добавить' })).toBeEnabled())
+    expect(screen.getByRole('button', { name: 'Создать backup' })).toBeEnabled()
   })
 
   it('does not overlap periodic public polling while the current request is pending', async () => {
