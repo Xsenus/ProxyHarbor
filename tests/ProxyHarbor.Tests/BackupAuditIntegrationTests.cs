@@ -2,6 +2,7 @@ using System.IO.Compression;
 using System.Net;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Npgsql;
@@ -15,6 +16,58 @@ namespace ProxyHarbor.Tests;
 public sealed class BackupAuditIntegrationTests
 {
     private const string EncryptionKey = "integration-encryption-key-32-chars";
+
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
+    public async Task SuccessfulBackupAndAuditSurviveLoggingProviderFailure()
+    {
+        var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
+        if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
+
+        var schema = $"proxyharbor_backup_logging_{Guid.NewGuid():N}";
+        var directory = Path.Combine(Path.GetTempPath(), $"proxyharbor-backup-logging-{Guid.NewGuid():N}");
+        var builder = new NpgsqlConnectionStringBuilder(baseConnectionString) { SearchPath = schema };
+        await using var admin = new NpgsqlConnection(baseConnectionString);
+        await admin.OpenAsync();
+        await using (var create = new NpgsqlCommand($"CREATE SCHEMA {schema}", admin))
+            await create.ExecuteNonQueryAsync();
+        try
+        {
+            var dbOptions = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+                .UseNpgsql(builder.ConnectionString)
+                .Options;
+            var factory = new TestDbFactory(dbOptions);
+            await using (var migrationDb = await factory.CreateDbContextAsync())
+                await migrationDb.Database.MigrateAsync();
+
+            using var service = new BackupService(
+                factory,
+                new UnusedHttpClientFactory(),
+                Options.Create(new BackupOptions
+                {
+                    Directory = directory,
+                    EncryptionKey = EncryptionKey
+                }),
+                Options.Create(new CollectorOptions()),
+                new ConfigurationBuilder().Build(),
+                new ThrowingLogger<BackupService>());
+
+            var path = await service.CreateAndSendAsync(CancellationToken.None);
+
+            Assert.True(File.Exists(path));
+            await using var verificationDb = await factory.CreateDbContextAsync();
+            var audit = await verificationDb.BackupRuns.AsNoTracking().SingleAsync();
+            Assert.Equal("completed", audit.Status);
+            Assert.Equal(Path.GetFileName(path), audit.FileName);
+            Assert.True(audit.SizeBytes > 0);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+            await using var drop = new NpgsqlCommand($"DROP SCHEMA IF EXISTS {schema} CASCADE", admin);
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
 
     [Fact]
     [Trait("Category", "PostgresIntegration")]
@@ -436,6 +489,20 @@ public sealed class BackupAuditIntegrationTests
             await using var drop = new NpgsqlCommand($"DROP SCHEMA IF EXISTS {schema} CASCADE", admin);
             await drop.ExecuteNonQueryAsync();
         }
+    }
+
+    private sealed class ThrowingLogger<T> : ILogger<T>
+    {
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter) =>
+            throw new InvalidOperationException("Deterministic logging provider failure.");
     }
 
     private sealed class TestDbFactory(DbContextOptions<ProxyHarborDbContext> options)

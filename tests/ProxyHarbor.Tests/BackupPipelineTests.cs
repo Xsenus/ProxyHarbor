@@ -16,6 +16,22 @@ public sealed class BackupPipelineTests
     private const string EncryptionKey = "pipeline-test-encryption-key-32-chars";
 
     [Fact]
+    public void LoggingBoundaryCannotEscapeIntoBackupPipeline()
+    {
+        var providerFailure = new InvalidOperationException("Deterministic logging provider failure.");
+        var calls = 0;
+
+        var escaped = Record.Exception(() => BackupLogBoundary.Write(() =>
+        {
+            calls++;
+            throw providerFailure;
+        }));
+
+        Assert.Null(escaped);
+        Assert.Equal(1, calls);
+    }
+
+    [Fact]
     public async Task PipeCompletionFailurePreservesPrimaryButFailsSuccessfulOperation()
     {
         var primaryFailure = new InvalidOperationException("Deterministic producer failure.");

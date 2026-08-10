@@ -99,6 +99,7 @@
 
 ### Fixed
 
+- Все BackupService/BackupWorker log-вызовы изолированы non-throwing boundary: неисправный logging provider больше не заменяет первичный отказ БД/шифрования/Telegram, не превращает завершённый PHB3 с `completed` audit в ошибку API и не останавливает будущие scheduler-циклы; PostgreSQL-canary воспроизводит успешный backup при logger, бросающем на каждой записи.
 - Потоковый PostgreSQL export теперь использует отдельный non-retrying DbContext: `RepeatableRead` сохраняет единый snapshot для continuation headers и body, а EF retry не может повторить транзакцию после частичной отправки HTTP-ответа.
 - Принудительный admin/source-аудит теперь отключает HTTP validators и требует свежий `LastContentFetchedAt` каждого feed внутри run window; исторический `304` больше не может имитировать полный повторный parse.
 - Stats, admin diagnostics и Prometheus теперь считают `due` только среди доступных для claim строк и отдельно показывают активные leases; in-flight batch больше не завышает backlog/ETA и не создаёт ложный `ValidationBacklogAtRisk`, а lease с expiry ровно `now` согласована с claim ownership.
