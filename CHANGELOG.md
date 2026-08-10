@@ -7,6 +7,7 @@
 
 ### Changed
 
+- React polling теперь планирует следующий public/admin refresh только после завершения текущего, отменяет устаревшие fetch при смене фильтра, ключа или закрытии диалога и не позволяет старому admin-ответу восстановить удалённую сессию.
 - Production admin-key policy теперь едина со middleware, отклоняет whitespace-only и некорректный UTF-16, а strict UTF-8 hashing исключает коллизии через replacement characters.
 - Source HTTP validators больше не передаются redirect-target и не сохраняются для перенаправленной representation; неожиданный `304` после redirect отклоняется, исключая cross-origin ETag leakage и ложную неизменность при смене `Location`.
 - Validator повторно проверяет каноничность и публичность proxy IP непосредственно перед открытием TCP socket, поэтому повреждённая или вручную вставленная строка БД не может превратить сервис в сканер внутренних сетей.

@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
 
@@ -30,6 +30,7 @@ describe('ProxyHarbor UI', () => {
 
   afterEach(() => {
     cleanup()
+    vi.useRealTimers()
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
   })
@@ -85,6 +86,75 @@ describe('ProxyHarbor UI', () => {
     expect(screen.getByRole('button', { name: 'Проверить пакет' })).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Создать backup' })).toBeDisabled()
     expect(vi.mocked(fetch).mock.calls.filter(([input]) => String(input).includes('/api/v1/admin/sources'))).toHaveLength(1)
+  })
+
+  it('cannot restore an admin session from a response owned by an old key', async () => {
+    let resolveSources!: (response: Response) => void
+    let resolveDiagnostics!: (response: Response) => void
+    const pendingSources = new Promise<Response>(resolve => { resolveSources = resolve })
+    const pendingDiagnostics = new Promise<Response>(resolve => { resolveDiagnostics = resolve })
+    vi.mocked(fetch).mockImplementation(async input => {
+      const url = String(input)
+      if (url.includes('/api/v1/stats')) return jsonResponse(stats)
+      if (url.includes('/api/v1/proxies')) return jsonResponse({ items: [], pageSize: 100, hasMore: false, nextCursor: null })
+      if (url.includes('/api/v1/admin/sources')) return pendingSources
+      if (url.includes('/api/v1/admin/diagnostics')) return pendingDiagnostics
+      return jsonResponse({ title: 'Unexpected request' }, 500)
+    })
+
+    render(<App />)
+    await screen.findByText('система активна')
+    fireEvent.click(screen.getByRole('button', { name: /^Управление$/ }))
+    const keyInput = screen.getByLabelText('Ключ администратора')
+    fireEvent.change(keyInput, { target: { value: 'old-admin-key' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Войти' }))
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.filter(([input]) =>
+      String(input).includes('/api/v1/admin/')).length).toBe(2))
+
+    // Fetch mock намеренно игнорирует AbortSignal: generation ownership остаётся
+    // последней защитой от позднего ответа уже недействительного ключа.
+    fireEvent.change(keyInput, { target: { value: 'new-admin-key' } })
+    resolveSources(jsonResponse([]))
+    resolveDiagnostics(jsonResponse({
+      serverTime: '2026-08-09T10:00:00Z', databaseBytes: 0,
+      validationQueue: { total: 0, leased: 0, neverChecked: 0, due: 0, scheduled: 0, repeatedlyFailing: 0 },
+      recentRuns: [], recentBackups: [],
+    }))
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Войти' })).toBeEnabled())
+    expect(keyInput).toHaveValue('new-admin-key')
+    expect(screen.queryByLabelText('Диагностика сервиса')).not.toBeInTheDocument()
+    expect(sessionStorage.getItem('proxyharbor-admin-key')).toBeNull()
+  })
+
+  it('does not overlap periodic public polling while the current request is pending', async () => {
+    vi.useFakeTimers()
+    let resolveStats!: (response: Response) => void
+    const pendingStats = new Promise<Response>(resolve => { resolveStats = resolve })
+    let statsRequests = 0
+    vi.mocked(fetch).mockImplementation(async input => {
+      const url = String(input)
+      if (url.includes('/api/v1/stats')) {
+        statsRequests++
+        return statsRequests === 1 ? pendingStats : jsonResponse(stats)
+      }
+      if (url.includes('/api/v1/proxies')) return jsonResponse({ items: [], pageSize: 100, hasMore: false, nextCursor: null })
+      return jsonResponse({ title: 'Unexpected request' }, 500)
+    })
+
+    render(<App />)
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(statsRequests).toBe(1)
+
+    // Старый setInterval создал бы ещё четыре запроса за эту минуту. Новый цикл
+    // начинает отсчёт 15 секунд только после settle текущего Promise.
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000) })
+    expect(statsRequests).toBe(1)
+
+    await act(async () => {
+      resolveStats(jsonResponse(stats))
+      await Promise.resolve()
+    })
   })
 
   it('closes the admin dialog with Escape and restores focus', async () => {

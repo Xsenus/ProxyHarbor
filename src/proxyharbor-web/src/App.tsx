@@ -40,6 +40,10 @@ function removeStoredAdminKey() {
   catch { /* Локальное React-состояние очищается независимо от доступности Storage API. */ }
 }
 
+function isAbortError(reason: unknown) {
+  return reason instanceof Error && reason.name === 'AbortError'
+}
+
 /** Основная панель: публичный каталог и компактное администрирование в одном интерфейсе. */
 export default function App() {
   const [stats, setStats] = useState<Stats | null>(null)
@@ -67,19 +71,37 @@ export default function App() {
   const autoLoginAttemptedRef = useRef(false)
   const extendedCatalogRef = useRef(false)
   const catalogRequestIdRef = useRef(0)
+  const publicRequestIdRef = useRef(0)
+  const publicAbortRef = useRef<AbortController | null>(null)
+  const loadMoreAbortRef = useRef<AbortController | null>(null)
+  const adminRequestIdRef = useRef(0)
+  const adminAbortRef = useRef<AbortController | null>(null)
+
+  const cancelPublicRequests = useCallback(() => {
+    publicRequestIdRef.current++
+    catalogRequestIdRef.current++
+    publicAbortRef.current?.abort()
+    loadMoreAbortRef.current?.abort()
+  }, [])
 
   /** Обновляет статистику и, при необходимости, первую keyset-страницу каталога. */
   const load = useCallback(async (includeCatalog = true) => {
+    const requestId = ++publicRequestIdRef.current
     const catalogRequestId = includeCatalog ? ++catalogRequestIdRef.current : 0
+    publicAbortRef.current?.abort()
+    const controller = new AbortController()
+    publicAbortRef.current = controller
     try {
       const query = new URLSearchParams({ pageSize: '100', maxLatencyMs: String(maxLatency) })
       if (protocol !== 'All') query.set('protocol', protocol)
       const [statsResponse, proxyResponse] = await Promise.all([
-        fetch(`${API}/api/v1/stats`),
-        includeCatalog ? fetch(`${API}/api/v1/proxies/seek?${query}`) : Promise.resolve(null),
+        fetch(`${API}/api/v1/stats`, { signal: controller.signal }),
+        includeCatalog ? fetch(`${API}/api/v1/proxies/seek?${query}`, { signal: controller.signal }) : Promise.resolve(null),
       ])
       if (!statsResponse.ok || (proxyResponse && !proxyResponse.ok)) throw new Error('API пока недоступен')
-      setStats(await statsResponse.json())
+      const statsSnapshot = await statsResponse.json()
+      if (requestId !== publicRequestIdRef.current) return
+      setStats(statsSnapshot)
       if (proxyResponse && catalogRequestId === catalogRequestIdRef.current) {
         const page = await proxyResponse.json() as CursorPage<Proxy>
         setProxies(page.items)
@@ -88,24 +110,34 @@ export default function App() {
       }
       setApiError('')
     } catch (reason) {
-      if (!includeCatalog || catalogRequestId === catalogRequestIdRef.current) {
+      if (!isAbortError(reason) && requestId === publicRequestIdRef.current &&
+          (!includeCatalog || catalogRequestId === catalogRequestIdRef.current)) {
         setApiError(reason instanceof Error ? reason.message : 'Ошибка загрузки')
       }
     } finally {
-      if (!includeCatalog || catalogRequestId === catalogRequestIdRef.current) setLoading(false)
+      if (requestId === publicRequestIdRef.current) {
+        publicAbortRef.current = null
+        setLoading(false)
+      }
     }
   }, [protocol, maxLatency])
 
   useEffect(() => {
     // Смена фильтра начинает новый обход; старые ответы больше не могут заменить его результаты.
     extendedCatalogRef.current = false
-    const initialLoad = window.setTimeout(() => void load(), 0)
-    const refreshTimer = window.setInterval(() => void load(!extendedCatalogRef.current), 15_000)
-    return () => {
-      window.clearTimeout(initialLoad)
-      window.clearInterval(refreshTimer)
+    let stopped = false
+    let refreshTimer: number | undefined
+    const refresh = async () => {
+      await load(!extendedCatalogRef.current)
+      if (!stopped) refreshTimer = window.setTimeout(() => void refresh(), 15_000)
     }
-  }, [load])
+    void refresh()
+    return () => {
+      stopped = true
+      if (refreshTimer !== undefined) window.clearTimeout(refreshTimer)
+      cancelPublicRequests()
+    }
+  }, [load, cancelPublicRequests])
 
   /** Добавляет следующую страницу, не выполняя дорожающий OFFSET и не дублируя изменившиеся строки. */
   const loadMore = async () => {
@@ -113,10 +145,13 @@ export default function App() {
     extendedCatalogRef.current = true
     setLoadingMore(true)
     const catalogRequestId = catalogRequestIdRef.current
+    loadMoreAbortRef.current?.abort()
+    const controller = new AbortController()
+    loadMoreAbortRef.current = controller
     try {
       const query = new URLSearchParams({ pageSize: '100', maxLatencyMs: String(maxLatency), after: nextCursor })
       if (protocol !== 'All') query.set('protocol', protocol)
-      const response = await fetch(`${API}/api/v1/proxies/seek?${query}`)
+      const response = await fetch(`${API}/api/v1/proxies/seek?${query}`, { signal: controller.signal })
       if (!response.ok) throw new Error(await responseMessage(response, 'Не удалось загрузить следующую страницу'))
       const page = await response.json() as CursorPage<Proxy>
       if (catalogRequestId !== catalogRequestIdRef.current) return
@@ -128,17 +163,23 @@ export default function App() {
       setNextCursor(page.nextCursor ?? null)
       setApiError('')
     } catch (reason) {
-      if (catalogRequestId === catalogRequestIdRef.current) {
+      if (!isAbortError(reason) && catalogRequestId === catalogRequestIdRef.current) {
         setApiError(reason instanceof Error ? reason.message : 'Ошибка загрузки')
       }
     }
-    finally { setLoadingMore(false) }
+    finally {
+      if (loadMoreAbortRef.current === controller) {
+        loadMoreAbortRef.current = null
+        setLoadingMore(false)
+      }
+    }
   }
 
   /** Инвалидирует предыдущий cursor до запуска запроса с новым фильтром. */
   const changeProtocol = (value: Protocol | 'All') => {
     if (value === protocol) return
     catalogRequestIdRef.current++
+    loadMoreAbortRef.current?.abort()
     extendedCatalogRef.current = false
     setLoading(true)
     setHasMore(false)
@@ -149,6 +190,7 @@ export default function App() {
   const changeMaxLatency = (value: number) => {
     if (value === maxLatency) return
     catalogRequestIdRef.current++
+    loadMoreAbortRef.current?.abort()
     extendedCatalogRef.current = false
     setLoading(true)
     setHasMore(false)
@@ -157,17 +199,23 @@ export default function App() {
   }
 
   const loadAdminData = useCallback(async () => {
+    const requestId = ++adminRequestIdRef.current
+    adminAbortRef.current?.abort()
     if (!adminKey) {
       setAdminAuthenticated(false)
+      setAdminLoading(false)
       return
     }
+    const controller = new AbortController()
+    adminAbortRef.current = controller
     setAdminLoading(true)
     try {
-      const requestOptions = { headers: { 'X-Admin-Key': adminKey } }
+      const requestOptions = { headers: { 'X-Admin-Key': adminKey }, signal: controller.signal }
       const [sourcesResponse, diagnosticsResponse] = await Promise.all([
         fetch(`${API}/api/v1/admin/sources`, requestOptions),
         fetch(`${API}/api/v1/admin/diagnostics`, requestOptions),
       ])
+      if (requestId !== adminRequestIdRef.current) return
       const unauthorizedResponse = [sourcesResponse, diagnosticsResponse].find(response => response.status === 401)
       if (unauthorizedResponse) {
         removeStoredAdminKey()
@@ -178,15 +226,22 @@ export default function App() {
       }
       if (!sourcesResponse.ok) throw new Error(await responseMessage(sourcesResponse, 'Неверный ключ администратора'))
       if (!diagnosticsResponse.ok) throw new Error(await responseMessage(diagnosticsResponse, 'Диагностика недоступна'))
-      storeAdminKey(adminKey)
       const [sourceRows, diagnosticSnapshot] = await Promise.all([sourcesResponse.json(), diagnosticsResponse.json()])
+      if (requestId !== adminRequestIdRef.current) return
+      storeAdminKey(adminKey)
       setSources(sourceRows)
       setDiagnostics(diagnosticSnapshot)
       setAdminAuthenticated(true)
       setAdminError('')
     } catch (reason) {
-      setAdminError(reason instanceof Error ? reason.message : 'Не удалось открыть административную консоль')
-    } finally { setAdminLoading(false) }
+      if (!isAbortError(reason) && requestId === adminRequestIdRef.current)
+        setAdminError(reason instanceof Error ? reason.message : 'Не удалось открыть административную консоль')
+    } finally {
+      if (requestId === adminRequestIdRef.current) {
+        adminAbortRef.current = null
+        setAdminLoading(false)
+      }
+    }
   }, [adminKey])
 
   useEffect(() => {
@@ -203,16 +258,30 @@ export default function App() {
 
   useEffect(() => {
     if (!adminOpen || !adminAuthenticated) return
-    const refreshTimer = window.setInterval(() => void loadAdminData(), 15_000)
-    return () => window.clearInterval(refreshTimer)
+    let stopped = false
+    let refreshTimer = window.setTimeout(async function refresh() {
+      await loadAdminData()
+      if (!stopped) refreshTimer = window.setTimeout(refresh, 15_000)
+    }, 15_000)
+    return () => {
+      stopped = true
+      window.clearTimeout(refreshTimer)
+    }
   }, [adminOpen, adminAuthenticated, loadAdminData])
 
   const openAdmin = (event: React.MouseEvent<HTMLButtonElement>) => {
     lastAdminTriggerRef.current = event.currentTarget
     setAdminOpen(true)
   }
-  const closeAdmin = useCallback(() => setAdminOpen(false), [])
+  const closeAdmin = useCallback(() => {
+    adminRequestIdRef.current++
+    adminAbortRef.current?.abort()
+    setAdminLoading(false)
+    setAdminOpen(false)
+  }, [])
   const logoutAdmin = useCallback(() => {
+    adminRequestIdRef.current++
+    adminAbortRef.current?.abort()
     removeStoredAdminKey()
     setAdminKey('')
     setAdminAuthenticated(false)
@@ -223,6 +292,17 @@ export default function App() {
     setSourceBusy('')
     window.requestAnimationFrame(() => adminKeyRef.current?.focus())
   }, [])
+
+  const changeAdminKey = (value: string) => {
+    adminRequestIdRef.current++
+    adminAbortRef.current?.abort()
+    setAdminLoading(false)
+    setAdminKey(value)
+    setAdminAuthenticated(false)
+    setAdminError('')
+    setSources([])
+    setDiagnostics(null)
+  }
 
   useEffect(() => {
     if (!adminOpen) return
@@ -386,7 +466,7 @@ export default function App() {
       <section ref={adminDialogRef} className="admin-modal" role="dialog" aria-modal="true" aria-labelledby="admin-title">
         <button className="close" aria-label="Закрыть" onClick={closeAdmin}><X/></button>
         <span className="kicker">ADMIN CONSOLE</span><h2 id="admin-title">Управление сбором</h2><p>Ключ хранится только до закрытия вкладки.</p>
-        <div className="key-input"><KeyRound size={18}/><input ref={adminKeyRef} type="password" aria-label="Ключ администратора" placeholder="X-Admin-Key" autoComplete="off" autoCapitalize="none" spellCheck={false} maxLength={256} value={adminKey} onChange={e => { setAdminKey(e.target.value); setAdminAuthenticated(false); setAdminError(''); setSources([]); setDiagnostics(null) }}/><button onClick={loadAdminData} disabled={adminLoading}>{adminLoading ? 'Проверяем…' : 'Войти'}</button>{adminAuthenticated && <button className="logout" onClick={logoutAdmin}>Выйти</button>}</div>
+        <div className="key-input"><KeyRound size={18}/><input ref={adminKeyRef} type="password" aria-label="Ключ администратора" placeholder="X-Admin-Key" autoComplete="off" autoCapitalize="none" spellCheck={false} maxLength={256} value={adminKey} onChange={e => changeAdminKey(e.target.value)}/><button onClick={loadAdminData} disabled={adminLoading}>{adminLoading ? 'Проверяем…' : 'Войти'}</button>{adminAuthenticated && <button className="logout" onClick={logoutAdmin}>Выйти</button>}</div>
         {adminError && <div className="admin-notice" role="alert"><X size={16}/>{adminError}</div>}
         <div className="admin-actions">
           <button onClick={() => runAdminAction('collect')} disabled={!adminAuthenticated || !!action}><Play/> {action === 'collect' ? 'Собираем…' : 'Запустить сбор'}</button>
