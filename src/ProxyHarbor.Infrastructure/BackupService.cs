@@ -29,6 +29,9 @@ public sealed class BackupService(
         LoggerMessage.Define<string>(LogLevel.Information, new EventId(1201, "BackupCreated"), "Резервная копия создана: {BackupFile}");
     private static readonly Action<ILogger, Exception?> BackupAuditFailed =
         LoggerMessage.Define(LogLevel.Error, new EventId(1203, "BackupAuditFailed"), "Не удалось сохранить аудит резервного копирования.");
+    private static readonly Action<ILogger, string, Exception?> BackupCleanupFailed =
+        LoggerMessage.Define<string>(LogLevel.Warning, new EventId(1204, "BackupCleanupFailed"),
+            "Не удалось удалить временный backup-файл {BackupFile}; следующий запуск повторит точную orphan-очистку.");
     private readonly SemaphoreSlim _runGate = new(1, 1);
 
     /// <summary>Создаёт один снимок; секреты намеренно не сериализуются.</summary>
@@ -109,12 +112,15 @@ public sealed class BackupService(
             }
             catch (Exception exception)
             {
+                BackupFileCleanup.TryDeletePreservingPrimary(partialEncryptedPath, exception);
                 await FailAuditAsync(backupRun.Id, encryptedPath, exception);
                 throw;
             }
             finally
             {
-                if (File.Exists(partialEncryptedPath)) File.Delete(partialEncryptedPath);
+                var cleanupFailure = BackupFileCleanup.TryDelete(partialEncryptedPath);
+                if (cleanupFailure is not null)
+                    BackupCleanupFailed(logger, Path.GetFileName(partialEncryptedPath), cleanupFailure);
             }
         }
         finally { _runGate.Release(); }
@@ -338,9 +344,9 @@ public sealed class BackupService(
             // атомарным и наблюдатель никогда не увидит недописанный .phbackup.
             File.Move(partialPath, finalPath);
         }
-        catch
+        catch (Exception exception)
         {
-            if (File.Exists(partialPath)) File.Delete(partialPath);
+            BackupFileCleanup.TryDeletePreservingPrimary(partialPath, exception);
             throw;
         }
     }
@@ -575,7 +581,9 @@ internal static class BackupFileSplitter
             }
             finally
             {
-                if (File.Exists(partPath)) File.Delete(partPath);
+                // Ошибка отправки/отмены важнее cleanup; точный orphan parser удалит
+                // оставшуюся часть перед следующим cluster-locked backup.
+                _ = BackupFileCleanup.TryDelete(partPath);
             }
         }
     }

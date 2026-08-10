@@ -83,10 +83,10 @@ public static class BackupEncryption
             await output.FlushAsync(token);
             output.Flush(flushToDisk: true);
         }
-        catch
+        catch (Exception exception)
         {
             // Частичный ciphertext никогда не должен выглядеть как готовая резервная копия.
-            if (File.Exists(destination)) File.Delete(destination);
+            BackupFileCleanup.TryDeletePreservingPrimary(destination, exception);
             throw;
         }
         finally
@@ -105,9 +105,9 @@ public static class BackupEncryption
         {
             await DecryptCoreAsync(source, destination, password, token);
         }
-        catch
+        catch (Exception exception)
         {
-            if (File.Exists(destination)) File.Delete(destination);
+            BackupFileCleanup.TryDeletePreservingPrimary(destination, exception);
             throw;
         }
     }
