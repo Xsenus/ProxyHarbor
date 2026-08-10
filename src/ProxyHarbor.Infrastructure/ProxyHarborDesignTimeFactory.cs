@@ -6,6 +6,7 @@ namespace ProxyHarbor.Infrastructure;
 /// <summary>Позволяет создавать миграции без запущенного API и доступной production-БД.</summary>
 public sealed class ProxyHarborDesignTimeFactory : IDesignTimeDbContextFactory<ProxyHarborDbContext>
 {
+    /// <inheritdoc />
     public ProxyHarborDbContext CreateDbContext(string[] args)
     {
         var connection = Environment.GetEnvironmentVariable("ConnectionStrings__Postgres")

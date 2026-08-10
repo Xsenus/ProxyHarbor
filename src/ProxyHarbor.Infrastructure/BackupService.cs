@@ -523,6 +523,7 @@ public sealed class BackupService(
             value >= 1;
     }
 
+    /// <inheritdoc />
     public void Dispose() => _runGate.Dispose();
 }
 
@@ -683,6 +684,7 @@ public sealed class BackupWorker(
     private static readonly Action<ILogger, Exception?> BackupDeliveryPolicyRejected =
         LoggerMessage.Define(LogLevel.Error, new EventId(1205, "BackupDeliveryPolicyRejected"),
             "Локальный backup создан, но превышает bounded policy Telegram-доставки.");
+    /// <inheritdoc />
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         if (!options.Value.Enabled) return;

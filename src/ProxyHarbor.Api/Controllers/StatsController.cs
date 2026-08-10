@@ -14,6 +14,7 @@ public sealed class StatsController(
     IDbContextFactory<ProxyHarborDbContext> dbFactory,
     IOptions<CollectorOptions> collectorOptions) : ControllerBase
 {
+    /// <summary>Возвращает согласованный snapshot proxy/source/run агрегатов.</summary>
     [HttpGet]
     [OutputCache(PolicyName = "public-summary")]
     [ProducesResponseType<StatsResponse>(StatusCodes.Status200OK)]

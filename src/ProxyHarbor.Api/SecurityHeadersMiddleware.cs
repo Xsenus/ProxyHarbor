@@ -3,6 +3,7 @@ namespace ProxyHarbor.Api;
 /// <summary>Добавляет безопасные заголовки даже при прямом доступе к API без внешнего Nginx.</summary>
 public sealed class SecurityHeadersMiddleware(RequestDelegate next)
 {
+    /// <summary>Добавляет browser hardening headers до выполнения следующего middleware.</summary>
     public async Task InvokeAsync(HttpContext context)
     {
         context.Response.Headers.XContentTypeOptions = "nosniff";

@@ -499,6 +499,7 @@ public sealed class ProxiesController(
 /// <summary>Стабильный публичный контракт без внутренних полей и ошибок.</summary>
 public sealed record ProxyDto(string Host, int Port, ProxyProtocol Protocol, string Url, int? LatencyMs, decimal SuccessRate, string? ExitIp, DateTimeOffset? LastCheckedAt)
 {
+    /// <summary>Проецирует внутреннюю entity в безопасный публичный контракт и канонический URL.</summary>
     public static ProxyDto From(ProxyEndpoint x)
     {
         // Категория HTTPS в публичных free-list означает HTTP CONNECT, а не TLS до proxy endpoint.

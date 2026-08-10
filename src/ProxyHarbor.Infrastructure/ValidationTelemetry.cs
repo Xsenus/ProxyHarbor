@@ -16,6 +16,7 @@ public sealed record ValidationTelemetrySnapshot(
 /// <summary>Выполняет общий расчёт без зависимости от HTTP или конкретного EF provider.</summary>
 public static class ValidationTelemetry
 {
+    /// <summary>Агрегирует завершённые run'ы окна и рассчитывает throughput/ETA due-очереди.</summary>
     public static ValidationTelemetrySnapshot Calculate(
         IEnumerable<ValidationRun> runs,
         DateTimeOffset windowStart,

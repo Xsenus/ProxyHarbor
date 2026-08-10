@@ -6,12 +6,18 @@ namespace ProxyHarbor.Infrastructure;
 /// <summary>Контекст PostgreSQL со всеми индексами и начальными источниками.</summary>
 public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> options) : DbContext(options)
 {
+    /// <summary>Все собранные и дедуплицированные proxy endpoints.</summary>
     public DbSet<ProxyEndpoint> Proxies => Set<ProxyEndpoint>();
+    /// <summary>Встроенные и пользовательские proxy feed'ы.</summary>
     public DbSet<ProxySource> Sources => Set<ProxySource>();
+    /// <summary>История циклов сбора.</summary>
     public DbSet<CollectionRun> Runs => Set<CollectionRun>();
+    /// <summary>История validation-партий.</summary>
     public DbSet<ValidationRun> ValidationRuns => Set<ValidationRun>();
+    /// <summary>История создания и Telegram-доставки backup.</summary>
     public DbSet<BackupRun> BackupRuns => Set<BackupRun>();
 
+    /// <inheritdoc />
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         var proxy = modelBuilder.Entity<ProxyEndpoint>();

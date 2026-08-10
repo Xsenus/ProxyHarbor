@@ -11,6 +11,7 @@ public sealed class AdminApiKeyMiddleware
     private readonly bool _isConfigured;
     private readonly byte[] _expectedHash;
 
+    /// <summary>Предварительно хеширует валидный configured key и сохраняет следующий middleware.</summary>
     public AdminApiKeyMiddleware(RequestDelegate next, IConfiguration configuration)
     {
         _next = next;
@@ -21,6 +22,7 @@ public sealed class AdminApiKeyMiddleware
             throw new InvalidOperationException("Допустимый административный ключ не удалось закодировать.");
     }
 
+    /// <summary>Пропускает публичные маршруты и constant-time проверяет X-Admin-Key для admin API.</summary>
     public async Task InvokeAsync(HttpContext context)
     {
         if (!context.Request.Path.StartsWithSegments("/api/v1/admin"))

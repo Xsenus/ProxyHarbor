@@ -12,6 +12,7 @@ public sealed class CollectorWorker(ProxyCollector collector, IOptions<Collector
     private static readonly TimeSpan OverrunCooldown = TimeSpan.FromSeconds(30);
     private static readonly Action<ILogger, Exception?> CollectionFailed =
         LoggerMessage.Define(LogLevel.Error, new EventId(1101, "CollectionFailed"), "Цикл сбора завершился ошибкой.");
+    /// <inheritdoc />
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         if (!options.Value.BackgroundWorkersEnabled) return;
@@ -68,6 +69,7 @@ public sealed class ValidatorWorker(
 {
     private static readonly Action<ILogger, Exception?> ValidationFailed =
         LoggerMessage.Define(LogLevel.Error, new EventId(1102, "ValidationFailed"), "Цикл проверки завершился ошибкой.");
+    /// <inheritdoc />
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         if (!options.Value.BackgroundWorkersEnabled) return;

@@ -281,6 +281,7 @@ public sealed class DatabaseRuntimeLease : IAsyncDisposable
     /// <summary>Подтверждает, что PostgreSQL-сессия, владеющая shared lock, не потеряна.</summary>
     public Task VerifyAsync(CancellationToken token) => _lease.VerifySessionAsync(token);
 
+    /// <inheritdoc />
     public ValueTask DisposeAsync() => _lease.DisposeAsync();
 }
 

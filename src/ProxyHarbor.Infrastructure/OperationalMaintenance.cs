@@ -64,10 +64,15 @@ public sealed class OperationalMaintenanceService(
     private long _lastRecoveredRows;
     private int _status = -1;
 
+    /// <summary>Unix-время последнего успешного cluster-wide цикла либо ноль.</summary>
     public long LastSuccessUnixSeconds => Interlocked.Read(ref _lastSuccessUnixSeconds);
+    /// <summary>Unix-время последнего неуспешного цикла либо ноль.</summary>
     public long LastFailureUnixSeconds => Interlocked.Read(ref _lastFailureUnixSeconds);
+    /// <summary>Число строк, удалённых последним успешным циклом.</summary>
     public long LastDeletedRows => Interlocked.Read(ref _lastDeletedRows);
+    /// <summary>Число orphan audit rows, восстановленных последним успешным циклом.</summary>
     public long LastRecoveredRows => Interlocked.Read(ref _lastRecoveredRows);
+    /// <summary>-1 до первого запуска, 0 после ошибки, 1 после успеха.</summary>
     public int Status => Volatile.Read(ref _status);
 
     /// <summary>Возвращает null, когда maintenance уже выполняет другая реплика.</summary>
@@ -184,7 +189,9 @@ public sealed record OperationalMaintenanceResult(
     int RecoveredValidationRuns,
     int RecoveredBackupRuns)
 {
+    /// <summary>Суммарное число удалённых proxy и audit rows.</summary>
     public long TotalDeleted => (long)Proxies + CollectionRuns + ValidationRuns + BackupRuns;
+    /// <summary>Суммарное число аварийно прерванных run'ов, переведённых в failed.</summary>
     public long TotalRecovered =>
         (long)RecoveredCollectionRuns + RecoveredValidationRuns + RecoveredBackupRuns;
 }
@@ -203,6 +210,7 @@ public sealed class OperationalMaintenanceWorker(
         LoggerMessage.Define(LogLevel.Error, new EventId(1402, "MaintenanceFailed"),
             "Operational maintenance завершился ошибкой.");
 
+    /// <inheritdoc />
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         await Task.Delay(InitialDelay, stoppingToken);

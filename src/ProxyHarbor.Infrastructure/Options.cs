@@ -6,28 +6,51 @@ namespace ProxyHarbor.Infrastructure;
 /// <summary>Параметры периодического сбора и проверки.</summary>
 public sealed class CollectorOptions
 {
+    /// <summary>Имя configuration-секции.</summary>
     public const string Section = "Collector";
+    /// <summary>Запускать ли collector/validator background workers в этой реплике.</summary>
     public bool BackgroundWorkersEnabled { get; set; } = true;
+    /// <summary>Базовый период планового сбора источников.</summary>
     public int CollectionIntervalMinutes { get; set; } = 15;
+    /// <summary>Пауза между проходами validation worker.</summary>
     public int ValidationIntervalMinutes { get; set; } = 5;
+    /// <summary>Максимальный возраст Alive-проверки для публичной выдачи.</summary>
     public int PublicFreshnessMinutes { get; set; } = 15;
+    /// <summary>Начальная задержка повторной проверки Dead-прокси.</summary>
     public int DeadRetryBaseMinutes { get; set; } = 15;
+    /// <summary>Верхняя граница адаптивной задержки повторной проверки Dead-прокси.</summary>
     public int DeadRetryMaxHours { get; set; } = 24;
+    /// <summary>Максимальное число одновременных сетевых проверок прокси.</summary>
     public int ValidationConcurrency { get; set; } = 800;
+    /// <summary>Максимальное число proxy rows в одной распределённой аренде.</summary>
     public int ValidationBatchSize { get; set; } = 1_600;
+    /// <summary>Полный timeout одной proxy-проверки.</summary>
     public int ProbeTimeoutSeconds { get; set; } = 8;
+    /// <summary>Полный timeout одной попытки загрузки feed'а.</summary>
     public int SourceTimeoutSeconds { get; set; } = 20;
+    /// <summary>Максимальное число одновременно загружаемых feed'ов.</summary>
     public int SourceConcurrency { get; set; } = 8;
+    /// <summary>Число повторов transient-ошибки источника после первой попытки.</summary>
     public int SourceRetryCount { get; set; } = 2;
+    /// <summary>Начальная задержка source backoff после неуспешного цикла.</summary>
     public int SourceFailureBackoffBaseMinutes { get; set; } = 15;
+    /// <summary>Верхняя граница source backoff.</summary>
     public int SourceFailureBackoffMaxHours { get; set; } = 24;
+    /// <summary>Максимум уникальных endpoint'ов, принимаемых из одного feed'а.</summary>
     public int MaxProxiesPerSource { get; set; } = 500_000;
+    /// <summary>Максимум уникальных endpoint'ов после объединения всех feed'ов цикла.</summary>
     public int MaxCandidatesPerRun { get; set; } = 500_000;
+    /// <summary>Минимальный интервал между persistence-обновлениями LastSeenAt.</summary>
     public int LastSeenRefreshMinutes { get; set; } = 360;
+    /// <summary>Срок хранения давно не встречавшихся Pending/Dead proxy rows.</summary>
     public int DeadRetentionDays { get; set; } = 3;
+    /// <summary>Срок хранения завершённых collection/validation run'ов.</summary>
     public int RunRetentionDays { get; set; } = 30;
+    /// <summary>Публичный контрольный host для TLS-пробы и определения exit IP.</summary>
     public string ProbeHost { get; set; } = "api.ipify.org";
+    /// <summary>TCP-порт HTTPS контрольного endpoint.</summary>
     public int ProbePort { get; set; } = 443;
+    /// <summary>Канонический HTTP origin-form path/query контрольного endpoint.</summary>
     public string ProbePath { get; set; } = "/?format=json";
 
     /// <summary>Control host передаётся URI, TLS SNI и сырому HTTP Host одинаковыми ASCII bytes.</summary>
@@ -65,19 +88,33 @@ public sealed class CollectorOptions
 public sealed class BackupOptions
 {
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
+    /// <summary>Имя configuration-секции.</summary>
     public const string Section = "Backup";
+    /// <summary>Минимальная длина ключа для новых PHB3-архивов.</summary>
     public const int MinimumEncryptionKeyLength = 32;
+    /// <summary>Минимальная длина ключа при чтении совместимых legacy-архивов.</summary>
     public const int MinimumLegacyDecryptionKeyLength = 16;
+    /// <summary>Максимальная длина ключа, ограничивающая PBKDF2 input.</summary>
     public const int MaximumEncryptionKeyLength = 1024;
+    /// <summary>Максимальная длина абсолютного backup path.</summary>
     public const int MaximumDirectoryLength = 1024;
+    /// <summary>Включить плановое создание и обязательную Telegram-доставку backup.</summary>
     public bool Enabled { get; set; }
+    /// <summary>Период между успешными плановыми архивами.</summary>
     public int IntervalHours { get; set; } = 24;
+    /// <summary>Абсолютный каталог атомарно публикуемых PHB3-файлов.</summary>
     public string Directory { get; set; } = "/app/backups";
+    /// <summary>Срок локального хранения опубликованных архивов.</summary>
     public int RetentionDays { get; set; } = 7;
+    /// <summary>Срок хранения audit rows резервного копирования.</summary>
     public int HistoryRetentionDays { get; set; } = 365;
+    /// <summary>Секретный ключ PHB3; никогда не включается в snapshot настроек.</summary>
     public string? EncryptionKey { get; set; }
+    /// <summary>Секретный Bot API token; никогда не включается в backup или log.</summary>
     public string? TelegramBotToken { get; set; }
+    /// <summary>Числовой идентификатор администратора/группы для доставки архива.</summary>
     public string? TelegramChatId { get; set; }
+    /// <summary>Максимальный размер одного Telegram document перед разбиением.</summary>
     public int MaxTelegramFileSizeMb { get; set; } = 49;
 
     /// <summary>Проверяет bounded path-safe ASCII token без недокументированных предположений о его структуре.</summary>

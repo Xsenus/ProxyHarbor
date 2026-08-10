@@ -100,6 +100,9 @@ jobs:
       - name: Verify CodeQL contracts
         shell: pwsh
         run: ./tools/Test-CodeQLContracts.ps1
+      - name: Verify production documentation contracts
+        shell: pwsh
+        run: ./tools/Test-DocumentationContracts.ps1
       - name: Verify publication readiness
         shell: pwsh
         run: |

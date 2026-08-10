@@ -13,6 +13,7 @@
 
 ### Added
 
+- Удалено глобальное подавление `CS1591`: все публичные члены Domain, Infrastructure, API и Restore теперь имеют содержательную XML-документацию, а обычная Release-сборка fail-closed запрещает добавлять недокументированный production API; точечное исключение оставлено только для самодокументируемых имён xUnit-тестов, а отдельный CI/release contract не позволяет расширить suppression.
 - PostgreSQL integration-gate теперь покрывает полный успешный Telegram backup: реальный PHB3 проходит multipart upload с подтверждением `ok=true`, audit обязан завершиться как `completed`/`SentToTelegram=true`, а тот же отправленный ciphertext расшифровывается и проходит строгую проверку архива и безопасных настроек без секретов.
 - Сгенерированный OpenAPI теперь полностью описывает оба streaming export endpoint: canonical enum `json/xml/txt/csv`, structured ProxyDto[] для JSON/XML, текстовые TXT/CSV schemas, legacy offset и seek cursor continuation headers, `Content-Disposition`, точные `400/429/503` ProblemDetails и `Retry-After`; unit-contract и реальный CI process-smoke защищают wiring.
 - Добавлены low-overhead runtime HTTP SLI без внешней зависимости: counters и cumulative histogram используют только восемь bounded route groups и шесть status classes, исключают self-scrape `/metrics`, учитывают 5xx/client abort и питают проверяемые alarms для sustained public 5xx ratio и p95 latency; exposition всегда использует канонический LF, а Docker CI и Windows runtime-smoke пропускают фактический ответ через официальный parser.

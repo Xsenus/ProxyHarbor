@@ -21,6 +21,7 @@ public sealed class AdminController(
     IOptions<BackupOptions> backupOptions,
     IOptions<CollectorOptions> collectorOptions) : ControllerBase
 {
+    /// <summary>Возвращает полный операторский список источников и их runtime-состояние.</summary>
     [HttpGet("sources")]
     [ProducesResponseType<IReadOnlyList<SourceResponse>>(StatusCodes.Status200OK)]
     public async Task<ActionResult<IReadOnlyList<SourceResponse>>> Sources(CancellationToken token)
@@ -30,6 +31,7 @@ public sealed class AdminController(
         return Ok(sources.Select(SourceResponse.From).ToArray());
     }
 
+    /// <summary>Возвращает один источник по стабильному идентификатору.</summary>
     [HttpGet("sources/{id:guid}")]
     [ProducesResponseType<SourceResponse>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -40,6 +42,7 @@ public sealed class AdminController(
         return source is null ? NotFound() : Ok(SourceResponse.From(source));
     }
 
+    /// <summary>Добавляет проверенный публичный HTTPS feed под общей collection-lock.</summary>
     [HttpPost("sources")]
     [ProducesResponseType<SourceResponse>(StatusCodes.Status201Created)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status400BadRequest)]
@@ -66,6 +69,7 @@ public sealed class AdminController(
         return CreatedAtAction(nameof(GetSource), new { id = source.Id }, response);
     }
 
+    /// <summary>Изменяет пользовательский feed либо только флаг Enabled встроенного источника.</summary>
     [HttpPut("sources/{id:guid}")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status400BadRequest)]
@@ -124,6 +128,7 @@ public sealed class AdminController(
         return NoContent();
     }
 
+    /// <summary>Удаляет пользовательский feed либо устойчиво отключает встроенный.</summary>
     [HttpDelete("sources/{id:guid}")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -150,6 +155,7 @@ public sealed class AdminController(
         Status = StatusCodes.Status409Conflict
     });
 
+    /// <summary>Возвращает единый PostgreSQL snapshot очередей, каталога и operational audit.</summary>
     [HttpGet("diagnostics")]
     [ProducesResponseType<DiagnosticsResponse>(StatusCodes.Status200OK)]
     public async Task<ActionResult<DiagnosticsResponse>> Diagnostics(CancellationToken requestToken)
@@ -229,6 +235,7 @@ public sealed class AdminController(
             recentBackups));
     }
 
+    /// <summary>Принудительно загружает и разбирает каждый включённый источник.</summary>
     [HttpPost("collect")]
     [ProducesResponseType<CollectionRun>(StatusCodes.Status200OK)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]
@@ -242,6 +249,7 @@ public sealed class AdminController(
         }
     }
 
+    /// <summary>Проверяет одну доступную распределённую партию прокси.</summary>
     [HttpPost("validate")]
     [ProducesResponseType<ValidationTriggerResponse>(StatusCodes.Status200OK)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]
@@ -256,6 +264,7 @@ public sealed class AdminController(
         return Ok(new ValidationTriggerResponse(result.Checked, result.Alive, result.Deferred));
     }
 
+    /// <summary>Создаёт, self-verify шифрует и доставляет администратору один backup.</summary>
     [HttpPost("backup")]
     [ProducesResponseType<BackupTriggerResponse>(StatusCodes.Status200OK)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]
@@ -319,6 +328,7 @@ public sealed record SourceRequest(
     [Range(-10_000, 10_000)] int Priority = 100,
     bool Enabled = true) : IValidatableObject
 {
+    /// <inheritdoc />
     public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
     {
         if (string.IsNullOrWhiteSpace(Name) || Name.Trim().Length < 2)

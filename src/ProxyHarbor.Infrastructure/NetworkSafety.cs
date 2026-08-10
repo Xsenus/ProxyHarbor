@@ -118,6 +118,7 @@ public static class PublicNetworkConnector
         return handler;
     }
 
+    /// <summary>Разрешает hostname и открывает прямое соединение только с проверенным публичным IP.</summary>
     public static ValueTask<Stream> ConnectAsync(SocketsHttpConnectionContext context, CancellationToken token) =>
         ConnectCoreAsync(
             context.DnsEndPoint,

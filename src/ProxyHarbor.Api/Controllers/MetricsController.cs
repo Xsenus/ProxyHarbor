@@ -20,6 +20,7 @@ public sealed class MetricsController(
     OperationalMaintenanceService? maintenance = null,
     HttpRequestTelemetry? httpTelemetry = null) : ControllerBase
 {
+    /// <summary>Возвращает согласованный Prometheus text exposition operational-метрик.</summary>
     [HttpGet]
     [Produces("text/plain")]
     [OutputCache(PolicyName = "public-summary")]

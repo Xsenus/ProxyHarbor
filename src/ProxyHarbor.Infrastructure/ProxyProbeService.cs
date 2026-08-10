@@ -134,6 +134,7 @@ public sealed class OriginIpProvider(
     // поля оставляли бы 16-байтовый DateTimeOffset под torn read у сотен probe-задач.
     private CacheEntry _cache = CacheEntry.Empty;
 
+    /// <summary>Возвращает свежий канонический origin IP или сигнализирует нейтральный Deferred.</summary>
     public async Task<string> GetRequiredAsync(CancellationToken token)
     {
         var snapshot = Volatile.Read(ref _cache);
@@ -216,6 +217,7 @@ public sealed class OriginIpProvider(
         }
     }
 
+    /// <inheritdoc />
     public void Dispose() => _gate.Dispose();
 
     private sealed record CacheEntry(string? Value, DateTimeOffset ExpiresAt)
@@ -236,6 +238,7 @@ public sealed class ProbeControlHealth
 
     /// <summary>-1 до первой проверки, 0 при сбое, 1 при успешном ответе.</summary>
     public int Availability => Volatile.Read(ref _availability);
+    /// <summary>Unix-время последней завершённой прямой проверки либо ноль.</summary>
     public long CheckedAtUnixSeconds => Interlocked.Read(ref _checkedAtUnixSeconds);
 
     internal void Record(bool available)

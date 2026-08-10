@@ -107,6 +107,7 @@ internal enum HttpRouteGroup
 /// <summary>Измеряет завершённые запросы; scrape `/metrics` исключён, чтобы не наблюдать сам себя.</summary>
 public sealed class HttpRequestTelemetryMiddleware(RequestDelegate next)
 {
+    /// <summary>Измеряет запрос, классифицирует итоговый status и не раскрывает raw route values.</summary>
     public async Task InvokeAsync(HttpContext context, HttpRequestTelemetry telemetry)
     {
         var route = Classify(context.Request.Path);

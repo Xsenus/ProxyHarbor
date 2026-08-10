@@ -52,6 +52,7 @@ jobs:
           ./tools/Test-WorkflowSecurityContracts.ps1
           ./tools/Test-GitleaksContracts.ps1
           ./tools/Test-CodeQLContracts.ps1
+          ./tools/Test-DocumentationContracts.ps1
           ./tools/Test-PublicationReadiness.ps1 -RequireCleanWorktree
           ./tools/Test-PublicationReadinessContracts.ps1
           ./tools/Test-ActionlintContracts.ps1
