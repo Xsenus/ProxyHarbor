@@ -1,8 +1,8 @@
 param(
     [Parameter(Mandatory)][ValidateScript({ Test-Path -LiteralPath $_ -PathType Leaf })]
     [string]$ReportPath,
-    [ValidateRange(0.0, 1.0)][double]$MinimumLineRate = 0.55,
-    [ValidateRange(0.0, 1.0)][double]$MinimumBranchRate = 0.55
+    [ValidateRange(0.0, 1.0)][double]$MinimumLineRate = 0.65,
+    [ValidateRange(0.0, 1.0)][double]$MinimumBranchRate = 0.68
 )
 
 $ErrorActionPreference = 'Stop'

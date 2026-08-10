@@ -216,7 +216,7 @@ npm run build
 
 Репозиторий ограничивает разработку совместимыми feature band .NET 10 через `global.json`, а release CI и Docker закреплены на security SDK `10.0.302` и runtime `10.0.10`. NuGet restore разрешён только с официального `nuget.org`, полный transitive graph хранится в `packages.lock.json` каждого проекта. При намеренном обновлении пакетов выполните `dotnet restore ProxyHarbor.slnx --force-evaluate`, проверьте изменения lock-файлов и повторите vulnerability-аудит; обычные CI/Docker-сборки используют `--locked-mode`.
 
-CI собирает Cobertura coverage и через `tools/Assert-Coverage.ps1` запрещает опускаться ниже 55% уникальных строк и ветвей рукописного кода. Suite выполняется как без внешних зависимостей, так и повторно с настоящей PostgreSQL, поэтому в отдельный gate входят SQL bulk-upsert, lease, backup/restore и транзакционные ветви. Generated `obj` и EF migrations в знаменатель не входят; порог является только regression-floor и должен повышаться вместе с тестами критических orchestration-ветвей.
+CI собирает Cobertura coverage и через `tools/Assert-Coverage.ps1` запрещает опускаться ниже 65% уникальных строк и 68% ветвей рукописного кода. На контрольной CI-эквивалентной базе без внешней БД фактическое покрытие составляет около 68,5%/72,0%, а полный PostgreSQL gate — 89,39%/80,35%; tagged release теперь повторно собирает и проверяет собственный отчёт. Suite выполняется как без внешних зависимостей, так и повторно с настоящей PostgreSQL, поэтому в отдельный gate входят SQL bulk-upsert, lease, backup/restore и транзакционные ветви. Generated `obj` и EF migrations в знаменатель не входят; отдельные pass/fail fixtures защищают расчёт и wiring от незаметного ослабления.
 
 ## Резервные копии и восстановление
 

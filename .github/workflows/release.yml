@@ -55,6 +55,7 @@ jobs:
           ./tools/Test-PublicationReadiness.ps1 -RequireCleanWorktree
           ./tools/Test-PublicationReadinessContracts.ps1
           ./tools/Test-ActionlintContracts.ps1
+          ./tools/Test-CoverageContracts.ps1
           ./tools/Invoke-Actionlint.ps1
           ./tools/Test-AuditSourceFeeds.ps1
           ./tools/Test-BuiltInSourceEndpoints.ps1 -CatalogOnly
@@ -67,13 +68,20 @@ jobs:
         run: |
           dotnet restore ProxyHarbor.slnx --locked-mode
           dotnet build ProxyHarbor.slnx --configuration Release --no-restore
-          dotnet test ProxyHarbor.slnx --configuration Release --no-build --no-restore
+          dotnet test ProxyHarbor.slnx --configuration Release --no-build --no-restore \
+            --collect:'XPlat Code Coverage' --results-directory ReleaseTestResults
           dotnet tool restore
           dotnet ef migrations has-pending-model-changes \
             --project src/ProxyHarbor.Infrastructure/ProxyHarbor.Infrastructure.csproj \
             --startup-project src/ProxyHarbor.Api/ProxyHarbor.Api.csproj \
             --configuration Release --no-build
           dotnet list ProxyHarbor.slnx package --vulnerable --include-transitive --no-restore
+      - name: Enforce tagged release coverage
+        shell: pwsh
+        run: |
+          $report = Get-ChildItem ReleaseTestResults -Recurse -Filter coverage.cobertura.xml | Select-Object -First 1
+          if (-not $report) { throw 'Release coverage report was not created.' }
+          ./tools/Assert-Coverage.ps1 -ReportPath $report.FullName
       - name: Build, test and audit frontend
         working-directory: src/proxyharbor-web
         run: |

@@ -50,6 +50,9 @@ jobs:
           $report = Get-ChildItem TestResults -Recurse -Filter coverage.cobertura.xml | Select-Object -First 1
           if (-not $report) { throw 'Coverage report was not created.' }
           ./tools/Assert-Coverage.ps1 -ReportPath $report.FullName
+      - name: Verify coverage gate contracts
+        shell: pwsh
+        run: ./tools/Test-CoverageContracts.ps1
       - name: Validate operational PowerShell scripts
         shell: pwsh
         run: |
