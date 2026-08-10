@@ -68,6 +68,8 @@ docker compose -f docker-compose.yml -f docker-compose.production.yml logs --tai
 
 Opt-in профиль запускает Prometheus с 30-дневным/10-ГБ bounded retention и Alertmanager с Telegram-маршрутом. До запуска задайте bot token и числовой chat ID (для group/channel обычно отрицательный):
 
+`ProxyHarborAdvisoryLockCleanupFailure` срабатывает при любом росте process-local счётчика cleanup-инцидентов. Это означает, что реплика уже исключила неоднозначную PostgreSQL lock-сессию из pool; проверьте состояние БД/сети и перезапустите затронутую реплику после устранения причины.
+
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.production.yml --profile monitoring up -d
 curl --fail http://127.0.0.1:9090/-/ready

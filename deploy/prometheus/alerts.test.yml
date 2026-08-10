@@ -41,6 +41,24 @@ tests:
               summary: Alertmanager недоступен
               description: Prometheus не может передать alerts в Telegram-маршрутизатор более двух минут.
 
+  - name: Advisory lock cleanup failure is immediately visible
+    interval: 1m
+    input_series:
+      - series: proxyharbor_advisory_lock_cleanup_failures_total
+        values: '0 0 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: ProxyHarborAdvisoryLockCleanupFailure
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: ProxyHarborAdvisoryLockCleanupFailure
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: Ошибка освобождения PostgreSQL advisory lock
+              description: Реплика исключила неоднозначную lock-сессию из pool; проверьте PostgreSQL и сетевую стабильность.
+
   - name: Collection stall uses configured interval and worker guard
     interval: 1m
     input_series:

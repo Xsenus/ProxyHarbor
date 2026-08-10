@@ -57,6 +57,8 @@ public sealed class MetricsControllerTests
         Assert.Contains("proxyharbor_backup_enabled 0", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_backup_interval_seconds 86400", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_backup_telegram_configured 0", metrics, StringComparison.Ordinal);
+        Assert.Contains("# TYPE proxyharbor_advisory_lock_cleanup_failures_total counter", metrics,
+            StringComparison.Ordinal);
         Assert.Contains("proxyharbor_http_requests_total{route=\"proxies\",status=\"5xx\"} 1", metrics,
             StringComparison.Ordinal);
     }

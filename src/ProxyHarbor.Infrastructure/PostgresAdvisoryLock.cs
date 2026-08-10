@@ -1,3 +1,4 @@
+using System.Runtime.ExceptionServices;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 
@@ -10,17 +11,26 @@ internal sealed class PostgresAdvisoryLock : IAsyncDisposable
     internal const long BackupKey = 0x5052484241434B02;
     internal const long MaintenanceKey = 0x5052484D41494E04;
     internal const long RuntimeKey = 0x50524852554E5405;
+    internal const string CleanupFailureDataKey = "ProxyHarbor.AdvisoryLockCleanupFailure";
+    private static long _cleanupFailures;
     private readonly NpgsqlConnection _connection;
     private readonly long _key;
     private readonly bool _shared;
+    private readonly PostgresAdvisoryLockExecutionHooks? _hooks;
+    private int _disposed;
 
     internal int BackendProcessId => _connection.ProcessID;
 
-    private PostgresAdvisoryLock(NpgsqlConnection connection, long key, bool shared)
+    private PostgresAdvisoryLock(
+        NpgsqlConnection connection,
+        long key,
+        bool shared,
+        PostgresAdvisoryLockExecutionHooks? hooks)
     {
         _connection = connection;
         _key = key;
         _shared = shared;
+        _hooks = hooks;
     }
 
     internal static async Task<PostgresAdvisoryLock?> TryAcquireAsync(
@@ -52,10 +62,12 @@ internal sealed class PostgresAdvisoryLock : IAsyncDisposable
         string connectionString,
         long key,
         bool shared,
-        CancellationToken token)
+        CancellationToken token,
+        PostgresAdvisoryLockExecutionHooks? hooks = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
         var connection = new NpgsqlConnection(connectionString);
+        Exception? primaryFailure = null;
         try
         {
             await connection.OpenAsync(token);
@@ -65,23 +77,46 @@ internal sealed class PostgresAdvisoryLock : IAsyncDisposable
             await using var command = new NpgsqlCommand(sql, connection);
             command.Parameters.AddWithValue("key", key);
             var acquired = (bool)(await command.ExecuteScalarAsync(token) ?? false);
-            if (acquired) return new PostgresAdvisoryLock(connection, key, shared);
-            await connection.DisposeAsync();
-            return null;
+            if (acquired)
+            {
+                hooks?.AfterLockAcquired?.Invoke();
+                return new PostgresAdvisoryLock(connection, key, shared, hooks);
+            }
         }
-        catch
+        catch (Exception exception)
         {
-            await connection.DisposeAsync();
-            throw;
+            primaryFailure = exception;
+            // Сервер мог получить session lock непосредственно перед сетевым отказом.
+            NpgsqlConnection.ClearPool(connection);
         }
+
+        var cleanupFailure = await DisposeConnectionAsync(connection, hooks);
+        if (cleanupFailure is not null)
+            Interlocked.Increment(ref _cleanupFailures);
+        if (primaryFailure is not null)
+        {
+            if (cleanupFailure is not null)
+                AddCleanupFailure(primaryFailure, "dispose", cleanupFailure);
+            ExceptionDispatchInfo.Capture(primaryFailure).Throw();
+        }
+        if (cleanupFailure is not null)
+            ExceptionDispatchInfo.Capture(cleanupFailure).Throw();
+        return null;
     }
 
+    /// <summary>
+    /// Освобождение lease не меняет уже определённый caller outcome. Любая неоднозначность
+    /// unlock исключает сессию из pool; физический dispose выполняется при любом результате.
+    /// </summary>
     public async ValueTask DisposeAsync()
     {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+        Exception? unlockFailure = null;
         try
         {
             if (_connection.State == System.Data.ConnectionState.Open)
             {
+                _hooks?.BeforeUnlock?.Invoke();
                 var sql = _shared
                     ? "SELECT pg_advisory_unlock_shared(@key)"
                     : "SELECT pg_advisory_unlock(@key)";
@@ -89,18 +124,74 @@ internal sealed class PostgresAdvisoryLock : IAsyncDisposable
                 command.Parameters.AddWithValue("key", _key);
                 var released = (bool)(await command.ExecuteScalarAsync(CancellationToken.None) ?? false);
                 if (!released)
-                {
-                    NpgsqlConnection.ClearPool(_connection);
                     throw new InvalidOperationException("PostgreSQL не подтвердил освобождение advisory lock.");
-                }
             }
         }
-        catch
+        catch (Exception exception)
         {
+            unlockFailure = exception;
             // Не возвращаем потенциально заблокированную сессию в pool.
             NpgsqlConnection.ClearPool(_connection);
         }
-        finally { await _connection.DisposeAsync(); }
+
+        var disposeFailure = await DisposeConnectionAsync(_connection, _hooks);
+        if (unlockFailure is not null || disposeFailure is not null)
+            Interlocked.Increment(ref _cleanupFailures);
+        ObserveCleanupFailure(_hooks, "unlock", unlockFailure);
+        ObserveCleanupFailure(_hooks, "dispose", disposeFailure);
+    }
+
+    internal static long CleanupFailures => Interlocked.Read(ref _cleanupFailures);
+
+    /// <summary>Всегда пытается выполнить настоящий async и fallback sync dispose.</summary>
+    private static async ValueTask<Exception?> DisposeConnectionAsync(
+        NpgsqlConnection connection,
+        PostgresAdvisoryLockExecutionHooks? hooks)
+    {
+        Exception? failure = null;
+        try { hooks?.BeforeConnectionDispose?.Invoke(); }
+        catch (Exception exception) { failure = exception; }
+
+        try
+        {
+            await connection.DisposeAsync();
+        }
+        catch (Exception exception)
+        {
+            failure ??= exception;
+            NpgsqlConnection.ClearPool(connection);
+            try { connection.Dispose(); }
+            catch (Exception fallbackFailure) { failure ??= fallbackFailure; }
+        }
+        return failure;
+    }
+
+    /// <summary>Прикрепляет bounded тип secondary failure без сообщения/connection string.</summary>
+    private static void AddCleanupFailure(Exception primaryFailure, string stage, Exception cleanupFailure)
+    {
+        try
+        {
+            var detail = $"{stage}: {cleanupFailure.GetType().Name}";
+            primaryFailure.Data[CleanupFailureDataKey] =
+                primaryFailure.Data[CleanupFailureDataKey] is string previous
+                    ? $"{previous} | {detail}"
+                    : detail;
+        }
+        catch (Exception)
+        {
+            // Нестандартное read-only Exception.Data не может заменить primary acquire failure.
+        }
+    }
+
+    /// <summary>Тестовая/диагностическая точка не участвует в production control flow.</summary>
+    private static void ObserveCleanupFailure(
+        PostgresAdvisoryLockExecutionHooks? hooks,
+        string stage,
+        Exception? failure)
+    {
+        if (failure is null) return;
+        try { hooks?.CleanupFailureObserved?.Invoke(stage, failure); }
+        catch (Exception) { /* observer не может изменить non-throwing disposal contract */ }
     }
 
     /// <summary>
@@ -119,11 +210,24 @@ internal sealed class PostgresAdvisoryLock : IAsyncDisposable
 }
 
 /// <summary>
+/// Внутренние lifecycle hooks для детерминированных PostgreSQL failure-canary. Production
+/// acquisition их не передаёт; реальный unlock/dispose всегда выполняется независимо от observer.
+/// </summary>
+internal sealed record PostgresAdvisoryLockExecutionHooks(
+    Action? AfterLockAcquired = null,
+    Action? BeforeUnlock = null,
+    Action? BeforeConnectionDispose = null,
+    Action<string, Exception>? CleanupFailureObserved = null);
+
+/// <summary>
 /// Database-wide lifetime gate: API-реплики совместно владеют shared lease, а destructive
 /// restore получает exclusive lease только после остановки всех реплик.
 /// </summary>
 public static class DatabaseRuntimeGate
 {
+    /// <summary>Число lease cleanup-инцидентов текущего процесса с момента запуска.</summary>
+    public static long AdvisoryLockCleanupFailures => PostgresAdvisoryLock.CleanupFailures;
+
     /// <summary>Пытается зарегистрировать живую API-реплику; null означает активный restore.</summary>
     public static async Task<DatabaseRuntimeLease?> TryAcquireApiLeaseAsync(
         string connectionString,

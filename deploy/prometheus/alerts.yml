@@ -28,6 +28,15 @@ groups:
           summary: Alertmanager не доставляет уведомления
           description: За последние десять минут зарегистрированы ошибки Telegram-доставки.
 
+      - alert: ProxyHarborAdvisoryLockCleanupFailure
+        expr: increase(proxyharbor_advisory_lock_cleanup_failures_total[10m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Ошибка освобождения PostgreSQL advisory lock
+          description: Реплика исключила неоднозначную lock-сессию из pool; проверьте PostgreSQL и сетевую стабильность.
+
       - alert: ProxyHarborBackgroundWorkersDisabled
         expr: proxyharbor_background_workers_enabled == 0
         for: 10m

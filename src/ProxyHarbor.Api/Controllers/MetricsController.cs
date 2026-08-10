@@ -124,6 +124,9 @@ public sealed class MetricsController(
             validationTelemetry.ActiveRuns);
         Gauge(output, "proxyharbor_background_workers_enabled", "Whether built-in collection and validation workers are enabled.",
             collectorOptions.Value.BackgroundWorkersEnabled ? 1 : 0);
+        Counter(output, "proxyharbor_advisory_lock_cleanup_failures_total",
+            "Advisory-lock lease cleanup incidents observed by this API replica.",
+            DatabaseRuntimeGate.AdvisoryLockCleanupFailures);
         Gauge(output, "proxyharbor_maintenance_last_success_timestamp_seconds", "Unix timestamp of this replica's latest successful cluster maintenance run.",
             maintenance?.LastSuccessUnixSeconds ?? 0);
         Gauge(output, "proxyharbor_maintenance_last_failure_timestamp_seconds", "Unix timestamp of this replica's latest failed maintenance attempt.",
@@ -250,5 +253,12 @@ public sealed class MetricsController(
         output.Append("# HELP ").Append(name).Append(' ').AppendLine(help);
         output.Append("# TYPE ").Append(name).AppendLine(" gauge");
         output.Append(name).Append(' ').AppendLine(value.ToString("0.###", CultureInfo.InvariantCulture));
+    }
+
+    private static void Counter(StringBuilder output, string name, string help, long value)
+    {
+        output.Append("# HELP ").Append(name).Append(' ').AppendLine(help);
+        output.Append("# TYPE ").Append(name).AppendLine(" counter");
+        output.Append(name).Append(' ').AppendLine(value.ToString(CultureInfo.InvariantCulture));
     }
 }

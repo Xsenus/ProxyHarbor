@@ -365,6 +365,7 @@ jobs:
           echo "$metrics" | grep 'proxyharbor_backup_enabled 0'
           echo "$metrics" | grep 'proxyharbor_backup_interval_seconds 86400'
           echo "$metrics" | grep 'proxyharbor_backup_telegram_configured 0'
+          echo "$metrics" | grep 'proxyharbor_advisory_lock_cleanup_failures_total 0'
           openapi_document=$(curl --fail --silent http://127.0.0.1:8080/openapi/v1.json)
           echo "$openapi_document" | jq --exit-status \
             '.components.securitySchemes.AdminApiKey.type == "apiKey" and
@@ -726,6 +727,7 @@ jobs:
           echo "$metrics" | grep 'proxyharbor_validation_batch_size 1600'
           echo "$metrics" | grep 'proxyharbor_validation_checks_per_second 0'
           echo "$metrics" | grep 'proxyharbor_validation_estimated_drain_seconds 0'
+          echo "$metrics" | grep 'proxyharbor_advisory_lock_cleanup_failures_total 0'
           sources=$(curl --fail --silent -H 'X-Admin-Key: integration-admin-key-at-least-24-chars' http://127.0.0.1:5080/api/v1/admin/sources)
           test "$(echo "$sources" | jq length)" -eq 81
           test "$(echo "$sources" | jq '[.[] | select(.isBuiltIn)] | length')" -eq 81
