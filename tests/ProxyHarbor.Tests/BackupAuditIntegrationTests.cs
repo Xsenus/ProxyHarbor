@@ -1,3 +1,4 @@
+using System.IO.Compression;
 using System.Net;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -221,6 +222,82 @@ public sealed class BackupAuditIntegrationTests
         }
     }
 
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
+    public async Task ShutdownDuringTelegramUploadClosesFilesAndFinalizesFailedAudit()
+    {
+        var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
+        if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
+
+        var schema = $"proxyharbor_backup_cancel_{Guid.NewGuid():N}";
+        var backupDirectory = Path.Combine(Path.GetTempPath(), $"proxyharbor-cancel-{Guid.NewGuid():N}");
+        var builder = new NpgsqlConnectionStringBuilder(baseConnectionString) { SearchPath = schema };
+        await using var admin = new NpgsqlConnection(baseConnectionString);
+        await admin.OpenAsync();
+        await using (var create = new NpgsqlCommand($"CREATE SCHEMA {schema}", admin))
+            await create.ExecuteNonQueryAsync();
+
+        try
+        {
+            var dbOptions = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+                .UseNpgsql(builder.ConnectionString)
+                .Options;
+            var factory = new TestDbFactory(dbOptions);
+            await using (var migrationDb = await factory.CreateDbContextAsync())
+                await migrationDb.Database.MigrateAsync();
+
+            Directory.CreateDirectory(backupDirectory);
+            using var clients = new HangingTelegramClientFactory();
+            using var service = new BackupService(
+                factory,
+                clients,
+                Options.Create(new BackupOptions
+                {
+                    Directory = backupDirectory,
+                    EncryptionKey = EncryptionKey,
+                    TelegramBotToken = "shutdown-secret-token",
+                    TelegramChatId = "-100123456"
+                }),
+                Options.Create(new CollectorOptions()),
+                new ConfigurationBuilder().Build(),
+                NullLogger<BackupService>.Instance);
+            using var stopping = new CancellationTokenSource();
+
+            var backup = service.CreateAndSendAsync(stopping.Token);
+            await clients.Started.Task.WaitAsync(TimeSpan.FromSeconds(15));
+            await stopping.CancelAsync();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => backup)
+                .WaitAsync(TimeSpan.FromSeconds(15));
+
+            var encryptedPath = Assert.Single(Directory.EnumerateFiles(backupDirectory, "*.phbackup"));
+            Assert.Empty(Directory.EnumerateFiles(backupDirectory, "*.partial"));
+            Assert.Empty(Directory.EnumerateFiles(backupDirectory, "*.part*"));
+            var decryptedPath = Path.Combine(backupDirectory, "shutdown-check.zip");
+            await BackupEncryption.DecryptAsync(
+                encryptedPath, decryptedPath, EncryptionKey, CancellationToken.None);
+            using (var archive = ZipFile.OpenRead(decryptedPath))
+                BackupArchiveValidator.Validate(archive);
+
+            await using var verify = await factory.CreateDbContextAsync();
+            var failed = await verify.BackupRuns.AsNoTracking().SingleAsync();
+            Assert.Equal("failed", failed.Status);
+            Assert.NotNull(failed.FinishedAt);
+            Assert.True(failed.TelegramConfigured);
+            Assert.False(failed.SentToTelegram);
+            Assert.Equal(Path.GetFileName(encryptedPath), failed.FileName);
+            Assert.Equal(new FileInfo(encryptedPath).Length, failed.SizeBytes);
+            Assert.Contains("отменена", failed.Error, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("shutdown-secret-token", failed.Error, StringComparison.Ordinal);
+            Assert.DoesNotContain("-100123456", failed.Error, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(backupDirectory)) Directory.Delete(backupDirectory, recursive: true);
+            await using var drop = new NpgsqlCommand($"DROP SCHEMA IF EXISTS {schema} CASCADE", admin);
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
+
     private sealed class TestDbFactory(DbContextOptions<ProxyHarborDbContext> options)
         : IDbContextFactory<ProxyHarborDbContext>
     {
@@ -257,6 +334,35 @@ public sealed class BackupAuditIntegrationTests
                 Content = new StringContent(
                     "{\"ok\":false,\"error_code\":400,\"description\":\"delivery rejected\"}")
             });
+    }
+
+    private sealed class HangingTelegramClientFactory : IHttpClientFactory, IDisposable
+    {
+        private readonly HttpClient _client;
+        internal TaskCompletionSource Started { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        internal HangingTelegramClientFactory() => _client = new HttpClient(new HangingTelegramHandler(Started));
+
+        public HttpClient CreateClient(string name)
+        {
+            Assert.Equal("telegram", name);
+            return _client;
+        }
+
+        public void Dispose() => _client.Dispose();
+    }
+
+    private sealed class HangingTelegramHandler(TaskCompletionSource started) : HttpMessageHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            started.TrySetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            throw new InvalidOperationException("Недостижимый код hanging Telegram handler.");
+        }
     }
 
     /// <summary>

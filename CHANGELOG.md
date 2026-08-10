@@ -7,6 +7,7 @@
 
 ### Added
 
+- PostgreSQL backup shutdown-canary отменяет процесс строго во время Telegram upload, затем требует закрытые file handles, отсутствие `.partial/.part*`, криптографически пригодный локальный PHB3, завершённый `failed` audit и отсутствие Telegram secrets в error.
 - PostgreSQL status-evidence trust boundary гарантирует, что публичный `Alive` имеет `LastCheckedAt`, измеренную latency и хотя бы одну успешную проверку, а `Dead` — дату и неуспешную проверку; rollout возвращает неподтверждённые legacy-строки в немедленную `Pending`-очередь до неблокирующей валидации constraint.
 - PostgreSQL backup integration-gate теперь коммитит source из второй сессии строго между чтением `proxies.json` и `sources.json`; архив обязан сохранить единую старую эпоху, тогда как живая БД подтверждает поздний commit, напрямую доказывая multi-table `REPEATABLE READ` snapshot.
 - Публичная React-панель раскрывает в каждой из 50 provider-карточек полный список конкретных feed'ов: все 81 HTTPS URL, имя и заявленный HTTP/HTTPS/SOCKS4/SOCKS5 protocol доступны как keyboard/touch-friendly ссылки вместо прежней ссылки только на первый feed.
