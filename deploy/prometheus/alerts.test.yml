@@ -219,3 +219,31 @@ tests:
       - eval_time: 31m
         alertname: ProxyHarborStaleProxyRetention
         exp_alerts: []
+
+  - name: Operational maintenance failure remains unhealthy
+    interval: 1m
+    input_series:
+      - series: proxyharbor_maintenance_healthy
+        values: '0x16'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: ProxyHarborMaintenanceFailed
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: ProxyHarborMaintenanceFailed
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Operational maintenance не восстанавливается
+              description: Последняя попытка bounded retention завершилась ошибкой и ещё не перекрыта успешным циклом.
+
+  - name: Operational maintenance success clears older failure
+    interval: 1m
+    input_series:
+      - series: proxyharbor_maintenance_healthy
+        values: '1x16'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: ProxyHarborMaintenanceFailed
+        exp_alerts: []

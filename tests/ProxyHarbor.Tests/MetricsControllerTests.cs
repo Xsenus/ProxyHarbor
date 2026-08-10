@@ -42,6 +42,11 @@ public sealed class MetricsControllerTests
         Assert.Contains("proxyharbor_builtin_sources_healthy 0", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_builtin_sources_stale 1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_background_workers_enabled 1", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_maintenance_last_success_timestamp_seconds 0", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_maintenance_last_failure_timestamp_seconds 0", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_maintenance_last_deleted_rows 0", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_maintenance_last_recovered_rows 0", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_maintenance_healthy -1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_collection_interval_seconds 900", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_public_freshness_seconds 900", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_backup_enabled 0", metrics, StringComparison.Ordinal);

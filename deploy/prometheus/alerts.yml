@@ -159,6 +159,17 @@ groups:
           summary: Retention устаревших прокси не завершается
           description: Неарендованные Pending или Dead строки старше retention остаются после нескольких циклов collection.
 
+  - name: proxyharbor.maintenance
+    rules:
+      - alert: ProxyHarborMaintenanceFailed
+        expr: proxyharbor_maintenance_healthy == 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: Operational maintenance не восстанавливается
+          description: Последняя попытка bounded retention завершилась ошибкой и ещё не перекрыта успешным циклом.
+
   - name: proxyharbor.backup
     rules:
       - alert: ProxyHarborBackupFailed

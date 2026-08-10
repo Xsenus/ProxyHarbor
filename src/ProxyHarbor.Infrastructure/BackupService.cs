@@ -137,6 +137,10 @@ public sealed class BackupService(
         await using var db = await dbFactory.CreateDbContextAsync(token);
         var finishedAt = DateTimeOffset.UtcNow;
         var file = new FileInfo(path);
+        // История очищается до completed transition: сбой retention тогда корректно
+        // переводит текущую попытку в failed вместо ложного успешного аудита.
+        await OperationalRetention.PruneBackupHistoryAsync(
+            db, finishedAt, historyRetentionDays, token);
         // Завершить можно только собственную незавершённую попытку. Проверка числа строк
         // не позволяет сообщить об успехе, если audit-запись удалили или изменили параллельно.
         var updated = await db.BackupRuns
@@ -153,8 +157,6 @@ public sealed class BackupService(
             throw new InvalidOperationException(
                 "Backup-аудит потерял ownership своей running-строки.");
 
-        var cutoff = finishedAt.AddDays(-historyRetentionDays);
-        await db.BackupRuns.Where(x => x.StartedAt < cutoff).ExecuteDeleteAsync(token);
     }
 
     private async Task FailAuditAsync(Guid id, string encryptedPath, Exception exception)

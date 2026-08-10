@@ -8,6 +8,7 @@ internal sealed class PostgresAdvisoryLock : IAsyncDisposable
 {
     internal const long CollectionKey = 0x505248434F4C4C01;
     internal const long BackupKey = 0x5052484241434B02;
+    internal const long MaintenanceKey = 0x5052484D41494E04;
     private readonly NpgsqlConnection _connection;
     private readonly long _key;
     private readonly bool _shared;

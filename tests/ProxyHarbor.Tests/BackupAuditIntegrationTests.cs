@@ -161,6 +161,86 @@ public sealed class BackupAuditIntegrationTests
 
     [Fact]
     [Trait("Category", "PostgresIntegration")]
+    public async Task HistoryRetentionFailureCannotLeaveFalseCompletedBackupAudit()
+    {
+        var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
+        if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
+
+        var schema = $"proxyharbor_backup_retention_failure_{Guid.NewGuid():N}";
+        var backupDirectory = Path.Combine(Path.GetTempPath(), $"proxyharbor-history-failure-{Guid.NewGuid():N}");
+        var builder = new NpgsqlConnectionStringBuilder(baseConnectionString) { SearchPath = schema };
+        await using var admin = new NpgsqlConnection(baseConnectionString);
+        await admin.OpenAsync();
+        await using (var create = new NpgsqlCommand($"CREATE SCHEMA {schema}", admin))
+            await create.ExecuteNonQueryAsync();
+
+        try
+        {
+            var dbOptions = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+                .UseNpgsql(builder.ConnectionString)
+                .Options;
+            var factory = new TestDbFactory(dbOptions);
+            await using (var seed = await factory.CreateDbContextAsync())
+            {
+                await seed.Database.MigrateAsync();
+                var old = DateTimeOffset.UtcNow.AddDays(-5);
+                seed.BackupRuns.Add(new BackupRun
+                {
+                    StartedAt = old,
+                    FinishedAt = old.AddMinutes(1),
+                    Status = "failed",
+                    Error = "historical failure"
+                });
+                await seed.SaveChangesAsync();
+                await seed.Database.ExecuteSqlRawAsync("""
+                    CREATE FUNCTION fail_backup_history_retention() RETURNS trigger LANGUAGE plpgsql AS $$
+                    BEGIN
+                      RAISE EXCEPTION 'backup history retention failure canary';
+                    END;
+                    $$;
+                    CREATE TRIGGER fail_backup_history_retention
+                    BEFORE DELETE ON "BackupRuns"
+                    FOR EACH STATEMENT EXECUTE FUNCTION fail_backup_history_retention();
+                    """);
+            }
+
+            using var service = new BackupService(
+                factory,
+                new UnusedHttpClientFactory(),
+                Options.Create(new BackupOptions
+                {
+                    Directory = backupDirectory,
+                    EncryptionKey = EncryptionKey,
+                    HistoryRetentionDays = 1
+                }),
+                Options.Create(new CollectorOptions()),
+                new ConfigurationBuilder().Build(),
+                NullLogger<BackupService>.Instance);
+
+            var exception = await Assert.ThrowsAsync<PostgresException>(
+                () => service.CreateAndSendAsync(CancellationToken.None));
+
+            Assert.Contains("backup history retention failure canary", exception.Message, StringComparison.Ordinal);
+            await using var verify = await factory.CreateDbContextAsync();
+            var runs = await verify.BackupRuns.AsNoTracking().OrderBy(run => run.StartedAt).ToListAsync();
+            Assert.Equal(2, runs.Count);
+            var current = runs[^1];
+            Assert.Equal("failed", current.Status);
+            Assert.NotNull(current.FinishedAt);
+            Assert.Contains("backup history retention failure canary", current.Error, StringComparison.Ordinal);
+            Assert.NotNull(current.FileName);
+            Assert.True(current.SizeBytes > 0);
+        }
+        finally
+        {
+            if (Directory.Exists(backupDirectory)) Directory.Delete(backupDirectory, recursive: true);
+            await using var drop = new NpgsqlCommand($"DROP SCHEMA IF EXISTS {schema} CASCADE", admin);
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
     public async Task ChangedAuditOwnershipRejectsOtherwiseSuccessfulTelegramBackup()
     {
         var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");

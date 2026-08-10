@@ -16,7 +16,8 @@ public sealed class MetricsController(
     IDbContextFactory<ProxyHarborDbContext> dbFactory,
     IOptions<CollectorOptions> collectorOptions,
     IOptions<BackupOptions> backupOptions,
-    ProbeControlHealth probeControlHealth) : ControllerBase
+    ProbeControlHealth probeControlHealth,
+    OperationalMaintenanceService? maintenance = null) : ControllerBase
 {
     [HttpGet]
     [Produces("text/plain")]
@@ -114,6 +115,16 @@ public sealed class MetricsController(
             validationTelemetry.ActiveRuns);
         Gauge(output, "proxyharbor_background_workers_enabled", "Whether built-in collection and validation workers are enabled.",
             collectorOptions.Value.BackgroundWorkersEnabled ? 1 : 0);
+        Gauge(output, "proxyharbor_maintenance_last_success_timestamp_seconds", "Unix timestamp of this replica's latest successful cluster maintenance run.",
+            maintenance?.LastSuccessUnixSeconds ?? 0);
+        Gauge(output, "proxyharbor_maintenance_last_failure_timestamp_seconds", "Unix timestamp of this replica's latest failed maintenance attempt.",
+            maintenance?.LastFailureUnixSeconds ?? 0);
+        Gauge(output, "proxyharbor_maintenance_last_deleted_rows", "Rows deleted by this replica's latest successful maintenance run.",
+            maintenance?.LastDeletedRows ?? 0);
+        Gauge(output, "proxyharbor_maintenance_last_recovered_rows", "Abandoned running audits recovered by this replica's latest successful maintenance run.",
+            maintenance?.LastRecoveredRows ?? 0);
+        Gauge(output, "proxyharbor_maintenance_healthy", "Latest maintenance outcome on this replica: 1 success, 0 failure, -1 not attempted.",
+            maintenance?.Status ?? -1);
         Gauge(output, "proxyharbor_collection_interval_seconds", "Configured interval between collection cycles in seconds.",
             collectorOptions.Value.CollectionIntervalMinutes * 60L);
         Gauge(output, "proxyharbor_public_freshness_seconds", "Maximum validation age accepted by public API and exports.",

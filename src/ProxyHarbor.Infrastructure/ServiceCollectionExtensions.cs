@@ -108,9 +108,11 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ProxyValidator>();
         services.AddSingleton<BackupService>();
         services.AddSingleton<DatabaseReadinessProbe>();
+        services.AddSingleton<OperationalMaintenanceService>();
         services.AddHostedService<CollectorWorker>();
         services.AddHostedService<ValidatorWorker>();
         services.AddHostedService<BackupWorker>();
+        services.AddHostedService<OperationalMaintenanceWorker>();
         return services;
     }
 }

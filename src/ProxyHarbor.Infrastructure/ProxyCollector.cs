@@ -199,23 +199,17 @@ public sealed class ProxyCollector(
                 // Retention является частью collection pipeline, поэтому выполняется до
                 // completed-аудита. Ошибка DELETE/cancellation тогда оставляет честный failed,
                 // а не возвращает клиенту исключение при сохранённом ложном успехе.
-                var unseenCutoff = now.AddDays(-Math.Max(1, options.Value.DeadRetentionDays));
                 // Активная validation lease владеет строкой до сохранения результата.
                 // Просроченная аренда ownership уже не даёт и не должна блокировать retention.
                 // Помимо Dead удаляем так и не проверенные Pending: при длительной проблеме
                 // control endpoint они иначе навсегда накапливаются после исчезновения из feed'ов.
                 // Подтверждённые Alive сохраняются до очередной объективной проверки.
-                await db.Proxies.Where(x =>
-                        (x.Status == ProxyStatus.Pending || x.Status == ProxyStatus.Dead) &&
-                        x.LastSeenAt < unseenCutoff &&
-                        (x.CheckLeaseUntil == null || x.CheckLeaseUntil < now))
-                    .ExecuteDeleteAsync(cancellationToken);
-                var runCutoff = now.AddDays(-options.Value.RunRetentionDays);
-                await db.Runs.Where(x => x.StartedAt < runCutoff).ExecuteDeleteAsync(cancellationToken);
+                await OperationalRetention.PruneProxyMembershipAsync(
+                    db, now, options.Value.DeadRetentionDays, cancellationToken);
                 // Долгая активная validation-партия другой реплики не должна потерять
                 // ownership своей audit row из-за retention collection-цикла.
-                await db.ValidationRuns.Where(x => x.StartedAt < runCutoff && x.Status != "running")
-                    .ExecuteDeleteAsync(cancellationToken);
+                await OperationalRetention.PruneRunHistoryAsync(
+                    db, now, options.Value.RunRetentionDays, cancellationToken);
 
                 var updated = await db.Runs
                     .Where(item => item.Id == run.Id && item.Status == "running")
