@@ -5,7 +5,7 @@ namespace ProxyHarbor.Infrastructure;
 /// <summary>Версионируемый каталог публичных proxy-feed endpoint'ов от 50 независимых провайдеров.</summary>
 public static class BuiltInSourceCatalog
 {
-    public static DateOnly LastAuditedOn => new(2026, 8, 9);
+    public static DateOnly LastAuditedOn => new(2026, 8, 10);
 
     /// <summary>Источники ранжированы по свежести, объёму, стабильности ответа и разнообразию провайдеров.</summary>
     public static IReadOnlyList<BuiltInSource> Sources { get; } =
