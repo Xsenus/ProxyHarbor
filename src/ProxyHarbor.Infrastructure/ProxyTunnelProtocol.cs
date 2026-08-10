@@ -34,14 +34,30 @@ internal static class ProxyTunnelProtocol
         Stream stream, string targetHost, int targetPort, CancellationToken token)
     {
         ValidateTarget(targetHost, targetPort);
-        var host = EncodeHost(targetHost);
-        var request = new byte[10 + host.Length];
+        var parsedAddress = IPAddress.TryParse(targetHost, out var targetAddress)
+            ? targetAddress
+            : null;
+        if (parsedAddress?.AddressFamily == AddressFamily.InterNetworkV6)
+            throw new ProxyTargetUnsupportedException(
+                "SOCKS4/SOCKS4a не поддерживает IPv6 literal назначения.");
+        var isNativeIpv4 = parsedAddress?.AddressFamily == AddressFamily.InterNetwork;
+        byte[] host = isNativeIpv4 ? [] : EncodeHost(targetHost);
+        // Native SOCKS4: 8-byte request + empty USERID. SOCKS4a: sentinel
+        // 0.0.0.1, empty USERID, DNS-name and its terminating NUL.
+        var request = new byte[isNativeIpv4 ? 9 : 10 + host.Length];
         request[0] = 4;
         request[1] = 1;
         request[2] = (byte)(targetPort >> 8);
         request[3] = (byte)targetPort;
-        request[7] = 1; // SOCKS4a: 0.0.0.1, затем пустой user id и DNS-имя.
-        host.CopyTo(request, 9);
+        if (isNativeIpv4)
+        {
+            parsedAddress!.GetAddressBytes().CopyTo(request, 4);
+        }
+        else
+        {
+            request[7] = 1;
+            host.CopyTo(request, 9);
+        }
         await stream.WriteAsync(request, token);
         var response = new byte[8];
         await ReadExactlyAsync(stream, response, token);
@@ -59,17 +75,7 @@ internal static class ProxyTunnelProtocol
         if (greeting[0] != 5 || greeting[1] != 0)
             throw new IOException("SOCKS5 требует неподдерживаемую авторизацию.");
 
-        var host = EncodeHost(targetHost);
-        if (host.Length > byte.MaxValue) throw new IOException("DNS-имя назначения слишком длинное для SOCKS5.");
-        var request = new byte[7 + host.Length];
-        request[0] = 5;
-        request[1] = 1;
-        request[2] = 0;
-        request[3] = 3;
-        request[4] = (byte)host.Length;
-        host.CopyTo(request, 5);
-        request[^2] = (byte)(targetPort >> 8);
-        request[^1] = (byte)targetPort;
+        var request = BuildSocks5ConnectRequest(targetHost, targetPort);
         await stream.WriteAsync(request, token);
 
         var header = new byte[4];
@@ -92,6 +98,48 @@ internal static class ProxyTunnelProtocol
     private static byte[] EncodeHost(string host)
     {
         return Encoding.ASCII.GetBytes(host);
+    }
+
+    /// <summary>Кодирует IP literals нативными ATYP=1/4, DNS-name — bounded ATYP=3.</summary>
+    private static byte[] BuildSocks5ConnectRequest(string targetHost, int targetPort)
+    {
+        byte addressType;
+        byte[] addressBytes;
+        var domainLengthBytes = 0;
+        if (IPAddress.TryParse(targetHost, out var address))
+        {
+            addressType = address.AddressFamily switch
+            {
+                AddressFamily.InterNetwork => 1,
+                AddressFamily.InterNetworkV6 => 4,
+                _ => throw new IOException("SOCKS5 не поддерживает семейство IP-адреса назначения.")
+            };
+            addressBytes = address.GetAddressBytes();
+        }
+        else
+        {
+            addressType = 3;
+            addressBytes = EncodeHost(targetHost);
+            if (addressBytes.Length is 0 or > byte.MaxValue)
+                throw new IOException("DNS-имя назначения слишком длинное для SOCKS5.");
+            domainLengthBytes = 1;
+        }
+
+        var request = new byte[checked(6 + domainLengthBytes + addressBytes.Length)];
+        request[0] = 5;
+        request[1] = 1;
+        request[2] = 0;
+        request[3] = addressType;
+        var addressOffset = 4;
+        if (addressType == 3)
+        {
+            request[4] = (byte)addressBytes.Length;
+            addressOffset++;
+        }
+        addressBytes.CopyTo(request, addressOffset);
+        request[^2] = (byte)(targetPort >> 8);
+        request[^1] = (byte)targetPort;
+        return request;
     }
 
     private static void ValidateTarget(string host, int port)
@@ -161,3 +209,6 @@ internal static class ProxyTunnelProtocol
         }
     }
 }
+
+/// <summary>Control target нельзя представить в wire-format конкретного proxy-протокола.</summary>
+internal sealed class ProxyTargetUnsupportedException(string message) : IOException(message);

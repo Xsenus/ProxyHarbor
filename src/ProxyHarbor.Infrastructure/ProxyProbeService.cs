@@ -41,6 +41,12 @@ public sealed class ProxyProbeService(IOptions<CollectorOptions> options, Origin
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(TimeSpan.FromSeconds(options.Value.ProbeTimeoutSeconds));
 
+            if (proxy.Protocol == ProxyProtocol.Socks4 &&
+                IPAddress.TryParse(options.Value.ProbeHost, out var controlAddress) &&
+                controlAddress.AddressFamily == AddressFamily.InterNetworkV6)
+                throw new ProxyTargetUnsupportedException(
+                    "SOCKS4/SOCKS4a не поддерживает IPv6 literal назначения.");
+
             using var tcp = await _connectAsync(proxy.Host, proxy.Port, timeout.Token);
             var stream = tcp.GetStream();
 
@@ -88,6 +94,13 @@ public sealed class ProxyProbeService(IOptions<CollectorOptions> options, Origin
         {
             // Валидный TLS-туннель вернул непригодный control-ответ. Это не является
             // доказательством неисправности прокси и не должно ухудшать его статистику.
+            return new ProxyCheckResult(proxy.Id, false, null, null, false,
+                exception.Message[..Math.Min(500, exception.Message.Length)], IsDeferred: true);
+        }
+        catch (ProxyTargetUnsupportedException exception)
+        {
+            // Ограничение wire-протокола/control-конфигурации ничего не говорит
+            // о работоспособности самого прокси и не должно увеличивать failure streak.
             return new ProxyCheckResult(proxy.Id, false, null, null, false,
                 exception.Message[..Math.Min(500, exception.Message.Length)], IsDeferred: true);
         }

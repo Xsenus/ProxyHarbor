@@ -124,6 +124,28 @@ public sealed class ProxyTunnelProtocolTests
     }
 
     [Fact]
+    public async Task Socks4UsesNativeIpv4TargetInsteadOfLiteralDnsName()
+    {
+        await using var stream = new ScriptedDuplexStream([0, 90, 0, 0, 0, 0, 0, 0]);
+
+        await ProxyTunnelProtocol.EstablishSocks4aAsync(
+            stream, "8.8.8.8", 443, CancellationToken.None);
+
+        Assert.Equal(new byte[] { 4, 1, 1, 187, 8, 8, 8, 8, 0 }, stream.Written);
+    }
+
+    [Fact]
+    public async Task Socks4RejectsUnrepresentableIpv6TargetBeforeWriting()
+    {
+        await using var stream = new ScriptedDuplexStream([]);
+
+        await Assert.ThrowsAsync<ProxyTargetUnsupportedException>(() =>
+            ProxyTunnelProtocol.EstablishSocks4aAsync(
+                stream, "2606:4700:4700::1111", 443, CancellationToken.None));
+        Assert.Empty(stream.Written);
+    }
+
+    [Fact]
     public async Task Socks5WritesNoAuthDnsConnectAndConsumesBoundAddress()
     {
         await using var stream = new ScriptedDuplexStream([
@@ -136,6 +158,34 @@ public sealed class ProxyTunnelProtocolTests
 
         var expectedConnect = new byte[] { 5, 1, 0, 3, 11 }
             .Concat(Encoding.ASCII.GetBytes("example.com")).Concat(new byte[] { 1, 187 }).ToArray();
+        Assert.Equal(new byte[] { 5, 1, 0 }.Concat(expectedConnect), stream.Written);
+    }
+
+    [Fact]
+    public async Task Socks5UsesNativeIpv4AddressType()
+    {
+        await using var stream = SuccessfulSocks5Stream();
+
+        await ProxyTunnelProtocol.EstablishSocks5Async(
+            stream, "8.8.8.8", 443, CancellationToken.None);
+
+        Assert.Equal(
+            new byte[] { 5, 1, 0, 5, 1, 0, 1, 8, 8, 8, 8, 1, 187 },
+            stream.Written);
+    }
+
+    [Fact]
+    public async Task Socks5UsesNativeIpv6AddressType()
+    {
+        await using var stream = SuccessfulSocks5Stream();
+        var address = System.Net.IPAddress.Parse("2606:4700:4700::1111").GetAddressBytes();
+
+        await ProxyTunnelProtocol.EstablishSocks5Async(
+            stream, "2606:4700:4700::1111", 443, CancellationToken.None);
+
+        var expectedConnect = new byte[] { 5, 1, 0, 4 }
+            .Concat(address)
+            .Concat(new byte[] { 1, 187 });
         Assert.Equal(new byte[] { 5, 1, 0 }.Concat(expectedConnect), stream.Written);
     }
 
@@ -159,6 +209,11 @@ public sealed class ProxyTunnelProtocolTests
         await Assert.ThrowsAsync<IOException>(() => ProxyTunnelProtocol.EstablishSocks5Async(
             stream, "example.com", 443, CancellationToken.None));
     }
+
+    private static ScriptedDuplexStream SuccessfulSocks5Stream() => new([
+        5, 0,
+        5, 0, 0, 1, 127, 0, 0, 1, 0x1f, 0x90
+    ]);
 
     /// <summary>Отдаёт заранее заданные байты сервера и отдельно записывает запрос клиента.</summary>
     private sealed class ScriptedDuplexStream(byte[] response, int maxReadSize = int.MaxValue) : Stream

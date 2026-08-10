@@ -4,6 +4,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using ProxyHarbor.Domain;
 using ProxyHarbor.Infrastructure;
 
 namespace ProxyHarbor.Tests;
@@ -307,6 +308,40 @@ public sealed class OriginIpProviderTests
             () => validator.ValidateBatchAsync(CancellationToken.None));
 
         Assert.Equal(1, handler.RequestCount);
+    }
+
+    [Fact]
+    public async Task Socks4WithIpv6ControlTargetIsDeferredInsteadOfMarkedDead()
+    {
+        var handler = new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("{\"ip\":\"8.8.8.8\"}")
+        });
+        using var factory = new StubHttpClientFactory(handler);
+        var settings = Options.Create(new CollectorOptions
+        {
+            ProbeHost = "2606:4700:4700::1111",
+            ProbeTimeoutSeconds = 2
+        });
+        using var origin = new OriginIpProvider(factory, settings, new ProbeControlHealth());
+        var connectAttempted = false;
+        var probe = new ProxyProbeService(settings, origin, (_, _, _) =>
+        {
+            connectAttempted = true;
+            throw new InvalidOperationException("TCP connect не должен выполняться.");
+        });
+
+        var result = await probe.CheckAsync(new ProxyEndpoint
+        {
+            Host = "1.1.1.1",
+            Port = 1080,
+            Protocol = ProxyProtocol.Socks4
+        }, CancellationToken.None);
+
+        Assert.True(result.IsDeferred);
+        Assert.False(result.IsAlive);
+        Assert.False(connectAttempted);
+        Assert.Contains("SOCKS4", result.Error, StringComparison.Ordinal);
     }
 
     [Fact]

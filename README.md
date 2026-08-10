@@ -171,7 +171,7 @@ Background collector применяет bounded exponential backoff только
 
 Proxy-tunnel control response разбирается как bounded byte stream: HTTP headers требуют ASCII без bare control bytes, Content-Length и chunk sizes считаются в байтах, chunk framing удаляется до strict UTF-8/JSON validation. Поэтому Unicode code point может безопасно пересекать границу chunks, а malformed encoding или JSON shape переводят попытку в `deferred`, не ухудшая статистику прокси и не прерывая validation batch.
 
-HTTP CONNECT response читается bounded блоками и требует точный HTTP/1.0 или HTTP/1.1 status line, безопасные ASCII headers и отсутствие post-header bytes до начала TLS. SOCKS4a/SOCKS5 readers поддерживают partial network reads, проверяют protocol/version/reserved fields и полностью потребляют bounded bind endpoint; нулевая длина SOCKS5 domain отклоняется.
+HTTP CONNECT response читается bounded блоками и требует точный HTTP/1.0 или HTTP/1.1 status line, безопасные ASCII headers и отсутствие post-header bytes до начала TLS. SOCKS4a/SOCKS5 readers поддерживают partial network reads, проверяют protocol/version/reserved fields и полностью потребляют bounded bind endpoint; нулевая длина SOCKS5 domain отклоняется. Настроенные IPv4 literals передаются нативным SOCKS4/SOCKS5 address type, IPv6 — SOCKS5 `ATYP=4`, без зависимости от DNS parser конкретного прокси. Поскольку SOCKS4 не имеет IPv6 address type, такая control-конфигурация даёт `deferred` для SOCKS4, не изменяя его health-статистику.
 
 ## Локальная разработка
 
