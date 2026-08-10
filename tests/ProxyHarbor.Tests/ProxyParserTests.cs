@@ -94,6 +94,26 @@ public sealed class ProxyParserTests
         Assert.DoesNotContain(result, x => x.Host == "example.com");
     }
 
+    [Fact]
+    public void ParseMixedFeedPreservesEveryPerRecordProtocolAndFallback()
+    {
+        const string content = """
+            http://8.8.8.8:8080
+            https://8.8.8.8:8080
+            socks4://8.8.8.8:8080
+            socks5://8.8.8.8:8080
+            1.1.1.1:1080
+            """;
+
+        var result = ProxyParser.Parse(content, ProxyProtocol.Socks5);
+
+        Assert.Equal(5, result.Count);
+        Assert.All(Enum.GetValues<ProxyProtocol>(), protocol =>
+            Assert.Contains(result, proxy => proxy.Host == "8.8.8.8" && proxy.Protocol == protocol));
+        Assert.Contains(result, proxy =>
+            proxy == ("1.1.1.1", 1080, ProxyProtocol.Socks5));
+    }
+
     [Theory]
     [InlineData("0.0.0.0")]
     [InlineData("10.0.0.1")]

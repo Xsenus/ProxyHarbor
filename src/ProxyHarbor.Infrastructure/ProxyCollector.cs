@@ -549,10 +549,14 @@ internal static class SourceFeedParser
     private static void EnsureNotHtmlEnvelope(string content)
     {
         var start = content.TrimStart('\uFEFF', ' ', '\t', '\r', '\n');
-        if (start.StartsWith("<!doctype html", StringComparison.OrdinalIgnoreCase) ||
+        if (start.StartsWith("<!--", StringComparison.Ordinal) ||
+            start.StartsWith("<!doctype html", StringComparison.OrdinalIgnoreCase) ||
             start.StartsWith("<html", StringComparison.OrdinalIgnoreCase) ||
             start.StartsWith("<head", StringComparison.OrdinalIgnoreCase) ||
-            start.StartsWith("<body", StringComparison.OrdinalIgnoreCase))
+            start.StartsWith("<body", StringComparison.OrdinalIgnoreCase) ||
+            start.StartsWith("<meta", StringComparison.OrdinalIgnoreCase) ||
+            start.StartsWith("<title", StringComparison.OrdinalIgnoreCase) ||
+            start.StartsWith("<script", StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException("Источник вернул HTML вместо списка прокси.");
     }
 }

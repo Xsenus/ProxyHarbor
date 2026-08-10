@@ -22,6 +22,10 @@ public sealed class SourceReliabilityTests
     [Theory]
     [InlineData("<!doctype html><html>8.8.8.8:8080</html>")]
     [InlineData("\uFEFF  <BODY>Cloud WAF at 8.8.8.8:8080</BODY>")]
+    [InlineData("<!-- Cloud WAF challenge -->\n<html>8.8.8.8:8080</html>")]
+    [InlineData("<meta charset=\"utf-8\"><title>Blocked at 8.8.8.8:8080</title>")]
+    [InlineData("<title>Proxy error 8.8.8.8:8080</title>")]
+    [InlineData("<script>const diagnostic = '8.8.8.8:8080';</script>")]
     public void ParserRejectsHtmlEnvelopeEvenWhenItContainsProxyLikeText(string content)
     {
         var exception = Assert.Throws<InvalidDataException>(() =>
