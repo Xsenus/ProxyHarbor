@@ -81,6 +81,7 @@ describe('ProxyHarbor UI', () => {
     expect(await screen.findByLabelText('Диагностика сервиса')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Создать backup' })).toBeEnabled()
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Запустить сбор' })).toHaveFocus())
 
     fireEvent.click(screen.getByRole('button', { name: 'Выйти' }))
     expect(screen.getByLabelText('Ключ администратора')).toHaveValue('')
@@ -324,17 +325,24 @@ describe('ProxyHarbor UI', () => {
       element?.tagName === 'CODE' && element.textContent === '192.0.2.99:8080')).not.toBeInTheDocument())
   })
 
-  it('labels built-in sources with canonical provider metadata', async () => {
+  it('labels built-in sources and reserves deletion for custom sources', async () => {
     vi.mocked(fetch).mockImplementation(async input => {
       const url = String(input)
       if (url.includes('/api/v1/stats')) return jsonResponse(stats)
       if (url.includes('/api/v1/proxies')) return jsonResponse({ items: [], pageSize: 100, hasMore: false, nextCursor: null })
-      if (url.includes('/api/v1/admin/sources')) return jsonResponse([{
-        id: 'source-1', name: 'ProxyScrape HTTP', url: 'https://example.test/list.txt',
-        defaultProtocol: 'Http', enabled: true, priority: 1, lastItemCount: 100,
-        consecutiveFailures: 0, isBuiltIn: true, provider: 'ProxyScrape',
-        providerIdentity: 'host:api.proxyscrape.com', catalogRank: 2,
-      }])
+      if (url.includes('/api/v1/admin/sources')) return jsonResponse([
+        {
+          id: 'source-1', name: 'ProxyScrape HTTP', url: 'https://example.test/list.txt',
+          defaultProtocol: 'Http', enabled: true, priority: 1, lastItemCount: 100,
+          consecutiveFailures: 0, isBuiltIn: true, provider: 'ProxyScrape',
+          providerIdentity: 'host:api.proxyscrape.com', catalogRank: 2,
+        },
+        {
+          id: 'source-2', name: 'Собственный feed', url: 'https://custom.example.test/list.txt',
+          defaultProtocol: 'Http', enabled: true, priority: 100, lastItemCount: 10,
+          consecutiveFailures: 0, isBuiltIn: false,
+        },
+      ])
       if (url.includes('/api/v1/admin/diagnostics')) return jsonResponse({
         serverTime: '2026-08-09T07:00:00Z', databaseBytes: 0,
         validationQueue: { total: 0, leased: 0, neverChecked: 0, due: 0, scheduled: 0, repeatedlyFailing: 0 },
@@ -351,6 +359,7 @@ describe('ProxyHarbor UI', () => {
 
     expect(await screen.findByTitle(
       'Встроенный источник · ProxyScrape · host:api.proxyscrape.com · ранг 2')).toHaveTextContent('ProxyScrape')
+    expect(screen.getAllByRole('button', { name: 'Удалить' })).toHaveLength(1)
   })
 
   it('shows operational diagnostics and refreshes them after a backup', async () => {

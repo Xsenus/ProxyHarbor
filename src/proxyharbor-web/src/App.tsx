@@ -74,6 +74,8 @@ export default function App() {
   const lastAdminTriggerRef = useRef<HTMLButtonElement>(null)
   const adminDialogRef = useRef<HTMLElement>(null)
   const adminKeyRef = useRef<HTMLInputElement>(null)
+  const firstAdminActionRef = useRef<HTMLButtonElement>(null)
+  const focusAdminActionAfterLoginRef = useRef(false)
   const autoLoginAttemptedRef = useRef(false)
   const extendedCatalogRef = useRef(false)
   const catalogRequestIdRef = useRef(0)
@@ -240,7 +242,7 @@ export default function App() {
     setMaxLatency(value)
   }
 
-  const loadAdminData = useCallback(async () => {
+  const loadAdminData = useCallback(async (focusFirstAction = false) => {
     const requestId = ++adminRequestIdRef.current
     adminAbortRef.current?.abort()
     if (!adminKey) {
@@ -275,6 +277,9 @@ export default function App() {
       setDiagnostics(diagnosticSnapshot)
       setAdminAuthenticated(true)
       setAdminError('')
+      // Кнопка входа на время запроса disabled, поэтому браузер теряет focus.
+      // Effect ниже ждёт React commit и переводит его в начало рабочей зоны.
+      focusAdminActionAfterLoginRef.current = focusFirstAction
     } catch (reason) {
       if (!isAbortError(reason) && requestId === adminRequestIdRef.current)
         setAdminError(reason instanceof Error ? reason.message : 'Не удалось открыть административную консоль')
@@ -287,6 +292,12 @@ export default function App() {
   }, [adminKey])
 
   useEffect(() => {
+    if (!adminAuthenticated || !focusAdminActionAfterLoginRef.current) return
+    focusAdminActionAfterLoginRef.current = false
+    firstAdminActionRef.current?.focus()
+  }, [adminAuthenticated])
+
+  useEffect(() => {
     if (!adminOpen) {
       autoLoginAttemptedRef.current = false
       return
@@ -294,7 +305,7 @@ export default function App() {
     if (autoLoginAttemptedRef.current) return
     autoLoginAttemptedRef.current = true
     if (!adminKey) return
-    const initialLoad = window.setTimeout(() => void loadAdminData(), 0)
+    const initialLoad = window.setTimeout(() => void loadAdminData(true), 0)
     return () => window.clearTimeout(initialLoad)
   }, [adminOpen, adminKey, loadAdminData])
 
@@ -519,15 +530,15 @@ export default function App() {
       <section ref={adminDialogRef} className="admin-modal" role="dialog" aria-modal="true" aria-labelledby="admin-title">
         <button className="close" aria-label="Закрыть" onClick={closeAdmin}><X/></button>
         <span className="kicker">ADMIN CONSOLE</span><h2 id="admin-title">Управление сбором</h2><p>Ключ хранится только до закрытия вкладки.</p>
-        <div className="key-input"><KeyRound size={18}/><input ref={adminKeyRef} type="password" aria-label="Ключ администратора" placeholder="X-Admin-Key" autoComplete="off" autoCapitalize="none" spellCheck={false} maxLength={256} value={adminKey} onChange={e => changeAdminKey(e.target.value)}/><button onClick={loadAdminData} disabled={adminLoading}>{adminLoading ? 'Проверяем…' : 'Войти'}</button>{adminAuthenticated && <button className="logout" onClick={logoutAdmin}>Выйти</button>}</div>
+        <div className="key-input"><KeyRound size={18}/><input ref={adminKeyRef} type="password" aria-label="Ключ администратора" placeholder="X-Admin-Key" autoComplete="off" autoCapitalize="none" spellCheck={false} maxLength={256} value={adminKey} onChange={e => changeAdminKey(e.target.value)}/><button onClick={() => void loadAdminData(true)} disabled={adminLoading}>{adminLoading ? 'Проверяем…' : 'Войти'}</button>{adminAuthenticated && <button className="logout" onClick={logoutAdmin}>Выйти</button>}</div>
         {adminError && <div className="admin-notice" role="alert"><X size={16}/>{adminError}</div>}
         <div className="admin-actions">
-          <button onClick={() => runAdminAction('collect')} disabled={!adminAuthenticated || !!action}><Play/> {action === 'collect' ? 'Собираем…' : 'Запустить сбор'}</button>
+          <button ref={firstAdminActionRef} onClick={() => runAdminAction('collect')} disabled={!adminAuthenticated || !!action}><Play/> {action === 'collect' ? 'Собираем…' : 'Запустить сбор'}</button>
           <button onClick={() => runAdminAction('validate')} disabled={!adminAuthenticated || !!action}><Check/> {action === 'validate' ? 'Проверяем…' : 'Проверить пакет'}</button>
           <button onClick={() => runAdminAction('backup')} disabled={!adminAuthenticated || !!action}><Database/> {action === 'backup' ? 'Копируем…' : 'Создать backup'}</button>
         </div>
         {adminAuthenticated && <section className="admin-diagnostics" aria-label="Диагностика сервиса">
-          <div className="diagnostics-heading"><h3>Диагностика</h3><button aria-label="Обновить диагностику" onClick={loadAdminData} disabled={adminLoading}><RefreshCw className={adminLoading ? 'spin' : ''}/></button></div>
+          <div className="diagnostics-heading"><h3>Диагностика</h3><button aria-label="Обновить диагностику" onClick={() => void loadAdminData()} disabled={adminLoading}><RefreshCw className={adminLoading ? 'spin' : ''}/></button></div>
           <div className="diagnostic-grid">
             <article title={`Параллельность ${formatNumber(diagnostics?.validationQueue?.concurrencyLimit)}, партия ${formatNumber(diagnostics?.validationQueue?.batchSize)}`}><span>Очередь проверки</span><strong>{formatNumber(diagnostics?.validationQueue?.due)}</strong><small>{formatNumber(diagnostics?.validationQueue?.attemptsLastFiveMinutes)} попыток за 5 мин · {formatRate(diagnostics?.validationQueue?.checksPerSecond)} · лимит {formatNumber(diagnostics?.validationQueue?.concurrencyLimit)} × {formatNumber(diagnostics?.validationQueue?.batchSize)} · ETA {formatDuration(diagnostics?.validationQueue?.estimatedDrainSeconds)} · {formatNumber(diagnostics?.validationQueue?.aliveLastFiveMinutes)} живых · {formatNumber(diagnostics?.validationQueue?.deferredLastFiveMinutes)} отложено</small></article>
             <article><span>Последний сбор</span><strong className={latestCollection?.candidateLimitReached || latestCollection?.sourcesTruncated ? 'status-running' : statusClass(latestCollection?.status)}>{latestCollection?.candidateLimitReached || latestCollection?.sourcesTruncated ? 'достигнут лимит' : statusLabel(latestCollection?.status)}</strong><small>{latestCollection ? `${formatNumber(latestCollection.candidatesFound)} кандидатов · ${timeAgo(latestCollection.startedAt)}` : 'Циклов пока нет'}</small></article>
@@ -552,7 +563,7 @@ export default function App() {
         <h3>Источники <span>{sources.length}</span></h3>
         <div className="source-list">{sources.map(source => <article key={source.id}>
           <div><b>{source.name}</b><small>{source.defaultProtocol} · {source.lastItemCount.toLocaleString('ru-RU')} адресов{source.lastContentFetchedAt ? ` · полный feed ${new Date(source.lastContentFetchedAt).toLocaleString('ru-RU')}` : ' · полный feed ещё не получен'}{source.lastResultTruncated ? ' · результат усечён' : ''}{source.consecutiveFailures > 0 ? ` · сбоев подряд: ${source.consecutiveFailures}` : ''}{source.nextFetchAt ? ` · повтор ${timeUntil(source.nextFetchAt)}` : ''}</small></div>
-          <div className="source-controls"><span title={source.isBuiltIn ? `Встроенный источник · ${source.provider} · ${source.providerIdentity} · ранг ${source.catalogRank}` : 'Пользовательский источник'} className="source-kind">{source.isBuiltIn ? source.provider : 'свой'}</span><span title={source.lastError} className={source.lastError ? 'source-error' : 'source-ok'}>{source.lastError ? 'ошибка' : source.enabled ? 'активен' : 'пауза'}</span><button disabled={sourceBusy === source.id} onClick={() => toggleSource(source)}>{source.enabled ? 'Пауза' : 'Включить'}</button><button className="danger" disabled={sourceBusy === source.id} onClick={() => removeSource(source)}>Удалить</button></div>
+          <div className="source-controls"><span title={source.isBuiltIn ? `Встроенный источник · ${source.provider} · ${source.providerIdentity} · ранг ${source.catalogRank}` : 'Пользовательский источник'} className="source-kind">{source.isBuiltIn ? source.provider : 'свой'}</span><span title={source.lastError} className={source.lastError ? 'source-error' : 'source-ok'}>{source.lastError ? 'ошибка' : source.enabled ? 'активен' : 'пауза'}</span><button disabled={sourceBusy === source.id} onClick={() => toggleSource(source)}>{source.enabled ? 'Пауза' : 'Включить'}</button>{!source.isBuiltIn && <button className="danger" disabled={sourceBusy === source.id} onClick={() => removeSource(source)}>Удалить</button>}</div>
         </article>)}</div>
       </section>
     </div>}

@@ -52,6 +52,7 @@
 
 ### Fixed
 
+- Mobile React UI увеличивает logo/admin, protocol filters, latency slider, 50 source-link targets и все элементы admin dialog до 44 px без horizontal overflow; после входа keyboard focus переходит к первой admin-команде, а встроенные источники больше не показывают вводящее в заблуждение действие удаления. Stylesheet и component-контракты защищают accessibility в CI.
 - Container smoke больше не пытается отправить тестовый backup в настоящий Telegram с фиктивным token: API пересоздаётся с пустыми Telegram secret-файлами, а ответ и `BackupRun` обязаны подтвердить локальный completed-архив.
 
 ## [1.0.0] - 2026-08-10
