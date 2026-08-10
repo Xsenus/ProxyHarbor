@@ -98,6 +98,25 @@ services:
     Assert-GateRejected 'mutable container reference redis:latest'
     [IO.File]::Delete($composePath)
 
+    # Канонический docker-compose.yml включает отдельный fail-closed runtime contract.
+    $coreComposePath = Join-Path $fixtureRoot 'docker-compose.yml'
+    Set-Content -LiteralPath $coreComposePath -Value @'
+services:
+  postgres:
+    mem_limit: ${POSTGRES_MEMORY_LIMIT:-2g}
+    cpus: ${POSTGRES_CPU_LIMIT:-2.0}
+  api:
+    cpus: ${API_CPU_LIMIT:-2.0}
+  restore:
+    mem_limit: ${RESTORE_MEMORY_LIMIT:-2g}
+    cpus: ${RESTORE_CPU_LIMIT:-2.0}
+  web:
+    mem_limit: ${WEB_MEMORY_LIMIT:-256m}
+    cpus: ${WEB_CPU_LIMIT:-0.5}
+'@ -Encoding utf8NoBOM
+    Assert-GateRejected 'service api не задаёт bounded mem_limit'
+    [IO.File]::Delete($coreComposePath)
+
     Set-FixtureWorkflow @'
 name: test
 jobs:
@@ -113,7 +132,7 @@ services:
 '@ -Encoding utf8NoBOM
     Assert-GateRejected 'PostgreSQL tag/digest расходятся между Compose и workflows'
 
-    Write-Host 'Supply-chain contracts пройдены: workflow services/container, matrix metadata, actions, Dockerfile/Compose variants и PostgreSQL pin synchronization.' -ForegroundColor Green
+    Write-Host 'Supply-chain/runtime contracts пройдены: workflow services/container, matrix metadata, actions, Dockerfile/Compose variants, resource ceilings и PostgreSQL pin synchronization.' -ForegroundColor Green
 } finally {
     $resolvedFixture = [IO.Path]::GetFullPath($fixtureRoot)
     $resolvedTemp = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())

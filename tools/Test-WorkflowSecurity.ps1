@@ -102,7 +102,42 @@ if ($distinctPostgresReferences.Count -gt 1) {
     $violations.Add("PostgreSQL tag/digest расходятся между Compose и workflows: $($distinctPostgresReferences -join ', ')")
 }
 
+# Core runtime не может оставаться без host-level CPU/RAM ceilings. Проверка
+# включается только для канонических Compose-файлов, поэтому synthetic fixtures
+# без production topology по-прежнему могут тестировать supply-chain правила.
+$resourceContracts = @(
+    @{ File = 'docker-compose.yml'; Service = 'postgres'; Memory = 'POSTGRES_MEMORY_LIMIT:-2g'; Cpu = 'POSTGRES_CPU_LIMIT:-2.0' }
+    @{ File = 'docker-compose.yml'; Service = 'api'; Memory = 'API_MEMORY_LIMIT:-2g'; Cpu = 'API_CPU_LIMIT:-2.0' }
+    @{ File = 'docker-compose.yml'; Service = 'restore'; Memory = 'RESTORE_MEMORY_LIMIT:-2g'; Cpu = 'RESTORE_CPU_LIMIT:-2.0' }
+    @{ File = 'docker-compose.yml'; Service = 'web'; Memory = 'WEB_MEMORY_LIMIT:-256m'; Cpu = 'WEB_CPU_LIMIT:-0.5' }
+    @{ File = 'docker-compose.production.yml'; Service = 'caddy'; Memory = 'CADDY_MEMORY_LIMIT:-256m'; Cpu = 'CADDY_CPU_LIMIT:-0.5' }
+)
+foreach ($contract in $resourceContracts) {
+    $composePath = Join-Path $repositoryRoot $contract.File
+    if (-not [IO.File]::Exists($composePath)) { continue }
+    $composeText = Get-Content -LiteralPath $composePath -Raw
+    $serviceName = [regex]::Escape($contract.Service)
+    $serviceMatch = [regex]::Match(
+        $composeText,
+        "(?ms)^  $serviceName`:\s*\r?\n(?<body>.*?)(?=^  [a-zA-Z0-9_-]+`:\s*\r?$|^(?:volumes|networks|secrets)`:\s*\r?$|\z)")
+    if (-not $serviceMatch.Success) {
+        $violations.Add("$($contract.File): service $($contract.Service) отсутствует для resource-limit contract")
+        continue
+    }
+    $block = $serviceMatch.Value
+    $memoryExpression = '${' + $contract.Memory + '}'
+    $cpuExpression = '${' + $contract.Cpu + '}'
+    $expectedMemory = [regex]::Escape($memoryExpression)
+    $expectedCpu = [regex]::Escape($cpuExpression)
+    if ($block -notmatch ('(?m)^    mem_limit:\s*' + $expectedMemory + '\s*$')) {
+        $violations.Add("$($contract.File): service $($contract.Service) не задаёт bounded mem_limit $memoryExpression")
+    }
+    if ($block -notmatch ('(?m)^    cpus:\s*' + $expectedCpu + '\s*$')) {
+        $violations.Add("$($contract.File): service $($contract.Service) не задаёт bounded cpus $cpuExpression")
+    }
+}
+
 if ($violations.Count -gt 0) {
     throw "Supply-chain gate отклонён:`n$($violations -join [Environment]::NewLine)"
 }
-Write-Host "Supply-chain contract пройден: actions закреплены commit SHA, container references — $pinnedImages tag+digest pins, PostgreSQL references — $($postgresReferences.Count) синхронизированы." -ForegroundColor Green
+Write-Host "Supply-chain/runtime contract пройден: actions закреплены commit SHA, container references — $pinnedImages tag+digest pins, PostgreSQL references — $($postgresReferences.Count) синхронизированы, core services имеют CPU/RAM ceilings." -ForegroundColor Green

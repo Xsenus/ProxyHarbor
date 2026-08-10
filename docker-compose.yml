@@ -24,6 +24,8 @@ services:
       retries: 20
     networks: [backend]
     pids_limit: 256
+    mem_limit: ${POSTGRES_MEMORY_LIMIT:-2g}
+    cpus: ${POSTGRES_CPU_LIMIT:-2.0}
     stop_grace_period: 1m
     logging: *bounded-logging
     security_opt: [no-new-privileges:true]
@@ -64,6 +66,8 @@ services:
     networks: [backend]
     init: true
     pids_limit: 512
+    mem_limit: ${API_MEMORY_LIMIT:-2g}
+    cpus: ${API_CPU_LIMIT:-2.0}
     ulimits:
       nofile:
         soft: 8192
@@ -101,6 +105,8 @@ services:
     networks: [backend]
     init: true
     pids_limit: 256
+    mem_limit: ${RESTORE_MEMORY_LIMIT:-2g}
+    cpus: ${RESTORE_CPU_LIMIT:-2.0}
     read_only: true
     cap_drop: [ALL]
     logging: *bounded-logging
@@ -120,6 +126,8 @@ services:
     networks: [backend]
     init: true
     pids_limit: 128
+    mem_limit: ${WEB_MEMORY_LIMIT:-256m}
+    cpus: ${WEB_CPU_LIMIT:-0.5}
     stop_grace_period: 15s
     read_only: true
     tmpfs: [/tmp]

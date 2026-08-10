@@ -88,6 +88,7 @@ Prometheus слушает только `127.0.0.1:9090`, Alertmanager — `127.0
 | `PROMETHEUS_RETENTION_SIZE` | Максимальный объём TSDB, по умолчанию 10GB |
 | `ALERTMANAGER_PORT` | Loopback-порт Alertmanager, по умолчанию 9093 |
 | `ALERTMANAGER_RETENTION_TIME` | Срок notification log и silences, по умолчанию 120h |
+| `POSTGRES_*_LIMIT`, `API_*_LIMIT`, `RESTORE_*_LIMIT`, `WEB_*_LIMIT`, `CADDY_*_LIMIT` | Настраиваемые memory/CPU ceilings core-контейнеров; безопасные defaults перечислены в `.env.example` |
 | `SecretFiles__*` | Абсолютные пути secret manager; Docker Compose задаёт их автоматически |
 | `Collector__BackgroundWorkersEnabled` | Позволяет отключить workers для миграций, CI или отдельной API-реплики |
 | `VALIDATION_CONCURRENCY` / `Collector__ValidationConcurrency` | Параллельность сетевых проверок, по умолчанию 800 |

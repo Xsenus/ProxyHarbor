@@ -36,6 +36,8 @@ services:
     user: "65532:65532"
     init: true
     pids_limit: 128
+    mem_limit: ${CADDY_MEMORY_LIMIT:-256m}
+    cpus: ${CADDY_CPU_LIMIT:-0.5}
     stop_grace_period: 30s
     read_only: true
     tmpfs: [/tmp]
