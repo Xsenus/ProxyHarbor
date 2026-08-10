@@ -70,7 +70,11 @@ public sealed class ProxyCollector(
                 {
                     try
                     {
-                        var useValidators = SourceConditionalFetchPolicy.ShouldUseValidators(
+                        // Admin force-run является доказательным полным аудитом, а не только
+                        // обходом backoff-расписания: каждый feed обязан вернуть body и заново
+                        // пройти parser. Иначе 304 повторно выдаёт старый LastItemCount за
+                        // результат текущего ручного запуска.
+                        var useValidators = !forceAllSources && SourceConditionalFetchPolicy.ShouldUseValidators(
                             source.LastContentFetchedAt,
                             collectionStartedAt,
                             options.Value.DeadRetentionDays);

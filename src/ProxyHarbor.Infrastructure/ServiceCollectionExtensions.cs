@@ -69,6 +69,9 @@ public static class ServiceCollectionExtensions
             .ValidateOnStart();
         services.AddPooledDbContextFactory<ProxyHarborDbContext>(x => x.UseNpgsql(connection, npgsql =>
             npgsql.EnableRetryOnFailure(3, TimeSpan.FromSeconds(2), null)));
+        // Короткие API/worker-команды выигрывают от retry, но streaming export нельзя
+        // повторять после отправки части body. Для него зарегистрирован отдельный контекст.
+        services.AddSingleton<IProxyExportDbContextFactory>(new NpgsqlExportDbContextFactory(connection));
         services.AddHttpClient("sources", client =>
         {
             client.DefaultRequestHeaders.UserAgent.ParseAdd("ProxyHarbor/1.0");

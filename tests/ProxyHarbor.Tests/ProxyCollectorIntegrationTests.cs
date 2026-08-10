@@ -300,7 +300,7 @@ public sealed class ProxyCollectorIntegrationTests
             using (var collector = new ProxyCollector(
                 factory, clients, Options.Create(settings), NullLogger<ProxyCollector>.Instance))
             {
-                var unchanged = await collector.CollectAsync(CancellationToken.None, forceAllSources: true);
+                var unchanged = await collector.CollectAsync(CancellationToken.None, forceAllSources: false);
 
                 Assert.Equal("completed", unchanged.Status);
                 Assert.Equal(1, unchanged.SourcesProcessed);
@@ -314,6 +314,21 @@ public sealed class ProxyCollectorIntegrationTests
             await using (var unchangedContent = await factory.CreateDbContextAsync())
                 Assert.Equal(firstContentFetchedAt, (await unchangedContent.Sources.AsNoTracking()
                     .SingleAsync(source => source.Id == sourceId)).LastContentFetchedAt);
+
+            // Ручной force-run обязан игнорировать ещё свежие validators и повторно
+            // скачать/распарсить body: иначе source-аудит способен подтвердить старые counts.
+            using (var clients = new TestHttpClientFactory(new FullRefreshFeedHandler()))
+            using (var collector = new ProxyCollector(
+                factory, clients, Options.Create(settings), NullLogger<ProxyCollector>.Instance))
+            {
+                var forced = await collector.CollectAsync(CancellationToken.None, forceAllSources: true);
+
+                Assert.Equal("completed", forced.Status);
+                Assert.Equal(1, forced.SourcesSucceeded);
+                Assert.Equal(1, forced.CandidatesFound);
+                Assert.Equal(0, forced.NewProxies);
+                Assert.True(forced.CandidateLimitReached);
+            }
 
             var staleContentFetchedAt = DateTimeOffset.UtcNow.AddDays(-2);
             await using (var ageContent = await factory.CreateDbContextAsync())
@@ -331,7 +346,7 @@ public sealed class ProxyCollectorIntegrationTests
             using (var collector = new ProxyCollector(
                 factory, clients, Options.Create(settings), NullLogger<ProxyCollector>.Instance))
             {
-                var refreshed = await collector.CollectAsync(CancellationToken.None, forceAllSources: true);
+                var refreshed = await collector.CollectAsync(CancellationToken.None, forceAllSources: false);
 
                 Assert.Equal("completed", refreshed.Status);
                 Assert.Equal(1, refreshed.SourcesSucceeded);
@@ -354,12 +369,12 @@ public sealed class ProxyCollectorIntegrationTests
 
             await using var verify = await factory.CreateDbContextAsync();
             var runs = await verify.Runs.AsNoTracking().OrderBy(run => run.StartedAt).ToListAsync();
-            Assert.Equal(5, runs.Count);
+            Assert.Equal(6, runs.Count);
             var abandoned = runs.Single(run => run.Id == abandonedId);
             Assert.Equal("failed", abandoned.Status);
             Assert.NotNull(abandoned.FinishedAt);
             Assert.Contains("прерван", abandoned.Error, StringComparison.OrdinalIgnoreCase);
-            Assert.Equal(3, runs.Count(run => run.Status == "completed" && run.FinishedAt != null));
+            Assert.Equal(4, runs.Count(run => run.Status == "completed" && run.FinishedAt != null));
             var failed = Assert.Single(runs, run => run.Id != abandonedId && run.Status == "failed");
             Assert.NotNull(failed.FinishedAt);
             Assert.Contains("CanceledException", failed.Error, StringComparison.Ordinal);

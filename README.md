@@ -51,7 +51,7 @@ docker compose -f docker-compose.yml -f docker-compose.release.yml -f docker-com
 
 Для prerelease используется полный нормализованный image tag из release manifest; разделитель `+` SemVer build metadata кодируется как `_build_`, что исключает столкновение с допустимым prerelease-именем. Тег `latest` и плавающий `major.minor` обновляются только стабильными релизами. Compose CI доказывает, что release overlay полностью удаляет локальные `build`-секции. Процедура выпуска и проверка attestations описаны в [docs/RELEASING.md](docs/RELEASING.md).
 
-Перед первым push выполните fail-closed [checklist публикации](docs/GITHUB_SETUP.md): он фиксирует required checks, rulesets, GitHub security settings и GHCR visibility. Локальный `tools/Test-PublicationReadiness.ps1` отклоняет tracked secret-bearing/generated artifacts, конфликты регистра путей и файлы больше 10 MiB до попадания в GitHub.
+Перед первым push выполните fail-closed [checklist публикации](docs/GITHUB_SETUP.md): он фиксирует required checks, rulesets, GitHub security settings и GHCR visibility. Локальный `tools/Test-PublicationReadiness.ps1` отклоняет tracked secret-bearing/generated artifacts, включая runtime audit reports, конфликты регистра путей и файлы больше 10 MiB до попадания в GitHub.
 
 ## Production HTTPS
 
@@ -126,6 +126,10 @@ Production требует 1–32 явных ASCII pattern в `AllowedHosts`; п�
 
 ## API
 
+Принудительный admin collection отключает `ETag`/`Last-Modified`: все feed’ы обязаны вернуть полный body и заново пройти parser. Source audit требует `LastContentFetchedAt` внутри границ именно этого run, поэтому исторический `304` не может выдать сохранённый `LastItemCount` за новый полный аудит.
+
+Потоковые export endpoint'ы читают boundary metadata и body в одной PostgreSQL `RepeatableRead` транзакции через отдельный non-retrying контекст. Обычные короткие запросы и workers сохраняют transient retry, но экспорт никогда не повторяется после отправки первых байтов клиенту.
+
 ```text
 GET  /api/v1/proxies?protocol=Socks5&maxLatencyMs=1000&page=1&pageSize=100
 GET  /api/v1/proxies/seek?protocol=Socks5&pageSize=100&after={nextCursor}
@@ -140,7 +144,7 @@ GET  /api/v1/stats
 
 `/api/v1/sources` без административного ключа возвращает публичный read-only снимок: дату последнего release-аудита, 50 независимых провайдеров, их протоколы и все 81 канонический feed. React-карточка каждого провайдера раскрывает все его конкретные URL с именем и HTTP/HTTPS/SOCKS4/SOCKS5 protocol; свёрнутое состояние сохраняет компактную сетку. Текущее состояние, ошибки и расписание источников остаются только в admin diagnostics и Prometheus.
 
-Для независимого bounded live-аудита каталога запустите `./tools/Test-BuiltInSourceEndpoints.ps1`: инструмент отключает системный proxy, параллельно проверяет все 81 HTTPS feed с общим per-request timeout, читает не более 256 КиБ распакованного body и требует признак `IP:port`. Режим `-CatalogOnly` без сети фиксирует cardinality/uniqueness/rank contract в CI и release gate; полный JSON-отчёт можно сохранить через `-ReportPath`. Последний независимый endpoint-аудит 10 августа 2026 года в 18:29 (Asia/Novosibirsk) подтвердил 81/81 feed от 50/50 владельцев без ошибок, самый медленный ответ занял 1,139 мс.
+Для независимого bounded live-аудита каталога запустите `./tools/Test-BuiltInSourceEndpoints.ps1`: инструмент отключает системный proxy, параллельно проверяет все 81 HTTPS feed с общим per-request timeout, читает не более 256 КиБ распакованного body и требует признак `IP:port`. Режим `-CatalogOnly` без сети фиксирует cardinality/uniqueness/rank contract в CI и release gate; полный JSON-отчёт можно сохранить через `-ReportPath`. Последний независимый endpoint-аудит 10 августа 2026 года в 18:54 (Asia/Novosibirsk) подтвердил 81/81 feed от 50/50 владельцев без ошибок, самый медленный ответ занял 1,023 мс.
 
 Mixed feed сохраняет scheme каждой отдельной строки (`http`, `https`, `socks4`, `socks5`), а source default применяется только к голому `IP:port`. До разбора кандидатов semantic gate отклоняет HTML media types и mislabelled HTML/WAF envelopes, включая leading comment, `doctype`, `html/head/body`, `meta`, `title` и `script`, поэтому диагностический адрес на error page не становится прокси.
 

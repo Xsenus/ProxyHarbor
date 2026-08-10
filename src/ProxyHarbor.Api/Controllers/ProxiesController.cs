@@ -19,7 +19,8 @@ namespace ProxyHarbor.Api.Controllers;
 [ApiController, Route("api/v1"), EnableRateLimiting("public")]
 public sealed class ProxiesController(
     IDbContextFactory<ProxyHarborDbContext> dbFactory,
-    IOptions<CollectorOptions> collectorOptions) : ControllerBase
+    IOptions<CollectorOptions> collectorOptions,
+    IProxyExportDbContextFactory exportDbFactory) : ControllerBase
 {
     private const int MaxExportPageSize = 50_000;
     private const int MaxLegacyOffset = 5_000_000;
@@ -30,6 +31,17 @@ public sealed class ProxiesController(
     {
         Converters = { new JsonStringEnumConverter() }
     };
+
+    /// <summary>
+    /// Provider-agnostic unit tests могут использовать одну InMemory-фабрику для всех
+    /// запросов. Production DI видит только публичный fail-closed конструктор выше.
+    /// </summary>
+    internal ProxiesController(
+        IDbContextFactory<ProxyHarborDbContext> testDbFactory,
+        IOptions<CollectorOptions> testCollectorOptions)
+        : this(testDbFactory, testCollectorOptions, new TestExportDbContextFactory(testDbFactory))
+    {
+    }
 
     /// <summary>Возвращает страницу только живых прокси, отсортированную по задержке.</summary>
     [HttpGet("proxies")]
@@ -179,7 +191,7 @@ public sealed class ProxiesController(
 
         try
         {
-            await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+            await using var db = await exportDbFactory.CreateDbContextAsync(cancellationToken);
             // Boundary headers и streaming body обязаны видеть один набор строк. Иначе
             // validation update между двумя SQL-командами способен выдать cursor от одной
             // страницы, а тело — от другой. InMemory unit provider транзакций не имеет.
@@ -427,6 +439,15 @@ public sealed class ProxiesController(
             // Жизненным циклом исходного Response.Body владеет ASP.NET Core.
             base.Dispose(disposing);
         }
+    }
+
+    /// <summary>Внутренний адаптер существует только для unit-test конструктора.</summary>
+    private sealed class TestExportDbContextFactory(
+        IDbContextFactory<ProxyHarborDbContext> factory) : IProxyExportDbContextFactory
+    {
+        public Task<ProxyHarborDbContext> CreateDbContextAsync(
+            CancellationToken cancellationToken = default) =>
+            factory.CreateDbContextAsync(cancellationToken);
     }
 }
 

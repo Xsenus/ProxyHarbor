@@ -34,11 +34,17 @@ public sealed class ProxyPublicationPostgresIntegrationTests
         try
         {
             var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
-                .UseNpgsql(builder.ConnectionString)
+                .UseNpgsql(builder.ConnectionString, npgsql => npgsql.EnableRetryOnFailure())
                 .Options;
             var factory = new TestDbFactory(options);
+            var exportFactory = new NpgsqlExportDbContextFactory(builder.ConnectionString);
             await using (var migrationDb = await factory.CreateDbContextAsync())
                 await migrationDb.Database.MigrateAsync();
+
+            await using (var normalDb = await factory.CreateDbContextAsync())
+                Assert.True(normalDb.Database.CreateExecutionStrategy().RetriesOnFailure);
+            await using (var exportDb = await exportFactory.CreateDbContextAsync())
+                Assert.False(exportDb.Database.CreateExecutionStrategy().RetriesOnFailure);
 
             var now = DateTimeOffset.UtcNow;
             await using (var seed = await factory.CreateDbContextAsync())
@@ -66,7 +72,7 @@ public sealed class ProxyPublicationPostgresIntegrationTests
             Assert.False(secondPage.HasMore);
 
             await using var firstOutput = new MemoryStream();
-            var firstExport = ExportController(factory, firstOutput);
+            var firstExport = ExportController(factory, firstOutput, exportFactory);
             Assert.IsType<EmptyResult>(await firstExport.ExportSeek(
                 "txt", null, null, null, CancellationToken.None, limit: 2));
             Assert.Equal(
@@ -77,7 +83,7 @@ public sealed class ProxyPublicationPostgresIntegrationTests
             Assert.Equal(PublicationCursor.EncodedLength, exportCursor.Length);
 
             await using var secondOutput = new MemoryStream();
-            var secondExport = ExportController(factory, secondOutput);
+            var secondExport = ExportController(factory, secondOutput, exportFactory);
             Assert.IsType<EmptyResult>(await secondExport.ExportSeek(
                 "txt", null, null, null, CancellationToken.None, limit: 2, after: exportCursor));
             Assert.Equal("http://9.9.9.9:8080", Encoding.UTF8.GetString(secondOutput.ToArray()).Trim());
@@ -137,7 +143,8 @@ public sealed class ProxyPublicationPostgresIntegrationTests
                 .AddInterceptors(interceptor)
                 .Options;
             await using var output = new MemoryStream();
-            var controller = ExportController(new TestDbFactory(exportOptions), output);
+            var controller = ExportController(
+                plainFactory, output, new TestExportDbFactory(exportOptions));
 
             Assert.IsType<EmptyResult>(await controller.ExportSeek(
                 "txt", null, null, null, CancellationToken.None, limit: 1));
@@ -161,10 +168,13 @@ public sealed class ProxyPublicationPostgresIntegrationTests
 
     private static ProxiesController ExportController(
         IDbContextFactory<ProxyHarborDbContext> factory,
-        Stream output)
+        Stream output,
+        IProxyExportDbContextFactory? exportFactory = null)
     {
-        var controller = new ProxiesController(
-            factory, Options.Create(new CollectorOptions { PublicFreshnessMinutes = 15 }));
+        var options = Options.Create(new CollectorOptions { PublicFreshnessMinutes = 15 });
+        var controller = exportFactory is null
+            ? new ProxiesController(factory, options)
+            : new ProxiesController(factory, options, exportFactory);
         controller.ControllerContext = new ControllerContext
         {
             HttpContext = new DefaultHttpContext { Response = { Body = output } }
@@ -192,6 +202,18 @@ public sealed class ProxyPublicationPostgresIntegrationTests
         public ProxyHarborDbContext CreateDbContext() => new(options);
         public Task<ProxyHarborDbContext> CreateDbContextAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult(CreateDbContext());
+    }
+
+    /// <summary>Позволяет snapshot-тесту добавить SQL interceptor в export-контекст.</summary>
+    private sealed class TestExportDbFactory(DbContextOptions<ProxyHarborDbContext> options)
+        : IProxyExportDbContextFactory
+    {
+        public Task<ProxyHarborDbContext> CreateDbContextAsync(
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(new ProxyHarborDbContext(options));
+        }
     }
 
     /// <summary>Изменяет первую строку строго между boundary query и streaming query.</summary>

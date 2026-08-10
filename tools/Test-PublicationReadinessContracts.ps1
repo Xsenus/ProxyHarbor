@@ -75,6 +75,14 @@ try {
     Invoke-Git rm --cached -- .env.production
     [IO.File]::Delete((Join-Path $fixtureRoot '.env.production'))
 
+    $artifactPath = Join-Path $fixtureRoot 'artifacts/runtime-audit.json'
+    [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($artifactPath)) | Out-Null
+    [IO.File]::WriteAllText($artifactPath, "{}`n")
+    Invoke-Git add -- artifacts/runtime-audit.json
+    Assert-PublicationRejected 'secret/generated artifacts'
+    Invoke-Git rm --cached -- artifacts/runtime-audit.json
+    [IO.Directory]::Delete((Join-Path $fixtureRoot 'artifacts'), $true)
+
     $largePath = Join-Path $fixtureRoot 'large.bin'
     $stream = [IO.File]::Create($largePath)
     try { $stream.SetLength(10MB + 1) } finally { $stream.Dispose() }
@@ -102,4 +110,4 @@ finally {
     }
 }
 
-Write-Host 'Publication contracts пройдены: wiring/checks и negative fixtures для secret, size, case collision, dirty worktree.' -ForegroundColor Green
+Write-Host 'Publication contracts пройдены: wiring/checks и negative fixtures для secret/artifact, size, case collision, dirty worktree.' -ForegroundColor Green

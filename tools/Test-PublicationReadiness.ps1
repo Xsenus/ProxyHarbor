@@ -29,7 +29,7 @@ if ($tracked.Count -eq 0) { throw 'Git index пуст.' }
 
 # Локальные ignored build/test каталоги допустимы, но ни один из них не должен
 # оказаться в истории, которую получит публичный GitHub checkout.
-$forbiddenPath = '(?i)(^|/)(?:\.env(?:\..+)?|backups?|coverage|TestResults(?:-.+)?|node_modules|bin|obj|\.tmp-postgres)(?:/|$)|(?i)\.(?:phbackup|pfx|p12|pem|key|dump|sql|zip)$'
+$forbiddenPath = '(?i)(^|/)(?:\.env(?:\..+)?|artifacts|backups?|coverage|TestResults(?:-.+)?|node_modules|bin|obj|\.tmp-postgres)(?:/|$)|(?i)\.(?:phbackup|pfx|p12|pem|key|dump|sql|zip)$'
 $forbiddenTracked = @($tracked | Where-Object {
     $_ -ne '.env.example' -and $_ -match $forbiddenPath
 })

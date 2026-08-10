@@ -9,7 +9,7 @@
 
 - Добавлен fail-closed Gitleaks scan всей Git-истории с закреплёнными версией и SHA-256 архива, redaction вывода и контрактной проверкой CI/release wiring.
 - Добавлен CodeQL SAST для C# и JavaScript/TypeScript с `security-extended`, locked C# build, least-privilege permissions и immutable action pins.
-- Добавлены fail-closed publication-readiness gate и воспроизводимый GitHub checklist: tracked secret-bearing/generated artifacts, case collisions, oversized-файлы, required checks, rulesets и security settings.
+- Добавлены fail-closed publication-readiness gate и воспроизводимый GitHub checklist: tracked secret-bearing/generated artifacts, включая runtime audit reports, case collisions, oversized-файлы, required checks, rulesets и security settings.
 
 ### Added
 
@@ -24,7 +24,7 @@
 - OpenAPI admin-контракт теперь явно описывает общий `401 ProblemDetails` и реальные success/400/404/409 responses, включая cluster-wide конфликт source mutation с collection, поэтому сгенерированные клиенты больше не предполагают только happy path.
 - Admin diagnostics получил типизированные `DiagnosticsResponse`/`ValidationQueueResponse`, поэтому OpenAPI и generated clients видят полный operator snapshot вместо schema-less `200`.
 - PostgreSQL CI process-smoke fail-closed проверяет фактически сгенерированный `/openapi/v1.json`: `AdminApiKey`, operation security, точные response-коды source CRUD и `ProblemDetails` schema для collection conflicts.
-- Воспроизводимый `Test-BuiltInSourceEndpoints.ps1` выполняет bounded parallel live-аудит 81 feed/50 технических владельцев без системного proxy и публикует JSON failures; network-free `-CatalogOnly` contract включён в CI/release. Четыре последовательных live-run 10 августа подтвердили 81/81 endpoint с `IP:port` и нулём ошибок; последний прогон завершился с worst-case 1,130 мс, максимум серии — 3,110 мс.
+- Воспроизводимый `Test-BuiltInSourceEndpoints.ps1` выполняет bounded parallel live-аудит 81 feed/50 технических владельцев без системного proxy и публикует JSON failures; network-free `-CatalogOnly` contract включён в CI/release. Последний live-run 10 августа подтвердил 81/81 endpoint с `IP:port` и нулём ошибок за worst-case 1,023 мс.
 - Production Caddy получил end-to-end Docker healthcheck: pinned image `curl` обращается к API `/health/ready` через внутренний TLS listener с `PUBLIC_HOST` одновременно как SNI и Host; проверка охватывает TLS → gateway → API → PostgreSQL, Compose contract фиксирует bounded timing, а container smoke требует фактический статус `healthy`.
 - Публичный `GET /api/v1/sources` и React-панель раскрывают полный встроенный каталог как 50 независимых провайдеров и 81 feed без административных ошибок, backoff и других эксплуатационных полей.
 
@@ -85,6 +85,8 @@
 
 ### Fixed
 
+- Потоковый PostgreSQL export теперь использует отдельный non-retrying DbContext: `RepeatableRead` сохраняет единый snapshot для continuation headers и body, а EF retry не может повторить транзакцию после частичной отправки HTTP-ответа.
+- Принудительный admin/source-аудит теперь отключает HTTP validators и требует свежий `LastContentFetchedAt` каждого feed внутри run window; исторический `304` больше не может имитировать полный повторный parse.
 - Stats, admin diagnostics и Prometheus теперь считают `due` только среди доступных для claim строк и отдельно показывают активные leases; in-flight batch больше не завышает backlog/ETA и не создаёт ложный `ValidationBacklogAtRisk`, а lease с expiry ровно `now` согласована с claim ownership.
 - Dead-retention больше не удаляет строку с активной validation lease посреди сетевой проверки и не превращает корректный batch в ownership failure; просроченная lease по-прежнему допускает очистку.
 - Source CRUD теперь берёт cluster-wide shared advisory-lock, а collection — exclusive-lock того же ключа: прямой REST-клиент на любой реплике получает `409` вместо изменения enabled-каталога посреди snapshot и ложного `completed` полного аудита; параллельные CRUD по-прежнему разрешены.

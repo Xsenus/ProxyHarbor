@@ -12,6 +12,7 @@ backups/
 .vs/
 .vscode/
 coverage/
+artifacts/
 TestResults/
 TestResults-*/
 .tmp-postgres/
