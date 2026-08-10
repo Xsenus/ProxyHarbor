@@ -43,20 +43,7 @@ public sealed class ProxyProbeServiceTests
         var probe = new ProxyProbeService(
             settings,
             origin,
-            async (_, _, token) =>
-            {
-                var client = new TcpClient { NoDelay = true };
-                try
-                {
-                    await client.ConnectAsync(IPAddress.Loopback, listenerPort, token);
-                    return client;
-                }
-                catch
-                {
-                    client.Dispose();
-                    throw;
-                }
-            },
+            (_, _, token) => ConnectLoopbackAsync(listenerPort, token),
             (_, remoteCertificate, _, _) =>
                 remoteCertificate is not null &&
                 string.Equals(
@@ -89,6 +76,169 @@ public sealed class ProxyProbeServiceTests
         Assert.Equal(exitIp, result.ExitIp);
         Assert.Equal(expectedAnonymous, result.IsAnonymous);
         Assert.Null(result.Error);
+    }
+
+    [Fact]
+    public async Task SystemTlsValidationRejectsUntrustedProxyCertificate()
+    {
+        using var originClients = new StubHttpClientFactory("{\"ip\":\"8.8.8.8\"}");
+        var settings = Options.Create(new CollectorOptions
+        {
+            ProbeHost = "probe.example",
+            ProbePort = 8_443,
+            ProbePath = "/who",
+            ProbeTimeoutSeconds = 5
+        });
+        using var origin = new OriginIpProvider(originClients, settings, new ProbeControlHealth());
+        using var rsa = RSA.Create(2_048);
+        using var certificate = CreateServerCertificate(rsa);
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var listenerPort = ((IPEndPoint)listener.LocalEndpoint).Port;
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var releaseConnection = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var server = ServeProxyOnceAsync(
+            listener, certificate, "1.1.1.1", releaseConnection.Task, timeout.Token);
+        // Callback намеренно отсутствует: этот internal-конструктор проходит тем же
+        // системным certificate validation path, что публичный production-конструктор.
+        var probe = new ProxyProbeService(
+            settings,
+            origin,
+            (_, _, token) => ConnectLoopbackAsync(listenerPort, token));
+
+        ProxyCheckResult result;
+        Exception? serverFailure = null;
+        try
+        {
+            result = await probe.CheckAsync(Proxy(), timeout.Token);
+        }
+        finally
+        {
+            releaseConnection.TrySetResult();
+            serverFailure = await Record.ExceptionAsync(() => server);
+        }
+
+        Assert.True(serverFailure is AuthenticationException or IOException, serverFailure?.ToString());
+        Assert.False(result.IsAlive);
+        Assert.False(result.IsDeferred);
+        Assert.Null(result.ExitIp);
+        Assert.False(result.IsAnonymous);
+        Assert.False(string.IsNullOrWhiteSpace(result.Error));
+    }
+
+    [Fact]
+    public async Task SilentProxyIsClassifiedAsTimeoutWithinConfiguredBound()
+    {
+        using var originClients = new StubHttpClientFactory("{\"ip\":\"8.8.8.8\"}");
+        var settings = Options.Create(new CollectorOptions
+        {
+            ProbeHost = "probe.example",
+            ProbePort = 443,
+            ProbePath = "/who",
+            ProbeTimeoutSeconds = 1
+        });
+        using var origin = new OriginIpProvider(originClients, settings, new ProbeControlHealth());
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var listenerPort = ((IPEndPoint)listener.LocalEndpoint).Port;
+        using var serverStop = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var accepted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var server = HoldConnectionOpenAsync(listener, accepted, serverStop.Token);
+        var probe = new ProxyProbeService(
+            settings,
+            origin,
+            (_, _, token) => ConnectLoopbackAsync(listenerPort, token));
+
+        ProxyCheckResult result;
+        try
+        {
+            result = await probe.CheckAsync(Proxy(), CancellationToken.None)
+                .WaitAsync(TimeSpan.FromSeconds(5));
+            await accepted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        }
+        finally
+        {
+            await StopServerAsync(serverStop, server);
+        }
+
+        Assert.False(result.IsAlive);
+        Assert.False(result.IsDeferred);
+        Assert.Equal("timeout", result.Error);
+        Assert.Null(result.LatencyMs);
+    }
+
+    [Fact]
+    public async Task CallerCancellationEscapesInsteadOfBeingClassifiedAsTimeout()
+    {
+        using var originClients = new StubHttpClientFactory("{\"ip\":\"8.8.8.8\"}");
+        var settings = Options.Create(new CollectorOptions
+        {
+            ProbeHost = "probe.example",
+            ProbeTimeoutSeconds = 10
+        });
+        using var origin = new OriginIpProvider(originClients, settings, new ProbeControlHealth());
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var listenerPort = ((IPEndPoint)listener.LocalEndpoint).Port;
+        using var serverStop = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var accepted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var server = HoldConnectionOpenAsync(listener, accepted, serverStop.Token);
+        var probe = new ProxyProbeService(
+            settings,
+            origin,
+            (_, _, token) => ConnectLoopbackAsync(listenerPort, token));
+        using var callerCancellation = new CancellationTokenSource();
+
+        try
+        {
+            var check = probe.CheckAsync(Proxy(), callerCancellation.Token);
+            await accepted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            await callerCancellation.CancelAsync();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => check);
+        }
+        finally
+        {
+            await StopServerAsync(serverStop, server);
+        }
+    }
+
+    private static ProxyEndpoint Proxy() => new()
+    {
+        Host = "203.0.113.10",
+        Port = 31_280,
+        Protocol = ProxyProtocol.Http
+    };
+
+    private static async Task<TcpClient> ConnectLoopbackAsync(int port, CancellationToken token)
+    {
+        var client = new TcpClient { NoDelay = true };
+        try
+        {
+            await client.ConnectAsync(IPAddress.Loopback, port, token);
+            return client;
+        }
+        catch
+        {
+            client.Dispose();
+            throw;
+        }
+    }
+
+    private static async Task HoldConnectionOpenAsync(
+        TcpListener listener,
+        TaskCompletionSource accepted,
+        CancellationToken token)
+    {
+        using var client = await listener.AcceptTcpClientAsync(token);
+        accepted.TrySetResult();
+        await Task.Delay(Timeout.InfiniteTimeSpan, token);
+    }
+
+    private static async Task StopServerAsync(CancellationTokenSource stopping, Task server)
+    {
+        await stopping.CancelAsync();
+        try { await server; }
+        catch (OperationCanceledException) when (stopping.IsCancellationRequested) { }
     }
 
     private static async Task ServeProxyOnceAsync(
