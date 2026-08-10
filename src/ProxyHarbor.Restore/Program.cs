@@ -46,7 +46,17 @@ internal static class RestoreApplication
         }
     }
 
-    public static async Task<int> RunAsync(string[] args, CancellationToken cancellationToken = default)
+    public static Task<int> RunAsync(string[] args, CancellationToken cancellationToken = default) =>
+        RunAsync(args, hooks: null, cancellationToken);
+
+    /// <summary>
+    /// Выполняет restore с необязательными внутренними точками наблюдения для детерминированных
+    /// integration-тестов. Обычный CLI всегда передаёт <see langword="null"/> и не несёт test-only логики.
+    /// </summary>
+    internal static async Task<int> RunAsync(
+        string[] args,
+        RestoreExecutionHooks? hooks,
+        CancellationToken cancellationToken)
     {
         try
         {
@@ -62,12 +72,13 @@ internal static class RestoreApplication
             Directory.CreateDirectory(temporaryDirectory);
             try
             {
+                hooks?.TemporaryDirectoryCreated?.Invoke(temporaryDirectory);
                 var zipPath = Path.Combine(temporaryDirectory, "snapshot.zip");
                 Console.WriteLine("Проверка целостности и расшифровка backup...");
                 await BackupEncryption.DecryptAsync(
                     options.InputFile!, zipPath, options.EncryptionKey!, cancellationToken);
                 var counts = await RestoreDatabaseAsync(
-                    zipPath, options.ConnectionString!, cancellationToken);
+                    zipPath, options.ConnectionString!, hooks, cancellationToken);
                 Console.WriteLine($"Восстановление завершено: {counts.Proxies:N0} прокси, {counts.Sources:N0} источников, " +
                     $"{counts.Runs:N0} циклов сбора, {counts.ValidationRuns:N0} validation-партий, " +
                     $"{counts.BackupRuns:N0} циклов backup.");
@@ -91,7 +102,11 @@ internal static class RestoreApplication
         }
     }
 
-    private static async Task<RestoreCounts> RestoreDatabaseAsync(string zipPath, string connectionString, CancellationToken token)
+    private static async Task<RestoreCounts> RestoreDatabaseAsync(
+        string zipPath,
+        string connectionString,
+        RestoreExecutionHooks? hooks,
+        CancellationToken token)
     {
         using var archive = ZipFile.OpenRead(zipPath);
         BackupArchiveValidator.Validate(archive);
@@ -125,6 +140,7 @@ internal static class RestoreApplication
                 """COPY "Proxies" ("Id", "Host", "Port", "Protocol", "Status", "LatencyMs", "ExitIp", "CountryCode", "IsAnonymous", "FirstSeenAt", "LastSeenAt", "LastCheckedAt", "LastValidationAttemptAt", "LastValidationDeferred", "NextCheckAt", "CheckLeaseUntil", "CheckLeaseId", "SuccessfulChecks", "FailedChecks", "ConsecutiveFailedChecks", "LastError") FROM STDIN (FORMAT BINARY)""",
                 RestoreEntityValidator.ValidateProxy,
                 WriteProxyAsync,
+                hooks,
                 token);
             var sourceCount = await ImportAsync<ProxySource>(
                 archive,
@@ -133,6 +149,7 @@ internal static class RestoreApplication
                 """COPY "Sources" ("Id", "Name", "Url", "DefaultProtocol", "Enabled", "Priority", "LastFetchedAt", "LastSucceededAt", "LastContentFetchedAt", "NextFetchAt", "HttpETag", "HttpLastModifiedAt", "LastItemCount", "LastResultTruncated", "ConsecutiveFailures", "LastError") FROM STDIN (FORMAT BINARY)""",
                 RestoreEntityValidator.ValidateSource,
                 WriteSourceAsync,
+                hooks,
                 token);
             var runCount = await ImportAsync<CollectionRun>(
                 archive,
@@ -141,6 +158,7 @@ internal static class RestoreApplication
                 """COPY "Runs" ("Id", "StartedAt", "FinishedAt", "SourcesProcessed", "SourcesSucceeded", "SourcesFailed", "SourcesSkipped", "SourcesTruncated", "CandidatesFound", "CandidateLimitReached", "NewProxies", "AliveProxies", "Status", "Error") FROM STDIN (FORMAT BINARY)""",
                 RestoreEntityValidator.ValidateCollectionRun,
                 WriteRunAsync,
+                hooks,
                 token);
             var validationRunCount = archive.GetEntry("database/validation-runs.json") is null
                 ? 0
@@ -151,6 +169,7 @@ internal static class RestoreApplication
                     """COPY "ValidationRuns" ("Id", "LeaseId", "StartedAt", "FinishedAt", "Claimed", "Checked", "Alive", "Deferred", "Status", "Error") FROM STDIN (FORMAT BINARY)""",
                     RestoreEntityValidator.ValidateValidationRun,
                     WriteValidationRunAsync,
+                    hooks,
                     token);
             var backupRunCount = archive.GetEntry("database/backup-runs.json") is null
                 ? 0
@@ -161,6 +180,7 @@ internal static class RestoreApplication
                     """COPY "BackupRuns" ("Id", "StartedAt", "FinishedAt", "Status", "FileName", "SizeBytes", "TelegramConfigured", "SentToTelegram", "Error") FROM STDIN (FORMAT BINARY)""",
                     RestoreEntityValidator.ValidateBackupRun,
                     WriteBackupRunAsync,
+                    hooks,
                     token);
             await transaction.CommitAsync(token);
             return new RestoreCounts(proxyCount, sourceCount, runCount, validationRunCount, backupRunCount);
@@ -174,6 +194,7 @@ internal static class RestoreApplication
         string copyCommand,
         Action<TEntity> validateEntity,
         Func<NpgsqlBinaryImporter, TEntity, CancellationToken, ValueTask> writeEntity,
+        RestoreExecutionHooks? hooks,
         CancellationToken token)
     {
         var count = 0;
@@ -185,6 +206,10 @@ internal static class RestoreApplication
             validateEntity(entity);
             await writeEntity(importer, entity, token);
             count = checked(count + 1);
+            hooks?.RowImported?.Invoke(entryName, count);
+            // Observer может инициировать остановку сразу после реально записанной COPY row.
+            // Явная проверка делает cancellation-canary независимым от размера следующего JSON-буфера.
+            token.ThrowIfCancellationRequested();
         }
         await importer.CompleteAsync(token);
         return count;
@@ -304,6 +329,14 @@ internal static class RestoreApplication
 
     private sealed record RestoreCounts(int Proxies, int Sources, int Runs, int ValidationRuns, int BackupRuns);
 }
+
+/// <summary>
+/// Внутренние точки наблюдения restore lifecycle. Нужны только тестам rollback/cleanup и не
+/// позволяют изменять данные или обходить production-проверки архива.
+/// </summary>
+internal sealed record RestoreExecutionHooks(
+    Action<string>? TemporaryDirectoryCreated = null,
+    Action<string, int>? RowImported = null);
 
 /// <summary>Проверяет семантические инварианты backup-строк до записи очередной COPY row.</summary>
 internal static class RestoreEntityValidator

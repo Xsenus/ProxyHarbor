@@ -107,6 +107,31 @@ public sealed class BackupRestoreRoundTripIntegrationTests
                     await unchanged.Sources.OrderBy(source => source.Priority).Select(source => source.Name).FirstAsync());
             }
 
+            using (var stopping = new CancellationTokenSource())
+            {
+                string? restoreTemporaryDirectory = null;
+                var hooks = new RestoreExecutionHooks(
+                    TemporaryDirectoryCreated: directory => restoreTemporaryDirectory = directory,
+                    RowImported: (entryName, importedCount) =>
+                    {
+                        // Останавливаем restore внутри открытого binary COPY, уже после первой
+                        // записи. Это самая опасная точка между DELETE и COMMIT.
+                        if (entryName == "database/proxies.json" && importedCount == 1)
+                            stopping.Cancel();
+                    });
+
+                var cancelledExitCode = await RestoreApplication.RunAsync([
+                    "--input", encryptedPath,
+                    "--connection", targetConnection,
+                    "--encryption-key-file", restoreKeyFile,
+                    "--replace-existing-data"], hooks, stopping.Token);
+
+                Assert.Equal(130, cancelledExitCode);
+                Assert.NotNull(restoreTemporaryDirectory);
+                Assert.False(Directory.Exists(restoreTemporaryDirectory));
+                await AssertTargetMarkersSurvivedAsync(targetOptions);
+            }
+
             var exitCode = await RestoreApplication.RunAsync([
                 "--input", encryptedPath,
                 "--connection", targetConnection,
@@ -122,6 +147,19 @@ public sealed class BackupRestoreRoundTripIntegrationTests
             await DropSchemaAsync(admin, sourceSchema);
             await DropSchemaAsync(admin, targetSchema);
         }
+    }
+
+    /// <summary>Доказывает, что незавершённый destructive restore полностью откатился.</summary>
+    private static async Task AssertTargetMarkersSurvivedAsync(
+        DbContextOptions<ProxyHarborDbContext> options)
+    {
+        await using var unchanged = new ProxyHarborDbContext(options);
+        Assert.Equal(1, await unchanged.Proxies.CountAsync(proxy => proxy.Host == "9.9.9.9"));
+        Assert.Equal(0, await unchanged.Proxies.CountAsync(proxy => proxy.Host == "8.8.8.8"));
+        Assert.Equal(BuiltInSourceCatalog.Sources.Count, await unchanged.Sources.CountAsync());
+        Assert.Equal(
+            "Target metadata must survive failed restore",
+            await unchanged.Sources.OrderBy(source => source.Priority).Select(source => source.Name).FirstAsync());
     }
 
     private static async Task VerifySettingsSnapshotAsync(string encryptedPath, string directory)
