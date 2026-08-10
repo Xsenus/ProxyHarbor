@@ -496,17 +496,26 @@ internal static class BackupFileSplitter
 }
 
 /// <summary>Запускает резервное копирование по расписанию только при явном включении.</summary>
-public sealed class BackupWorker(BackupService backup, IOptions<BackupOptions> options, ILogger<BackupWorker> logger) : Microsoft.Extensions.Hosting.BackgroundService
+public sealed class BackupWorker(
+    BackupService backup,
+    IDbContextFactory<ProxyHarborDbContext> dbFactory,
+    IOptions<BackupOptions> options,
+    ILogger<BackupWorker> logger) : Microsoft.Extensions.Hosting.BackgroundService
 {
     internal enum CycleOutcome { Succeeded, PeerOwned, Failed }
     private static readonly TimeSpan FailureRetryDelay = TimeSpan.FromMinutes(15);
+    private static readonly TimeSpan MaximumScheduleWaitChunk = TimeSpan.FromDays(1);
     private static readonly Action<ILogger, Exception?> BackupFailed =
         LoggerMessage.Define(LogLevel.Error, new EventId(1202, "BackupFailed"), "Не удалось создать резервную копию.");
+    private static readonly Action<ILogger, Exception?> BackupScheduleReadFailed =
+        LoggerMessage.Define(LogLevel.Error, new EventId(1204, "BackupScheduleReadFailed"),
+            "Не удалось восстановить расписание резервного копирования из PostgreSQL.");
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         if (!options.Value.Enabled) return;
         while (!stoppingToken.IsCancellationRequested)
         {
+            await WaitUntilDueAsync(stoppingToken);
             var outcome = CycleOutcome.Failed;
             try
             {
@@ -523,9 +532,65 @@ public sealed class BackupWorker(BackupService backup, IOptions<BackupOptions> o
                 BackupFailed(logger, ex);
             }
 
-            await Task.Delay(NextDelay(options.Value.IntervalHours, outcome), stoppingToken);
+            await Task.Delay(WaitChunk(NextDelay(options.Value.IntervalHours, outcome)), stoppingToken);
         }
     }
+
+    /// <summary>
+    /// На старте и после каждого cooldown повторно читает persistent audit. Поэтому
+    /// restart либо ручной backup не создаёт ещё один архив раньше полного интервала.
+    /// </summary>
+    private async Task WaitUntilDueAsync(CancellationToken token)
+    {
+        while (true)
+        {
+            try
+            {
+                var completedAt = await ReadLastCompletedAtAsync(dbFactory, token);
+                var delay = InitialDelay(options.Value.IntervalHours, completedAt, DateTimeOffset.UtcNow);
+                if (delay == TimeSpan.Zero) return;
+                await Task.Delay(WaitChunk(delay), token);
+            }
+            catch (Exception exception) when (!token.IsCancellationRequested)
+            {
+                // Недоступная БД не должна завершать весь Generic Host. Повторяем чтение
+                // раньше суточного интервала, но с bounded паузой без tight loop.
+                BackupScheduleReadFailed(logger, exception);
+                await Task.Delay(FailureRetryDelay, token);
+            }
+        }
+    }
+
+    /// <summary>Читает только подтверждённый completed audit; failed/running не сдвигают RPO.</summary>
+    internal static async Task<DateTimeOffset?> ReadLastCompletedAtAsync(
+        IDbContextFactory<ProxyHarborDbContext> factory,
+        CancellationToken token)
+    {
+        await using var db = await factory.CreateDbContextAsync(token);
+        return await db.BackupRuns.AsNoTracking()
+            .Where(run => run.Status == "completed" && run.FinishedAt != null)
+            .MaxAsync(run => (DateTimeOffset?)run.FinishedAt, token);
+    }
+
+    /// <summary>Вычисляет bounded остаток интервала, устойчивый к backward clock skew.</summary>
+    internal static TimeSpan InitialDelay(
+        int intervalHours,
+        DateTimeOffset? lastCompletedAt,
+        DateTimeOffset now)
+    {
+        if (!lastCompletedAt.HasValue) return TimeSpan.Zero;
+        var interval = TimeSpan.FromHours(Math.Max(1, intervalHours));
+        var remaining = lastCompletedAt.Value.Add(interval) - now;
+        if (remaining <= TimeSpan.Zero) return TimeSpan.Zero;
+        return remaining >= interval ? interval : remaining;
+    }
+
+    /// <summary>
+    /// Длинный разрешённый интервал до года разбивается на переносимые суточные
+    /// timer chunks; между ними worker замечает новый ручной backup или clock shift.
+    /// </summary>
+    internal static TimeSpan WaitChunk(TimeSpan delay) =>
+        delay <= MaximumScheduleWaitChunk ? delay : MaximumScheduleWaitChunk;
 
     /// <summary>После ошибки повторяет существенно раньше суточного production-интервала.</summary>
     internal static TimeSpan NextDelay(int intervalHours, CycleOutcome outcome)

@@ -52,6 +52,7 @@
 
 ### Fixed
 
+- BackupWorker восстанавливает расписание из последнего persistent `completed`-аудита: restart/deploy и ручной backup больше не создают преждевременный повторный архив/Telegram-спам, overdue или отсутствующая копия запускается сразу, future timestamp bounded одним интервалом, длинное ожидание делится на суточные chunks, а временный сбой чтения БД повторяется через 15 минут без остановки host.
 - Collector после bounded bulk-upsert будит ValidatorWorker через coalescing channel: новые кандидаты больше не ждут случайно до 30 секунд idle polling, повторные сигналы занимают ровно один slot, а cancellation shutdown не маскируется.
 - Background collector сохраняет настроенный start-to-start cadence, но после overrun делает обязательный cooldown, после общего сбоя повторяет цикл через минуту, а при занятом cluster lock ждёт полный интервал; медленные feed'ы и несколько API-реплик больше не могут вызвать немедленный тяжёлый restart/retry-storm.
 - Mobile React UI увеличивает logo/admin, protocol filters, latency slider, 50 source-link targets и все элементы admin dialog до 44 px без horizontal overflow; после входа keyboard focus переходит к первой admin-команде, а встроенные источники больше не показывают вводящее в заблуждение действие удаления. Stylesheet и component-контракты защищают accessibility в CI.

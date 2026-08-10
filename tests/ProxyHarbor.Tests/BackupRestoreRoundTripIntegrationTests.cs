@@ -83,6 +83,10 @@ public sealed class BackupRestoreRoundTripIntegrationTests
             Assert.EndsWith(".phbackup", encryptedPath, StringComparison.Ordinal);
             Assert.Empty(Directory.EnumerateFiles(backupDirectory, "*.zip"));
             Assert.Empty(Directory.EnumerateFiles(backupDirectory, "*.partial"));
+            var lastCompletedAt = await BackupWorker.ReadLastCompletedAtAsync(
+                sourceFactory, CancellationToken.None);
+            Assert.NotNull(lastCompletedAt);
+            Assert.True(lastCompletedAt.Value > SnapshotTime);
             await VerifySettingsSnapshotAsync(encryptedPath, backupDirectory);
 
             var invalidBackup = await CreateSemanticallyInvalidBackupAsync(encryptedPath, backupDirectory);
