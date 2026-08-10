@@ -340,6 +340,12 @@ internal static class RestoreEntityValidator
             Invalid("proxy check counters переполняют вычисление successRate.");
         if (entity.ConsecutiveFailedChecks > entity.FailedChecks)
             Invalid("proxy.consecutiveFailedChecks не может превышать failedChecks.");
+        if (entity.Status == ProxyStatus.Alive &&
+            (entity.LastCheckedAt is null || entity.LatencyMs is null || entity.SuccessfulChecks == 0))
+            Invalid("alive proxy должен содержать lastCheckedAt, latencyMs и успешную проверку.");
+        if (entity.Status == ProxyStatus.Dead &&
+            (entity.LastCheckedAt is null || entity.FailedChecks == 0))
+            Invalid("dead proxy должен содержать lastCheckedAt и неуспешную проверку.");
     }
 
     internal static void ValidateSource(ProxySource entity)

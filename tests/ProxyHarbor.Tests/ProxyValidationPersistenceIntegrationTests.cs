@@ -48,6 +48,7 @@ public sealed class ProxyValidationPersistenceIntegrationTests
             await using (var migrationDb = await factory.CreateDbContextAsync())
                 await migrationDb.Database.MigrateAsync();
             var proxyId = Guid.NewGuid();
+            var lastCheckedAt = DateTimeOffset.UtcNow.AddMinutes(-10);
             await using (var seed = await factory.CreateDbContextAsync())
             {
                 seed.Proxies.Add(new ProxyEndpoint
@@ -57,6 +58,8 @@ public sealed class ProxyValidationPersistenceIntegrationTests
                     Port = port,
                     Protocol = ProxyProtocol.Http,
                     Status = ProxyStatus.Alive,
+                    LatencyMs = 120,
+                    LastCheckedAt = lastCheckedAt,
                     SuccessfulChecks = 7,
                     FailedChecks = 2,
                     ConsecutiveFailedChecks = 1
@@ -88,7 +91,8 @@ public sealed class ProxyValidationPersistenceIntegrationTests
             var saved = await verify.Proxies.AsNoTracking().SingleAsync(proxy => proxy.Id == proxyId);
             Assert.Null(saved.CheckLeaseId);
             Assert.Null(saved.CheckLeaseUntil);
-            Assert.Null(saved.LastCheckedAt);
+            Assert.Equal(lastCheckedAt.ToUnixTimeMilliseconds(), saved.LastCheckedAt?.ToUnixTimeMilliseconds());
+            Assert.Equal(120, saved.LatencyMs);
             Assert.Null(saved.LastValidationAttemptAt);
             Assert.False(saved.LastValidationDeferred);
             Assert.Equal(ProxyStatus.Alive, saved.Status);

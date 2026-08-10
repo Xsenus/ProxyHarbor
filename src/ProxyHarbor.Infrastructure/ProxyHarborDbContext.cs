@@ -54,6 +54,9 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
             table.HasCheckConstraint("CK_Proxies_Timeline", "\"LastSeenAt\" >= \"FirstSeenAt\"");
             table.HasCheckConstraint("CK_Proxies_Latency", "\"LatencyMs\" IS NULL OR \"LatencyMs\" >= 0");
             table.HasCheckConstraint("CK_Proxies_CheckCounters", "\"SuccessfulChecks\" >= 0 AND \"FailedChecks\" >= 0 AND \"ConsecutiveFailedChecks\" >= 0 AND \"ConsecutiveFailedChecks\" <= \"FailedChecks\" AND \"SuccessfulChecks\"::bigint + \"FailedChecks\"::bigint <= 2147483647");
+            // Alive/Dead публикуются и учитываются только после доказанной проверки.
+            // Pending остаётся свободным состоянием для новых и повторно поставленных в очередь строк.
+            table.HasCheckConstraint("CK_Proxies_StatusEvidence", "(\"Status\" = 0) OR (\"Status\" = 1 AND \"LastCheckedAt\" IS NOT NULL AND \"LatencyMs\" IS NOT NULL AND \"SuccessfulChecks\" > 0) OR (\"Status\" = 2 AND \"LastCheckedAt\" IS NOT NULL AND \"FailedChecks\" > 0)");
             table.HasCheckConstraint("CK_Proxies_Lease", "(\"CheckLeaseUntil\" IS NULL) = (\"CheckLeaseId\" IS NULL)");
             table.HasCheckConstraint("CK_Proxies_DeferredAttempt", "NOT \"LastValidationDeferred\" OR \"LastValidationAttemptAt\" IS NOT NULL");
         });

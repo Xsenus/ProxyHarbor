@@ -128,7 +128,9 @@ public sealed class ProxyPublicationPostgresIntegrationTests
                 await using var update = await plainFactory.CreateDbContextAsync(token);
                 await update.Proxies.Where(proxy => proxy.Id == firstId)
                     .ExecuteUpdateAsync(setters => setters
-                        .SetProperty(proxy => proxy.Status, ProxyStatus.Dead), token);
+                        .SetProperty(proxy => proxy.Status, ProxyStatus.Dead)
+                        .SetProperty(proxy => proxy.FailedChecks, proxy => proxy.FailedChecks + 1)
+                        .SetProperty(proxy => proxy.ConsecutiveFailedChecks, 1), token);
             });
             var exportOptions = new DbContextOptionsBuilder<ProxyHarborDbContext>()
                 .UseNpgsql(builder.ConnectionString)

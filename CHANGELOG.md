@@ -7,6 +7,7 @@
 
 ### Added
 
+- PostgreSQL status-evidence trust boundary гарантирует, что публичный `Alive` имеет `LastCheckedAt`, измеренную latency и хотя бы одну успешную проверку, а `Dead` — дату и неуспешную проверку; rollout возвращает неподтверждённые legacy-строки в немедленную `Pending`-очередь до неблокирующей валидации constraint.
 - PostgreSQL backup integration-gate теперь коммитит source из второй сессии строго между чтением `proxies.json` и `sources.json`; архив обязан сохранить единую старую эпоху, тогда как живая БД подтверждает поздний commit, напрямую доказывая multi-table `REPEATABLE READ` snapshot.
 - Публичная React-панель раскрывает в каждой из 50 provider-карточек полный список конкретных feed'ов: все 81 HTTPS URL, имя и заявленный HTTP/HTTPS/SOCKS4/SOCKS5 protocol доступны как keyboard/touch-friendly ссылки вместо прежней ссылки только на первый feed.
 - OpenAPI admin-контракт теперь явно описывает общий `401 ProblemDetails` и реальные success/400/404/409 responses, включая cluster-wide конфликт source mutation с collection, поэтому сгенерированные клиенты больше не предполагают только happy path.
@@ -54,7 +55,7 @@
 - Diagnostics, React и Prometheus публикуют каноническую дату последнего полного release-аудита каталога.
 - Restore до изменения БД отклоняет ZIP-bomb, database entry крупнее 16 ГиБ и backup распакованным размером более 32 ГиБ.
 - Restore валидирует semantic invariants каждой JSON-строки до её записи через PostgreSQL binary COPY.
-- Пятнадцать PostgreSQL CHECK constraints независимо защищают пять операционных таблиц; rollout использует повторяемый `NOT VALID`/`VALIDATE CONSTRAINT` без длительной блокировки writes.
+- Семнадцать PostgreSQL CHECK constraints независимо защищают пять операционных таблиц; rollout использует `NOT VALID`/`VALIDATE CONSTRAINT` без длительной блокировки writes.
 - Collector парсит параллельные feed'ы прямо в общий bounded-набор через компактные IP value-key без per-source materialized списков и удерживаемых строк.
 - Источники сохраняют `ETag`/`Last-Modified` и используют conditional HTTP revalidation; подтверждённый `304` обновляет freshness без повторной загрузки и парсинга feed'а.
 

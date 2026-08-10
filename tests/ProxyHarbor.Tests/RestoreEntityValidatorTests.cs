@@ -126,6 +126,26 @@ public sealed class RestoreEntityValidatorTests
     }
 
     [Fact]
+    public void RejectsAliveProxyWithoutPublishedEvidence()
+    {
+        var proxy = ValidProxy();
+        proxy.LatencyMs = null;
+
+        Assert.Throws<InvalidDataException>(() => RestoreEntityValidator.ValidateProxy(proxy));
+    }
+
+    [Fact]
+    public void RejectsDeadProxyWithoutFailedCheckEvidence()
+    {
+        var proxy = ValidProxy();
+        proxy.Status = ProxyStatus.Dead;
+        proxy.SuccessfulChecks = 0;
+        proxy.FailedChecks = 0;
+
+        Assert.Throws<InvalidDataException>(() => RestoreEntityValidator.ValidateProxy(proxy));
+    }
+
+    [Fact]
     public void RejectsValidationCountsBeyondClaimedBatch()
     {
         var run = new ValidationRun
@@ -172,8 +192,10 @@ public sealed class RestoreEntityValidatorTests
             Port = 8080,
             Protocol = ProxyProtocol.Http,
             Status = ProxyStatus.Alive,
+            LatencyMs = 120,
             FirstSeenAt = now.AddHours(-1),
             LastSeenAt = now,
+            LastCheckedAt = now,
             SuccessfulChecks = 2,
             FailedChecks = 1,
             ConsecutiveFailedChecks = 1,
