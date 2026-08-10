@@ -265,6 +265,24 @@ public sealed class SourceReliabilityTests
         Assert.True(SourceFetchSchedule.IsDue(null, now, forceAllSources: false));
     }
 
+    [Theory]
+    [InlineData(3, -23, true)]
+    [InlineData(3, -24, false)]
+    [InlineData(1, -11, true)]
+    [InlineData(1, -12, false)]
+    [InlineData(3, 1, false)]
+    public void ConditionalValidatorsExpireBeforeDeadRetentionCanLoseMembership(
+        int retentionDays,
+        int contentAgeHours,
+        bool expected)
+    {
+        var now = new DateTimeOffset(2026, 8, 10, 0, 0, 0, TimeSpan.Zero);
+
+        Assert.Equal(expected, SourceConditionalFetchPolicy.ShouldUseValidators(
+            now.AddHours(contentAgeHours), now, retentionDays));
+        Assert.False(SourceConditionalFetchPolicy.ShouldUseValidators(null, now, retentionDays));
+    }
+
     private sealed class SequencedHandler(params HttpResponseMessage[] responses) : HttpMessageHandler
     {
         private int _index;

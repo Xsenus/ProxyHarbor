@@ -56,6 +56,11 @@ public sealed class ProxySource
     public int Priority { get; set; } = 100;
     public DateTimeOffset? LastFetchedAt { get; set; }
     public DateTimeOffset? LastSucceededAt { get; set; }
+    /// <summary>
+    /// Последний успешный ответ с полным body. В отличие от LastSucceededAt не меняется
+    /// на 304 и гарантирует периодическое восстановление membership после retention.
+    /// </summary>
+    public DateTimeOffset? LastContentFetchedAt { get; set; }
     /// <summary>Неудачный источник не опрашивается background worker до этого момента; admin-аудит игнорирует паузу.</summary>
     public DateTimeOffset? NextFetchAt { get; set; }
     /// <summary>Последний серверный ETag для условной повторной загрузки неизменившегося feed'а.</summary>

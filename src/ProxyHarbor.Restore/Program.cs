@@ -94,7 +94,7 @@ internal static class RestoreApplication
                 archive,
                 "database/sources.json",
                 connection,
-                """COPY "Sources" ("Id", "Name", "Url", "DefaultProtocol", "Enabled", "Priority", "LastFetchedAt", "LastSucceededAt", "NextFetchAt", "HttpETag", "HttpLastModifiedAt", "LastItemCount", "LastResultTruncated", "ConsecutiveFailures", "LastError") FROM STDIN (FORMAT BINARY)""",
+                """COPY "Sources" ("Id", "Name", "Url", "DefaultProtocol", "Enabled", "Priority", "LastFetchedAt", "LastSucceededAt", "LastContentFetchedAt", "NextFetchAt", "HttpETag", "HttpLastModifiedAt", "LastItemCount", "LastResultTruncated", "ConsecutiveFailures", "LastError") FROM STDIN (FORMAT BINARY)""",
                 RestoreEntityValidator.ValidateSource,
                 WriteSourceAsync,
                 token);
@@ -191,6 +191,7 @@ internal static class RestoreApplication
         await writer.WriteAsync(entity.Priority, token);
         await WriteNullableValueAsync(writer, entity.LastFetchedAt, token);
         await WriteNullableValueAsync(writer, entity.LastSucceededAt, token);
+        await WriteNullableValueAsync(writer, entity.LastContentFetchedAt, token);
         await WriteNullableValueAsync(writer, entity.NextFetchAt, token);
         await WriteNullableReferenceAsync(writer, entity.HttpETag, token);
         await WriteNullableValueAsync(writer, entity.HttpLastModifiedAt, token);
@@ -325,6 +326,11 @@ internal static class RestoreEntityValidator
         if (entity.LastSucceededAt is not null &&
             (entity.LastFetchedAt is null || entity.LastSucceededAt > entity.LastFetchedAt))
             Invalid("source.lastSucceededAt не может быть новее lastFetchedAt.");
+        if (entity.LastContentFetchedAt is not null &&
+            (entity.LastFetchedAt is null || entity.LastSucceededAt is null ||
+                entity.LastContentFetchedAt > entity.LastFetchedAt ||
+                entity.LastContentFetchedAt > entity.LastSucceededAt))
+            Invalid("source.lastContentFetchedAt должен принадлежать успешной fetch timeline.");
     }
 
     internal static void ValidateCollectionRun(CollectionRun entity)

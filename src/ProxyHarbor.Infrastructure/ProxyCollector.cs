@@ -69,11 +69,15 @@ public sealed class ProxyCollector(
                 {
                     try
                     {
+                        var useValidators = SourceConditionalFetchPolicy.ShouldUseValidators(
+                            source.LastContentFetchedAt,
+                            collectionStartedAt,
+                            options.Value.DeadRetentionDays);
                         var fetched = await FetchSourceStateAsync(
                             client,
                             source.Url,
-                            source.HttpETag,
-                            source.HttpLastModifiedAt,
+                            useValidators ? source.HttpETag : null,
+                            useValidators ? source.HttpLastModifiedAt : null,
                             token);
                         if (fetched.NotModified)
                         {
@@ -86,6 +90,7 @@ public sealed class ProxyCollector(
                                 source.LastResultTruncated,
                                 fetched.HttpETag,
                                 fetched.HttpLastModifiedAt,
+                                ContentFetched: false,
                                 Error: null));
                             return;
                         }
@@ -113,13 +118,14 @@ public sealed class ProxyCollector(
                             parsed.Truncated,
                             fetched.HttpETag,
                             fetched.HttpLastModifiedAt,
+                            ContentFetched: true,
                             Error: null));
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException || !token.IsCancellationRequested)
                     {
                         SourceFailed(logger, source.Name, ex);
                         sourceResults.Add(new SourceCollectionResult(
-                            source.Id, 0, false, null, null, ex.Message));
+                            source.Id, 0, false, null, null, ContentFetched: false, ex.Message));
                     }
                 });
 
@@ -141,6 +147,7 @@ public sealed class ProxyCollector(
                         source.NextFetchAt = null;
                         source.HttpETag = result.HttpETag;
                         source.HttpLastModifiedAt = result.HttpLastModifiedAt;
+                        if (result.ContentFetched) source.LastContentFetchedAt = fetchedAt;
                     }
                     else
                     {
@@ -403,6 +410,7 @@ public sealed class ProxyCollector(
         bool Truncated,
         string? HttpETag,
         DateTimeOffset? HttpLastModifiedAt,
+        bool ContentFetched,
         string? Error);
 }
 
@@ -498,5 +506,23 @@ internal static class SourceFetchSchedule
         var delayMinutes = baseMinutes * Math.Pow(2, exponent);
         var boundedMinutes = Math.Min(delayMinutes, TimeSpan.FromHours(maxHours).TotalMinutes);
         return failedAt.AddMinutes(boundedMinutes);
+    }
+}
+
+/// <summary>
+/// Периодически отключает conditional validators, чтобы неизменившийся feed всё же
+/// отдал полный body и восстановил кандидатов, удалённых локальной retention-политикой.
+/// </summary>
+internal static class SourceConditionalFetchPolicy
+{
+    internal static bool ShouldUseValidators(
+        DateTimeOffset? lastContentFetchedAt,
+        DateTimeOffset now,
+        int deadRetentionDays)
+    {
+        if (lastContentFetchedAt is null || lastContentFetchedAt > now) return false;
+        var retention = TimeSpan.FromDays(Math.Clamp(deadRetentionDays, 1, 365));
+        var maximumBodyAge = TimeSpan.FromTicks(Math.Min(TimeSpan.FromDays(1).Ticks, retention.Ticks / 2));
+        return now - lastContentFetchedAt.Value < maximumBodyAge;
     }
 }

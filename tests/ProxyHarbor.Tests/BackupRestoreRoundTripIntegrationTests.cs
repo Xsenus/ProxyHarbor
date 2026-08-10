@@ -187,6 +187,7 @@ public sealed class BackupRestoreRoundTripIntegrationTests
         builtIn.Enabled = false;
         builtIn.LastFetchedAt = SnapshotTime;
         builtIn.LastSucceededAt = SnapshotTime.AddMinutes(-1);
+        builtIn.LastContentFetchedAt = SnapshotTime.AddMinutes(-2);
         builtIn.NextFetchAt = SnapshotTime.AddHours(1);
         builtIn.LastItemCount = 321;
         builtIn.LastResultTruncated = true;
@@ -217,6 +218,7 @@ public sealed class BackupRestoreRoundTripIntegrationTests
         Assert.False(builtIn.Enabled);
         Assert.Equal(SnapshotTime, builtIn.LastFetchedAt);
         Assert.Equal(SnapshotTime.AddMinutes(-1), builtIn.LastSucceededAt);
+        Assert.Equal(SnapshotTime.AddMinutes(-2), builtIn.LastContentFetchedAt);
         Assert.Equal(SnapshotTime.AddHours(1), builtIn.NextFetchAt);
         Assert.Equal(321, builtIn.LastItemCount);
         Assert.True(builtIn.LastResultTruncated);
@@ -270,6 +272,7 @@ public sealed class BackupRestoreRoundTripIntegrationTests
         Priority = 9_999,
         LastFetchedAt = SnapshotTime,
         LastSucceededAt = SnapshotTime.AddMinutes(-2),
+        LastContentFetchedAt = SnapshotTime.AddMinutes(-3),
         NextFetchAt = SnapshotTime.AddHours(2),
         LastItemCount = 17,
         LastResultTruncated = true,

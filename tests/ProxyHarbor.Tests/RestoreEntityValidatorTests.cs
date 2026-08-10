@@ -77,6 +77,17 @@ public sealed class RestoreEntityValidatorTests
     }
 
     [Fact]
+    public void RejectsContentFetchOutsideSuccessfulSourceTimeline()
+    {
+        var source = ValidSource();
+        source.LastFetchedAt = DateTimeOffset.UtcNow.AddHours(-2);
+        source.LastSucceededAt = source.LastFetchedAt;
+        source.LastContentFetchedAt = source.LastFetchedAt.Value.AddMinutes(1);
+
+        Assert.Throws<InvalidDataException>(() => RestoreEntityValidator.ValidateSource(source));
+    }
+
+    [Fact]
     public void RejectsInconsistentCollectionCounters()
     {
         var run = new CollectionRun

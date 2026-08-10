@@ -71,6 +71,7 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
             table.HasCheckConstraint("CK_Sources_ProtocolPriority", "\"DefaultProtocol\" BETWEEN 0 AND 3 AND \"Priority\" BETWEEN -10000 AND 10000");
             table.HasCheckConstraint("CK_Sources_Counters", "\"LastItemCount\" >= 0 AND \"ConsecutiveFailures\" >= 0");
             table.HasCheckConstraint("CK_Sources_FetchTimeline", "\"LastSucceededAt\" IS NULL OR (\"LastFetchedAt\" IS NOT NULL AND \"LastSucceededAt\" <= \"LastFetchedAt\")");
+            table.HasCheckConstraint("CK_Sources_ContentTimeline", "\"LastContentFetchedAt\" IS NULL OR (\"LastFetchedAt\" IS NOT NULL AND \"LastSucceededAt\" IS NOT NULL AND \"LastContentFetchedAt\" <= \"LastFetchedAt\" AND \"LastContentFetchedAt\" <= \"LastSucceededAt\")");
         });
 
         var collectionRun = modelBuilder.Entity<CollectionRun>();

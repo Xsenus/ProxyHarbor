@@ -88,6 +88,7 @@ public sealed class AdminController(
         {
             source.LastFetchedAt = null;
             source.LastSucceededAt = null;
+            source.LastContentFetchedAt = null;
             source.LastItemCount = 0;
             source.LastResultTruncated = false;
             source.ConsecutiveFailures = 0;
@@ -252,6 +253,7 @@ public sealed record SourceResponse(
     int Priority,
     DateTimeOffset? LastFetchedAt,
     DateTimeOffset? LastSucceededAt,
+    DateTimeOffset? LastContentFetchedAt,
     DateTimeOffset? NextFetchAt,
     int LastItemCount,
     bool LastResultTruncated,
@@ -275,6 +277,7 @@ public sealed record SourceResponse(
             source.Priority,
             source.LastFetchedAt,
             source.LastSucceededAt,
+            source.LastContentFetchedAt,
             source.NextFetchAt,
             source.LastItemCount,
             source.LastResultTruncated,

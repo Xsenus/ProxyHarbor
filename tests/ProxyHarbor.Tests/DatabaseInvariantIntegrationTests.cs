@@ -25,6 +25,7 @@ public sealed class DatabaseInvariantIntegrationTests
         "CK_Proxies_Timeline",
         "CK_Runs_Counters",
         "CK_Runs_State",
+        "CK_Sources_ContentTimeline",
         "CK_Sources_Counters",
         "CK_Sources_FetchTimeline",
         "CK_Sources_ProtocolPriority",
@@ -50,9 +51,11 @@ public sealed class DatabaseInvariantIntegrationTests
     }
 
     [Fact]
-    public void MigrationUsesRestartableNonBlockingValidationForEveryConstraint()
+    public void MigrationsUseRestartableNonBlockingValidationForEveryConstraint()
     {
-        var operations = new EnforceDataInvariants().UpOperations.OfType<SqlOperation>().ToArray();
+        var operations = new EnforceDataInvariants().UpOperations.OfType<SqlOperation>()
+            .Concat(new AddSourceContentRefresh().UpOperations.OfType<SqlOperation>())
+            .ToArray();
 
         Assert.Equal(ExpectedConstraints.Length * 2, operations.Length);
         Assert.All(operations, operation => Assert.True(operation.SuppressTransaction));
@@ -107,6 +110,14 @@ public sealed class DatabaseInvariantIntegrationTests
                 Name = "Invalid source",
                 Url = "https://example.com/proxies.txt",
                 Priority = 10_001
+            }));
+            await AssertRejectedAsync(options, db => db.Sources.Add(new ProxySource
+            {
+                Name = "Invalid source timeline",
+                Url = "https://example.net/proxies.txt",
+                LastFetchedAt = DateTimeOffset.UtcNow.AddHours(-2),
+                LastSucceededAt = DateTimeOffset.UtcNow.AddHours(-2),
+                LastContentFetchedAt = DateTimeOffset.UtcNow
             }));
             await AssertRejectedAsync(options, db => db.Runs.Add(new CollectionRun
             {

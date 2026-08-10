@@ -177,6 +177,7 @@ public sealed class AdminSourceControllerTests
             Url = "https://8.8.8.8/Feed.txt",
             LastFetchedAt = DateTimeOffset.UtcNow,
             LastSucceededAt = DateTimeOffset.UtcNow,
+            LastContentFetchedAt = DateTimeOffset.UtcNow.AddMinutes(-1),
             NextFetchAt = DateTimeOffset.UtcNow.AddHours(1),
             LastItemCount = 10,
             LastResultTruncated = true,
@@ -198,6 +199,7 @@ public sealed class AdminSourceControllerTests
         Assert.Equal("https://8.8.8.8/feed.txt", updated.Url);
         Assert.Null(updated.LastFetchedAt);
         Assert.Null(updated.LastSucceededAt);
+        Assert.Null(updated.LastContentFetchedAt);
         Assert.Null(updated.NextFetchAt);
         Assert.Equal(0, updated.LastItemCount);
         Assert.False(updated.LastResultTruncated);

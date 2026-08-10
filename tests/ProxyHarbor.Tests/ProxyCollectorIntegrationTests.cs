@@ -95,6 +95,10 @@ public sealed class ProxyCollectorIntegrationTests
                 Assert.Equal(1, completed.SourcesTruncated);
                 Assert.True(completed.CandidateLimitReached);
             }
+            DateTimeOffset firstContentFetchedAt;
+            await using (var firstContent = await factory.CreateDbContextAsync())
+                firstContentFetchedAt = (await firstContent.Sources.AsNoTracking()
+                    .SingleAsync(source => source.Id == sourceId)).LastContentFetchedAt!.Value;
 
             using (var clients = new TestHttpClientFactory(new NotModifiedFeedHandler()))
             using (var collector = new ProxyCollector(
@@ -111,6 +115,31 @@ public sealed class ProxyCollectorIntegrationTests
                 Assert.Equal(1, unchanged.SourcesTruncated);
                 Assert.False(unchanged.CandidateLimitReached);
             }
+            await using (var unchangedContent = await factory.CreateDbContextAsync())
+                Assert.Equal(firstContentFetchedAt, (await unchangedContent.Sources.AsNoTracking()
+                    .SingleAsync(source => source.Id == sourceId)).LastContentFetchedAt);
+
+            var staleContentFetchedAt = DateTimeOffset.UtcNow.AddDays(-2);
+            await using (var ageContent = await factory.CreateDbContextAsync())
+            {
+                await ageContent.Sources.Where(source => source.Id == sourceId)
+                    .ExecuteUpdateAsync(setters => setters
+                        .SetProperty(source => source.LastContentFetchedAt, staleContentFetchedAt));
+                // Имитируем proxy, уже удалённый retention во время серии 304.
+                await ageContent.Proxies.ExecuteDeleteAsync();
+            }
+            using (var clients = new TestHttpClientFactory(new FullRefreshFeedHandler()))
+            using (var collector = new ProxyCollector(
+                factory, clients, Options.Create(settings), NullLogger<ProxyCollector>.Instance))
+            {
+                var refreshed = await collector.CollectAsync(CancellationToken.None, forceAllSources: true);
+
+                Assert.Equal("completed", refreshed.Status);
+                Assert.Equal(1, refreshed.SourcesSucceeded);
+                Assert.Equal(1, refreshed.CandidatesFound);
+                Assert.Equal(1, refreshed.NewProxies);
+                Assert.True(refreshed.CandidateLimitReached);
+            }
 
             var hangingHandler = new HangingFeedHandler();
             using (var clients = new TestHttpClientFactory(hangingHandler))
@@ -126,12 +155,12 @@ public sealed class ProxyCollectorIntegrationTests
 
             await using var verify = await factory.CreateDbContextAsync();
             var runs = await verify.Runs.AsNoTracking().OrderBy(run => run.StartedAt).ToListAsync();
-            Assert.Equal(4, runs.Count);
+            Assert.Equal(5, runs.Count);
             var abandoned = runs.Single(run => run.Id == abandonedId);
             Assert.Equal("failed", abandoned.Status);
             Assert.NotNull(abandoned.FinishedAt);
             Assert.Contains("прерван", abandoned.Error, StringComparison.OrdinalIgnoreCase);
-            Assert.Equal(2, runs.Count(run => run.Status == "completed" && run.FinishedAt != null));
+            Assert.Equal(3, runs.Count(run => run.Status == "completed" && run.FinishedAt != null));
             var failed = Assert.Single(runs, run => run.Id != abandonedId && run.Status == "failed");
             Assert.NotNull(failed.FinishedAt);
             Assert.Contains("CanceledException", failed.Error, StringComparison.Ordinal);
@@ -145,8 +174,9 @@ public sealed class ProxyCollectorIntegrationTests
             Assert.Equal(0, source.ConsecutiveFailures);
             Assert.Null(source.LastError);
             Assert.NotNull(source.LastSucceededAt);
-            Assert.Equal("\"feed-v2\"", source.HttpETag);
+            Assert.Equal("\"feed-v3\"", source.HttpETag);
             Assert.Equal(StaticFeedHandler.LastModifiedAt, source.HttpLastModifiedAt);
+            Assert.True(source.LastContentFetchedAt > staleContentFetchedAt);
         }
         finally
         {
@@ -205,6 +235,24 @@ public sealed class ProxyCollectorIntegrationTests
             Assert.Equal(StaticFeedHandler.LastModifiedAt, request.Headers.IfModifiedSince);
             var response = new HttpResponseMessage(HttpStatusCode.NotModified);
             response.Headers.ETag = new System.Net.Http.Headers.EntityTagHeaderValue("\"feed-v2\"");
+            response.Content.Headers.LastModified = StaticFeedHandler.LastModifiedAt;
+            return Task.FromResult(response);
+        }
+    }
+
+    private sealed class FullRefreshFeedHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            Assert.Empty(request.Headers.IfNoneMatch);
+            Assert.Null(request.Headers.IfModifiedSince);
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("1.1.1.1:80\n8.8.8.8:81\n1.1.1.1:80\n9.9.9.9:82")
+            };
+            response.Headers.ETag = new System.Net.Http.Headers.EntityTagHeaderValue("\"feed-v3\"");
             response.Content.Headers.LastModified = StaticFeedHandler.LastModifiedAt;
             return Task.FromResult(response);
         }
