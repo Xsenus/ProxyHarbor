@@ -7,7 +7,7 @@
 
 ### Changed
 
-- Все сторонние Docker build/runtime/service images закреплены на точных multi-architecture registry digest; supply-chain gate отклоняет mutable container references.
+- Все сторонние Docker build/runtime/service images, включая PostgreSQL jobs в CI, release и live source audit, закреплены на точных multi-architecture registry digest; протестированный supply-chain gate отклоняет mutable container references в Dockerfile, Compose и GitHub Actions.
 - React-каталог использует keyset/cursor-пагинацию, позволяет дозагружать весь живой набор и сохраняет расширенный список при фоновом обновлении статистики.
 - Стартовая cursor-страница кэшируется на API с request collapsing, а уникальные continuation-страницы не засоряют ограниченный output cache.
 - Frontend Nginx запускается непривилегированным пользователем на порту 8080 с read-only root filesystem и без Linux capabilities.
