@@ -132,6 +132,25 @@ public sealed class BackupRestoreRoundTripIntegrationTests
                 await AssertTargetMarkersSurvivedAsync(targetOptions);
             }
 
+            using (var stoppingBeforeCommit = new CancellationTokenSource())
+            {
+                string? restoreTemporaryDirectory = null;
+                var hooks = new RestoreExecutionHooks(
+                    TemporaryDirectoryCreated: directory => restoreTemporaryDirectory = directory,
+                    BeforeCommit: stoppingBeforeCommit.Cancel);
+
+                var cancelledExitCode = await RestoreApplication.RunAsync([
+                    "--input", encryptedPath,
+                    "--connection", targetConnection,
+                    "--encryption-key-file", restoreKeyFile,
+                    "--replace-existing-data"], hooks, stoppingBeforeCommit.Token);
+
+                Assert.Equal(130, cancelledExitCode);
+                Assert.NotNull(restoreTemporaryDirectory);
+                Assert.False(Directory.Exists(restoreTemporaryDirectory));
+                await AssertTargetMarkersSurvivedAsync(targetOptions);
+            }
+
             var exitCode = await RestoreApplication.RunAsync([
                 "--input", encryptedPath,
                 "--connection", targetConnection,

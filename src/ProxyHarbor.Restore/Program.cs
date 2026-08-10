@@ -182,6 +182,10 @@ internal static class RestoreApplication
                     WriteBackupRunAsync,
                     hooks,
                     token);
+            hooks?.BeforeCommit?.Invoke();
+            // Не начинаем COMMIT, если shutdown поступил после завершения всех COPY. Явная
+            // граница исключает неоднозначный запуск подтверждения с уже отменённым token.
+            token.ThrowIfCancellationRequested();
             await transaction.CommitAsync(token);
             return new RestoreCounts(proxyCount, sourceCount, runCount, validationRunCount, backupRunCount);
         });
@@ -336,7 +340,8 @@ internal static class RestoreApplication
 /// </summary>
 internal sealed record RestoreExecutionHooks(
     Action<string>? TemporaryDirectoryCreated = null,
-    Action<string, int>? RowImported = null);
+    Action<string, int>? RowImported = null,
+    Action? BeforeCommit = null);
 
 /// <summary>Проверяет семантические инварианты backup-строк до записи очередной COPY row.</summary>
 internal static class RestoreEntityValidator
