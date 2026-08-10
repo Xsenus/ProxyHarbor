@@ -44,6 +44,40 @@ jobs:
     & $gate -RepositoryRoot $fixtureRoot -MinimumPinnedContainerReferences 1 `
         -MinimumSynchronizedPostgresReferences 0 *> $null
 
+    # Независимые PR для Test SDK и coverlet способны пройти по отдельности, но
+    # сломать collector protocol. Gate требует их атомарного Dependabot upgrade.
+    $dependabotPath = Join-Path $fixtureRoot '.github/dependabot.yml'
+    Set-Content -LiteralPath $dependabotPath -Value @'
+version: 2
+updates:
+  - package-ecosystem: nuget
+    directory: /
+    groups:
+      dotnet-runtime:
+        patterns: ["Microsoft.*"]
+      dotnet-tests:
+        patterns: ["coverlet.*"]
+'@ -Encoding utf8NoBOM
+    Assert-GateRejected 'Microsoft.NET.Test.Sdk и coverlet.* должны обновляться одной dotnet-tests группой'
+
+    # Порядок patterns не влияет на Dependabot semantics и не должен создавать
+    # ложный CI failure при formatter/review перестановке элементов.
+    Set-Content -LiteralPath $dependabotPath -Value @'
+version: 2
+updates:
+  - package-ecosystem: nuget
+    directory: /
+    groups:
+      dotnet-runtime:
+        patterns: ["Microsoft.*"]
+        exclude-patterns: ["Microsoft.NET.Test.Sdk"]
+      dotnet-tests:
+        patterns: ["Microsoft.NET.Test.Sdk", "coverlet.*"]
+'@ -Encoding utf8NoBOM
+    & $gate -RepositoryRoot $fixtureRoot -MinimumPinnedContainerReferences 1 `
+        -MinimumSynchronizedPostgresReferences 0 *> $null
+    [IO.File]::Delete($dependabotPath)
+
     Set-FixtureWorkflow @'
 name: test
 jobs:
@@ -132,7 +166,7 @@ services:
 '@ -Encoding utf8NoBOM
     Assert-GateRejected 'PostgreSQL tag/digest расходятся между Compose и workflows'
 
-    Write-Host 'Supply-chain/runtime contracts пройдены: workflow services/container, matrix metadata, actions, Dockerfile/Compose variants, resource ceilings и PostgreSQL pin synchronization.' -ForegroundColor Green
+    Write-Host 'Supply-chain/runtime contracts пройдены: workflow services/container, matrix metadata, actions, Dockerfile/Compose variants, resource ceilings, PostgreSQL pin synchronization и Dependabot test-toolchain grouping.' -ForegroundColor Green
 } finally {
     $resolvedFixture = [IO.Path]::GetFullPath($fixtureRoot)
     $resolvedTemp = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())

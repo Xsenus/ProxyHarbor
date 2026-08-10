@@ -24,6 +24,7 @@
 ### Changed
 
 - Test/coverage toolchain обновлён до согласованной для modern VSTest связки `Microsoft.NET.Test.Sdk` 18.8.1 и `coverlet.collector` 10.0.1; locked restore, 489 Release-тестов, Cobertura attachment, внутренний coverage-floor и повторный NuGet vulnerability audit проходят без исключений.
+- Dependabot теперь обновляет `Microsoft.NET.Test.Sdk` и `coverlet.*` одним атомарным `dotnet-tests` PR вместо несовместимых runtime/test PR; supply-chain gate и негативный fixture fail-closed защищают эту группировку.
 - Финальный source connect ограничивает один DNS-ответ максимум 32 публичными адресами до открытия socket; mixed private/public и oversized fan-out отклоняются fail-closed, а детерминированный gate доказывает public-only fallback и немедленную caller cancellation.
 - `/health/ready` больше не кэширует успешный ответ и выполняет zero-row schema probe всех пяти operational tables и актуальных колонок; доступный PostgreSQL с удалённой/устаревшей схемой теперь немедленно возвращает `503`, а не ложный `healthy`.
 - PHB3 writer после финального аутентифицированного маркера выполняет единственный `Flush(true)` до self-verification и atomic publish: completed audit, retention и Telegram больше не могут опередить durable запись ciphertext при power-loss, при этом каждый мегабайтный блок не переводится в дорогой `WriteThrough`.

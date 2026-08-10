@@ -12,6 +12,33 @@ $postgresReferences = [Collections.Generic.List[string]]::new()
 $workflowFiles = @(Get-ChildItem -LiteralPath $workflowRoot -File |
     Where-Object { $_.Extension -in '.yml', '.yaml' })
 
+# Coverlet 10 требует modern Microsoft.NET.Test.Sdk; отдельные Dependabot PR могут
+# временно сломать coverage gate. Runtime wildcard обязан исключать Test SDK, а
+# test-группа — обновлять обе части совместимой пары одним атомарным PR.
+$dependabotPath = Join-Path $repositoryRoot '.github/dependabot.yml'
+if ([IO.File]::Exists($dependabotPath)) {
+    $dependabotText = Get-Content -LiteralPath $dependabotPath -Raw
+    $runtimeGroup = [regex]::Match(
+        $dependabotText,
+        '(?ms)^      dotnet-runtime:\s*\r?\n(?<body>(?:(?!^      \S).)*)')
+    $testGroup = [regex]::Match(
+        $dependabotText,
+        '(?ms)^      dotnet-tests:\s*\r?\n(?<body>(?:(?!^      \S).)*)')
+    $runtimeExcludesTestSdk = $runtimeGroup.Success -and
+        $runtimeGroup.Groups['body'].Value -match
+            '(?m)^        exclude-patterns:\s*\[[^\]]*"Microsoft\.NET\.Test\.Sdk"[^\]]*\]'
+    $testPatterns = if ($testGroup.Success) {
+        [regex]::Match($testGroup.Groups['body'].Value, '(?m)^        patterns:\s*\[(?<items>[^\]]*)\]')
+    } else { [Text.RegularExpressions.Match]::Empty }
+    $testGroupCoordinatesPair = $testPatterns.Success -and
+        $testPatterns.Groups['items'].Value.Contains('"coverlet.*"', [StringComparison]::Ordinal) -and
+        $testPatterns.Groups['items'].Value.Contains('"Microsoft.NET.Test.Sdk"', [StringComparison]::Ordinal)
+    if (-not $runtimeExcludesTestSdk -or -not $testGroupCoordinatesPair) {
+        $violations.Add(
+            'dependabot.yml: Microsoft.NET.Test.Sdk и coverlet.* должны обновляться одной dotnet-tests группой, вне dotnet-runtime wildcard.')
+    }
+}
+
 # Tag major-version у action подвижен и способен изменить исполняемый код без
 # review репозитория. Разрешаются только локальные actions либо полный SHA-1.
 $pinnedWorkflowImages = 0
@@ -140,4 +167,4 @@ foreach ($contract in $resourceContracts) {
 if ($violations.Count -gt 0) {
     throw "Supply-chain gate отклонён:`n$($violations -join [Environment]::NewLine)"
 }
-Write-Host "Supply-chain/runtime contract пройден: actions закреплены commit SHA, container references — $pinnedImages tag+digest pins, PostgreSQL references — $($postgresReferences.Count) синхронизированы, core services имеют CPU/RAM ceilings." -ForegroundColor Green
+Write-Host "Supply-chain/runtime contract пройден: actions закреплены commit SHA, container references — $pinnedImages tag+digest pins, PostgreSQL references — $($postgresReferences.Count) синхронизированы, core services имеют CPU/RAM ceilings, Test SDK/coverlet обновляются атомарно." -ForegroundColor Green

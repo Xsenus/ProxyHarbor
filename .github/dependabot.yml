@@ -8,8 +8,9 @@ updates:
     groups:
       dotnet-runtime:
         patterns: ["Microsoft.*", "Npgsql.*"]
+        exclude-patterns: ["Microsoft.NET.Test.Sdk"]
       dotnet-tests:
-        patterns: ["xunit*", "coverlet.*"]
+        patterns: ["xunit*", "coverlet.*", "Microsoft.NET.Test.Sdk"]
     open-pull-requests-limit: 5
 
   - package-ecosystem: npm
