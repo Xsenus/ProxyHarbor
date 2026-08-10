@@ -74,7 +74,7 @@ public sealed class ProxyValidationPersistenceIntegrationTests
             using var origin = new OriginIpProvider(clients, Options.Create(settings), new ProbeControlHealth());
             using var validator = new ProxyValidator(
                 factory,
-                new ProxyProbeService(Options.Create(settings), origin),
+                new ProxyProbeService(Options.Create(settings), origin, ConnectLoopbackFixtureAsync),
                 Options.Create(settings),
                 NullLogger<ProxyValidator>.Instance);
             using var cancellation = new CancellationTokenSource();
@@ -359,6 +359,28 @@ public sealed class ProxyValidationPersistenceIntegrationTests
         private readonly HttpClient _client = new(new StubHandler());
         public HttpClient CreateClient(string name) => _client;
         public void Dispose() => _client.Dispose();
+    }
+
+    /// <summary>
+    /// Этот тест проверяет cancellation/lease lifecycle на локальном listener, а не
+    /// production SSRF-policy; явная подмена существует только во friend test assembly.
+    /// </summary>
+    private static async Task<TcpClient> ConnectLoopbackFixtureAsync(
+        string host,
+        int port,
+        CancellationToken token)
+    {
+        var client = new TcpClient { NoDelay = true };
+        try
+        {
+            await client.ConnectAsync(host, port, token);
+            return client;
+        }
+        catch
+        {
+            client.Dispose();
+            throw;
+        }
     }
 
     private sealed class StubHandler : HttpMessageHandler

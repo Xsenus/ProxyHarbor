@@ -39,4 +39,28 @@ public sealed class NetworkSafetyTests
 
         Assert.Contains("локальный или служебный", exception.ToString(), StringComparison.Ordinal);
     }
+
+    [Theory]
+    [InlineData("127.0.0.1", 8080)]
+    [InlineData("10.0.0.1", 8080)]
+    [InlineData("169.254.169.254", 80)]
+    [InlineData("::1", 8080)]
+    [InlineData("not-an-ip", 8080)]
+    [InlineData("8.8.8.8", 0)]
+    public async Task ProxySocketGateRejectsUnsafeDatabaseEndpointBeforeConnect(string host, int port)
+    {
+        var exception = await Assert.ThrowsAsync<IOException>(() =>
+            PublicProxyConnector.ConnectAsync(host, port, CancellationToken.None));
+
+        Assert.Contains("каноническим публичным IP", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("2606:4700:4700:0:0:0:0:1111")]
+    [InlineData("::ffff:8.8.8.8")]
+    public async Task ProxySocketGateRejectsNonCanonicalPublicRepresentation(string host)
+    {
+        await Assert.ThrowsAsync<IOException>(() =>
+            PublicProxyConnector.ConnectAsync(host, 8080, CancellationToken.None));
+    }
 }

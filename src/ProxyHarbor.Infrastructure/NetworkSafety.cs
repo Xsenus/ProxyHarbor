@@ -108,3 +108,38 @@ public static class PublicNetworkConnector
         throw new HttpRequestException("Не удалось соединиться ни с одним публичным адресом источника.", lastError);
     }
 }
+
+/// <summary>
+/// Открывает validator-соединение только к каноническому публичному IP из proxy-каталога.
+/// Проверка находится в последнем сетевом sink и поэтому не зависит от того, каким
+/// ingestion-путём запись попала в PostgreSQL.
+/// </summary>
+internal static class PublicProxyConnector
+{
+    internal static async Task<TcpClient> ConnectAsync(
+        string host,
+        int port,
+        CancellationToken token)
+    {
+        if (port is < 1 or > 65_535 ||
+            !IPAddress.TryParse(host, out var address) ||
+            address.IsIPv4MappedToIPv6 ||
+            !string.Equals(address.ToString(), host, StringComparison.OrdinalIgnoreCase) ||
+            !NetworkSafety.IsPublicAddress(address))
+            throw new IOException("Proxy endpoint должен быть каноническим публичным IP с допустимым портом.");
+
+        // Передаётся уже проверенный IPAddress, поэтому TcpClient не выполняет DNS и
+        // повреждённая запись не способна перенаправить соединение через resolver.
+        var client = new TcpClient(address.AddressFamily) { NoDelay = true };
+        try
+        {
+            await client.ConnectAsync(address, port, token);
+            return client;
+        }
+        catch
+        {
+            client.Dispose();
+            throw;
+        }
+    }
+}

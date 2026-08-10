@@ -13,6 +13,19 @@ namespace ProxyHarbor.Infrastructure;
 /// <summary>Проверяет прокси на уровне протокола и измеряет полную задержку до HTTPS-ответа.</summary>
 public sealed class ProxyProbeService(IOptions<CollectorOptions> options, OriginIpProvider originIpProvider)
 {
+    private readonly Func<string, int, CancellationToken, Task<TcpClient>> _connectAsync =
+        PublicProxyConnector.ConnectAsync;
+
+    /// <summary>Позволяет integration-тесту заменить только транспорт, не ослабляя production-коннектор.</summary>
+    internal ProxyProbeService(
+        IOptions<CollectorOptions> options,
+        OriginIpProvider originIpProvider,
+        Func<string, int, CancellationToken, Task<TcpClient>> connectAsync)
+        : this(options, originIpProvider)
+    {
+        _connectAsync = connectAsync ?? throw new ArgumentNullException(nameof(connectAsync));
+    }
+
     /// <summary>Не позволяет арендовать пакет, пока доверенный control endpoint недоступен напрямую.</summary>
     public async Task EnsureControlEndpointAvailableAsync(CancellationToken cancellationToken) =>
         _ = await originIpProvider.GetRequiredAsync(cancellationToken);
@@ -28,8 +41,7 @@ public sealed class ProxyProbeService(IOptions<CollectorOptions> options, Origin
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(TimeSpan.FromSeconds(options.Value.ProbeTimeoutSeconds));
 
-            using var tcp = new TcpClient { NoDelay = true };
-            await tcp.ConnectAsync(proxy.Host, proxy.Port, timeout.Token);
+            using var tcp = await _connectAsync(proxy.Host, proxy.Port, timeout.Token);
             var stream = tcp.GetStream();
 
             switch (proxy.Protocol)
