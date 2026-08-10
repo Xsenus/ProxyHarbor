@@ -88,6 +88,9 @@ jobs:
       - name: Verify secret-scanner contracts
         shell: pwsh
         run: ./tools/Test-GitleaksContracts.ps1
+      - name: Verify CodeQL contracts
+        shell: pwsh
+        run: ./tools/Test-CodeQLContracts.ps1
       - name: Verify supply-chain scanner contracts
         shell: pwsh
         run: ./tools/Test-WorkflowSecurityContracts.ps1
