@@ -378,6 +378,24 @@ jobs:
              .recentBackups[0].telegramConfigured == false and
              .recentBackups[0].sentToTelegram == false and
              .recentBackups[0].sizeBytes > 0'
+          readiness_headers=$(mktemp)
+          readiness_body=$(mktemp)
+          readiness_limited=false
+          for attempt in {1..130}; do
+            readiness_status=$(curl --silent --dump-header "$readiness_headers" \
+              --output "$readiness_body" --write-out '%{http_code}' \
+              http://127.0.0.1:8080/health/ready)
+            if [ "$readiness_status" -eq 429 ]; then
+              readiness_limited=true
+              break
+            fi
+            test "$readiness_status" -eq 200
+          done
+          test "$readiness_limited" = true
+          grep --ignore-case '^Retry-After: [1-9][0-9]*' "$readiness_headers"
+          jq --exit-status '.status == 429' "$readiness_body"
+          curl --fail --silent http://127.0.0.1:8080/health/live
+          rm "$readiness_headers" "$readiness_body"
           docker compose stop web api
           docker compose exec -T postgres psql --username proxyharbor --dbname proxyharbor \
             --set ON_ERROR_STOP=1 --command 'DELETE FROM "Sources";'

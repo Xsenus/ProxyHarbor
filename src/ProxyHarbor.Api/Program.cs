@@ -175,7 +175,7 @@ app.MapGet("/health/ready", async (IDbContextFactory<ProxyHarborDbContext> facto
     return await db.Database.CanConnectAsync(token)
         ? Results.Ok(new { status = "healthy", time = DateTimeOffset.UtcNow })
         : Results.Problem("database unavailable", statusCode: 503);
-}).CacheOutput("health");
+}).CacheOutput("health").RequireRateLimiting("public");
 app.MapGet("/healthz", () => Results.Redirect("/health/ready"));
 
 await using (var scope = app.Services.CreateAsyncScope())
