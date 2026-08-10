@@ -17,6 +17,7 @@
 - ограничение частоты запросов, SSRF-защита источников, контейнеры без root и с read-only ФС;
 - потоковые зашифрованные AES-256-GCM снимки БД и настроек с отправкой в Telegram;
 - постоянный аудит создания, размера и подтверждённой Telegram-доставки каждого backup;
+- bounded runtime HTTP counters/histogram и Prometheus alarms для sustained 5xx и p95 latency публичного API;
 - воспроизводимый fail-closed backup-аудит конкретного PHB3-файла и его Telegram delivery evidence;
 - opt-in Prometheus + Alertmanager с bounded retention, проверяемыми alert rules и Telegram-уведомлениями;
 - воспроизводимый public API latency-аудит с cold/hot p95 SLO и JSON-отчётом;
@@ -217,7 +218,7 @@ npm run build
 
 Репозиторий ограничивает разработку совместимыми feature band .NET 10 через `global.json`, а release CI и Docker закреплены на security SDK `10.0.302` и runtime `10.0.10`. NuGet restore разрешён только с официального `nuget.org`, полный transitive graph хранится в `packages.lock.json` каждого проекта. При намеренном обновлении пакетов выполните `dotnet restore ProxyHarbor.slnx --force-evaluate`, проверьте изменения lock-файлов и повторите vulnerability-аудит; обычные CI/Docker-сборки используют `--locked-mode`.
 
-CI собирает Cobertura coverage и через `tools/Assert-Coverage.ps1` запрещает опускаться ниже 65% уникальных строк и 68% ветвей рукописного кода. На контрольной CI-эквивалентной базе без внешней БД фактическое покрытие составляет около 66,7%/71,5%, а полный PostgreSQL gate — около 89,2%/80,7%; tagged release теперь повторно собирает и проверяет собственный отчёт. Suite выполняется как без внешних зависимостей, так и повторно с настоящей PostgreSQL, поэтому в отдельный gate входят SQL bulk-upsert, lease, maintenance, backup/restore и транзакционные ветви. Generated `obj` и EF migrations в знаменатель не входят; отдельные pass/fail fixtures защищают расчёт и wiring от незаметного ослабления.
+CI собирает Cobertura coverage и через `tools/Assert-Coverage.ps1` запрещает опускаться ниже 65% уникальных строк и 68% ветвей рукописного кода. На контрольной CI-эквивалентной базе без внешней БД фактическое покрытие составляет около 67,2%/72,0%, а полный PostgreSQL gate — около 89,3%/80,9%; tagged release теперь повторно собирает и проверяет собственный отчёт. Suite выполняется как без внешних зависимостей, так и повторно с настоящей PostgreSQL, поэтому в отдельный gate входят SQL bulk-upsert, lease, maintenance, backup/restore и транзакционные ветви. Generated `obj` и EF migrations в знаменатель не входят; отдельные pass/fail fixtures защищают расчёт и wiring от незаметного ослабления.
 
 ## Резервные копии и восстановление
 

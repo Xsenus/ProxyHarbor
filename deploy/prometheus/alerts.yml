@@ -46,6 +46,39 @@ groups:
           summary: Публичная выдача прокси пуста
           description: В API более 30 минут нет свежих проверенных прокси.
 
+      - alert: ProxyHarborPublicApiErrorRate
+        expr: |
+          (
+            sum(rate(proxyharbor_http_requests_total{route=~"proxies|export|stats|sources",status="5xx"}[5m]))
+            /
+            clamp_min(sum(rate(proxyharbor_http_requests_total{route=~"proxies|export|stats|sources"}[5m])), 0.001)
+          ) > 0.05
+          and
+          sum(rate(proxyharbor_http_requests_total{route=~"proxies|export|stats|sources"}[5m])) > 0.1
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: Публичный API возвращает много 5xx
+          description: Более 5% публичных запросов завершаются 5xx при устойчивой нагрузке выше 0.1 запроса/с.
+
+      - alert: ProxyHarborPublicApiLatency
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (
+              rate(proxyharbor_http_request_duration_seconds_bucket{route=~"proxies|export|stats|sources"}[5m])
+            )
+          ) > 2
+          and
+          sum(rate(proxyharbor_http_requests_total{route=~"proxies|export|stats|sources"}[5m])) > 0.1
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: Публичный API превышает runtime latency SLO
+          description: Совокупный p95 публичных запросов превышает 2 секунды при устойчивой нагрузке выше 0.1 запроса/с.
+
   - name: proxyharbor.collection
     rules:
       - alert: ProxyHarborCollectionStalled

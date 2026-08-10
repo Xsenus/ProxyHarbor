@@ -17,7 +17,8 @@ public sealed class MetricsController(
     IOptions<CollectorOptions> collectorOptions,
     IOptions<BackupOptions> backupOptions,
     ProbeControlHealth probeControlHealth,
-    OperationalMaintenanceService? maintenance = null) : ControllerBase
+    OperationalMaintenanceService? maintenance = null,
+    HttpRequestTelemetry? httpTelemetry = null) : ControllerBase
 {
     [HttpGet]
     [Produces("text/plain")]
@@ -88,7 +89,8 @@ public sealed class MetricsController(
         var activeBackups = await db.BackupRuns.AsNoTracking()
             .CountAsync(x => x.Status == "running" && x.FinishedAt == null, token);
 
-        var output = new StringBuilder(1_024);
+        var output = new StringBuilder(16_384);
+        (httpTelemetry ?? new HttpRequestTelemetry()).AppendPrometheus(output);
         output.AppendLine("# HELP proxyharbor_proxies Number of known proxies by status and protocol.");
         output.AppendLine("# TYPE proxyharbor_proxies gauge");
         foreach (var row in proxyCounts.OrderBy(x => x.Status).ThenBy(x => x.Protocol))
@@ -221,7 +223,12 @@ public sealed class MetricsController(
             lastSuccessfulBackup?.SizeBytes ?? 0);
         Gauge(output, "proxyharbor_last_backup_timestamp_seconds", "Unix timestamp of the latest successful backup completion.",
             lastSuccessfulBackup?.FinishedAt?.ToUnixTimeSeconds() ?? 0);
-        return Content(output.ToString(), "text/plain; version=0.0.4; charset=utf-8", Encoding.UTF8);
+        var content = output.ToString();
+        // Prometheus text exposition требует LF. AppendLine использует CRLF на Windows,
+        // поэтому локальный promtool/Prometheus иначе отклоняет TYPE как `counter\r`.
+        if (Environment.NewLine.Length != 1)
+            content = content.Replace(Environment.NewLine, "\n", StringComparison.Ordinal);
+        return Content(content, "text/plain; version=0.0.4; charset=utf-8", Encoding.UTF8);
     }
 
     private static void Gauge(StringBuilder output, string name, string help, long value)

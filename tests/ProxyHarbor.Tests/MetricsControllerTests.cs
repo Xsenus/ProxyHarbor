@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using ProxyHarbor.Api;
 using ProxyHarbor.Api.Controllers;
 using ProxyHarbor.Domain;
 using ProxyHarbor.Infrastructure;
@@ -30,13 +31,17 @@ public sealed class MetricsControllerTests
             await seed.SaveChangesAsync();
         }
 
+        var httpTelemetry = new HttpRequestTelemetry();
+        httpTelemetry.Record(HttpRouteGroup.Proxies, 503, TimeSpan.FromMilliseconds(250));
         var controller = new MetricsController(
             new TestDbFactory(options), Options.Create(new CollectorOptions { CollectionIntervalMinutes = 15 }),
             Options.Create(new BackupOptions()),
-            new ProbeControlHealth());
+            new ProbeControlHealth(),
+            httpTelemetry: httpTelemetry);
 
         var result = Assert.IsType<ContentResult>(await controller.Get(CancellationToken.None));
         var metrics = result.Content!;
+        Assert.DoesNotContain('\r', metrics);
         Assert.Contains("proxyharbor_sources_healthy 0", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_sources_stale 1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_builtin_sources_healthy 0", metrics, StringComparison.Ordinal);
@@ -52,6 +57,8 @@ public sealed class MetricsControllerTests
         Assert.Contains("proxyharbor_backup_enabled 0", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_backup_interval_seconds 86400", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_backup_telegram_configured 0", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_http_requests_total{route=\"proxies\",status=\"5xx\"} 1", metrics,
+            StringComparison.Ordinal);
     }
 
     [Fact]

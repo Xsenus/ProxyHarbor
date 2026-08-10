@@ -247,3 +247,71 @@ tests:
       - eval_time: 16m
         alertname: ProxyHarborMaintenanceFailed
         exp_alerts: []
+
+  - name: Public API sustained 5xx ratio triggers after grace period
+    interval: 1m
+    input_series:
+      - series: 'proxyharbor_http_requests_total{route="proxies",status="2xx"}'
+        values: '0+10x20'
+      - series: 'proxyharbor_http_requests_total{route="proxies",status="5xx"}'
+        values: '0+2x20'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: ProxyHarborPublicApiErrorRate
+        exp_alerts: []
+      - eval_time: 13m
+        alertname: ProxyHarborPublicApiErrorRate
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: Публичный API возвращает много 5xx
+              description: Более 5% публичных запросов завершаются 5xx при устойчивой нагрузке выше 0.1 запроса/с.
+
+  - name: Public API error ratio ignores sparse traffic
+    interval: 1m
+    input_series:
+      - series: 'proxyharbor_http_requests_total{route="sources",status="5xx"}'
+        values: '0+1x20'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: ProxyHarborPublicApiErrorRate
+        exp_alerts: []
+
+  - name: Public API sustained slow p95 triggers after grace period
+    interval: 1m
+    input_series:
+      - series: 'proxyharbor_http_requests_total{route="export",status="2xx"}'
+        values: '0+12x22'
+      - series: 'proxyharbor_http_request_duration_seconds_bucket{route="export",le="2"}'
+        values: '0+0x22'
+      - series: 'proxyharbor_http_request_duration_seconds_bucket{route="export",le="5"}'
+        values: '0+12x22'
+      - series: 'proxyharbor_http_request_duration_seconds_bucket{route="export",le="+Inf"}'
+        values: '0+12x22'
+    alert_rule_test:
+      - eval_time: 17m
+        alertname: ProxyHarborPublicApiLatency
+        exp_alerts: []
+      - eval_time: 18m
+        alertname: ProxyHarborPublicApiLatency
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Публичный API превышает runtime latency SLO
+              description: Совокупный p95 публичных запросов превышает 2 секунды при устойчивой нагрузке выше 0.1 запроса/с.
+
+  - name: Public API healthy p95 stays below SLO
+    interval: 1m
+    input_series:
+      - series: 'proxyharbor_http_requests_total{route="stats",status="2xx"}'
+        values: '0+12x22'
+      - series: 'proxyharbor_http_request_duration_seconds_bucket{route="stats",le="1"}'
+        values: '0+12x22'
+      - series: 'proxyharbor_http_request_duration_seconds_bucket{route="stats",le="+Inf"}'
+        values: '0+12x22'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: ProxyHarborPublicApiLatency
+        exp_alerts: []

@@ -1,5 +1,5 @@
-using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Npgsql;
 using ProxyHarbor.Api.Controllers;
@@ -220,20 +220,20 @@ public sealed class OperationalMaintenanceIntegrationTests
         int successfulChecks = 0,
         int failedChecks = 0,
         DateTimeOffset? leaseUntil = null) => new()
-    {
-        Host = host,
-        Port = 8080,
-        Status = status,
-        FirstSeenAt = seenAt.AddDays(-1),
-        LastSeenAt = seenAt,
-        LastCheckedAt = successfulChecks + failedChecks > 0 ? seenAt : null,
-        LatencyMs = successfulChecks > 0 ? 250 : null,
-        SuccessfulChecks = successfulChecks,
-        FailedChecks = failedChecks,
-        ConsecutiveFailedChecks = failedChecks,
-        CheckLeaseId = leaseUntil is null ? null : Guid.NewGuid(),
-        CheckLeaseUntil = leaseUntil
-    };
+        {
+            Host = host,
+            Port = 8080,
+            Status = status,
+            FirstSeenAt = seenAt.AddDays(-1),
+            LastSeenAt = seenAt,
+            LastCheckedAt = successfulChecks + failedChecks > 0 ? seenAt : null,
+            LatencyMs = successfulChecks > 0 ? 250 : null,
+            SuccessfulChecks = successfulChecks,
+            FailedChecks = failedChecks,
+            ConsecutiveFailedChecks = failedChecks,
+            CheckLeaseId = leaseUntil is null ? null : Guid.NewGuid(),
+            CheckLeaseUntil = leaseUntil
+        };
 
     private static CollectionRun CollectionRun(DateTimeOffset startedAt, string status) => new()
     {

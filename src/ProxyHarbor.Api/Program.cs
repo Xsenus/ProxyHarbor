@@ -58,6 +58,7 @@ builder.Services.AddOpenApi(options =>
     });
 });
 builder.Services.AddProblemDetails();
+builder.Services.AddSingleton<HttpRequestTelemetry>();
 builder.Services.AddResponseCompression(x =>
 {
     x.EnableForHttps = true;
@@ -155,6 +156,8 @@ var forwardedHeaders = new ForwardedHeadersOptions
 foreach (var network in knownProxyNetworks) forwardedHeaders.KnownIPNetworks.Add(network);
 app.UseForwardedHeaders(forwardedHeaders);
 app.UseMiddleware<SecurityHeadersMiddleware>();
+// Middleware стоит снаружи exception handler: обработанный 500 уже виден в итоговом SLI.
+app.UseMiddleware<HttpRequestTelemetryMiddleware>();
 app.UseExceptionHandler();
 app.UseResponseCompression();
 app.UseRouting();

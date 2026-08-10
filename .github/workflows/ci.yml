@@ -341,6 +341,10 @@ jobs:
           echo "$stats" | jq --exit-status \
             '(.alive | type) == "number" and (.byProtocol | type) == "array" and has("lastRun")'
           metrics=$(curl --fail --silent http://127.0.0.1:8080/metrics)
+          printf '%s\n' "$metrics" | docker run --rm --interactive --entrypoint /bin/promtool \
+            prom/prometheus:v3.13.2-distroless check metrics
+          echo "$metrics" | grep 'proxyharbor_http_requests_total{route="stats",status="2xx"} 1'
+          echo "$metrics" | grep 'proxyharbor_http_request_duration_seconds_count{route="stats"} 1'
           echo "$metrics" | grep 'proxyharbor_sources_enabled 81'
           echo "$metrics" | grep 'proxyharbor_source_catalog_complete 1'
           echo "$metrics" | grep 'proxyharbor_builtin_catalog_audit_timestamp_seconds 1786320000'

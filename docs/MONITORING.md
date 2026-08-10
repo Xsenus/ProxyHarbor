@@ -4,6 +4,8 @@
 
 `TELEGRAM_BOT_TOKEN` и числовой `TELEGRAM_CHAT_ID` передаются Alertmanager как Compose secrets-файлы: их нет в его environment, config и persistent volume. Критические alarms повторяются раз в час, warning — раз в четыре часа; resolved-сообщение закрывает инцидент.
 
+Runtime HTTP SLI публикуются как `proxyharbor_http_requests_total` и cumulative `proxyharbor_http_request_duration_seconds`. Labels ограничены фиксированными группами route/status; произвольные URL, IP и заголовки никогда не попадают в time-series, а `/metrics` исключён из измерения. Counters локальны реплике и сбрасываются при рестарте, поэтому alarms используют `rate()` и суммируют все scrape targets.
+
 ## Проверка
 
 ```bash
@@ -24,6 +26,8 @@ curl --fail http://127.0.0.1:9093/-/ready
 | `ProxyHarborTelegramNotificationErrors` | были ошибки отправки за 10 минут | Проверить Bot API, token/chat ID, egress и rate limit |
 | `ProxyHarborBackgroundWorkersDisabled` | production workers выключены 10 минут | Проверить `BACKGROUND_WORKERS_ENABLED`; отдельная API-only replica допустима только при наличии worker-replica |
 | `ProxyHarborNoPublishedProxies` | свежая выдача пуста 30 минут | Проверить control endpoint, validation queue и здоровье источников |
+| `ProxyHarborPublicApiErrorRate` | более 5% публичных запросов дают 5xx 10 минут при нагрузке выше 0.1 req/s | Проверить API/PostgreSQL logs, readiness, saturation CPU/RAM и последние deploy/migration |
+| `ProxyHarborPublicApiLatency` | совокупный p95 публичных запросов выше 2 секунд 15 минут при нагрузке выше 0.1 req/s | Разделить histogram по bounded `route`, проверить PostgreSQL query latency, export size и resource ceilings |
 | `ProxyHarborCollectionStalled` | нет успеха дольше четырёх интервалов | Проверить последний collection audit, DNS/egress и ошибки feed |
 | `ProxyHarborCollectionHung` | run активен более 30 минут | Проверить зависшие HTTP-загрузки и cluster lock; не удалять audit row вручную |
 | `ProxyHarborSourceCatalogIncomplete` | отсутствует/выключена каноническая запись | Перезапустить актуальную версию для seed и проверить миграции |

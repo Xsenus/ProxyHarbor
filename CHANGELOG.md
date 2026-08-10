@@ -13,6 +13,7 @@
 
 ### Added
 
+- Добавлены low-overhead runtime HTTP SLI без внешней зависимости: counters и cumulative histogram используют только восемь bounded route groups и шесть status classes, исключают self-scrape `/metrics`, учитывают 5xx/client abort и питают проверяемые alarms для sustained public 5xx ratio и p95 latency; exposition всегда использует канонический LF, а Docker CI и Windows runtime-smoke пропускают фактический ответ через официальный parser.
 - Restore CLI получил read-only `--inspect-settings`: он аутентифицирует backup v5, строго проверяет архив и выводит единый машиночитаемый JSON настроек без подключения к PostgreSQL; Docker smoke доказывает полноту снимка и отсутствие всех настроенных секретов.
 - Добавлен воспроизводимый public API performance gate: cold legacy page+COUNT и hot seek/stats получают отдельные configurable p95 SLO, машиночитаемые latency/bytes метрики и fail-closed HTTP/JSON/rate-limit contracts в CI/release.
 - Добавлен операторский `Audit-Backup.ps1`: по умолчанию он требует подтверждённую Telegram-доставку конкретного канонического непустого PHB3 и согласованный persisted `BackupRun`; local-only режим возможен только явным флагом, а CI/release защищают success/failure contracts.
