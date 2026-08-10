@@ -67,6 +67,20 @@ public static class NetworkSafety
 /// <summary>Повторно проверяет DNS прямо в момент TCP-соединения и тем самым блокирует DNS rebinding.</summary>
 public static class PublicNetworkConnector
 {
+    /// <summary>
+    /// Закрепляет handler за прямым соединением через проверяемый connect callback.
+    /// Системный HTTP proxy намеренно запрещён: иначе DNS target разрешает proxy,
+    /// а финальная защита видит адрес proxy вместо фактического назначения.
+    /// </summary>
+    internal static SocketsHttpHandler Harden(SocketsHttpHandler handler)
+    {
+        ArgumentNullException.ThrowIfNull(handler);
+        handler.UseProxy = false;
+        handler.AllowAutoRedirect = false;
+        handler.ConnectCallback = ConnectAsync;
+        return handler;
+    }
+
     public static async ValueTask<Stream> ConnectAsync(SocketsHttpConnectionContext context, CancellationToken token)
     {
         var addresses = await Dns.GetHostAddressesAsync(context.DnsEndPoint.Host, token);

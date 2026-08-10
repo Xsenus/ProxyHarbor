@@ -27,11 +27,10 @@ public sealed class NetworkSafetyTests
     [InlineData("::1")]
     public async Task FinalConnectionGateRejectsPrivateLiteralBeforeOpeningSocket(string host)
     {
-        using var handler = new SocketsHttpHandler
-        {
-            AllowAutoRedirect = false,
-            ConnectCallback = PublicNetworkConnector.ConnectAsync
-        };
+        using var handler = PublicNetworkConnector.Harden(new SocketsHttpHandler());
+        Assert.False(handler.UseProxy);
+        Assert.False(handler.AllowAutoRedirect);
+        Assert.NotNull(handler.ConnectCallback);
         using var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(2) };
         var uriHost = host.Contains(':') ? $"[{host}]" : host;
 

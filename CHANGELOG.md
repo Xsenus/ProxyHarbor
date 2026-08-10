@@ -7,6 +7,7 @@
 
 ### Changed
 
+- Исходящие source, origin и Telegram HTTP-клиенты принудительно работают без системного proxy, поэтому DNS-rebinding connect-gate нельзя обойти переносом разрешения target на посредника.
 - Потоковое PHB2/PHB3 шифрование и restore переиспользуют bounded buffers на протяжении всего архива, устраняя по две Large Object Heap allocation на каждый блок с сохранением криптографической очистки plaintext.
 - Создание backup теперь fail-closed требует bounded 32–1024-символьный ключ и абсолютный не-корневой каталог; restore сохраняет 16-символьную legacy-совместимость.
 - Новый backup полностью self-verifies все PHB3 AEAD-блоки до атомарной публикации, retention и Telegram; повреждённый partial никогда не становится готовой копией.

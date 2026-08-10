@@ -63,36 +63,29 @@ public static class ServiceCollectionExtensions
         {
             client.DefaultRequestHeaders.UserAgent.ParseAdd("ProxyHarbor/1.0");
             client.Timeout = Timeout.InfiniteTimeSpan;
-        }).ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+        }).ConfigurePrimaryHttpMessageHandler(() => PublicNetworkConnector.Harden(new SocketsHttpHandler
         {
-            AllowAutoRedirect = false,
             AutomaticDecompression = DecompressionMethods.All,
             ConnectTimeout = TimeSpan.FromSeconds(10),
             MaxConnectionsPerServer = 4,
-            PooledConnectionLifetime = TimeSpan.FromMinutes(5),
-            ConnectCallback = PublicNetworkConnector.ConnectAsync
-        });
+            PooledConnectionLifetime = TimeSpan.FromMinutes(5)
+        }));
         services.AddHttpClient("telegram", client => client.Timeout = TimeSpan.FromMinutes(5))
-            .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+            .ConfigurePrimaryHttpMessageHandler(() => PublicNetworkConnector.Harden(new SocketsHttpHandler
             {
-                AllowAutoRedirect = false,
                 ConnectTimeout = TimeSpan.FromSeconds(15),
-                PooledConnectionLifetime = TimeSpan.FromMinutes(5),
-                ConnectCallback = PublicNetworkConnector.ConnectAsync
-            })
+                PooledConnectionLifetime = TimeSpan.FromMinutes(5)
+            }))
             // URI Bot API содержит token, поэтому стандартное HTTP-логирование полностью отключено.
             .RemoveAllLoggers();
         services.AddHttpClient("origin", client => client.Timeout = TimeSpan.FromSeconds(10))
-            .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+            .ConfigurePrimaryHttpMessageHandler(() => PublicNetworkConnector.Harden(new SocketsHttpHandler
             {
-                AllowAutoRedirect = false,
                 AutomaticDecompression = DecompressionMethods.All,
                 ConnectTimeout = TimeSpan.FromSeconds(5),
                 MaxConnectionsPerServer = 2,
-                PooledConnectionLifetime = TimeSpan.FromMinutes(5),
-                // Проверка выполняется непосредственно перед TCP connect и закрывает DNS rebinding.
-                ConnectCallback = PublicNetworkConnector.ConnectAsync
-            });
+                PooledConnectionLifetime = TimeSpan.FromMinutes(5)
+            }));
         services.AddSingleton<ProxyCollector>();
         services.AddSingleton<ProxyProbeService>();
         services.AddSingleton<ProbeControlHealth>();
