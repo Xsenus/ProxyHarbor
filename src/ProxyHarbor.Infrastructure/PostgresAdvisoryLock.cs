@@ -10,16 +10,32 @@ internal sealed class PostgresAdvisoryLock : IAsyncDisposable
     internal const long BackupKey = 0x5052484241434B02;
     private readonly NpgsqlConnection _connection;
     private readonly long _key;
+    private readonly bool _shared;
 
-    private PostgresAdvisoryLock(NpgsqlConnection connection, long key)
+    private PostgresAdvisoryLock(NpgsqlConnection connection, long key, bool shared)
     {
         _connection = connection;
         _key = key;
+        _shared = shared;
     }
 
     internal static async Task<PostgresAdvisoryLock?> TryAcquireAsync(
         IDbContextFactory<ProxyHarborDbContext> dbFactory,
         long key,
+        CancellationToken token) =>
+        await TryAcquireCoreAsync(dbFactory, key, shared: false, token);
+
+    /// <summary>Shared-владелец совместим с другими mutation, но исключает collection-run.</summary>
+    internal static async Task<PostgresAdvisoryLock?> TryAcquireSharedAsync(
+        IDbContextFactory<ProxyHarborDbContext> dbFactory,
+        long key,
+        CancellationToken token) =>
+        await TryAcquireCoreAsync(dbFactory, key, shared: true, token);
+
+    private static async Task<PostgresAdvisoryLock?> TryAcquireCoreAsync(
+        IDbContextFactory<ProxyHarborDbContext> dbFactory,
+        long key,
+        bool shared,
         CancellationToken token)
     {
         await using var db = await dbFactory.CreateDbContextAsync(token);
@@ -29,10 +45,13 @@ internal sealed class PostgresAdvisoryLock : IAsyncDisposable
         try
         {
             await connection.OpenAsync(token);
-            await using var command = new NpgsqlCommand("SELECT pg_try_advisory_lock(@key)", connection);
+            var sql = shared
+                ? "SELECT pg_try_advisory_lock_shared(@key)"
+                : "SELECT pg_try_advisory_lock(@key)";
+            await using var command = new NpgsqlCommand(sql, connection);
             command.Parameters.AddWithValue("key", key);
             var acquired = (bool)(await command.ExecuteScalarAsync(token) ?? false);
-            if (acquired) return new PostgresAdvisoryLock(connection, key);
+            if (acquired) return new PostgresAdvisoryLock(connection, key, shared);
             await connection.DisposeAsync();
             return null;
         }
@@ -49,7 +68,10 @@ internal sealed class PostgresAdvisoryLock : IAsyncDisposable
         {
             if (_connection.State == System.Data.ConnectionState.Open)
             {
-                await using var command = new NpgsqlCommand("SELECT pg_advisory_unlock(@key)", _connection);
+                var sql = _shared
+                    ? "SELECT pg_advisory_unlock_shared(@key)"
+                    : "SELECT pg_advisory_unlock(@key)";
+                await using var command = new NpgsqlCommand(sql, _connection);
                 command.Parameters.AddWithValue("key", _key);
                 await command.ExecuteNonQueryAsync(CancellationToken.None);
             }

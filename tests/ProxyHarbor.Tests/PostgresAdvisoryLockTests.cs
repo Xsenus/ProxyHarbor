@@ -30,6 +30,36 @@ public sealed class PostgresAdvisoryLockTests
         Assert.NotNull(afterRelease);
     }
 
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
+    public async Task SharedCatalogMutationsExcludeCollectionButNotEachOther()
+    {
+        var connectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
+        if (string.IsNullOrWhiteSpace(connectionString)) return;
+        var options = new DbContextOptionsBuilder<ProxyHarborDbContext>().UseNpgsql(connectionString).Options;
+        var factory = new TestDbFactory(options);
+
+        {
+            await using var firstMutation = await PostgresAdvisoryLock.TryAcquireSharedAsync(
+                factory, PostgresAdvisoryLock.CollectionKey, CancellationToken.None);
+            await using var secondMutation = await PostgresAdvisoryLock.TryAcquireSharedAsync(
+                factory, PostgresAdvisoryLock.CollectionKey, CancellationToken.None);
+            Assert.NotNull(firstMutation);
+            Assert.NotNull(secondMutation);
+
+            var blockedCollection = await PostgresAdvisoryLock.TryAcquireAsync(
+                factory, PostgresAdvisoryLock.CollectionKey, CancellationToken.None);
+            Assert.Null(blockedCollection);
+        }
+
+        await using var collection = await PostgresAdvisoryLock.TryAcquireAsync(
+            factory, PostgresAdvisoryLock.CollectionKey, CancellationToken.None);
+        Assert.NotNull(collection);
+        var blockedMutation = await PostgresAdvisoryLock.TryAcquireSharedAsync(
+            factory, PostgresAdvisoryLock.CollectionKey, CancellationToken.None);
+        Assert.Null(blockedMutation);
+    }
+
     private sealed class TestDbFactory(DbContextOptions<ProxyHarborDbContext> options)
         : IDbContextFactory<ProxyHarborDbContext>
     {

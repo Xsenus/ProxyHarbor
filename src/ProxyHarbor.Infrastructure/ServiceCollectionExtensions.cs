@@ -97,6 +97,7 @@ public static class ServiceCollectionExtensions
                 PooledConnectionLifetime = TimeSpan.FromMinutes(5)
             }));
         services.AddSingleton<ProxyCollector>();
+        services.AddSingleton<ISourceCatalogMutationCoordinator, SourceCatalogMutationCoordinator>();
         services.AddSingleton<ProxyProbeService>();
         services.AddSingleton<ProbeControlHealth>();
         services.AddSingleton<OriginIpProvider>();

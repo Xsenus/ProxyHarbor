@@ -16,6 +16,7 @@ public sealed class AdminController(
     ProxyCollector collector,
     ProxyValidator validator,
     BackupService backup,
+    ISourceCatalogMutationCoordinator sourceMutationCoordinator,
     IOptions<BackupOptions> backupOptions,
     IOptions<CollectorOptions> collectorOptions) : ControllerBase
 {
@@ -41,6 +42,8 @@ public sealed class AdminController(
         if (!NetworkSafety.TryParseSafeHttpsUrl(request.Url, out var requestedUri) ||
             !await NetworkSafety.IsSafePublicHttpsUrlAsync(requestedUri.AbsoluteUri, token))
             return Problem("Разрешены только публичные HTTPS-адреса источников без fragment.", statusCode: 400);
+        await using var mutationLease = await sourceMutationCoordinator.TryAcquireAsync(token);
+        if (mutationLease is null) return SourceMutationConflict();
         await using var db = await dbFactory.CreateDbContextAsync(token);
         var normalizedUrl = requestedUri.AbsoluteUri;
         if (await db.Sources.AnyAsync(x => x.Url == normalizedUrl, token))
@@ -61,6 +64,8 @@ public sealed class AdminController(
     {
         if (!NetworkSafety.TryParseSafeHttpsUrl(request.Url, out var requestedUri))
             return Problem("Разрешены только публичные HTTPS-адреса источников без fragment.", statusCode: 400);
+        await using var mutationLease = await sourceMutationCoordinator.TryAcquireAsync(token);
+        if (mutationLease is null) return SourceMutationConflict();
         var normalizedUrl = requestedUri.AbsoluteUri;
         await using var db = await dbFactory.CreateDbContextAsync(token);
         var source = await db.Sources.FindAsync([id], token);
@@ -111,6 +116,8 @@ public sealed class AdminController(
     [HttpDelete("sources/{id:guid}")]
     public async Task<IActionResult> DeleteSource(Guid id, CancellationToken token)
     {
+        await using var mutationLease = await sourceMutationCoordinator.TryAcquireAsync(token);
+        if (mutationLease is null) return SourceMutationConflict();
         await using var db = await dbFactory.CreateDbContextAsync(token);
         var source = await db.Sources.FindAsync([id], token);
         if (source is null) return NotFound();
@@ -122,6 +129,12 @@ public sealed class AdminController(
         await db.SaveChangesAsync(token);
         return NoContent();
     }
+
+    private ConflictObjectResult SourceMutationConflict() => Conflict(new ProblemDetails
+    {
+        Title = "Сбор источников уже выполняется; повторите изменение после его завершения",
+        Status = StatusCodes.Status409Conflict
+    });
 
     [HttpGet("diagnostics")]
     public async Task<IActionResult> Diagnostics(CancellationToken token)

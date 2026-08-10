@@ -303,6 +303,40 @@ public sealed class AdminSourceControllerTests
         Assert.Equal(definition.Name, (await verify.Sources.SingleAsync()).Name);
     }
 
+    [Fact]
+    public async Task SourceMutationReturnsConflictWhileCollectionOwnsCatalog()
+    {
+        var options = Options($"source-collection-lock-{Guid.NewGuid():N}");
+        var source = new ProxySource
+        {
+            Name = "Protected source",
+            Url = "https://8.8.8.8/feed.txt",
+            DefaultProtocol = ProxyProtocol.Http
+        };
+        await SeedAsync(options, source);
+        var controller = Controller(options, new BlockedMutationCoordinator());
+
+        var create = await controller.CreateSource(
+            new SourceRequest("New source", "https://1.1.1.1/new.txt", ProxyProtocol.Http),
+            CancellationToken.None);
+        var update = await controller.UpdateSource(
+            source.Id,
+            new SourceRequest("Changed", source.Url, ProxyProtocol.Socks5),
+            CancellationToken.None);
+        var delete = await controller.DeleteSource(source.Id, CancellationToken.None);
+
+        Assert.Equal(409, Assert.IsType<ProblemDetails>(
+            Assert.IsType<ConflictObjectResult>(create.Result).Value).Status);
+        Assert.Equal(409, Assert.IsType<ProblemDetails>(
+            Assert.IsType<ConflictObjectResult>(update).Value).Status);
+        Assert.Equal(409, Assert.IsType<ProblemDetails>(
+            Assert.IsType<ConflictObjectResult>(delete).Value).Status);
+        await using var verify = new ProxyHarborDbContext(options);
+        var unchanged = await verify.Sources.SingleAsync();
+        Assert.Equal("Protected source", unchanged.Name);
+        Assert.Equal(ProxyProtocol.Http, unchanged.DefaultProtocol);
+    }
+
     private static DbContextOptions<ProxyHarborDbContext> Options(string database) =>
         new DbContextOptionsBuilder<ProxyHarborDbContext>().UseInMemoryDatabase(database).Options;
 
@@ -313,10 +347,30 @@ public sealed class AdminSourceControllerTests
         await db.SaveChangesAsync();
     }
 
-    private static AdminController Controller(DbContextOptions<ProxyHarborDbContext> options) =>
+    private static AdminController Controller(
+        DbContextOptions<ProxyHarborDbContext> options,
+        ISourceCatalogMutationCoordinator? mutationCoordinator = null) =>
         new(new TestDbFactory(options), null!, null!, null!,
+            mutationCoordinator ?? new AvailableMutationCoordinator(),
             Microsoft.Extensions.Options.Options.Create(new BackupOptions()),
             Microsoft.Extensions.Options.Options.Create(new CollectorOptions()));
+
+    private sealed class AvailableMutationCoordinator : ISourceCatalogMutationCoordinator
+    {
+        public Task<IAsyncDisposable?> TryAcquireAsync(CancellationToken token) =>
+            Task.FromResult<IAsyncDisposable?>(new NoopLease());
+    }
+
+    private sealed class BlockedMutationCoordinator : ISourceCatalogMutationCoordinator
+    {
+        public Task<IAsyncDisposable?> TryAcquireAsync(CancellationToken token) =>
+            Task.FromResult<IAsyncDisposable?>(null);
+    }
+
+    private sealed class NoopLease : IAsyncDisposable
+    {
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
 
     private sealed class TestDbFactory(DbContextOptions<ProxyHarborDbContext> options)
         : IDbContextFactory<ProxyHarborDbContext>
