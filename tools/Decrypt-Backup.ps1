@@ -9,6 +9,7 @@ $inputStream = $null
 $reader = $null
 $outputStream = $null
 $key = $null
+$passwordBytes = $null
 $aes = $null
 
 try {
@@ -52,8 +53,12 @@ try {
         throw 'Заголовок резервной копии повреждён.'
     }
 
+    # Строгая UTF-8 кодировка не допускает replacement bytes; временное представление
+    # ключа очищается в finally вместе с результатом PBKDF2.
+    $strictUtf8 = [Text.UTF8Encoding]::new($false, $true)
+    $passwordBytes = $strictUtf8.GetBytes($EncryptionKey)
     $key = [Security.Cryptography.Rfc2898DeriveBytes]::Pbkdf2(
-        $EncryptionKey, $salt, 200000, [Security.Cryptography.HashAlgorithmName]::SHA256, 32)
+        $passwordBytes, $salt, 200000, [Security.Cryptography.HashAlgorithmName]::SHA256, 32)
     $aes = [Security.Cryptography.AesGcm]::new($key, 16)
     [long]$blockIndex = 0
     while ($true) {
@@ -93,6 +98,7 @@ try {
     Remove-Item -LiteralPath $OutputZip -ErrorAction SilentlyContinue
     throw
 } finally {
+    if ($null -ne $passwordBytes) { [Security.Cryptography.CryptographicOperations]::ZeroMemory($passwordBytes) }
     if ($null -ne $key) { [Security.Cryptography.CryptographicOperations]::ZeroMemory($key) }
     if ($null -ne $aes) { $aes.Dispose() }
     if ($null -ne $reader) { $reader.Dispose() }
