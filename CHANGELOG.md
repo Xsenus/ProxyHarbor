@@ -7,6 +7,7 @@
 
 ### Added
 
+- Production Caddy получил end-to-end Docker healthcheck: pinned image `curl` обращается к API `/health/ready` через внутренний TLS listener с `PUBLIC_HOST` одновременно как SNI и Host; проверка охватывает TLS → gateway → API → PostgreSQL, Compose contract фиксирует bounded timing, а container smoke требует фактический статус `healthy`.
 - Публичный `GET /api/v1/sources` и React-панель раскрывают полный встроенный каталог как 50 независимых провайдеров и 81 feed без административных ошибок, backoff и других эксплуатационных полей.
 
 ### Changed

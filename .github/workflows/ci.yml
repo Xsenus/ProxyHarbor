@@ -148,6 +148,12 @@ jobs:
             .services.caddy.image == "caddy:2.11.4-alpine" and
             .services.caddy.user == "65532:65532" and
             .services.caddy.read_only == true and
+            .services.caddy.healthcheck.test[0] == "CMD-SHELL" and
+            (.services.caddy.healthcheck.test[1] | contains("/health/ready")) and
+            .services.caddy.healthcheck.interval == "30s" and
+            .services.caddy.healthcheck.timeout == "5s" and
+            .services.caddy.healthcheck.start_period == "20s" and
+            .services.caddy.healthcheck.retries == 3 and
             ((.services.caddy.cap_drop // []) | index("ALL") != null) and
             ([.services.caddy.ports[].published | tostring] | sort) == ["443", "443", "80"] and
             .services.prometheus.image == "prom/prometheus:v3.13.2-distroless" and
@@ -431,6 +437,15 @@ jobs:
               https://localhost/health/ready; then break; fi
             if [ "$attempt" -eq 90 ]; then exit 1; fi
             sleep 2
+          done
+          for attempt in {1..90}; do
+            caddy_health=$(docker inspect --format '{{.State.Health.Status}}' "$caddy_id")
+            if [ "$caddy_health" = 'healthy' ]; then break; fi
+            if [ "$caddy_health" = 'unhealthy' ] || [ "$attempt" -eq 90 ]; then
+              docker inspect --format '{{json .State.Health.Log}}' "$caddy_id"
+              exit 1
+            fi
+            sleep 1
           done
           tls_headers=$(mktemp)
           curl --fail --silent --insecure --resolve localhost:443:127.0.0.1 \
