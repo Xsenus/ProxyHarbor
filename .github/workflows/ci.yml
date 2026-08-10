@@ -704,6 +704,20 @@ jobs:
               "#/components/schemas/ValidationTriggerResponse" and
             .paths["/api/v1/admin/backup"].post.responses["200"].content["application/json"].schema["$ref"] ==
               "#/components/schemas/BackupTriggerResponse" and
+            (.paths["/api/v1/export/{format}"].get.parameters[] |
+              select(.name == "format").schema.enum) == ["json", "xml", "txt", "csv"] and
+            (.paths["/api/v1/export/{format}"].get.responses["200"].content | keys | sort) ==
+              ["application/json", "application/xml", "text/csv", "text/plain"] and
+            .paths["/api/v1/export/{format}"].get.responses["200"].content["application/json"].schema.items["$ref"] ==
+              "#/components/schemas/ProxyDto" and
+            .paths["/api/v1/export/{format}"].get.responses["200"].content["text/csv"].schema.type == "string" and
+            (.paths["/api/v1/export/{format}"].get.responses | keys | sort) == ["200", "400", "429", "503"] and
+            (.paths["/api/v1/export/{format}"].get.responses["200"].headers |
+              has("X-Next-Offset")) and
+            (.paths["/api/v1/export/{format}/seek"].get.responses["200"].headers |
+              has("X-Next-Cursor")) and
+            (.paths["/api/v1/export/{format}"].get.responses["503"].headers |
+              has("Retry-After")) and
             (.components.schemas.ValidationTriggerResponse.properties.checked.type | index("integer")) != null and
             .components.schemas.ValidationTriggerResponse.properties.checked.format == "int32" and
             (.components.schemas.ValidationTriggerResponse.properties.alive.type | index("integer")) != null and

@@ -46,6 +46,7 @@ builder.Services.AddOpenApi(options =>
     });
     options.AddOperationTransformer((operation, context, _) =>
     {
+        ExportOpenApiContract.Apply(operation, context.Description.RelativePath);
         if (context.Description.RelativePath?.StartsWith("api/v1/admin", StringComparison.OrdinalIgnoreCase) == true)
         {
             operation.Security ??= [];

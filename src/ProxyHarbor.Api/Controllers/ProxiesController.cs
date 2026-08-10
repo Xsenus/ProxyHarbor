@@ -121,6 +121,11 @@ public sealed class ProxiesController(
     /// <summary>Потоково экспортирует страницу живых записей в json, xml, txt или csv.</summary>
     [HttpGet("export/{format}")]
     [EnableRateLimiting("export")]
+    [ProducesResponseType(typeof(ProxyDto[]), StatusCodes.Status200OK,
+        "application/json", "application/xml", "text/plain", "text/csv")]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status429TooManyRequests)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status503ServiceUnavailable)]
     public async Task<IActionResult> Export(
         string format,
         [FromQuery, EnumDataType(typeof(ProxyProtocol))] ProxyProtocol? protocol,
@@ -144,6 +149,11 @@ public sealed class ProxiesController(
     /// <summary>Потоково экспортирует keyset-страницу с постоянной стоимостью продолжения.</summary>
     [HttpGet("export/{format}/seek")]
     [EnableRateLimiting("export")]
+    [ProducesResponseType(typeof(ProxyDto[]), StatusCodes.Status200OK,
+        "application/json", "application/xml", "text/plain", "text/csv")]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status429TooManyRequests)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status503ServiceUnavailable)]
     public async Task<IActionResult> ExportSeek(
         string format,
         [FromQuery, EnumDataType(typeof(ProxyProtocol))] ProxyProtocol? protocol,
