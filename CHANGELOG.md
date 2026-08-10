@@ -11,6 +11,7 @@
 
 ### Changed
 
+- Сборка Telegram backup-частей теперь fail-closed проверяет единый base-name/total, непрерывность `1..N`, размеры и атомарное создание output; CI отклоняет missing, mixed и malformed наборы.
 - Source-feed audit artifact теперь сохраняет длительность сбора, processed/skipped, unique candidates и new proxies; forced-аудит fail-closed отклоняет любой skip, пустую очередь кандидатов и несогласованные счётчики.
 - Backup encryption/decryption и PowerShell restore теперь отклоняют unpaired UTF-16 surrogate, строго кодируют ключ в UTF-8 перед PBKDF2 и очищают временные password bytes, исключая коллизии через replacement characters без потери корректных 16-символьных legacy-ключей.
 - Публичный React-каталог позволяет повторить временно неудачную загрузку, отменяет и инвалидирует устаревшие ответы, а справочные 50/81 больше не маскируют предупреждение об усечённых source feed'ах.
