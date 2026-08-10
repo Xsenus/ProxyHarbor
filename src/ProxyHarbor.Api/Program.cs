@@ -199,7 +199,7 @@ var runtimeLeaseLost = LoggerMessage.Define(
     LogLevel.Critical,
     new EventId(1401, "RuntimeLeaseLost"),
     "Потеряна PostgreSQL lifetime-lock session; API выполняет controlled shutdown.");
-var runtimeLeaseMonitor = MonitorRuntimeLeaseAsync(
+var runtimeLeaseMonitor = RuntimeLeaseMonitor.RunAsync(
     runtimeLease, app.Lifetime, app.Logger, runtimeLeaseLost);
 try { await app.RunAsync(); }
 finally
@@ -209,33 +209,89 @@ finally
     await runtimeLeaseMonitor;
 }
 
-// Останавливает реплику, если PostgreSQL session-level lifetime-lock потерян.
-static async Task MonitorRuntimeLeaseAsync(
-    DatabaseRuntimeLease lease,
-    IHostApplicationLifetime lifetime,
-    ILogger logger,
-    Action<ILogger, Exception?> runtimeLeaseLost)
-{
-    using var timer = new PeriodicTimer(TimeSpan.FromSeconds(5));
-    var stopping = lifetime.ApplicationStopping;
-    try
-    {
-        while (await timer.WaitForNextTickAsync(stopping))
-        {
-            using var heartbeatTimeout = CancellationTokenSource.CreateLinkedTokenSource(stopping);
-            heartbeatTimeout.CancelAfter(TimeSpan.FromSeconds(5));
-            try { await lease.VerifyAsync(heartbeatTimeout.Token); }
-            catch (OperationCanceledException) when (stopping.IsCancellationRequested) { return; }
-            catch (Exception exception)
-            {
-                runtimeLeaseLost(logger, exception);
-                lifetime.StopApplication();
-                return;
-            }
-        }
-    }
-    catch (OperationCanceledException) when (stopping.IsCancellationRequested) { }
-}
-
 /// <summary>Маркер для интеграционных тестов WebApplicationFactory.</summary>
 public partial class Program;
+
+/// <summary>Контролирует живость owning PostgreSQL lifetime-lock session API-реплики.</summary>
+internal static class RuntimeLeaseMonitor
+{
+    internal static Task RunAsync(
+        DatabaseRuntimeLease lease,
+        IHostApplicationLifetime lifetime,
+        ILogger logger,
+        Action<ILogger, Exception?> runtimeLeaseLost) =>
+        RunCoreAsync(
+            lease.VerifyAsync,
+            TimeSpan.FromSeconds(5),
+            TimeSpan.FromSeconds(5),
+            lifetime,
+            logger,
+            runtimeLeaseLost);
+
+    /// <summary>
+    /// Тестируемое ядро принимает verify delegate и интервалы. Потеря lease всегда инициирует
+    /// controlled shutdown; отказ logging provider не может остановить этот переход или
+    /// превратить monitor task во вторичную ошибку поверх host failure.
+    /// </summary>
+    internal static async Task RunCoreAsync(
+        Func<CancellationToken, Task> verifyAsync,
+        TimeSpan heartbeatInterval,
+        TimeSpan heartbeatTimeout,
+        IHostApplicationLifetime lifetime,
+        ILogger logger,
+        Action<ILogger, Exception?> runtimeLeaseLost)
+    {
+        ArgumentNullException.ThrowIfNull(verifyAsync);
+        ArgumentNullException.ThrowIfNull(lifetime);
+        ArgumentNullException.ThrowIfNull(logger);
+        ArgumentNullException.ThrowIfNull(runtimeLeaseLost);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(heartbeatInterval, TimeSpan.Zero);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(heartbeatTimeout, TimeSpan.Zero);
+
+        using var timer = new PeriodicTimer(heartbeatInterval);
+        var stopping = lifetime.ApplicationStopping;
+        try
+        {
+            while (await timer.WaitForNextTickAsync(stopping))
+            {
+                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(stopping);
+                timeout.CancelAfter(heartbeatTimeout);
+                try { await verifyAsync(timeout.Token); }
+                catch (OperationCanceledException) when (stopping.IsCancellationRequested) { return; }
+                catch (Exception exception)
+                {
+                    ReportFailureAndStop(lifetime, logger, runtimeLeaseLost, exception);
+                    return;
+                }
+            }
+        }
+        catch (OperationCanceledException) when (stopping.IsCancellationRequested) { }
+    }
+
+    /// <summary>Shutdown выполняется даже при неисправном logging provider.</summary>
+    private static void ReportFailureAndStop(
+        IHostApplicationLifetime lifetime,
+        ILogger logger,
+        Action<ILogger, Exception?> runtimeLeaseLost,
+        Exception failure)
+    {
+        try
+        {
+            runtimeLeaseLost(logger, failure);
+        }
+        catch (Exception loggingFailure)
+        {
+            // Fallback не включает message/connection string и сам остаётся best-effort.
+            try
+            {
+                Console.Error.WriteLine(
+                    $"Не удалось записать RuntimeLeaseLost ({loggingFailure.GetType().Name}); API останавливается.");
+            }
+            catch (Exception) { }
+        }
+        finally
+        {
+            lifetime.StopApplication();
+        }
+    }
+}
