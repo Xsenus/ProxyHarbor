@@ -86,6 +86,30 @@ public sealed class ApiSecurityMiddlewareTests
         Assert.Equal(StatusCodes.Status401Unauthorized, context.Response.StatusCode);
     }
 
+    [Fact]
+    public async Task InvalidUnicodeHeaderIsRejectedWithoutReplacementCharacterCollision()
+    {
+        var context = Context("/api/v1/admin/sources");
+        context.Request.Headers["X-Admin-Key"] = new string('\uD800', 24);
+        var pipeline = Pipeline(_ => throw new InvalidOperationException("invalid UTF-16 key must not pass"));
+
+        await pipeline(context);
+
+        Assert.Equal(StatusCodes.Status401Unauthorized, context.Response.StatusCode);
+    }
+
+    [Fact]
+    public void ProductionKeyPolicyRejectsUnusableSecrets()
+    {
+        Assert.False(AdminApiKeyPolicy.IsValid(null));
+        Assert.False(AdminApiKeyPolicy.IsValid(new string(' ', 24)));
+        Assert.False(AdminApiKeyPolicy.IsValid(new string('\uD800', 24)));
+        Assert.False(AdminApiKeyPolicy.IsValid(new string('x', 23)));
+        Assert.False(AdminApiKeyPolicy.IsValid(new string('x', 257)));
+        Assert.True(AdminApiKeyPolicy.IsValid(AdminKey));
+        Assert.True(AdminApiKeyPolicy.IsValid("ключ-администратора-длиной-больше-24"));
+    }
+
     [Theory]
     [InlineData("wrong")]
     [InlineData(AdminKey + "-suffix")]

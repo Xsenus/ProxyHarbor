@@ -18,9 +18,9 @@ builder.WebHost.ConfigureKestrel(options => options.AddServerHeader = false);
 if (!builder.Environment.IsDevelopment())
 {
     var adminKey = builder.Configuration["Security:AdminApiKey"];
-    if (adminKey is null || adminKey.Length is < 24 or > 256 || adminKey.Any(char.IsControl))
+    if (!AdminApiKeyPolicy.IsValid(adminKey))
         throw new InvalidOperationException(
-            "В Production параметр Security__AdminApiKey должен содержать 24–256 символов без управляющих знаков.");
+            "В Production Security__AdminApiKey должен содержать 24–256 значимых Unicode-символов без управляющих знаков и некорректных surrogate.");
 }
 
 builder.Services.AddProxyHarborInfrastructure(builder.Configuration);

@@ -15,8 +15,10 @@ public sealed class AdminApiKeyMiddleware
     {
         _next = next;
         var expected = configuration["Security:AdminApiKey"];
-        _isConfigured = !string.IsNullOrWhiteSpace(expected);
-        _expectedHash = SHA256.HashData(Encoding.UTF8.GetBytes(expected ?? string.Empty));
+        _isConfigured = AdminApiKeyPolicy.IsValid(expected);
+        _expectedHash = new byte[SHA256.HashSizeInBytes];
+        if (_isConfigured && !AdminApiKeyPolicy.TryHash(expected!, _expectedHash))
+            throw new InvalidOperationException("Допустимый административный ключ не удалось закодировать.");
     }
 
     public async Task InvokeAsync(HttpContext context)
@@ -37,12 +39,10 @@ public sealed class AdminApiKeyMiddleware
             headerValues[0] is { Length: > 0 and <= 256 };
         // ToString() объединяет несколько header values запятой. Явная проверка количества
         // исключает неоднозначность для ключа, который сам содержит запятую.
-        var provided = hasSingleBoundedValue ? headerValues[0]! : string.Empty;
-        var providedBytes = Encoding.UTF8.GetBytes(provided);
         Span<byte> providedHash = stackalloc byte[SHA256.HashSizeInBytes];
-        SHA256.HashData(providedBytes, providedHash);
-        CryptographicOperations.ZeroMemory(providedBytes);
-        var authenticated = hasSingleBoundedValue && _isConfigured &&
+        var hashCreated = hasSingleBoundedValue &&
+            AdminApiKeyPolicy.TryHash(headerValues[0]!, providedHash);
+        var authenticated = hashCreated && _isConfigured &&
             CryptographicOperations.FixedTimeEquals(_expectedHash, providedHash);
         CryptographicOperations.ZeroMemory(providedHash);
         if (!authenticated)
@@ -54,5 +54,53 @@ public sealed class AdminApiKeyMiddleware
             return;
         }
         await _next(context);
+    }
+}
+
+/// <summary>Единая fail-closed политика production validation и middleware hashing.</summary>
+internal static class AdminApiKeyPolicy
+{
+    internal const int MinimumLength = 24;
+    internal const int MaximumLength = 256;
+    private static readonly UTF8Encoding StrictUtf8 = new(false, true);
+
+    internal static bool IsValid(string? value)
+    {
+        if (value is null || value.Length is < MinimumLength or > MaximumLength ||
+            string.IsNullOrWhiteSpace(value) || value.Any(char.IsControl))
+            return false;
+        try
+        {
+            // ThrowOnInvalidBytes блокирует unpaired UTF-16 surrogate вместо замены
+            // нескольких разных строк одинаковым U+FFFD перед hashing.
+            _ = StrictUtf8.GetByteCount(value);
+            return true;
+        }
+        catch (EncoderFallbackException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Хеширует bounded строку и гарантированно очищает временные UTF-8 bytes.</summary>
+    internal static bool TryHash(string value, Span<byte> destination)
+    {
+        if (destination.Length < SHA256.HashSizeInBytes) throw new ArgumentException("SHA-256 destination слишком мал.", nameof(destination));
+        byte[]? bytes = null;
+        try
+        {
+            bytes = StrictUtf8.GetBytes(value);
+            SHA256.HashData(bytes, destination);
+            return true;
+        }
+        catch (EncoderFallbackException)
+        {
+            destination[..SHA256.HashSizeInBytes].Clear();
+            return false;
+        }
+        finally
+        {
+            if (bytes is not null) CryptographicOperations.ZeroMemory(bytes);
+        }
     }
 }
