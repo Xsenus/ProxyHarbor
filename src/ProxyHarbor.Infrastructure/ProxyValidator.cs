@@ -20,7 +20,7 @@ public sealed class ProxyValidator(
             "Непредусмотренная ошибка проверки прокси {ProxyKey}");
     private static readonly Action<ILogger, Guid, Exception?> LeaseRenewalFailed =
         LoggerMessage.Define<Guid>(LogLevel.Error, new EventId(1302, "LeaseRenewalFailed"),
-            "Не удалось продлить аренду validation-пакета {LeaseId}; устаревшие результаты будут отклонены PostgreSQL");
+            "Не удалось продлить аренду validation-пакета {LeaseId}; heartbeat повторит попытку, а утратившие ownership результаты будут отклонены PostgreSQL");
     private static readonly Action<ILogger, Guid, Exception?> LeaseReleaseFailed =
         LoggerMessage.Define<Guid>(LogLevel.Warning, new EventId(1303, "LeaseReleaseFailed"),
             "Не удалось досрочно освободить аренду validation-пакета {LeaseId}; она истечёт автоматически");
@@ -240,21 +240,48 @@ public sealed class ProxyValidator(
                 .SetProperty(proxy => proxy.CheckLeaseId, (Guid?)null), token);
     }
 
-    private async Task MaintainLeaseAsync(Guid leaseId, TimeSpan duration, CancellationToken token)
+    private Task MaintainLeaseAsync(Guid leaseId, TimeSpan duration, CancellationToken token) =>
+        MaintainLeaseWithRetryAsync(
+            duration,
+            ValidationLeasePolicy.RenewalInterval(duration),
+            (leaseUntil, cancellationToken) =>
+                RenewLeaseAsync(leaseId, leaseUntil, cancellationToken),
+            exception => LeaseRenewalFailed(logger, leaseId, exception),
+            token);
+
+    /// <summary>
+    /// Изолированное heartbeat-ядро принимает clock interval и renewal delegate, чтобы
+    /// transient-retry проверялся детерминированно без реальной БД и минутного ожидания.
+    /// </summary>
+    internal static async Task MaintainLeaseWithRetryAsync(
+        TimeSpan duration,
+        TimeSpan renewalInterval,
+        Func<DateTimeOffset, CancellationToken, Task<int>> renewAsync,
+        Action<Exception> renewalFailed,
+        CancellationToken token)
     {
-        using var timer = new PeriodicTimer(ValidationLeasePolicy.RenewalInterval(duration));
+        using var timer = new PeriodicTimer(renewalInterval);
         try
         {
             while (await timer.WaitForNextTickAsync(token))
-                await RenewLeaseAsync(leaseId, DateTimeOffset.UtcNow.Add(duration), token);
+            {
+                try
+                {
+                    await renewAsync(DateTimeOffset.UtcNow.Add(duration), token);
+                }
+                catch (OperationCanceledException) when (token.IsCancellationRequested)
+                {
+                    return;
+                }
+                catch (Exception exception)
+                {
+                    // Один transient-сбой не отключает heartbeat навсегда: следующая
+                    // периодическая попытка ещё может сохранить ownership до expiry.
+                    renewalFailed(exception);
+                }
+            }
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { }
-        catch (Exception exception)
-        {
-            // Lease token в merge-запросе не позволит записать устаревшие результаты,
-            // даже если после сбоя heartbeat пакет успеет арендовать другая реплика.
-            LeaseRenewalFailed(logger, leaseId, exception);
-        }
     }
 
     private async Task ReleaseLeaseBestEffortAsync(Guid leaseId)

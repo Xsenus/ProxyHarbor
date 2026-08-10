@@ -75,6 +75,31 @@ public sealed class ProxyCheckSchedulerTests
         Assert.Equal(TimeSpan.FromTicks(duration.Ticks / 3), ValidationLeasePolicy.RenewalInterval(duration));
     }
 
+    [Fact]
+    public async Task LeaseHeartbeatRetriesAfterTransientRenewalFailure()
+    {
+        using var stop = new CancellationTokenSource();
+        var attempts = 0;
+        var failures = 0;
+
+        await ProxyValidator.MaintainLeaseWithRetryAsync(
+            TimeSpan.FromMinutes(2),
+            TimeSpan.FromMilliseconds(1),
+            (_, _) =>
+            {
+                if (Interlocked.Increment(ref attempts) == 1)
+                    return Task.FromException<int>(new IOException("transient database failure"));
+
+                stop.Cancel();
+                return Task.FromResult(1);
+            },
+            _ => Interlocked.Increment(ref failures),
+            stop.Token).WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.Equal(2, attempts);
+        Assert.Equal(1, failures);
+    }
+
     private static ProxyCheckResult Result(bool alive) =>
         new(Guid.NewGuid(), alive, alive ? 100 : null, alive ? "1.1.1.1" : null, alive, alive ? null : "failed");
 }

@@ -55,6 +55,7 @@
 
 ### Fixed
 
+- Validation heartbeat после единичного transient-сбоя PostgreSQL больше не завершается навсегда: ошибка логируется, следующий период снова пытается продлить точный lease token, а детерминированный unit-тест доказывает retry без многоминутного ожидания.
 - Финализация collection-run теперь проверяемо переводит только собственную строку `running → completed`, а error-path допускает только `running → failed`: параллельный administrative/restore результат не перезаписывается tracked EF update; PostgreSQL-регрессия меняет audit во время feed-запроса и доказывает fail-closed ответ при сохранении уже собранного кандидата.
 - Финализация backup теперь атомарно переводит ровно свою audit-строку из `running` в `completed` и проверяет affected-row count: удалённая или параллельно изменённая запись приводит к fail-closed ошибке даже после успешной публикации и Telegram-доставки, а error-path не перезаписывает чужой `completed`/`failed`; PostgreSQL-регрессия воспроизводит потерю ownership во время внешнего вызова.
 - Публичный `/health/ready`, который обращается к PostgreSQL и не кэширует отрицательные ответы, теперь использует общую per-IP public rate policy; `/health/live` остаётся независимым дешёвым liveness-сигналом, а container smoke доказывает bounded 429 JSON с `Retry-After` после исчерпания readiness budget.
