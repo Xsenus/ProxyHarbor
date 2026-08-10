@@ -19,6 +19,7 @@
 - постоянный аудит создания, размера и подтверждённой Telegram-доставки каждого backup;
 - воспроизводимый fail-closed backup-аудит конкретного PHB3-файла и его Telegram delivery evidence;
 - opt-in Prometheus + Alertmanager с bounded retention, проверяемыми alert rules и Telegram-уведомлениями;
+- воспроизводимый public API latency-аудит с cold/hot p95 SLO и JSON-отчётом;
 - CI для backend, frontend, тестов и проверки Docker Compose.
 
 ## Быстрый запуск в Docker

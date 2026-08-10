@@ -73,6 +73,9 @@ jobs:
       - name: Verify backup-audit evidence contracts
         shell: pwsh
         run: ./tools/Test-AuditBackup.ps1
+      - name: Verify public API performance-audit contracts
+        shell: pwsh
+        run: ./tools/Test-AuditPublicApiPerformance.ps1
       - name: Verify release metadata contracts
         shell: pwsh
         run: ./tools/Test-ReleaseMetadata.ps1
