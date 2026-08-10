@@ -100,6 +100,7 @@
 
 ### Fixed
 
+- Публичный production Compose теперь безусловно задаёт `Backup__Enabled=true`: забытая или ложная environment-переменная больше не позволяет успешно развернуть сервис без зашифрованного backup и подтверждённой Telegram-доставки; отсутствие любого обязательного secret fail-closed останавливает startup, а CI/release проверяют итоговый merged Compose.
 - Validation claim получил concurrent expression-index, точно совпадающий с приоритетом `Alive → Pending → Dead` и порядком `NextCheckAt/LastCheckedAt`: на воспроизводимой очереди из 300 000 строк PostgreSQL сменил внешний disk sort 29 МБ и 364,8 мс на ordered index scan 4,6 мс без изменения lease/fairness семантики.
 - Proxy probe теперь bounded обрабатывает до восьми последовательных HTTP `1xx` перед финальным control-ответом: валидные `100/102/103` больше не превращают рабочий прокси в `Deferred`, а `101`, framing тела, бесконечная informational-цепочка, неоднозначный `Transfer-Encoding` и неканоническая status-line отклоняются fail-closed.
 - Proxy parser теперь требует строгие token boundaries и canonical decimal IPv4: хвост пятиоктетного адреса, первые пять цифр шестизначного порта, endpoint внутри hostname/идентификатора и octal-leading-zero вроде `010.0.0.1 → 8.0.0.1` больше не загрязняют validation queue. Проверка остаётся allocation-free; adversarial unit-canary и полный production parse 81/81 feed от 50 провайдеров подтвердили 890 996 записей и 291 705 уникальных кандидатов без ошибок/усечения за 5,897 секунды.

@@ -164,7 +164,22 @@ foreach ($contract in $resourceContracts) {
     }
 }
 
+# Публичный overlay не может наследовать выключенный local default: исходное
+# требование backup+Telegram является fail-closed production invariant.
+$productionComposePath = Join-Path $repositoryRoot 'docker-compose.production.yml'
+if ([IO.File]::Exists($productionComposePath)) {
+    $productionComposeText = Get-Content -LiteralPath $productionComposePath -Raw
+    $apiMatch = [regex]::Match(
+        $productionComposeText,
+        '(?ms)^  api:\s*\r?\n(?<body>.*?)(?=^  [a-zA-Z0-9_-]+:\s*\r?$|^(?:volumes|networks|secrets):\s*\r?$|\z)')
+    if (-not $apiMatch.Success -or
+        $apiMatch.Groups['body'].Value -notmatch '(?m)^      Backup__Enabled:\s*true\s*$') {
+        $violations.Add(
+            'docker-compose.production.yml: service api обязан fail-closed задавать Backup__Enabled: true')
+    }
+}
+
 if ($violations.Count -gt 0) {
     throw "Supply-chain gate отклонён:`n$($violations -join [Environment]::NewLine)"
 }
-Write-Host "Supply-chain/runtime contract пройден: actions закреплены commit SHA, container references — $pinnedImages tag+digest pins, PostgreSQL references — $($postgresReferences.Count) синхронизированы, core services имеют CPU/RAM ceilings, Test SDK/coverlet обновляются атомарно." -ForegroundColor Green
+Write-Host "Supply-chain/runtime contract пройден: actions закреплены commit SHA, container references — $pinnedImages tag+digest pins, PostgreSQL references — $($postgresReferences.Count) синхронизированы, core services имеют CPU/RAM ceilings, production backup обязателен, Test SDK/coverlet обновляются атомарно." -ForegroundColor Green

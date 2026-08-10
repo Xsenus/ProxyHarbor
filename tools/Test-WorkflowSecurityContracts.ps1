@@ -151,6 +151,19 @@ services:
     Assert-GateRejected 'service api не задаёт bounded mem_limit'
     [IO.File]::Delete($coreComposePath)
 
+    $productionComposePath = Join-Path $fixtureRoot 'docker-compose.production.yml'
+    Set-Content -LiteralPath $productionComposePath -Value @'
+services:
+  api:
+    environment:
+      Backup__Enabled: false
+  caddy:
+    mem_limit: ${CADDY_MEMORY_LIMIT:-256m}
+    cpus: ${CADDY_CPU_LIMIT:-0.5}
+'@ -Encoding utf8NoBOM
+    Assert-GateRejected 'service api обязан fail-closed задавать Backup__Enabled: true'
+    [IO.File]::Delete($productionComposePath)
+
     Set-FixtureWorkflow @'
 name: test
 jobs:
@@ -166,7 +179,7 @@ services:
 '@ -Encoding utf8NoBOM
     Assert-GateRejected 'PostgreSQL tag/digest расходятся между Compose и workflows'
 
-    Write-Host 'Supply-chain/runtime contracts пройдены: workflow services/container, matrix metadata, actions, Dockerfile/Compose variants, resource ceilings, PostgreSQL pin synchronization и Dependabot test-toolchain grouping.' -ForegroundColor Green
+    Write-Host 'Supply-chain/runtime contracts пройдены: workflow services/container, matrix metadata, actions, Dockerfile/Compose variants, resource ceilings, mandatory production backup, PostgreSQL pin synchronization и Dependabot test-toolchain grouping.' -ForegroundColor Green
 } finally {
     $resolvedFixture = [IO.Path]::GetFullPath($fixtureRoot)
     $resolvedTemp = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())

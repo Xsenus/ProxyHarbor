@@ -3,6 +3,9 @@ services:
   api:
     environment:
       AllowedHosts: ${PUBLIC_HOST:?set PUBLIC_HOST to the public DNS name}
+      # Публичный сервис обязан создавать шифрованные backup и подтверждать Telegram-доставку.
+      # Отсутствующие или некорректные secret-файлы остановят API через options validation.
+      Backup__Enabled: true
 
   # В production frontend доступен только через TLS gateway.
   web:
