@@ -40,6 +40,8 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
             .IsCreatedConcurrently();
         proxy.HasIndex(x => new { x.Status, x.LastSeenAt });
         proxy.HasIndex(x => new { x.NextCheckAt, x.CheckLeaseUntil });
+        // Точный expression-index для CASE priority + due order создаётся raw migration,
+        // поскольку EF-модель не представляет CASE key. Он остаётся вне snapshot намеренно.
         proxy.HasIndex(x => x.CheckLeaseId);
         proxy.HasIndex(x => x.LastValidationAttemptAt);
         proxy.Ignore(x => x.Key);

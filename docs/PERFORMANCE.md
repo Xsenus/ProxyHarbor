@@ -12,6 +12,8 @@
 
 Production default — **800 / 1 600**. Он ускорил контрольную выборку примерно в 3,2 раза относительно прежнего 200 / 1 000 и оставляет 20% запаса до программного hard limit 1 000. Во время точки 800 процесс занимал около 146 МБ working set, 64 МБ private memory, 49 threads и 881 handle. Docker Compose задаёт API-процессу `nofile=8192`; probes используют async I/O и не создают отдельный thread на соединение.
 
+Claim-план отдельно проверен на откатываемой PostgreSQL-таблице из 300 000 строк со смесью `Alive/Pending/Dead`, future `NextCheckAt` и активных lease. Прежний индекс `(NextCheckAt, CheckLeaseUntil)` не соответствовал фактическому `CASE Status → NextCheckAt → LastCheckedAt`: PostgreSQL читал 300 000 строк и выполнял внешний sort с 29 МБ temporary I/O за 364,8 мс. Concurrent `IX_Proxies_ValidationClaimOrder` точно повторяет operational order; тот же `LIMIT 1600 FOR UPDATE SKIP LOCKED` использовал ordered index scan, отфильтровал только 300 строк и завершился за 4,6 мс. Это измерение конкретного хоста, но отсутствие full sort закреплено точной миграцией и PostgreSQL contract test.
+
 Результат зависит от доли мгновенно отклонённых соединений, таймаутов, ОС, сети и control endpoint, поэтому это не универсальная гарантия. Фактическую ёмкость конкретной установки показывают `proxyharbor_validation_checks_per_second` и `proxyharbor_validation_estimated_drain_seconds`. При устойчивых `Deferred`, росте ошибок control endpoint или нехватке дескрипторов уменьшите `VALIDATION_CONCURRENCY`; размер партии рекомендуется держать не меньше двух волн concurrency.
 
 ## Публичная выдача

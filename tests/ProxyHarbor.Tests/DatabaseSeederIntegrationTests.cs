@@ -11,6 +11,53 @@ public sealed class DatabaseSeederIntegrationTests
 {
     [Fact]
     [Trait("Category", "PostgresIntegration")]
+    public async Task ValidationClaimIndexMatchesExactPriorityAndDueOrder()
+    {
+        var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
+        if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
+
+        var schema = $"proxyharbor_claim_index_{Guid.NewGuid():N}";
+        var builder = new NpgsqlConnectionStringBuilder(baseConnectionString) { SearchPath = schema };
+        await using var admin = new NpgsqlConnection(baseConnectionString);
+        await admin.OpenAsync();
+        await using (var create = new NpgsqlCommand($"CREATE SCHEMA {schema}", admin))
+            await create.ExecuteNonQueryAsync();
+
+        try
+        {
+            var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+                .UseNpgsql(builder.ConnectionString)
+                .Options;
+            await using (var db = new ProxyHarborDbContext(options))
+                await db.Database.MigrateAsync();
+
+            await using var inspect = new NpgsqlCommand(
+                """
+                SELECT indexdef
+                FROM pg_indexes
+                WHERE schemaname = @schema
+                  AND indexname = 'IX_Proxies_ValidationClaimOrder'
+                """,
+                admin);
+            inspect.Parameters.AddWithValue("schema", schema);
+            var definition = Assert.IsType<string>(await inspect.ExecuteScalarAsync());
+
+            Assert.Contains("CASE \"Status\"", definition, StringComparison.Ordinal);
+            Assert.Contains("WHEN 1 THEN 0", definition, StringComparison.Ordinal);
+            Assert.Contains("WHEN 0 THEN 1", definition, StringComparison.Ordinal);
+            Assert.Contains("\"NextCheckAt\" NULLS FIRST", definition, StringComparison.Ordinal);
+            Assert.Contains("\"LastCheckedAt\" NULLS FIRST", definition, StringComparison.Ordinal);
+        }
+        finally
+        {
+            // schema состоит только из фиксированного prefix и N-format GUID, поэтому identifier безопасен.
+            await using var drop = new NpgsqlCommand($"DROP SCHEMA {schema} CASCADE", admin);
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
     public async Task CleanupFailuresPreservePrimaryStartupFailureAndDiscardLockSession()
     {
         var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
