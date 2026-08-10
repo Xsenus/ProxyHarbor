@@ -55,6 +55,7 @@
 
 ### Fixed
 
+- Proxy-tunnel control response теперь сохраняет byte-oriented HTTP framing до dechunking, затем использует strict UTF-8 и безопасную проверку JSON shape: chunk-size корректно считается при Unicode и split code point, а повреждённые bytes, non-object root и нестроковый `ip` становятся deferred control failure.
 - Прямой ответ validation control endpoint теперь разбирается из исходных UTF-8 bytes и требует object со строковым `ip`: невалидная кодировка или JSON shape fail-closed отклоняются вместо replacement characters либо необработанного server error.
 - Validation worker больше не принимает непустой deferred-only пакет за пустую очередь: после временной ошибки control endpoint он продолжает осушать остальные due-записи с короткой паузой вместо 30-секундной остановки.
 - Telegram backup sender теперь запрашивает `ResponseHeadersRead`: недоверенный Bot API body больше не буферизуется `HttpClient` целиком до 64-КиБ parser limit. Oversized streaming response bounded-читается, закрывается и никогда не подтверждает доставку; регрессия запрещает возврат к `ResponseContentRead`.

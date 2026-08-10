@@ -167,6 +167,8 @@ Background collector применяет bounded exponential backoff только
 
 Источниками можно управлять и из React-панели: добавлять собственные HTTPS feed'ы, менять их активность и удалять пользовательские записи. Встроенные источники помечены провайдером и рангом; их канонические URL и протоколы неизменяемы, а удаление безопасно переводит запись на паузу. Административная панель также показывает размер PostgreSQL, очередь проверки, точную историю validation-партий, последние циклы сбора и историю backup с подтверждённым состоянием Telegram-доставки; данные автоматически обновляются каждые 15 секунд и после административных действий.
 
+Proxy-tunnel control response разбирается как bounded byte stream: HTTP headers требуют ASCII без bare control bytes, Content-Length и chunk sizes считаются в байтах, chunk framing удаляется до strict UTF-8/JSON validation. Поэтому Unicode code point может безопасно пересекать границу chunks, а malformed encoding или JSON shape переводят попытку в `deferred`, не ухудшая статистику прокси и не прерывая validation batch.
+
 ## Локальная разработка
 
 Запустите PostgreSQL и задайте строку подключения, затем:

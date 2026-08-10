@@ -9,11 +9,15 @@ namespace ProxyHarbor.Infrastructure;
 internal static class ProxyOriginResponse
 {
     private const int MaxHeaderBytes = 16 * 1024;
+    private static readonly UTF8Encoding StrictUtf8 = new(false, true);
 
     /// <summary>
     /// Читает ровно один bounded HTTP/1.1 response и не ждёт EOF после полного framed body.
     /// </summary>
-    internal static async Task<string> ReadAsync(Stream stream, int maxBytes, CancellationToken token)
+    internal static async Task<ReadOnlyMemory<byte>> ReadAsync(
+        Stream stream,
+        int maxBytes,
+        CancellationToken token)
     {
         ArgumentNullException.ThrowIfNull(stream);
         ArgumentOutOfRangeException.ThrowIfLessThan(maxBytes, 1);
@@ -29,9 +33,9 @@ internal static class ProxyOriginResponse
             if (headerEnd >= 0)
             {
                 if (expectedMessageBytes.HasValue && bytes.Length >= expectedMessageBytes.Value)
-                    return Encoding.UTF8.GetString(bytes[..expectedMessageBytes.Value]);
+                    return Snapshot(bytes[..expectedMessageBytes.Value]);
                 if (chunked && TryGetCompleteChunkedLength(bytes[(headerEnd + 4)..], out var bodyBytes))
-                    return Encoding.UTF8.GetString(bytes[..(headerEnd + 4 + bodyBytes)]);
+                    return Snapshot(bytes[..(headerEnd + 4 + bodyBytes)]);
             }
 
             if (output.Length == maxBytes)
@@ -39,7 +43,7 @@ internal static class ProxyOriginResponse
                 // Для close-delimited ответа EOF отличает ровно maxBytes от фактического превышения.
                 var sentinel = new byte[1];
                 if (await stream.ReadAsync(sentinel, token) == 0)
-                    return Encoding.UTF8.GetString(output.GetBuffer(), 0, checked((int)output.Length));
+                    return Snapshot(output.GetBuffer().AsSpan(0, checked((int)output.Length)));
                 throw new ProbeControlResponseException($"HTTP-ответ контрольного сервера превышает {maxBytes} байт.");
             }
             var remaining = checked((int)(maxBytes - output.Length));
@@ -48,7 +52,7 @@ internal static class ProxyOriginResponse
             {
                 if (expectedMessageBytes.HasValue || chunked)
                     throw new ProbeControlResponseException("Контрольный сервер преждевременно завершил HTTP-ответ.");
-                return Encoding.UTF8.GetString(output.GetBuffer(), 0, checked((int)output.Length));
+                return Snapshot(output.GetBuffer().AsSpan(0, checked((int)output.Length)));
             }
             await output.WriteAsync(buffer.AsMemory(0, read), token);
 
@@ -68,11 +72,16 @@ internal static class ProxyOriginResponse
         }
     }
 
-    internal static string ParseExitIp(string response)
+    /// <summary>Удобный overload для детерминированных текстовых unit-тестов.</summary>
+    internal static string ParseExitIp(string response) =>
+        ParseExitIp(StrictUtf8.GetBytes(response));
+
+    /// <summary>Разбирает headers и chunk framing в bytes до строгой UTF-8 проверки JSON body.</summary>
+    internal static string ParseExitIp(ReadOnlyMemory<byte> response)
     {
-        var separator = response.IndexOf("\r\n\r\n", StringComparison.Ordinal);
+        var separator = response.Span.IndexOf("\r\n\r\n"u8);
         if (separator < 0) throw new ProbeControlResponseException("Некорректный HTTP-ответ контрольного сервера.");
-        var headerLines = response[..separator].Split("\r\n", StringSplitOptions.None);
+        var headerLines = DecodeHttpHeader(response.Span[..separator]).Split("\r\n", StringSplitOptions.None);
         var statusParts = headerLines[0].Split(' ', StringSplitOptions.RemoveEmptyEntries);
         if (statusParts.Length < 2 || !statusParts[0].StartsWith("HTTP/", StringComparison.OrdinalIgnoreCase) ||
             !int.TryParse(statusParts[1], out var statusCode) || statusCode != 200)
@@ -86,21 +95,28 @@ internal static class ProxyOriginResponse
             headers[line[..colon].Trim()] = line[(colon + 1)..].Trim();
         }
 
-        var body = response[(separator + 4)..];
+        ReadOnlyMemory<byte> body = response[(separator + 4)..];
         if (headers.TryGetValue("Transfer-Encoding", out var transferEncoding) &&
             transferEncoding.Split(',').Any(value => value.Trim().Equals("chunked", StringComparison.OrdinalIgnoreCase)))
-            body = DecodeChunked(body);
+            body = DecodeChunked(body.Span);
         else if (headers.TryGetValue("Content-Length", out var contentLengthText))
         {
             if (!int.TryParse(contentLengthText, NumberStyles.None, CultureInfo.InvariantCulture, out var contentLength) ||
-                contentLength < 0 || Encoding.UTF8.GetByteCount(body) < contentLength)
+                contentLength < 0 || body.Length < contentLength)
                 throw new ProbeControlResponseException("Тело HTTP-ответа контрольного сервера оборвано.");
+            body = body[..contentLength];
         }
 
         try
         {
+            // JSON string tokens декодируются лениво; заранее проверяем весь body.
+            _ = StrictUtf8.GetCharCount(body.Span);
             using var json = JsonDocument.Parse(body);
-            var exitIp = json.RootElement.TryGetProperty("ip", out var ipElement) ? ipElement.GetString() : null;
+            var exitIp = json.RootElement.ValueKind == JsonValueKind.Object &&
+                json.RootElement.TryGetProperty("ip", out var ipElement) &&
+                ipElement.ValueKind == JsonValueKind.String
+                    ? ipElement.GetString()
+                    : null;
             if (!IPAddress.TryParse(exitIp, out var exitAddress) || !NetworkSafety.IsPublicAddress(exitAddress))
                 throw new ProbeControlResponseException("Контрольный сервер не вернул внешний IP.");
             return exitAddress.ToString();
@@ -109,6 +125,33 @@ internal static class ProxyOriginResponse
         {
             throw new ProbeControlResponseException("Контрольный сервер вернул некорректный JSON.", exception);
         }
+        catch (DecoderFallbackException exception)
+        {
+            throw new ProbeControlResponseException(
+                "Контрольный сервер вернул HTTP-ответ с некорректным UTF-8.",
+                exception);
+        }
+    }
+
+    private static ReadOnlyMemory<byte> Snapshot(ReadOnlySpan<byte> value) => value.ToArray();
+
+    /// <summary>HTTP/1.x header обязан оставаться ASCII и не может содержать bare controls.</summary>
+    private static string DecodeHttpHeader(ReadOnlySpan<byte> value)
+    {
+        for (var index = 0; index < value.Length; index++)
+        {
+            var character = value[index];
+            var validCrLf = character switch
+            {
+                (byte)'\r' => index + 1 < value.Length && value[index + 1] == (byte)'\n',
+                (byte)'\n' => index > 0 && value[index - 1] == (byte)'\r',
+                _ => true
+            };
+            if (!validCrLf || character > 0x7E ||
+                character < 0x20 && character is not (byte)'\t' and not (byte)'\r' and not (byte)'\n')
+                throw new ProbeControlResponseException("HTTP-заголовок контрольного сервера содержит недопустимые байты.");
+        }
+        return Encoding.ASCII.GetString(value);
     }
 
     private static (int? ExpectedMessageBytes, bool Chunked) ParseFraming(
@@ -116,7 +159,7 @@ internal static class ProxyOriginResponse
         int bodyOffset,
         int maxBytes)
     {
-        var lines = Encoding.ASCII.GetString(header).Split("\r\n", StringSplitOptions.None);
+        var lines = DecodeHttpHeader(header).Split("\r\n", StringSplitOptions.None);
         int? contentLength = null;
         var chunked = false;
         foreach (var line in lines.Skip(1))
@@ -211,24 +254,38 @@ internal static class ProxyOriginResponse
         return true;
     }
 
-    private static string DecodeChunked(string encoded)
+    private static byte[] DecodeChunked(ReadOnlySpan<byte> encoded)
     {
-        var output = new StringBuilder(encoded.Length);
+        using var output = new MemoryStream(encoded.Length);
         var position = 0;
         while (true)
         {
-            var lineEnd = encoded.IndexOf("\r\n", position, StringComparison.Ordinal);
-            if (lineEnd < 0) throw new ProbeControlResponseException("Некорректное chunked-тело контрольного сервера.");
-            var sizeText = encoded[position..lineEnd].Split(';', 2)[0].Trim();
-            if (!int.TryParse(sizeText, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var size) || size < 0)
+            var relativeLineEnd = encoded[position..].IndexOf("\r\n"u8);
+            if (relativeLineEnd < 0)
+                throw new ProbeControlResponseException("Некорректное chunked-тело контрольного сервера.");
+            var lineEnd = checked(position + relativeLineEnd);
+            var sizeText = encoded[position..lineEnd];
+            var extension = sizeText.IndexOf((byte)';');
+            if (extension >= 0) sizeText = sizeText[..extension];
+            if (!TryParseHex(TrimAsciiWhitespace(sizeText), out var size))
                 throw new ProbeControlResponseException("Некорректный размер HTTP chunk.");
             position = lineEnd + 2;
-            if (size == 0) return output.ToString();
-            if (position + size + 2 > encoded.Length ||
-                !encoded.AsSpan(position + size, 2).SequenceEqual("\r\n"))
+            if (size == 0)
+            {
+                if (encoded[position..].StartsWith("\r\n"u8)) return output.ToArray();
+                var trailerEnd = encoded[position..].IndexOf("\r\n\r\n"u8);
+                if (trailerEnd < 0)
+                    throw new ProbeControlResponseException("Chunked-тело контрольного сервера не завершено.");
+                _ = DecodeHttpHeader(encoded.Slice(position, trailerEnd + 2));
+                return output.ToArray();
+            }
+            if (size > encoded.Length - position - 2)
                 throw new ProbeControlResponseException("Chunked-тело контрольного сервера оборвано.");
-            output.Append(encoded, position, size);
-            position += size + 2;
+            output.Write(encoded.Slice(position, size));
+            position = checked(position + size);
+            if (!encoded[position..].StartsWith("\r\n"u8))
+                throw new ProbeControlResponseException("Chunked-тело контрольного сервера оборвано.");
+            position += 2;
         }
     }
 }

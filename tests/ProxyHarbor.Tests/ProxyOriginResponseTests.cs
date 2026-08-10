@@ -57,6 +57,64 @@ public sealed class ProxyOriginResponseTests
     }
 
     [Fact]
+    public async Task ReaderRejectsInvalidUtf8WithoutReplacementCharacters()
+    {
+        var prefix = Encoding.ASCII.GetBytes("HTTP/1.1 200 OK\r\nContent-Length: 11\r\n\r\n{\"ip\":\"");
+        byte[] response = [.. prefix, 0xC3, 0x28, (byte)'"', (byte)'}'];
+        await using var stream = new MemoryStream(response);
+
+        var received = await ProxyOriginResponse.ReadAsync(stream, 1024, CancellationToken.None);
+
+        Assert.Throws<ProbeControlResponseException>(() => ProxyOriginResponse.ParseExitIp(received));
+    }
+
+    [Theory]
+    [InlineData(0x00)]
+    [InlineData(0x0A)]
+    [InlineData(0x7F)]
+    [InlineData(0x80)]
+    public async Task ReaderRejectsControlOrNonAsciiHeaderBytes(int invalidByte)
+    {
+        byte[] response =
+        [
+            .. Encoding.ASCII.GetBytes("HTTP/1.1 200 OK\r\nX-Test: before"),
+            checked((byte)invalidByte),
+            .. Encoding.ASCII.GetBytes("after\r\nContent-Length: 0\r\n\r\n")
+        ];
+        await using var stream = new MemoryStream(response);
+
+        await Assert.ThrowsAsync<ProbeControlResponseException>(() =>
+            ProxyOriginResponse.ReadAsync(stream, 1024, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task ChunkDecoderUsesByteLengthsAndSupportsSplitUtf8CodePoint()
+    {
+        // UTF-8 `é` намеренно разделён между двумя chunks. HTTP framing оперирует
+        // байтами, поэтому декодировать Unicode можно только после dechunking.
+        byte[] firstBodyPart = [.. Encoding.UTF8.GetBytes("{\"note\":\""), 0xC3];
+        byte[] secondBodyPart = [0xA9, .. Encoding.UTF8.GetBytes("\",\"ip\":\"8.8.4.4\"}")];
+        byte[] response =
+        [
+            .. Encoding.ASCII.GetBytes("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"),
+            .. Encoding.ASCII.GetBytes(firstBodyPart.Length.ToString("X", System.Globalization.CultureInfo.InvariantCulture)),
+            (byte)'\r', (byte)'\n',
+            .. firstBodyPart,
+            (byte)'\r', (byte)'\n',
+            .. Encoding.ASCII.GetBytes(secondBodyPart.Length.ToString("X", System.Globalization.CultureInfo.InvariantCulture)),
+            (byte)'\r', (byte)'\n',
+            .. secondBodyPart,
+            (byte)'\r', (byte)'\n',
+            (byte)'0', (byte)'\r', (byte)'\n', (byte)'\r', (byte)'\n'
+        ];
+        await using var stream = new ThrowAfterContentStream(response, maxChunkSize: 5);
+
+        var received = await ProxyOriginResponse.ReadAsync(stream, 1024, CancellationToken.None);
+
+        Assert.Equal("8.8.4.4", ProxyOriginResponse.ParseExitIp(received));
+    }
+
+    [Fact]
     public void ParsesContentLengthResponse()
     {
         const string body = "{\"ip\":\"8.8.8.8\"}";
@@ -89,6 +147,27 @@ public sealed class ProxyOriginResponseTests
             "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n"));
         Assert.Throws<ProbeControlResponseException>(() => ProxyOriginResponse.ParseExitIp(
             "HTTP/1.1 200 OK\r\nContent-Length: 1\r\n\r\n{"));
+    }
+
+    [Theory]
+    [InlineData("[]")]
+    [InlineData("\"8.8.8.8\"")]
+    [InlineData("123")]
+    [InlineData("null")]
+    [InlineData("{\"ip\":123}")]
+    public void RejectsInvalidJsonShapeAsControlFailure(string body)
+    {
+        var response = $"HTTP/1.1 200 OK\r\nContent-Length: {Encoding.UTF8.GetByteCount(body)}\r\n\r\n{body}";
+
+        Assert.Throws<ProbeControlResponseException>(() => ProxyOriginResponse.ParseExitIp(response));
+    }
+
+    [Fact]
+    public void RejectsChunkedBodyWithoutFinalTerminator()
+    {
+        const string response = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n";
+
+        Assert.Throws<ProbeControlResponseException>(() => ProxyOriginResponse.ParseExitIp(response));
     }
 
     /// <summary>Имитирует keep-alive: любая попытка читать после полного response является ошибкой теста.</summary>
