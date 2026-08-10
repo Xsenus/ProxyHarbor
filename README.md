@@ -17,6 +17,7 @@
 - ограничение частоты запросов, SSRF-защита источников, контейнеры без root и с read-only ФС;
 - потоковые зашифрованные AES-256-GCM снимки БД и настроек с отправкой в Telegram;
 - постоянный аудит создания, размера и подтверждённой Telegram-доставки каждого backup;
+- воспроизводимый fail-closed backup-аудит конкретного PHB3-файла и его Telegram delivery evidence;
 - opt-in Prometheus + Alertmanager с bounded retention, проверяемыми alert rules и Telegram-уведомлениями;
 - CI для backend, frontend, тестов и проверки Docker Compose.
 
