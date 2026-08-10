@@ -56,6 +56,7 @@
 
 ### Fixed
 
+- Backup-worker после занятого cluster-lock больше не засыпает на полный production-интервал: через bounded 15 минут он перечитывает persistent `completed` audit, восстанавливает остаток расписания после успеха peer или повторяет просроченный backup после его аварии.
 - React admin-мutations теперь принадлежат точному поколению сессии, отменяются при logout, смене ключа, закрытии диалога и unmount; поздний ответ, игнорирующий `AbortSignal`, не может восстановить старый ключ или данные. Вход оформлен нативной формой и работает по Enter.
 - React admin-dialog помечает весь фон нативным `inert` и возвращает программно утёкший focus внутрь modal при прямом и обратном Tab, сохраняя keyboard-trap даже при вмешательстве расширения или стороннего скрипта.
 - Публичный proxy-каталог публикует screen-reader semantics `table/row/columnheader/cell`, loading/empty status и `aria-pressed` для protocol-фильтров без изменения визуального layout.

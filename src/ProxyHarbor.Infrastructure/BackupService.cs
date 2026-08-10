@@ -604,14 +604,19 @@ public sealed class BackupWorker(
     internal static TimeSpan WaitChunk(TimeSpan delay) =>
         delay <= MaximumScheduleWaitChunk ? delay : MaximumScheduleWaitChunk;
 
-    /// <summary>После ошибки повторяет существенно раньше суточного production-интервала.</summary>
+    /// <summary>
+    /// После ошибки или занятого cluster-lock повторно читает persistent audit через
+    /// bounded cooldown. Успех peer восстановит остаток штатного интервала, а его
+    /// авария не оставит backup-просрок незамеченным до следующих суток.
+    /// </summary>
     internal static TimeSpan NextDelay(int intervalHours, CycleOutcome outcome)
     {
         var regularDelay = TimeSpan.FromHours(Math.Max(1, intervalHours));
         return outcome switch
         {
-            CycleOutcome.Succeeded or CycleOutcome.PeerOwned => regularDelay,
-            CycleOutcome.Failed => regularDelay <= FailureRetryDelay ? regularDelay : FailureRetryDelay,
+            CycleOutcome.Succeeded => regularDelay,
+            CycleOutcome.PeerOwned or CycleOutcome.Failed =>
+                regularDelay <= FailureRetryDelay ? regularDelay : FailureRetryDelay,
             _ => throw new ArgumentOutOfRangeException(nameof(outcome))
         };
     }

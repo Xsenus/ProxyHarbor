@@ -19,8 +19,12 @@ public sealed class BackupWorkerScheduleTests
         Assert.Equal(TimeSpan.FromMinutes(15), BackupWorker.NextDelay(24, BackupWorker.CycleOutcome.Failed));
 
     [Fact]
-    public void ClusterLockOwnedByPeerDoesNotCreateRetryStorm() =>
-        Assert.Equal(TimeSpan.FromHours(24), BackupWorker.NextDelay(24, BackupWorker.CycleOutcome.PeerOwned));
+    public void ClusterLockOwnedByPeerRechecksPersistentAuditAfterBoundedCooldown() =>
+        Assert.Equal(TimeSpan.FromMinutes(15), BackupWorker.NextDelay(24, BackupWorker.CycleOutcome.PeerOwned));
+
+    [Fact]
+    public void PeerCooldownRemainsBoundedForShortestConfiguredInterval() =>
+        Assert.Equal(TimeSpan.FromMinutes(15), BackupWorker.NextDelay(1, BackupWorker.CycleOutcome.PeerOwned));
 
     [Fact]
     public void MissingSuccessfulHistoryRunsImmediately() =>
