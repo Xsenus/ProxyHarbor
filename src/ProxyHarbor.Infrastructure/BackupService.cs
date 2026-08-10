@@ -23,6 +23,7 @@ public sealed class BackupService(
     private const string PublishedBackupPrefix = "proxyharbor-";
     private const string PublishedBackupSuffix = ".phbackup";
     private const string PublishedBackupTimestampFormat = "yyyyMMdd-HHmmss-ffff";
+    internal const int MaximumTelegramParts = 20;
     private static readonly TimeSpan AuditWriteTimeout = TimeSpan.FromSeconds(15);
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private static readonly Action<ILogger, string, Exception?> BackupCreated =
@@ -325,13 +326,17 @@ public sealed class BackupService(
     {
         var partLimit = options.MaxTelegramFileSizeMb * 1024L * 1024L;
         var length = new FileInfo(path).Length;
+        // Проверяем предел до создания первого temporary part: слишком большой локальный
+        // encrypted backup сохраняется для ручного получения, но не создаёт upload storm.
+        _ = BackupFileSplitter.RequiredPartCount(length, partLimit, MaximumTelegramParts);
         if (length <= partLimit)
         {
             await SendDocumentAsync(path, "ProxyHarbor: зашифрованная резервная копия", options, token);
             return;
         }
 
-        await foreach (var part in BackupFileSplitter.SplitAsync(path, partLimit, token))
+        await foreach (var part in BackupFileSplitter.SplitAsync(
+            path, partLimit, MaximumTelegramParts, token))
             await SendDocumentAsync(part.Path, $"ProxyHarbor backup — часть {part.Number}/{part.Total}", options, token);
     }
 
@@ -557,11 +562,11 @@ internal static class BackupFileSplitter
     internal static async IAsyncEnumerable<Part> SplitAsync(
         string path,
         long partLimit,
+        int maximumParts,
         [EnumeratorCancellation] CancellationToken token)
     {
-        ArgumentOutOfRangeException.ThrowIfLessThan(partLimit, 1);
         var length = new FileInfo(path).Length;
-        var totalParts = checked((int)Math.Ceiling((double)length / partLimit));
+        var totalParts = RequiredPartCount(length, partLimit, maximumParts);
         await using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 128 * 1024,
             FileOptions.Asynchronous | FileOptions.SequentialScan);
         var buffer = new byte[128 * 1024];
@@ -591,6 +596,20 @@ internal static class BackupFileSplitter
                 _ = BackupFileCleanup.TryDelete(partPath);
             }
         }
+    }
+
+    /// <summary>Точно и без floating-point вычисляет bounded число частей до filesystem writes.</summary>
+    internal static int RequiredPartCount(long length, long partLimit, int maximumParts)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(length);
+        ArgumentOutOfRangeException.ThrowIfLessThan(partLimit, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThan(maximumParts, 1);
+        var totalParts = length == 0 ? 1 : 1 + ((length - 1) / partLimit);
+        if (totalParts > maximumParts)
+            throw new InvalidOperationException(
+                $"Backup требует {totalParts:N0} Telegram-частей при допустимом пределе {maximumParts:N0}; " +
+                "зашифрованный локальный файл сохранён для ручного получения.");
+        return checked((int)totalParts);
     }
 }
 

@@ -118,7 +118,7 @@ Prometheus слушает только `127.0.0.1:9090`, Alertmanager — `127.0
 | `Backup__EncryptionKey` | Ключ создания новых копий: 32–1024 случайных символа без управляющих знаков |
 | `Backup__TelegramBotToken` | Token от BotFather: 20–256 printable ASCII символов без URI-разделителей `/`, `\\`, `?`, `#`, `%` |
 | `Backup__TelegramChatId` | Ненулевой signed 64-bit числовой ID администратора/group/channel, совместимый с Alertmanager |
-| `Backup__MaxTelegramFileSizeMb` | Лимит отправляемого файла, по умолчанию безопасные 49 МБ |
+| `Backup__MaxTelegramFileSizeMb` | Лимит одной Telegram-части, 1–49 МБ; доставка ограничена максимум 20 частями |
 
 Числовой `chat_id` выбран намеренно: Bot API допускает также `@username`, но общий secret одновременно используется [Telegram receiver Alertmanager](https://prometheus.io/docs/alerting/latest/configuration/#telegram_config), где поле имеет тип integer; отправка документа соответствует официальному [`sendDocument`](https://core.telegram.org/bots/api#senddocument).
 
@@ -273,7 +273,7 @@ Restore сначала проверяет аутентификацию backup, m
 
 Telegram sender является sanitizing trust boundary: transport/custom-handler messages, inner exceptions и response descriptions не покидают его, поэтому URI с bot token, `chat_id` или multipart не могут попасть в `BackupRuns.Error`, application logs и следующий архив. Caller cancellation остаётся `OperationCanceledException`, а безопасный permanent rejection сохраняет числовой HTTP status.
 
-Если архив превышает Telegram-лимит, сервис отправляет нумерованные части. Сначала объедините их, затем расшифруйте:
+Если архив превышает Telegram-лимит, сервис отправляет не более 20 нумерованных частей. Предел проверяется до создания первого временного part; больший зашифрованный backup остаётся локально и получает failed delivery audit вместо многочасового upload storm. Сначала объедините части, затем расшифруйте:
 
 ```powershell
 ./tools/Join-BackupParts.ps1 -PartsPattern './proxyharbor.phbackup.part*' -OutputFile './proxyharbor.phbackup'
@@ -281,7 +281,7 @@ $keyFile = (Resolve-Path './backup-key.secret').Path
 ./tools/Decrypt-Backup.ps1 -InputFile './proxyharbor.phbackup' -OutputZip './proxyharbor.zip' -EncryptionKeyFile $keyFile
 ```
 
-Join-инструмент fail-closed принимает только один полный набор с общим base-name и `of-N`, требует непрерывные номера `1..N` и ожидаемые размеры частей. Слишком широкий wildcard, смешавший разные backup, пропущенный/пустой фрагмент или уже существующий output отклоняются до восстановления; целостность собранного ciphertext затем независимо подтверждается PHB3 AEAD при расшифровании.
+Join-инструмент fail-closed принимает только один полный набор с общим base-name и `of-N`, требует 2–20 непрерывных номеров `1..N` и ожидаемые размеры частей. Слишком широкий wildcard, смешавший разные backup, превышенный предел, пропущенный/пустой фрагмент или уже существующий output отклоняются до восстановления; целостность собранного ciphertext затем независимо подтверждается PHB3 AEAD при расшифровании.
 
 ## Добавление источника
 

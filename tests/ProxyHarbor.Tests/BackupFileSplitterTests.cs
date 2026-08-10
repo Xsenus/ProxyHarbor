@@ -63,7 +63,8 @@ public sealed class BackupFileSplitterTests
 
         try
         {
-            await foreach (var part in BackupFileSplitter.SplitAsync(source, 1_000_000, CancellationToken.None))
+            await foreach (var part in BackupFileSplitter.SplitAsync(
+                source, 1_000_000, maximumParts: 20, CancellationToken.None))
             {
                 observedPaths.Add(part.Path);
                 Assert.Equal(3, part.Total);
@@ -79,5 +80,49 @@ public sealed class BackupFileSplitterTests
         {
             Directory.Delete(directory, recursive: true);
         }
+    }
+
+    [Fact]
+    public async Task SplitRejectsExcessivePartCountBeforeCreatingTemporaryFiles()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"proxyharbor-split-limit-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        var source = Path.Combine(directory, "backup.phbackup");
+        await File.WriteAllBytesAsync(source, new byte[21]);
+        try
+        {
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            {
+                await foreach (var _ in BackupFileSplitter.SplitAsync(
+                    source, partLimit: 1, maximumParts: 20, CancellationToken.None))
+                {
+                }
+            });
+
+            Assert.Contains("21 Telegram-част", exception.Message, StringComparison.Ordinal);
+            Assert.Empty(Directory.EnumerateFiles(directory, "*.part*-of-*"));
+            Assert.True(File.Exists(source));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData(0, 10, 1)]
+    [InlineData(10, 10, 1)]
+    [InlineData(11, 10, 2)]
+    [InlineData(200, 10, 20)]
+    public void RequiredPartCountUsesExactBoundaries(long length, long partLimit, int expected) =>
+        Assert.Equal(expected, BackupFileSplitter.RequiredPartCount(length, partLimit, maximumParts: 20));
+
+    [Fact]
+    public void RequiredPartCountRejectsExtremeLengthWithOperationalErrorInsteadOfOverflow()
+    {
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            BackupFileSplitter.RequiredPartCount(long.MaxValue, partLimit: 1, maximumParts: 20));
+
+        Assert.Contains("Telegram-част", exception.Message, StringComparison.Ordinal);
     }
 }

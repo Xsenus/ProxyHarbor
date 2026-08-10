@@ -47,7 +47,12 @@ try {
     Write-Part 'malformed-part-two' ([byte[]](2))
     Assert-Rejected 'malformed-*' 'malformed-output.phbackup' 'Некорректное имя'
 
-    Write-Host 'Контракты сборки Telegram backup-частей пройдены: valid, missing, mixed и malformed.' -ForegroundColor Green
+    foreach ($number in 1..21) {
+        Write-Part ("oversized.phbackup.part{0:D3}-of-021" -f $number) ([byte[]]$number)
+    }
+    Assert-Rejected 'oversized.phbackup.part*-of-*' 'oversized-output.phbackup' 'превышает предел 20'
+
+    Write-Host 'Контракты сборки Telegram backup-частей пройдены: valid, missing, mixed, malformed и bounded count.' -ForegroundColor Green
 } finally {
     if (Test-Path -LiteralPath $testRoot) { Remove-Item -LiteralPath $testRoot -Recurse -Force }
 }

@@ -1,12 +1,16 @@
 param(
     [Parameter(Mandatory)][string]$PartsPattern,
-    [Parameter(Mandatory)][string]$OutputFile
+    [Parameter(Mandatory)][string]$OutputFile,
+    [ValidateRange(2, 20)][int]$MaximumParts = 20
 )
 
 # Telegram ограничивает размер одного документа. До создания результата строго
 # проверяем, что wildcard выбрал один полный и непрерывный набор частей.
 $parts = @(Get-ChildItem -Path $PartsPattern -File)
 if ($parts.Count -lt 2) { throw 'По указанному шаблону должно быть найдено не менее двух частей.' }
+if ($parts.Count -gt $MaximumParts) {
+    throw "Количество Telegram-частей $($parts.Count) превышает предел $MaximumParts."
+}
 if (Test-Path -LiteralPath $OutputFile) { throw 'Выходной файл уже существует.' }
 
 $descriptors = foreach ($part in $parts) {
@@ -41,6 +45,9 @@ if ($setIdentities.Count -ne 1 -or $declaredTotals.Count -ne 1) {
     throw 'Шаблон выбрал части разных резервных копий или с разным объявленным количеством.'
 }
 $declaredTotal = [Linq.Enumerable]::Single($declaredTotals)
+if ($declaredTotal -gt $MaximumParts) {
+    throw "Объявленное количество Telegram-частей $declaredTotal превышает предел $MaximumParts."
+}
 if ($parts.Count -ne $declaredTotal) {
     throw "Неполный набор Telegram-частей: найдено $($parts.Count), ожидалось $declaredTotal."
 }

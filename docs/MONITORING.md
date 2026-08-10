@@ -46,6 +46,6 @@ curl --fail http://127.0.0.1:9093/-/ready
 | `ProxyHarborBackupFailed` | последний/первый backup неуспешен | Проверить свободное место, ключ, DB snapshot и backup audit; worker автоматически повторит попытку через 15 минут |
 | `ProxyHarborBackupStale` | успех старше 1.5 интервалов | Запустить admin backup, затем проверить scheduler и cluster lock |
 | `ProxyHarborBackupHung` | backup активен более часа | Проверить размер БД/volume и Telegram delivery; не удалять partial во время работы |
-| `ProxyHarborTelegramDeliveryFailed` | настроенная доставка не подтверждена | Проверить Bot API, chat ID, лимит частей и повтор; локальный encrypted backup сохранить |
+| `ProxyHarborTelegramDeliveryFailed` | настроенная доставка не подтверждена | Проверить Bot API, chat ID и размер: максимум 20 частей; локальный encrypted backup сохранить либо получить вне Telegram |
 
 Alert rules находятся в `deploy/prometheus/alerts.yml`, а `alerts.test.yml` фиксирует grace periods и guards. Telegram route и HTML-шаблон находятся в `deploy/alertmanager`. После изменения интервалов приложения правила используют опубликованные configuration metrics; фиксированные пороги длительных операций при необходимости меняйте осознанно и повторно запускайте `promtool test rules` и `amtool check-config`.
