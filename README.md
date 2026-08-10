@@ -124,8 +124,11 @@ GET  /api/v1/export/json/seek?minSuccessRate=80&limit=50000&after={nextCursor}
 GET  /api/v1/export/xml?protocol=Socks5
 GET  /api/v1/export/txt?protocol=Http&maxLatencyMs=1000
 GET  /api/v1/export/csv?minSuccessRate=90
+GET  /api/v1/sources
 GET  /api/v1/stats
 ```
+
+`/api/v1/sources` без административного ключа возвращает публичный read-only снимок: дату последнего release-аудита, 50 независимых провайдеров, их протоколы и все 81 канонический feed. Текущее состояние, ошибки и расписание источников остаются только в admin diagnostics и Prometheus.
 
 Экспорт потоково отдаёт до 50 000 свежих проверенных записей за запрос, не собирая многомегабайтный ответ в памяти API, и поддерживает те же `protocol`, `maxLatencyMs` и `minSuccessRate`, что публичный список. Для последовательного обхода большого каталога используйте `/proxies/seek` и `/export/{format}/seek`: они не выполняют полный `COUNT` и не сканируют растущий `OFFSET`. Передайте возвращённый `nextCursor` как `after`; у экспорта продолжение находится в `X-Next-Cursor`, а текущая позиция — в `X-Export-Cursor`. Непрозрачный 44-символьный cursor привязан к фильтрам, поэтому повреждённое значение или его повторное использование с другими фильтрами даёт `400`. Старые `page`/`offset` маршруты сохранены для совместимости, возвращают `X-Next-Offset` и fail-fast отклоняют смещение свыше 5 000 000; для более глубокого обхода обязателен seek.
 

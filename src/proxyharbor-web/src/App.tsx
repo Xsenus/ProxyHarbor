@@ -10,6 +10,9 @@ type CollectionRun = { id: string; startedAt: string; finishedAt?: string; sourc
 type ValidationRun = { id: string; startedAt: string; finishedAt?: string; claimed: number; checked: number; alive: number; deferred: number; status: string; error?: string }
 type BackupRun = { id: string; startedAt: string; finishedAt?: string; status: string; fileName?: string; sizeBytes: number; telegramConfigured: boolean; sentToTelegram: boolean; error?: string }
 type SourceCatalogSnapshot = { lastAuditedOn: string; expectedSources: number; presentSources: number; enabledSources: number; healthySources: number; failingSources: number; neverAuditedSources: number; staleSources: number; truncatedSources: number; expectedProviders: number; presentProviders: number; enabledProviders: number; isComplete: boolean; isHealthy: boolean }
+type PublicSourceFeed = { rank: number; name: string; url: string; protocol: Protocol }
+type PublicSourceProvider = { rank: number; name: string; protocols: Protocol[]; feeds: PublicSourceFeed[] }
+type PublicSourceCatalog = { lastAuditedOn: string; feedCount: number; providerCount: number; providers: PublicSourceProvider[] }
 type Diagnostics = {
   serverTime: string
   databaseBytes: number
@@ -55,6 +58,8 @@ export default function App() {
   const [hasMore, setHasMore] = useState(false)
   const [nextCursor, setNextCursor] = useState<string | null>(null)
   const [apiError, setApiError] = useState('')
+  const [sourceCatalog, setSourceCatalog] = useState<PublicSourceCatalog | null>(null)
+  const [sourceCatalogError, setSourceCatalogError] = useState('')
   const [adminOpen, setAdminOpen] = useState(false)
   const [adminKey, setAdminKey] = useState(readStoredAdminKey)
   const [adminAuthenticated, setAdminAuthenticated] = useState(false)
@@ -82,6 +87,23 @@ export default function App() {
     catalogRequestIdRef.current++
     publicAbortRef.current?.abort()
     loadMoreAbortRef.current?.abort()
+  }, [])
+
+  useEffect(() => {
+    const controller = new AbortController()
+    const loadSourceCatalog = async () => {
+      try {
+        const response = await fetch(`${API}/api/v1/sources`, { signal: controller.signal })
+        if (!response.ok) throw new Error('Каталог источников временно недоступен')
+        setSourceCatalog(await response.json() as PublicSourceCatalog)
+        setSourceCatalogError('')
+      } catch (reason) {
+        if (!isAbortError(reason))
+          setSourceCatalogError(reason instanceof Error ? reason.message : 'Каталог источников временно недоступен')
+      }
+    }
+    void loadSourceCatalog()
+    return () => controller.abort()
   }, [])
 
   /** Обновляет статистику и, при необходимости, первую keyset-страницу каталога. */
@@ -421,7 +443,7 @@ export default function App() {
   return <div className="app-shell">
     <header aria-hidden={adminOpen || undefined}>
       <a className="brand" href="#top" aria-label="ProxyHarbor — наверх"><span className="brand-mark"><Network size={20}/></span><span>Proxy<span>Harbor</span></span></a>
-      <nav><a href="#catalog">Каталог</a><a href="#api">API</a><button className="admin-link" onClick={openAdmin}><KeyRound size={15}/> Управление</button></nav>
+      <nav><a href="#sources">Источники</a><a href="#catalog">Прокси</a><a href="#api">API</a><button className="admin-link" onClick={openAdmin}><KeyRound size={15}/> Управление</button></nav>
       <button className="mobile-admin" aria-label="Открыть управление" onClick={openAdmin}><KeyRound size={17}/></button>
       <div className={`live-pill ${apiError ? 'offline' : ''}`} aria-live="polite"><span/> {loading ? 'проверка…' : apiError ? 'API недоступен' : 'система активна'}</div>
     </header>
@@ -442,8 +464,19 @@ export default function App() {
       <section className="metrics" aria-label="Главные показатели">
         <Metric icon={<Activity/>} label="Живых адресов" value={formatNumber(stats?.alive)} note={stats?.staleAlive ? `${formatNumber(stats.staleAlive)} скрыто как устаревшие` : 'прошли свежую проверку'}/>
         <Metric icon={<Gauge/>} label="Средняя задержка" value={stats?.averageLatencyMs ? `${Math.round(stats.averageLatencyMs)} мс` : '—'} note="до контрольного HTTPS"/>
-        <Metric icon={<Database/>} label="Источников" value={formatNumber(stats?.sources)} note={stats?.failingSources ? `${stats.failingSources} требуют внимания` : stats?.truncatedSources ? `${stats.truncatedSources} упёрлись в лимит` : 'все источники стабильны'}/>
+        <Metric icon={<Database/>} label="Feed-источников" value={formatNumber(stats?.sources)} note={stats?.failingSources ? `${stats.failingSources} требуют внимания` : sourceCatalog ? `${sourceCatalog.providerCount} независимых провайдеров` : stats?.truncatedSources ? `${stats.truncatedSources} упёрлись в лимит` : 'все источники стабильны'}/>
         <Metric icon={<Clock3/>} label="Готовы к проверке" value={formatNumber(stats?.dueForCheck)} note={`${formatNumber(stats?.scheduledChecks)} запланировано позже`}/>
+      </section>
+
+      <section id="sources" className="public-sources" aria-label="Встроенные источники прокси">
+        <div className="section-heading"><div><span className="kicker">SOURCE TRANSPARENCY</span><h2>{sourceCatalog?.providerCount ?? 50} независимых провайдеров</h2></div><p>{sourceCatalog ? `${sourceCatalog.feedCount} HTTPS feed · аудит ${sourceCatalog.lastAuditedOn}` : 'Публичный read-only каталог'}</p></div>
+        {sourceCatalogError && <div className="source-catalog-error" role="status">{sourceCatalogError}</div>}
+        {sourceCatalog && <div className="provider-grid">{sourceCatalog.providers.map(provider =>
+          <article key={`${provider.rank}-${provider.name}`}>
+            <div><span>#{provider.rank}</span><strong>{provider.name}</strong></div>
+            <small>{provider.feeds.length} feed · {provider.protocols.map(label).join(' · ')}</small>
+            <a href={provider.feeds[0].url} target="_blank" rel="noreferrer" aria-label={`${provider.name}: открыть исходный feed`}>исходный feed ↗</a>
+          </article>)}</div>}
       </section>
 
       <section id="catalog" className="catalog">

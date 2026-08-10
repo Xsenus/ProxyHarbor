@@ -16,12 +16,29 @@ const stats = {
   byProtocol: [],
 }
 
+const publicSourceCatalog = {
+  lastAuditedOn: '2026-08-10',
+  feedCount: 81,
+  providerCount: 50,
+  providers: [
+    {
+      rank: 1, name: 'ProxyScrape', protocols: ['Http', 'Socks5'],
+      feeds: [{ rank: 1, name: 'ProxyScrape Mixed', url: 'https://api.proxyscrape.com/v4/free-proxy-list/get', protocol: 'Http' }],
+    },
+    {
+      rank: 3, name: 'OpenProxyList', protocols: ['Http'],
+      feeds: [{ rank: 3, name: 'OpenProxyList HTTP', url: 'https://openproxylist.xyz/http.txt', protocol: 'Http' }],
+    },
+  ],
+}
+
 describe('ProxyHarbor UI', () => {
   beforeEach(() => {
     sessionStorage.clear()
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
       if (url.includes('/api/v1/stats')) return jsonResponse(stats)
+      if (url.includes('/api/v1/sources')) return jsonResponse(publicSourceCatalog)
       if (url.includes('/api/v1/proxies')) return jsonResponse({ items: [], pageSize: 100, hasMore: false, nextCursor: null })
       if (url.includes('/api/v1/admin/sources')) return jsonResponse({ title: 'Неверный ключ администратора' }, 401)
       return jsonResponse({ title: 'Unexpected request' }, 500)
@@ -86,6 +103,19 @@ describe('ProxyHarbor UI', () => {
     expect(screen.getByRole('button', { name: 'Проверить пакет' })).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Создать backup' })).toBeDisabled()
     expect(vi.mocked(fetch).mock.calls.filter(([input]) => String(input).includes('/api/v1/admin/sources'))).toHaveLength(1)
+  })
+
+  it('shows the public provider catalog without an admin session', async () => {
+    render(<App />)
+
+    expect(await screen.findByRole('heading', { name: '50 независимых провайдеров' })).toBeInTheDocument()
+    expect(screen.getByText('81 HTTPS feed · аудит 2026-08-10')).toBeInTheDocument()
+    expect(screen.getByText('ProxyScrape')).toBeInTheDocument()
+    expect(screen.getByText('OpenProxyList')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'ProxyScrape: открыть исходный feed' })).toHaveAttribute(
+      'href', 'https://api.proxyscrape.com/v4/free-proxy-list/get')
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(vi.mocked(fetch).mock.calls.filter(([input]) => String(input).includes('/api/v1/sources'))).toHaveLength(1)
   })
 
   it('cannot restore an admin session from a response owned by an old key', async () => {
