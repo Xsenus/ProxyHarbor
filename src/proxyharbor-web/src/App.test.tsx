@@ -135,11 +135,11 @@ describe('ProxyHarbor UI', () => {
     })
 
     render(<App />)
-    expect(await screen.findByRole('status')).toHaveTextContent('Каталог источников временно недоступен')
+    expect(await screen.findByRole('status', { name: 'Состояние каталога источников' })).toHaveTextContent('Каталог источников временно недоступен')
     fireEvent.click(screen.getByRole('button', { name: 'повторить' }))
 
     expect(await screen.findByText('ProxyScrape')).toBeInTheDocument()
-    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+    expect(screen.queryByRole('status', { name: 'Состояние каталога источников' })).not.toBeInTheDocument()
     expect(sourceAttempts).toBe(2)
   })
 
@@ -343,6 +343,10 @@ describe('ProxyHarbor UI', () => {
     render(<App />)
     expect(await screen.findByText((_, element) =>
       element?.tagName === 'CODE' && element.textContent === '192.0.2.10:8080')).toBeInTheDocument()
+    const proxyTable = screen.getByRole('table', { name: 'Проверенные прокси' })
+    expect(screen.getAllByRole('columnheader')).toHaveLength(5)
+    expect(proxyTable).toContainElement(screen.getByRole('cell', { name: '192.0.2.10:8080' }))
+    expect(screen.getByRole('button', { name: 'Все' })).toHaveAttribute('aria-pressed', 'true')
     fireEvent.click(screen.getByRole('button', { name: /Показать ещё/ }))
 
     expect(await screen.findByText((_, element) =>
