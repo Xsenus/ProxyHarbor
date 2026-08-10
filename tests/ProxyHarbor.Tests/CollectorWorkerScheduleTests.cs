@@ -57,3 +57,22 @@ public sealed class CollectorWorkerScheduleTests
             (CollectorWorker.CycleOutcome)999,
             elapsed: TimeSpan.Zero));
 }
+
+/// <summary>Проверяет, что validator продолжает быстро осушать непустую очередь.</summary>
+public sealed class ValidatorWorkerScheduleTests
+{
+    [Theory]
+    [InlineData(0, 0, 30)]
+    [InlineData(1, 0, 1)]
+    [InlineData(0, 1, 1)]
+    [InlineData(12, 7, 1)]
+    public void NextDelayDistinguishesEmptyAndProcessedBatches(
+        int checkedCount,
+        int deferredCount,
+        int expectedSeconds)
+    {
+        Assert.Equal(
+            TimeSpan.FromSeconds(expectedSeconds),
+            ValidatorWorker.NextDelay(checkedCount, deferredCount));
+    }
+}

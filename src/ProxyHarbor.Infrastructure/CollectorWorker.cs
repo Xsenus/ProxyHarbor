@@ -78,7 +78,7 @@ public sealed class ValidatorWorker(
             {
                 var result = await validator.ValidateBatchAsync(stoppingToken);
                 await validationWakeSignal.WaitAsync(
-                    result.Checked == 0 ? TimeSpan.FromSeconds(30) : TimeSpan.FromSeconds(1),
+                    NextDelay(result.Checked, result.Deferred),
                     stoppingToken);
             }
             catch (OperationAlreadyRunningException)
@@ -93,4 +93,13 @@ public sealed class ValidatorWorker(
             }
         }
     }
+
+    /// <summary>
+    /// Долго ждёт только после действительно пустого прохода. Deferred-only пакет
+    /// уже освободил lease, но за ним в очереди могут оставаться другие due-прокси.
+    /// </summary>
+    internal static TimeSpan NextDelay(int checkedCount, int deferredCount) =>
+        checkedCount == 0 && deferredCount == 0
+            ? TimeSpan.FromSeconds(30)
+            : TimeSpan.FromSeconds(1);
 }
