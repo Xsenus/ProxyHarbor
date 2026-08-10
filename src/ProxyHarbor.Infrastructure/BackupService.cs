@@ -20,6 +20,7 @@ public sealed class BackupService(
     IConfiguration configuration,
     ILogger<BackupService> logger) : IDisposable
 {
+    internal const string PipeCompletionFailureDataKey = "ProxyHarbor.BackupPipeCompletionFailure";
     private const string PublishedBackupPrefix = "proxyharbor-";
     private const string PublishedBackupSuffix = ".phbackup";
     private const string PublishedBackupTimestampFormat = "yyyyMMdd-HHmmss-ffff";
@@ -301,7 +302,8 @@ public sealed class BackupService(
         }
         finally
         {
-            await writer.CompleteAsync(failure);
+            await CompletePipePreservingPrimaryAsync(
+                writer.CompleteAsync, failure, "writer");
         }
     }
 
@@ -324,7 +326,41 @@ public sealed class BackupService(
         }
         finally
         {
-            await reader.CompleteAsync(failure);
+            await CompletePipePreservingPrimaryAsync(
+                reader.CompleteAsync, failure, "reader");
+        }
+    }
+
+    /// <summary>
+    /// Завершает одну сторону pipe. Secondary completion failure не может скрыть producer/
+    /// encryptor failure; самостоятельный completion failure по-прежнему fail-closed.
+    /// </summary>
+    internal static async Task CompletePipePreservingPrimaryAsync(
+        Func<Exception?, ValueTask> completeAsync,
+        Exception? primaryFailure,
+        string stage)
+    {
+        ArgumentNullException.ThrowIfNull(completeAsync);
+        ArgumentException.ThrowIfNullOrWhiteSpace(stage);
+        try
+        {
+            await completeAsync(primaryFailure);
+        }
+        catch (Exception completionFailure)
+        {
+            if (primaryFailure is null) throw;
+            try
+            {
+                var detail = $"{stage}: {completionFailure.GetType().Name}";
+                primaryFailure.Data[PipeCompletionFailureDataKey] =
+                    primaryFailure.Data[PipeCompletionFailureDataKey] is string previous
+                        ? $"{previous} | {detail}"
+                        : detail;
+            }
+            catch (Exception)
+            {
+                // Нестандартное read-only Exception.Data не может заменить primary failure.
+            }
         }
     }
 

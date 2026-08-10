@@ -16,6 +16,31 @@ public sealed class BackupPipelineTests
     private const string EncryptionKey = "pipeline-test-encryption-key-32-chars";
 
     [Fact]
+    public async Task PipeCompletionFailurePreservesPrimaryButFailsSuccessfulOperation()
+    {
+        var primaryFailure = new InvalidOperationException("Deterministic producer failure.");
+        var secondaryFailure = new IOException("Deterministic writer completion failure.");
+
+        var preservingFailure = await Record.ExceptionAsync(() =>
+            BackupService.CompletePipePreservingPrimaryAsync(
+                _ => ValueTask.FromException(secondaryFailure),
+                primaryFailure,
+                "writer"));
+
+        Assert.Null(preservingFailure);
+        Assert.Equal(
+            "writer: IOException",
+            primaryFailure.Data[BackupService.PipeCompletionFailureDataKey]);
+
+        var standaloneFailure = await Assert.ThrowsAsync<IOException>(() =>
+            BackupService.CompletePipePreservingPrimaryAsync(
+                _ => ValueTask.FromException(secondaryFailure),
+                primaryFailure: null,
+                "reader"));
+        Assert.Same(secondaryFailure, standaloneFailure);
+    }
+
+    [Fact]
     public async Task SnapshotIsEncryptedDirectlyAndContainsExpectedArchive()
     {
         var directory = Path.Combine(Path.GetTempPath(), $"proxyharbor-pipeline-{Guid.NewGuid():N}");
