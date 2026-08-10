@@ -33,7 +33,15 @@ public static class BackupEncryption
         if (File.Exists(destination)) throw new IOException("Файл назначения уже существует.");
         var salt = RandomNumberGenerator.GetBytes(SaltSize);
         var key = Rfc2898DeriveBytes.Pbkdf2(password, salt, Iterations, HashAlgorithmName.SHA256, 32);
+        // Один bounded набор буферов обслуживает весь поток. Иначе каждый блок создавал
+        // новые мегабайтные LOH-объекты и вызывал дорогие full GC на больших снимках.
         var plaintext = new byte[DefaultChunkSize];
+        var ciphertext = new byte[DefaultChunkSize];
+        // Размер блока уже ограничен заголовком, поэтому два массива выделяются один раз,
+        // а не на каждой итерации; секретный буфер гарантированно очищается в finally.
+        var nonce = new byte[NonceSize];
+        var tag = new byte[TagSize];
+        var associatedData = new byte[4 + SaltSize + sizeof(int) + sizeof(long) + sizeof(int)];
         try
         {
             using var aes = new AesGcm(key, TagSize);
@@ -48,26 +56,23 @@ public static class BackupEncryption
             {
                 var length = await input.ReadAtLeastAsync(plaintext, 1, throwOnEndOfStream: false, token);
                 if (length == 0) break;
-                var nonce = RandomNumberGenerator.GetBytes(NonceSize);
-                var tag = new byte[TagSize];
-                var ciphertext = new byte[length];
-                aes.Encrypt(nonce, plaintext.AsSpan(0, length), ciphertext, tag,
-                    CreateAssociatedData(salt, DefaultChunkSize, index, length));
+                RandomNumberGenerator.Fill(nonce);
+                FillAssociatedData(associatedData, salt, DefaultChunkSize, index, length);
+                aes.Encrypt(nonce, plaintext.AsSpan(0, length), ciphertext.AsSpan(0, length), tag, associatedData);
                 await WriteInt32Async(output, length, token);
                 await output.WriteAsync(nonce, token);
                 await output.WriteAsync(tag, token);
-                await output.WriteAsync(ciphertext, token);
+                await output.WriteAsync(ciphertext.AsMemory(0, length), token);
                 index++;
             }
 
             // Пустой аутентифицированный блок фиксирует точное число предыдущих блоков.
-            var finalNonce = RandomNumberGenerator.GetBytes(NonceSize);
-            var finalTag = new byte[TagSize];
-            aes.Encrypt(finalNonce, ReadOnlySpan<byte>.Empty, Span<byte>.Empty, finalTag,
-                CreateAssociatedData(salt, DefaultChunkSize, index, 0));
+            RandomNumberGenerator.Fill(nonce);
+            FillAssociatedData(associatedData, salt, DefaultChunkSize, index, 0);
+            aes.Encrypt(nonce, ReadOnlySpan<byte>.Empty, Span<byte>.Empty, tag, associatedData);
             await WriteInt32Async(output, 0, token);
-            await output.WriteAsync(finalNonce, token);
-            await output.WriteAsync(finalTag, token);
+            await output.WriteAsync(nonce, token);
+            await output.WriteAsync(tag, token);
         }
         catch
         {
@@ -129,6 +134,15 @@ public static class BackupEncryption
             throw new InvalidDataException("Недопустимый размер блока backup.");
 
         var key = Rfc2898DeriveBytes.Pbkdf2(password, salt, Iterations, HashAlgorithmName.SHA256, 32);
+        // На restore использованная часть plaintext очищается после каждого блока,
+        // а весь bounded буфер — перед выходом из метода при любом результате.
+        var nonce = new byte[NonceSize];
+        var tag = new byte[TagSize];
+        var ciphertext = new byte[chunkSize];
+        var plaintext = new byte[chunkSize];
+        var associatedData = isPhb3
+            ? new byte[4 + SaltSize + sizeof(int) + sizeof(long) + sizeof(int)]
+            : null;
         try
         {
             using var aes = new AesGcm(key, TagSize);
@@ -144,22 +158,33 @@ public static class BackupEncryption
                     throw new InvalidDataException("Повреждён размер блока backup.");
                 if (length == 0 && isPhb2) break;
 
-                var nonce = new byte[NonceSize];
-                var tag = new byte[TagSize];
                 await input.ReadExactlyAsync(nonce, token);
                 await input.ReadExactlyAsync(tag, token);
-                var ciphertext = new byte[length];
-                if (length > 0) await input.ReadExactlyAsync(ciphertext, token);
-                var plaintext = new byte[length];
+                if (length > 0) await input.ReadExactlyAsync(ciphertext.AsMemory(0, length), token);
                 try
                 {
-                    var associatedData = isPhb3
-                        ? CreateAssociatedData(salt, chunkSize, index, length)
-                        : null;
-                    aes.Decrypt(nonce, ciphertext, tag, plaintext, associatedData);
-                    if (length > 0 && output is not null) await output.WriteAsync(plaintext, token);
+                    if (isPhb3)
+                    {
+                        FillAssociatedData(associatedData!, salt, chunkSize, index, length);
+                        aes.Decrypt(
+                            nonce,
+                            ciphertext.AsSpan(0, length),
+                            tag,
+                            plaintext.AsSpan(0, length),
+                            associatedData);
+                    }
+                    else
+                    {
+                        aes.Decrypt(
+                            nonce,
+                            ciphertext.AsSpan(0, length),
+                            tag,
+                            plaintext.AsSpan(0, length));
+                    }
+                    if (length > 0 && output is not null)
+                        await output.WriteAsync(plaintext.AsMemory(0, length), token);
                 }
-                finally { CryptographicOperations.ZeroMemory(plaintext); }
+                finally { CryptographicOperations.ZeroMemory(plaintext.AsSpan(0, length)); }
 
                 if (length == 0) break;
                 index++;
@@ -168,18 +193,20 @@ public static class BackupEncryption
             if (input.ReadByte() != -1)
                 throw new InvalidDataException("После завершающего блока backup обнаружены лишние данные.");
         }
-        finally { CryptographicOperations.ZeroMemory(key); }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(plaintext);
+            CryptographicOperations.ZeroMemory(key);
+        }
     }
 
-    private static byte[] CreateAssociatedData(byte[] salt, int chunkSize, long index, int length)
+    private static void FillAssociatedData(Span<byte> data, byte[] salt, int chunkSize, long index, int length)
     {
-        var data = new byte[4 + SaltSize + sizeof(int) + sizeof(long) + sizeof(int)];
         CurrentMagic.CopyTo(data);
-        salt.CopyTo(data, 4);
-        BinaryPrimitives.WriteInt32LittleEndian(data.AsSpan(20), chunkSize);
-        BinaryPrimitives.WriteInt64LittleEndian(data.AsSpan(24), index);
-        BinaryPrimitives.WriteInt32LittleEndian(data.AsSpan(32), length);
-        return data;
+        salt.AsSpan().CopyTo(data[4..]);
+        BinaryPrimitives.WriteInt32LittleEndian(data[20..], chunkSize);
+        BinaryPrimitives.WriteInt64LittleEndian(data[24..], index);
+        BinaryPrimitives.WriteInt32LittleEndian(data[32..], length);
     }
 
     private static async Task WriteInt32Async(Stream stream, int value, CancellationToken token)
