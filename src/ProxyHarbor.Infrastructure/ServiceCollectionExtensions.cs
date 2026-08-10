@@ -51,7 +51,10 @@ public static class ServiceCollectionExtensions
             .Validate(x => x.RetentionDays is >= 1 and <= 3_650, "RetentionDays: 1..3650")
             .Validate(x => x.HistoryRetentionDays is >= 1 and <= 3_650, "HistoryRetentionDays: 1..3650")
             .Validate(x => x.MaxTelegramFileSizeMb is >= 1 and <= 49, "MaxTelegramFileSizeMb: 1..49")
-            .Validate(x => !x.Enabled || x.EncryptionKey?.Length >= 16, "Для резервного копирования нужен EncryptionKey длиной не менее 16 символов")
+            .Validate(x => !x.Enabled || BackupOptions.IsNewEncryptionKeyValid(x.EncryptionKey),
+                $"Для резервного копирования нужен EncryptionKey длиной {BackupOptions.MinimumEncryptionKeyLength}..{BackupOptions.MaximumEncryptionKeyLength} символов без управляющих знаков")
+            .Validate(x => !x.Enabled || BackupOptions.IsDirectoryValid(x.Directory),
+                "Backup Directory должен быть абсолютным безопасным путём длиной не более 1024 символов")
             .Validate(x => string.IsNullOrWhiteSpace(x.TelegramBotToken) == string.IsNullOrWhiteSpace(x.TelegramChatId), "TelegramBotToken и TelegramChatId задаются только вместе")
             .ValidateOnStart();
         services.AddPooledDbContextFactory<ProxyHarborDbContext>(x => x.UseNpgsql(connection, npgsql =>

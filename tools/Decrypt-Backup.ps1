@@ -12,6 +12,18 @@ $key = $null
 $aes = $null
 
 try {
+    $keyHasControl = $false
+    foreach ($character in $EncryptionKey.ToCharArray()) {
+        if ([char]::IsControl($character)) {
+            $keyHasControl = $true
+            break
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($EncryptionKey) -or $EncryptionKey.Length -lt 16 -or
+        $EncryptionKey.Length -gt 1024 -or $keyHasControl) {
+        throw 'Ключ расшифрования должен содержать 16..1024 символа без управляющих знаков.'
+    }
+
     $resolvedInput = (Resolve-Path -LiteralPath $InputFile).Path
     if (Test-Path -LiteralPath $OutputZip) { throw 'Выходной ZIP уже существует.' }
     $inputStream = [IO.File]::OpenRead($resolvedInput)

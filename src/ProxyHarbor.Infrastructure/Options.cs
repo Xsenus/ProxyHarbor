@@ -32,6 +32,10 @@ public sealed class CollectorOptions
 public sealed class BackupOptions
 {
     public const string Section = "Backup";
+    public const int MinimumEncryptionKeyLength = 32;
+    public const int MinimumLegacyDecryptionKeyLength = 16;
+    public const int MaximumEncryptionKeyLength = 1024;
+    public const int MaximumDirectoryLength = 1024;
     public bool Enabled { get; set; }
     public int IntervalHours { get; set; } = 24;
     public string Directory { get; set; } = "/app/backups";
@@ -41,4 +45,37 @@ public sealed class BackupOptions
     public string? TelegramBotToken { get; set; }
     public string? TelegramChatId { get; set; }
     public int MaxTelegramFileSizeMb { get; set; } = 49;
+
+    /// <summary>Новые снимки требуют сильный bounded ключ без неоднозначных управляющих символов.</summary>
+    public static bool IsNewEncryptionKeyValid(string? key) =>
+        IsEncryptionKeyValid(key, MinimumEncryptionKeyLength);
+
+    /// <summary>Restore сохраняет совместимость с ранее разрешёнными 16-символьными ключами.</summary>
+    public static bool IsLegacyDecryptionKeyValid(string? key) =>
+        IsEncryptionKeyValid(key, MinimumLegacyDecryptionKeyLength);
+
+    private static bool IsEncryptionKeyValid(string? key, int minimumLength) =>
+        !string.IsNullOrWhiteSpace(key) && key.Length is <= MaximumEncryptionKeyLength &&
+        key.Length >= minimumLength && !key.Any(char.IsControl);
+
+    /// <summary>Backup должен записываться только в явно заданный абсолютный каталог текущей ОС.</summary>
+    internal static bool IsDirectoryValid(string? directory)
+    {
+        if (string.IsNullOrWhiteSpace(directory) || directory.Length > MaximumDirectoryLength ||
+            directory.Any(char.IsControl))
+            return false;
+        if (!Path.IsPathFullyQualified(directory)) return false;
+        try
+        {
+            var fullPath = Path.GetFullPath(directory)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var root = Path.GetPathRoot(fullPath)?
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            return !string.IsNullOrEmpty(fullPath) && !string.Equals(fullPath, root, StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
+    }
 }

@@ -39,8 +39,12 @@ public sealed class BackupService(
                 dbFactory, PostgresAdvisoryLock.BackupKey, cancellationToken)
                 ?? throw new OperationAlreadyRunningException("резервное копирование");
             var options = backupOptions.Value;
-            if (string.IsNullOrWhiteSpace(options.EncryptionKey) || options.EncryptionKey.Length < 16)
-                throw new InvalidOperationException("Backup__EncryptionKey должен содержать не менее 16 символов.");
+            if (!BackupOptions.IsNewEncryptionKeyValid(options.EncryptionKey))
+                throw new InvalidOperationException(
+                    $"Backup__EncryptionKey должен содержать {BackupOptions.MinimumEncryptionKeyLength}..{BackupOptions.MaximumEncryptionKeyLength} символов без управляющих знаков.");
+            if (!BackupOptions.IsDirectoryValid(options.Directory))
+                throw new InvalidOperationException(
+                    "Backup__Directory должен быть абсолютным безопасным путём длиной не более 1024 символов.");
 
             var telegramConfigured = !string.IsNullOrWhiteSpace(options.TelegramBotToken) &&
                 !string.IsNullOrWhiteSpace(options.TelegramChatId);
@@ -80,7 +84,7 @@ public sealed class BackupService(
                 // финального маркера. До успеха файл остаётся partial: retention и Telegram
                 // никогда не увидят усечённую либо повреждённую резервную копию.
                 await VerifyAndPublishAsync(
-                    partialEncryptedPath, encryptedPath, options.EncryptionKey, cancellationToken);
+                    partialEncryptedPath, encryptedPath, options.EncryptionKey!, cancellationToken);
 
                 // Локальная retention-политика не зависит от доступности Telegram. Иначе
                 // продолжительный внешний сбой оставлял бы новый архив на каждом цикле,

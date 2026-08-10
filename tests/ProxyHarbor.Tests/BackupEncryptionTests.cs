@@ -7,6 +7,7 @@ namespace ProxyHarbor.Tests;
 public sealed class BackupEncryptionTests
 {
     private const string Password = "integration-backup-key-32-characters";
+    private const string LegacyPassword = "legacy-key-16chr";
 
     [Fact]
     public async Task Phb3RoundTripPreservesMultiChunkFile()
@@ -105,6 +106,20 @@ public sealed class BackupEncryptionTests
     }
 
     [Fact]
+    public async Task NewEncryptionRejectsLegacyLengthKey()
+    {
+        using var files = new TemporaryFiles();
+        await File.WriteAllBytesAsync(files.Source, [1, 2, 3]);
+
+        var exception = await Assert.ThrowsAsync<ArgumentException>(() =>
+            BackupEncryption.EncryptAsync(
+                files.Source, files.Encrypted, LegacyPassword, CancellationToken.None));
+
+        Assert.Contains("32", exception.Message, StringComparison.Ordinal);
+        Assert.False(File.Exists(files.Encrypted));
+    }
+
+    [Fact]
     public async Task Phb3EncryptsANonSeekableStreamWithoutAPlaintextFile()
     {
         using var files = new TemporaryFiles();
@@ -123,17 +138,19 @@ public sealed class BackupEncryptionTests
     {
         using var files = new TemporaryFiles();
         var expected = RandomNumberGenerator.GetBytes(777);
-        await WriteLegacyPhb2Async(files.Encrypted, expected);
+        await WriteLegacyPhb2Async(files.Encrypted, expected, LegacyPassword);
 
-        await BackupEncryption.DecryptAsync(files.Encrypted, files.Decrypted, Password, CancellationToken.None);
+        await BackupEncryption.VerifyAsync(files.Encrypted, LegacyPassword, CancellationToken.None);
+        await BackupEncryption.DecryptAsync(
+            files.Encrypted, files.Decrypted, LegacyPassword, CancellationToken.None);
 
         Assert.Equal(expected, await File.ReadAllBytesAsync(files.Decrypted));
     }
 
-    private static async Task WriteLegacyPhb2Async(string path, byte[] plaintext)
+    private static async Task WriteLegacyPhb2Async(string path, byte[] plaintext, string password)
     {
         var salt = RandomNumberGenerator.GetBytes(16);
-        var key = Rfc2898DeriveBytes.Pbkdf2(Password, salt, 200_000, HashAlgorithmName.SHA256, 32);
+        var key = Rfc2898DeriveBytes.Pbkdf2(password, salt, 200_000, HashAlgorithmName.SHA256, 32);
         try
         {
             using var aes = new AesGcm(key, 16);

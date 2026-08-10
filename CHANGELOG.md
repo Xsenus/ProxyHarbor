@@ -7,6 +7,7 @@
 
 ### Changed
 
+- Создание backup теперь fail-closed требует bounded 32–1024-символьный ключ и абсолютный не-корневой каталог; restore сохраняет 16-символьную legacy-совместимость.
 - Новый backup полностью self-verifies все PHB3 AEAD-блоки до атомарной публикации, retention и Telegram; повреждённый partial никогда не становится готовой копией.
 - Полный production live-аудит 10 августа повторно подтвердил 81/81 feed от 50 провайдеров без ошибок/усечения и согласованную реальную выдачу JSON/XML/TXT/CSV после validation.
 - Все сторонние Docker build/runtime/service images, включая PostgreSQL jobs в CI, release и live source audit, закреплены на точных multi-architecture registry digest; протестированный supply-chain gate отклоняет mutable container references в Dockerfile, Compose и GitHub Actions.

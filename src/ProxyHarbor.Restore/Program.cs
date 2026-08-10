@@ -495,8 +495,9 @@ internal sealed record RestoreOptions(
             throw new ArgumentException("Укажите существующий backup через --input.");
         if (string.IsNullOrWhiteSpace(ConnectionString))
             throw new ArgumentException("Не задана ConnectionStrings__Postgres.");
-        if (string.IsNullOrWhiteSpace(EncryptionKey) || EncryptionKey.Length < 16)
-            throw new ArgumentException("Не задан Backup__EncryptionKey длиной не менее 16 символов.");
+        if (!BackupOptions.IsLegacyDecryptionKeyValid(EncryptionKey))
+            throw new ArgumentException(
+                $"Backup__EncryptionKey должен содержать {BackupOptions.MinimumLegacyDecryptionKeyLength}..{BackupOptions.MaximumEncryptionKeyLength} символов без управляющих знаков.");
         if (!ConfirmReplace)
             throw new ArgumentException("Операция заменяет данные БД; добавьте --replace-existing-data.");
     }

@@ -29,7 +29,7 @@ public static class BackupEncryption
     {
         ArgumentNullException.ThrowIfNull(input);
         if (!input.CanRead) throw new ArgumentException("Исходный поток должен поддерживать чтение.", nameof(input));
-        ValidatePassword(password);
+        ValidateEncryptionPassword(password);
         if (File.Exists(destination)) throw new IOException("Файл назначения уже существует.");
         var salt = RandomNumberGenerator.GetBytes(SaltSize);
         var key = Rfc2898DeriveBytes.Pbkdf2(password, salt, Iterations, HashAlgorithmName.SHA256, 32);
@@ -85,7 +85,7 @@ public static class BackupEncryption
     /// <summary>Расшифровывает PHB3 и существующие PHB2; частичный результат при ошибке удаляется.</summary>
     public static async Task DecryptAsync(string source, string destination, string password, CancellationToken token)
     {
-        ValidatePassword(password);
+        ValidateDecryptionPassword(password);
         if (File.Exists(destination)) throw new IOException("Файл назначения уже существует.");
         try
         {
@@ -104,7 +104,7 @@ public static class BackupEncryption
     /// </summary>
     public static Task VerifyAsync(string source, string password, CancellationToken token)
     {
-        ValidatePassword(password);
+        ValidateDecryptionPassword(password);
         return DecryptCoreAsync(source, destination: null, password, token);
     }
 
@@ -196,9 +196,19 @@ public static class BackupEncryption
         return BinaryPrimitives.ReadInt32LittleEndian(bytes);
     }
 
-    private static void ValidatePassword(string password)
+    private static void ValidateEncryptionPassword(string password)
     {
-        if (string.IsNullOrWhiteSpace(password) || password.Length < 16)
-            throw new ArgumentException("Ключ шифрования должен содержать не менее 16 символов.", nameof(password));
+        if (!BackupOptions.IsNewEncryptionKeyValid(password))
+            throw new ArgumentException(
+                $"Ключ шифрования нового backup должен содержать {BackupOptions.MinimumEncryptionKeyLength}..{BackupOptions.MaximumEncryptionKeyLength} символов без управляющих знаков.",
+                nameof(password));
+    }
+
+    private static void ValidateDecryptionPassword(string password)
+    {
+        if (!BackupOptions.IsLegacyDecryptionKeyValid(password))
+            throw new ArgumentException(
+                $"Ключ расшифрования должен содержать {BackupOptions.MinimumLegacyDecryptionKeyLength}..{BackupOptions.MaximumEncryptionKeyLength} символов без управляющих знаков.",
+                nameof(password));
     }
 }
