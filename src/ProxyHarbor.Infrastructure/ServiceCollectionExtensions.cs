@@ -104,6 +104,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ValidationWakeSignal>();
         services.AddSingleton<ProxyValidator>();
         services.AddSingleton<BackupService>();
+        services.AddSingleton<DatabaseReadinessProbe>();
         services.AddHostedService<CollectorWorker>();
         services.AddHostedService<ValidatorWorker>();
         services.AddHostedService<BackupWorker>();

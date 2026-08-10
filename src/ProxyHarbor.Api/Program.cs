@@ -82,9 +82,6 @@ builder.Services.AddOutputCache(options =>
         .Expire(TimeSpan.FromSeconds(15))
         // Неизвестные query-параметры не должны создавать неограниченное число cache keys.
         .SetVaryByQuery([]));
-    options.AddPolicy("health", policy => policy
-        .Expire(TimeSpan.FromSeconds(2))
-        .SetVaryByQuery([]));
 });
 var configuredCorsOrigins = builder.Configuration.GetSection("Cors:Origins").Get<string[]>();
 var corsOrigins = (configuredCorsOrigins ?? (builder.Environment.IsDevelopment() ? ["http://localhost:5173"] : []))
@@ -169,13 +166,12 @@ app.UseMiddleware<AdminApiKeyMiddleware>();
 app.MapOpenApi().CacheOutput("public-summary").RequireRateLimiting("public");
 app.MapControllers();
 app.MapGet("/health/live", () => Results.Ok(new { status = "healthy" }));
-app.MapGet("/health/ready", async (IDbContextFactory<ProxyHarborDbContext> factory, CancellationToken token) =>
+app.MapGet("/health/ready", async (DatabaseReadinessProbe probe, CancellationToken token) =>
 {
-    await using var db = await factory.CreateDbContextAsync(token);
-    return await db.Database.CanConnectAsync(token)
+    return await probe.CheckAsync(token)
         ? Results.Ok(new { status = "healthy", time = DateTimeOffset.UtcNow })
-        : Results.Problem("database unavailable", statusCode: 503);
-}).CacheOutput("health").RequireRateLimiting("public");
+        : Results.Problem("database or schema unavailable", statusCode: 503);
+}).RequireRateLimiting("public");
 app.MapGet("/healthz", () => Results.Redirect("/health/ready"));
 
 await using (var scope = app.Services.CreateAsyncScope())
