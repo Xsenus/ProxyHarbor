@@ -32,6 +32,20 @@ public sealed class AdminSourceControllerTests
         Assert.Contains(results, result => result.MemberNames.Contains(expectedMember, StringComparer.Ordinal));
     }
 
+    [Theory]
+    [InlineData("https://[")]
+    [InlineData("http://8.8.8.8/feed.txt")]
+    [InlineData("https://user:secret@8.8.8.8/feed.txt")]
+    [InlineData("https://8.8.8.8/feed.txt#fragment")]
+    public void RequestValidationRejectsUnsafeSourceUrl(string url)
+    {
+        var request = new SourceRequest("Valid source", url, ProxyProtocol.Http);
+        var results = new List<ValidationResult>();
+
+        Assert.False(Validator.TryValidateObject(request, new ValidationContext(request), results, true));
+        Assert.Contains(results, result => result.MemberNames.Contains("Url", StringComparer.Ordinal));
+    }
+
     [Fact]
     public async Task CreateSourcePersistsNormalizedRequestAndRejectsDuplicate()
     {
@@ -207,6 +221,33 @@ public sealed class AdminSourceControllerTests
         Assert.Null(updated.LastError);
         Assert.Null(updated.HttpETag);
         Assert.Null(updated.HttpLastModifiedAt);
+    }
+
+    [Fact]
+    public async Task UpdateRejectsMalformedUrlWithoutThrowingOrChangingDatabase()
+    {
+        var options = Options($"source-malformed-{Guid.NewGuid():N}");
+        var source = new ProxySource
+        {
+            Name = "Custom",
+            Url = "https://8.8.8.8/feed.txt",
+            DefaultProtocol = ProxyProtocol.Http
+        };
+        await SeedAsync(options, source);
+        var controller = Controller(options);
+
+        var result = await controller.UpdateSource(
+            source.Id,
+            new SourceRequest("Changed", "https://[", ProxyProtocol.Socks5),
+            CancellationToken.None);
+
+        var problem = Assert.IsType<ObjectResult>(result);
+        Assert.Equal(400, problem.StatusCode);
+        await using var verify = new ProxyHarborDbContext(options);
+        var unchanged = await verify.Sources.SingleAsync();
+        Assert.Equal("Custom", unchanged.Name);
+        Assert.Equal("https://8.8.8.8/feed.txt", unchanged.Url);
+        Assert.Equal(ProxyProtocol.Http, unchanged.DefaultProtocol);
     }
 
     [Fact]

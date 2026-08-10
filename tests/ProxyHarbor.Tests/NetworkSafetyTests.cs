@@ -6,6 +6,46 @@ namespace ProxyHarbor.Tests;
 public sealed class NetworkSafetyTests
 {
     [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("https://[")]
+    [InlineData("https://")]
+    [InlineData("https://8.8.8.8/feed\nnext")]
+    [InlineData("https://user:secret@8.8.8.8/feed")]
+    [InlineData("https://8.8.8.8:8443/feed")]
+    [InlineData("https://8.8.8.8/feed#fragment")]
+    public void SynchronousHttpsShapeGateRejectsMalformedInputWithoutThrowing(string? value)
+    {
+        Assert.False(NetworkSafety.TryParseSafeHttpsUrl(value, out var uri));
+        Assert.Null(uri);
+    }
+
+    [Fact]
+    public void SynchronousHttpsShapeGateRejectsOversizedInput()
+    {
+        Assert.False(NetworkSafety.TryParseSafeHttpsUrl(
+            "https://8.8.8.8/" + new string('a', 2048), out _));
+    }
+
+    [Fact]
+    public void SynchronousHttpsShapeGateBoundsNormalizedUnicodeUri()
+    {
+        var raw = "https://8.8.8.8/" + new string('я', 600);
+        Assert.True(raw.Length < 2048);
+
+        Assert.False(NetworkSafety.TryParseSafeHttpsUrl(raw, out _));
+    }
+
+    [Fact]
+    public void SynchronousHttpsShapeGateReturnsNormalizedUri()
+    {
+        Assert.True(NetworkSafety.TryParseSafeHttpsUrl(
+            "HTTPS://8.8.8.8:443/feed.txt?protocol=http", out var uri));
+
+        Assert.Equal("https://8.8.8.8/feed.txt?protocol=http", uri.AbsoluteUri);
+    }
+
+    [Theory]
     [InlineData("not-a-url")]
     [InlineData("http://8.8.8.8/feed.txt")]
     [InlineData("https://user:password@8.8.8.8/feed.txt")]

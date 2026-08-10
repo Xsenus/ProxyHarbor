@@ -38,10 +38,11 @@ public sealed class AdminController(
     [HttpPost("sources")]
     public async Task<ActionResult<SourceResponse>> CreateSource([FromBody] SourceRequest request, CancellationToken token)
     {
-        if (!await NetworkSafety.IsSafePublicHttpsUrlAsync(request.Url, token))
+        if (!NetworkSafety.TryParseSafeHttpsUrl(request.Url, out var requestedUri) ||
+            !await NetworkSafety.IsSafePublicHttpsUrlAsync(requestedUri.AbsoluteUri, token))
             return Problem("Разрешены только публичные HTTPS-адреса источников без fragment.", statusCode: 400);
         await using var db = await dbFactory.CreateDbContextAsync(token);
-        var normalizedUrl = new Uri(request.Url, UriKind.Absolute).AbsoluteUri;
+        var normalizedUrl = requestedUri.AbsoluteUri;
         if (await db.Sources.AnyAsync(x => x.Url == normalizedUrl, token))
             return Conflict(new ProblemDetails { Title = "Источник с таким URL уже существует", Status = 409 });
         var source = new ProxySource { Name = request.Name.Trim(), Url = normalizedUrl, DefaultProtocol = request.Protocol, Priority = request.Priority, Enabled = request.Enabled };
@@ -58,7 +59,9 @@ public sealed class AdminController(
     [HttpPut("sources/{id:guid}")]
     public async Task<IActionResult> UpdateSource(Guid id, [FromBody] SourceRequest request, CancellationToken token)
     {
-        var normalizedUrl = new Uri(request.Url, UriKind.Absolute).AbsoluteUri;
+        if (!NetworkSafety.TryParseSafeHttpsUrl(request.Url, out var requestedUri))
+            return Problem("Разрешены только публичные HTTPS-адреса источников без fragment.", statusCode: 400);
+        var normalizedUrl = requestedUri.AbsoluteUri;
         await using var db = await dbFactory.CreateDbContextAsync(token);
         var source = await db.Sources.FindAsync([id], token);
         if (source is null) return NotFound();
@@ -240,6 +243,10 @@ public sealed record SourceRequest(
                 [nameof(Name)]);
         if (!Enum.IsDefined(Protocol))
             yield return new ValidationResult("Неизвестный протокол источника.", [nameof(Protocol)]);
+        if (!NetworkSafety.TryParseSafeHttpsUrl(Url, out _))
+            yield return new ValidationResult(
+                "URL источника должен быть bounded HTTPS endpoint без credentials, нестандартного порта или fragment.",
+                [nameof(Url)]);
     }
 }
 

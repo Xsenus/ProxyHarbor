@@ -11,6 +11,7 @@
 
 ### Changed
 
+- Frontend lockfile обновлён до совместимых `@testing-library/jest-dom` 7.0.1 и `lucide-react` 1.31.0; повторный NPM/NuGet audit не обнаружил известных уязвимостей.
 - Сборка Telegram backup-частей теперь fail-closed проверяет единый base-name/total, непрерывность `1..N`, размеры и атомарное создание output; CI отклоняет missing, mixed и malformed наборы.
 - Source-feed audit artifact теперь сохраняет длительность сбора, processed/skipped, unique candidates и new proxies; forced-аудит fail-closed отклоняет любой skip, пустую очередь кандидатов и несогласованные счётчики.
 - Backup encryption/decryption и PowerShell restore теперь отклоняют unpaired UTF-16 surrogate, строго кодируют ключ в UTF-8 перед PBKDF2 и очищают временные password bytes, исключая коллизии через replacement characters без потери корректных 16-символьных legacy-ключей.
@@ -52,6 +53,7 @@
 
 ### Fixed
 
+- Admin source create/update и `SourceRequest` используют единый bounded non-throwing HTTPS parser до DNS и обращения к БД; malformed значение вроде `https://[` и Unicode URL, разрастающийся после normalization свыше DB-лимита, теперь стабильно возвращают 400 вместо необработанного исключения/500 и не изменяют существующий источник.
 - Control endpoint теперь fail-fast требует canonical ASCII `ProbeHost` и уже escaped origin-form `ProbePath`: Unicode/space, network-path `//`, fragment и невалидные percent escapes больше не проходят startup и не превращают всю validation-очередь в массовые ошибки либо `Deferred`; публичные canonical IPv4/IPv6 остаются допустимыми.
 - Telegram backup-конфигурация теперь fail-fast проверяет bounded path-safe ASCII token и совместимый с Alertmanager ненулевой signed 64-bit chat ID; при включённом scheduler доставка обязательна, URI/control-character ошибки и local-only misconfiguration больше не откладываются до первого production backup, а CI использует синтаксически валидный заведомо фиктивный token.
 - PowerShell decryptor больше не имеет TOCTOU между проверкой и созданием `OutputZip`: plaintext пишется в уникальный sibling `.partial`, после `Flush(true)` публикуется атомарным move без overwrite, существующий файл сохраняется, partial очищается при отказе аутентификации, а ошибка его удаления больше не замалчивается.

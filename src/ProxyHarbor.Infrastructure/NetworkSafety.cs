@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Net;
 using System.Net.Sockets;
 
@@ -6,13 +7,31 @@ namespace ProxyHarbor.Infrastructure;
 /// <summary>Единые правила, запрещающие обращения сборщика к локальным и служебным сетям.</summary>
 public static class NetworkSafety
 {
-    /// <summary>Проверяет HTTPS URL и все его текущие DNS-адреса.</summary>
-    public static async Task<bool> IsSafePublicHttpsUrlAsync(string value, CancellationToken token)
+    /// <summary>
+    /// Non-throwing синтаксический gate, общий для model validation, normalization и DNS-проверки.
+    /// Public-маршрутизируемость адресов отдельно подтверждается непосредственно перед connect.
+    /// </summary>
+    public static bool TryParseSafeHttpsUrl(
+        string? value,
+        [NotNullWhen(true)] out Uri? uri)
     {
-        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps ||
-            (!uri.IsDefaultPort && uri.Port != 443) || !string.IsNullOrEmpty(uri.UserInfo) ||
-            !string.IsNullOrEmpty(uri.Fragment))
+        uri = null;
+        if (value is not { Length: >= 1 and <= 2048 } || value.Any(char.IsControl) ||
+            !Uri.TryCreate(value, UriKind.Absolute, out var parsed) ||
+            parsed.Scheme != Uri.UriSchemeHttps || (!parsed.IsDefaultPort && parsed.Port != 443) ||
+            string.IsNullOrEmpty(parsed.Host) || parsed.HostNameType == UriHostNameType.Unknown ||
+            parsed.AbsoluteUri.Length > 2048 ||
+            !string.IsNullOrEmpty(parsed.UserInfo) || !string.IsNullOrEmpty(parsed.Fragment))
             return false;
+
+        uri = parsed;
+        return true;
+    }
+
+    /// <summary>Проверяет HTTPS URL и все его текущие DNS-адреса.</summary>
+    public static async Task<bool> IsSafePublicHttpsUrlAsync(string? value, CancellationToken token)
+    {
+        if (!TryParseSafeHttpsUrl(value, out var uri)) return false;
 
         try
         {
