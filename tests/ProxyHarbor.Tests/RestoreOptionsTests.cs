@@ -105,6 +105,53 @@ public sealed class RestoreOptionsTests
     }
 
     [Fact]
+    public void InspectSettingsDoesNotRequireDatabaseOrDestructiveConfirmation()
+    {
+        using var input = new TemporaryInput();
+        var options = new RestoreOptions(
+            input.Path,
+            ConnectionString: null,
+            LegacyKey,
+            ConfirmReplace: false,
+            ShowHelp: false,
+            InspectSettings: true);
+
+        options.Validate();
+    }
+
+    [Fact]
+    public void InspectSettingsRejectsDestructiveConfirmationFlag()
+    {
+        using var input = new TemporaryInput();
+        var options = new RestoreOptions(
+            input.Path,
+            Connection,
+            LegacyKey,
+            ConfirmReplace: true,
+            ShowHelp: false,
+            InspectSettings: true);
+
+        var exception = Assert.Throws<ArgumentException>(options.Validate);
+
+        Assert.Contains("нельзя объединять", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ParseRecognizesReadOnlySettingsInspection()
+    {
+        using var input = new TemporaryInput();
+
+        var options = RestoreOptions.Parse([
+            "--input", input.Path,
+            "--encryption-key", LegacyKey,
+            "--inspect-settings"]);
+
+        Assert.True(options.InspectSettings);
+        Assert.Null(options.ConnectionString);
+        options.Validate();
+    }
+
+    [Fact]
     public async Task PreCancelledRestoreReturnsStandardInterruptedExitCode()
     {
         using var plaintext = new TemporaryInput("representative plaintext");

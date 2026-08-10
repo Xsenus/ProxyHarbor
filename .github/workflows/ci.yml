@@ -161,7 +161,7 @@ jobs:
           PUBLIC_HOST: localhost
           ACME_EMAIL: ci@example.com
           TELEGRAM_BOT_TOKEN: 9000000000000000000:CI_ONLY_PLACEHOLDER_NOT_A_REAL_TOKEN
-          TELEGRAM_CHAT_ID: "123456"
+          TELEGRAM_CHAT_ID: "-1009000000001234"
           PROXYHARBOR_IMAGE_PREFIX: ghcr.io/example
           PROXYHARBOR_IMAGE_TAG: 1.2.3
         run: |
@@ -201,7 +201,7 @@ jobs:
             (.services.api.secrets | length) == 5 and
             (.services.restore.secrets | length) == 2 and
             (.services.alertmanager.secrets | length) == 2'
-          for secret_value in ci-password ci-admin-key ci-encryption-key-at-least-32-chars 9000000000000000000:CI_ONLY_PLACEHOLDER_NOT_A_REAL_TOKEN 123456; do
+          for secret_value in ci-password ci-admin-key ci-encryption-key-at-least-32-chars 9000000000000000000:CI_ONLY_PLACEHOLDER_NOT_A_REAL_TOKEN -1009000000001234; do
             if echo "$production_config" | grep --fixed-strings "$secret_value"; then
               echo "Secret value leaked into rendered Compose configuration."
               exit 1
@@ -268,7 +268,7 @@ jobs:
           PUBLIC_HOST: localhost
           ACME_EMAIL: ci@example.com
           TELEGRAM_BOT_TOKEN: 9000000000000000000:CI_ONLY_PLACEHOLDER_NOT_A_REAL_TOKEN
-          TELEGRAM_CHAT_ID: "123456"
+          TELEGRAM_CHAT_ID: "-1009000000001234"
         run: |
           cleanup() {
             status=$?
@@ -293,7 +293,7 @@ jobs:
             container_id=$1
             environment=$(docker inspect --format '{{json .Config.Env}}' "$container_id")
             for secret_value in ci-password ci-admin-key-at-least-24-chars \
-              ci-encryption-key-at-least-32-chars 9000000000000000000:CI_ONLY_PLACEHOLDER_NOT_A_REAL_TOKEN 123456; do
+              ci-encryption-key-at-least-32-chars 9000000000000000000:CI_ONLY_PLACEHOLDER_NOT_A_REAL_TOKEN -1009000000001234; do
               if echo "$environment" | grep --fixed-strings "$secret_value"; then
                 echo "Secret value leaked into container environment."
                 exit 1
@@ -415,6 +415,27 @@ jobs:
              .recentBackups[0].telegramConfigured == false and
              .recentBackups[0].sentToTelegram == false and
              .recentBackups[0].sizeBytes > 0'
+          recovered_settings=$(docker compose --profile tools run --rm --no-deps -T restore \
+            --input "/app/backups/$backup_file" --inspect-settings)
+          echo "$recovered_settings" | jq --exit-status \
+            '.manifest.version == 5 and
+             .manifest.settingsSchemaVersion == 1 and
+             .manifest.secretsIncluded == false and
+             .collector.validationConcurrency == 800 and
+             .backup.secretsIncluded == false and
+             .runtime.adminApiKeyConfigured == true and
+             .runtime.adminApiKeyIncluded == false and
+             .runtime.connectionStringConfigured == true and
+             .runtime.connectionStringIncluded == false'
+          if echo "$recovered_settings" | grep --fixed-strings --quiet \
+            --regexp="$POSTGRES_PASSWORD" \
+            --regexp="$ADMIN_API_KEY" \
+            --regexp="$BACKUP_ENCRYPTION_KEY" \
+            --regexp="$TELEGRAM_BOT_TOKEN" \
+            --regexp="$TELEGRAM_CHAT_ID"; then
+            echo 'Settings inspection exposed a configured secret.' >&2
+            exit 1
+          fi
           readiness_headers=$(mktemp)
           readiness_body=$(mktemp)
           readiness_limited=false

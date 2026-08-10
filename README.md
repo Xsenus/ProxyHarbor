@@ -246,15 +246,24 @@ dotnet run -c Release --project src/ProxyHarbor.Restore -- --input ./proxyharbor
 
 Вместо environment можно передать абсолютный путь к bounded UTF-8 secret-файлу через `--encryption-key-file`; inline `--encryption-key` оставлен для совместимости, но не рекомендуется, поскольку значение видно в process arguments. Ctrl+C и container `SIGTERM` отменяют расшифровку/COPY, откатывают транзакцию, удаляют временный plaintext ZIP и завершаются кодом 130.
 
+До выбора целевой БД можно аутентифицировать backup v5 и извлечь полный безопасный снимок настроек одним JSON-объектом. Команда не подключается к PostgreSQL и не изменяет данные; служебные сообщения идут в stderr, поэтому stdout можно перенаправить в файл:
+
+```powershell
+dotnet run -c Release --project src/ProxyHarbor.Restore -- --input ./proxyharbor.phbackup --inspect-settings > recovery-settings.json
+```
+
+В JSON входят manifest, collector, backup и runtime. Значения admin key, строки подключения, Telegram token/chat ID и ключа шифрования принципиально отсутствуют — для них сохраняются только флаги наличия, а сами секреты нужно восстановить из внешнего secret store. Архивы v2–v4 по-прежнему можно восстановить в БД, но inspection отклоняет их как неполный снимок конфигурации.
+
 На опубликованном Docker Compose-хосте локальный .NET SDK не требуется. Restore вынесен в opt-in profile `tools`, запускается без root с read-only root filesystem и по умолчанию только показывает справку. Сначала остановите процессы, которые пишут в БД, затем запустите одноразовый контейнер с точным именем backup из volume и после успеха верните сервисы:
 
 ```powershell
 docker compose stop web api
+docker compose --profile tools run --rm --no-deps -T restore --input /app/backups/proxyharbor-YYYYMMDD-HHMMSS.phbackup --inspect-settings > recovery-settings.json
 docker compose --profile tools run --rm restore --input /app/backups/proxyharbor-YYYYMMDD-HHMMSS.phbackup --replace-existing-data
 docker compose up -d api web
 ```
 
-Команда `run --rm` удаляет контейнер и его анонимный `/restore-temp`; постоянный volume `backups` подключён только для чтения. Расшифрованный ZIP никогда не записывается в `backups`. Перед заменой production-данных всё равно выполните пробное восстановление в отдельную БД, переопределив `ConnectionStrings__Postgres` для restore-контейнера.
+Команда `run --rm` удаляет контейнер и его анонимный `/restore-temp`; постоянный volume `backups` подключён только для чтения. Расшифрованный ZIP никогда не записывается в `backups`. Inspection лишь возвращает данные для сверки и намеренно не применяет настройки к контейнеру. Перед заменой production-данных всё равно выполните пробное восстановление в отдельную БД, переопределив `ConnectionStrings__Postgres` для restore-контейнера.
 
 Restore сначала проверяет аутентификацию backup, manifest, точный allowlist ZIP-записей, отсутствие секретов, дубликатов, oversized settings/database-файлов, общий распакованный размер 32 ГиБ и безопасную степень ZIP-сжатия, под общей startup-блокировкой применяет миграции, затем заменяет таблицы прокси, источников, циклов сбора, validation-аудита и backup-аудита в одной транзакции. Перед каждой streaming COPY row отдельно проверяются публичность и каноничность IP, port/enum/URL, длины, неотрицательные счётчики, согласованность run totals/status/finishedAt, lease, Telegram delivery и доказательства статуса: `Alive` обязан иметь дату проверки, latency и успешный check, `Dead` — дату и failed check; семантически повреждённый snapshot откатывает всю транзакцию с понятной ошибкой. Manifest v5 требует `validation-runs.json`, полный snapshot collector/backup/runtime-настроек, точный набор полей и обязательные отрицательные secret-флаги; подмена settings на пустой или частичный JSON отклоняется до изменения БД. Restore продолжает принимать архивы v2–v4. Потоковый PostgreSQL binary COPY ускоряет импорт больших снимков; при любой ошибке исходные данные целевой БД сохраняются. Готовый `.phbackup` публикуется в каталоге атомарно; plaintext ZIP в актуальной версии не создаётся, а новый запуск под cluster lock всё ещё удаляет legacy ZIP, `.partial` и временные Telegram-части после аварийного завершения. PostgreSQL integration-gate создаёт настоящий зашифрованный снимок, удаляет исходный marker и сравнивает после restore все сохраняемые поля пяти таблиц на отдельных схемах; отдельный повреждённый снимок доказывает rollback без потери прежней target-БД.
 

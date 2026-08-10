@@ -74,9 +74,14 @@ internal static class RestoreApplication
             {
                 hooks?.TemporaryDirectoryCreated?.Invoke(temporaryDirectory);
                 var zipPath = Path.Combine(temporaryDirectory, "snapshot.zip");
-                Console.WriteLine("Проверка целостности и расшифровка backup...");
+                WriteProgress(options, "Проверка целостности и расшифровка backup...");
                 await BackupEncryption.DecryptAsync(
                     options.InputFile!, zipPath, options.EncryptionKey!, cancellationToken);
+                if (options.InspectSettings)
+                {
+                    await WriteSettingsInspectionAsync(zipPath, cancellationToken);
+                    return 0;
+                }
                 var counts = await RestoreDatabaseAsync(
                     zipPath, options.ConnectionString!, hooks, cancellationToken);
                 Console.WriteLine($"Восстановление завершено: {counts.Proxies:N0} прокси, {counts.Sources:N0} источников, " +
@@ -100,6 +105,50 @@ internal static class RestoreApplication
             Console.Error.WriteLine($"Восстановление отменено: {exception.Message}");
             return 1;
         }
+    }
+
+    /// <summary>
+    /// Выводит проверенный безопасный снимок настроек одним JSON-объектом. Режим намеренно
+    /// не создаёт DbContext: оператор может изучить конфигурацию до выбора целевой БД.
+    /// </summary>
+    private static async Task WriteSettingsInspectionAsync(string zipPath, CancellationToken token)
+    {
+        using var archive = ZipFile.OpenRead(zipPath);
+        BackupArchiveValidator.Validate(archive);
+        var snapshot = ReadSettingsInspection(archive);
+        await JsonSerializer.SerializeAsync(
+            Console.OpenStandardOutput(), snapshot, JsonOptions, token);
+        await Console.Out.WriteLineAsync();
+    }
+
+    /// <summary>Читает только записи, чья точная v5-схема уже проверена валидатором.</summary>
+    internal static RestoreSettingsInspection ReadSettingsInspection(ZipArchive archive)
+    {
+        var manifest = ReadJsonObject(archive, "manifest.json");
+        if (manifest.GetProperty("version").GetInt32() != 5)
+            throw new InvalidDataException(
+                "Полный снимок настроек доступен только для backup manifest v5.");
+
+        return new RestoreSettingsInspection(
+            manifest,
+            ReadJsonObject(archive, "settings/collector.json"),
+            ReadJsonObject(archive, "settings/backup.json"),
+            ReadJsonObject(archive, "settings/runtime.json"));
+    }
+
+    private static JsonElement ReadJsonObject(ZipArchive archive, string entryName)
+    {
+        using var stream = BackupArchiveValidator.RequiredEntry(archive, entryName).Open();
+        using var document = JsonDocument.Parse(stream, new JsonDocumentOptions { MaxDepth = 32 });
+        return document.RootElement.Clone();
+    }
+
+    private static void WriteProgress(RestoreOptions options, string message)
+    {
+        // stdout режима inspection является машинным JSON-контрактом; служебные сообщения
+        // направляются в stderr, чтобы безопасно использовать перенаправление в файл/jq.
+        if (options.InspectSettings) Console.Error.WriteLine(message);
+        else Console.WriteLine(message);
     }
 
     private static async Task<RestoreCounts> RestoreDatabaseAsync(
@@ -526,13 +575,17 @@ internal sealed record RestoreOptions(
     string? ConnectionString,
     string? EncryptionKey,
     bool ConfirmReplace,
-    bool ShowHelp)
+    bool ShowHelp,
+    bool InspectSettings = false)
 {
     public const string Help = """
         ProxyHarbor restore
 
         dotnet run --project src/ProxyHarbor.Restore -- \
           --input ./proxyharbor.phbackup --replace-existing-data
+
+        Без подключения к БД вывести безопасные настройки manifest v5 в JSON:
+          --input ./proxyharbor.phbackup --inspect-settings
 
         По умолчанию строка БД читается из ConnectionStrings__Postgres,
         а ключ — из Backup__EncryptionKey. Docker использует bounded файлы
@@ -550,6 +603,7 @@ internal sealed record RestoreOptions(
         string? keyFile = null;
         var confirm = false;
         var help = false;
+        var inspectSettings = false;
         for (var index = 0; index < args.Length; index++)
         {
             switch (args[index])
@@ -559,6 +613,7 @@ internal sealed record RestoreOptions(
                 case "--encryption-key": key = NextValue(args, ref index, "--encryption-key"); break;
                 case "--encryption-key-file": keyFile = NextValue(args, ref index, "--encryption-key-file"); break;
                 case "--replace-existing-data": confirm = true; break;
+                case "--inspect-settings": inspectSettings = true; break;
                 case "--help" or "-h": help = true; break;
                 default: throw new ArgumentException($"Неизвестный аргумент: {args[index]}");
             }
@@ -571,9 +626,10 @@ internal sealed record RestoreOptions(
             if (key is not null && keyFile is not null)
                 throw new ArgumentException(
                     "Передайте только один из --encryption-key и --encryption-key-file.");
-            connection ??= RuntimeSecretConfiguration.ApplyPostgresPasswordFile(
-                Environment.GetEnvironmentVariable("ConnectionStrings__Postgres"),
-                Environment.GetEnvironmentVariable("SecretFiles__PostgresPassword"));
+            if (!inspectSettings)
+                connection ??= RuntimeSecretConfiguration.ApplyPostgresPasswordFile(
+                    Environment.GetEnvironmentVariable("ConnectionStrings__Postgres"),
+                    Environment.GetEnvironmentVariable("SecretFiles__PostgresPassword"));
             if (keyFile is not null)
             {
                 key = RuntimeSecretConfiguration.ReadOptionalFile(
@@ -587,18 +643,25 @@ internal sealed record RestoreOptions(
                 "SecretFiles__BackupEncryptionKey")
                 ?? Environment.GetEnvironmentVariable("Backup__EncryptionKey");
         }
-        return new RestoreOptions(input, connection, key, confirm, help);
+        return new RestoreOptions(input, connection, key, confirm, help, inspectSettings);
     }
 
     public void Validate()
     {
         if (string.IsNullOrWhiteSpace(InputFile) || !File.Exists(InputFile))
             throw new ArgumentException("Укажите существующий backup через --input.");
-        if (string.IsNullOrWhiteSpace(ConnectionString))
-            throw new ArgumentException("Не задана ConnectionStrings__Postgres.");
         if (!BackupOptions.IsLegacyDecryptionKeyValid(EncryptionKey))
             throw new ArgumentException(
                 $"Backup__EncryptionKey должен содержать {BackupOptions.MinimumLegacyDecryptionKeyLength}..{BackupOptions.MaximumEncryptionKeyLength} символов с корректной Unicode-кодировкой без управляющих знаков.");
+        if (InspectSettings)
+        {
+            if (ConfirmReplace)
+                throw new ArgumentException(
+                    "--inspect-settings нельзя объединять с --replace-existing-data.");
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(ConnectionString))
+            throw new ArgumentException("Не задана ConnectionStrings__Postgres.");
         if (!ConfirmReplace)
             throw new ArgumentException("Операция заменяет данные БД; добавьте --replace-existing-data.");
     }
@@ -610,3 +673,10 @@ internal sealed record RestoreOptions(
         return args[index];
     }
 }
+
+/// <summary>Машиночитаемый, заведомо не содержащий секретов снимок конфигурации backup v5.</summary>
+internal sealed record RestoreSettingsInspection(
+    JsonElement Manifest,
+    JsonElement Collector,
+    JsonElement Backup,
+    JsonElement Runtime);
