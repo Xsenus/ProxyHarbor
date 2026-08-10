@@ -60,6 +60,9 @@ jobs:
       - name: Verify source-audit evidence contracts
         shell: pwsh
         run: ./tools/Test-AuditSourceFeeds.ps1
+      - name: Verify built-in source endpoint catalog
+        shell: pwsh
+        run: ./tools/Test-BuiltInSourceEndpoints.ps1 -CatalogOnly
       - name: Verify validation-audit evidence contracts
         shell: pwsh
         run: ./tools/Test-AuditValidation.ps1

@@ -49,6 +49,7 @@ jobs:
           ./tools/Test-ActionlintContracts.ps1
           ./tools/Invoke-Actionlint.ps1
           ./tools/Test-AuditSourceFeeds.ps1
+          ./tools/Test-BuiltInSourceEndpoints.ps1 -CatalogOnly
           ./tools/Test-AuditValidation.ps1
       - name: Build and test backend against PostgreSQL
         env:
