@@ -1,6 +1,8 @@
+using System.Data.Common;
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Options;
 using Npgsql;
 using ProxyHarbor.Api.Controllers;
@@ -84,8 +86,24 @@ public sealed class AdminDiagnosticsIntegrationTests
                 await seed.SaveChangesAsync();
             }
 
+            var mutation = new MutateBeforeReadInterceptor("FROM \"ValidationRuns\"", async token =>
+            {
+                await using var update = await factory.CreateDbContextAsync(token);
+                await update.Proxies.ExecuteDeleteAsync(token);
+                update.ValidationRuns.Add(new ValidationRun
+                {
+                    LeaseId = Guid.NewGuid(),
+                    StartedAt = DateTimeOffset.UtcNow.AddSeconds(-5),
+                    FinishedAt = DateTimeOffset.UtcNow,
+                    Claimed = 20,
+                    Checked = 20,
+                    Status = "completed"
+                });
+                await update.SaveChangesAsync(token);
+            });
+            var diagnosticsFactory = RetryFactory(builder.ConnectionString, mutation);
             var controller = new AdminController(
-                factory,
+                diagnosticsFactory,
                 null!,
                 null!,
                 null!,
@@ -98,6 +116,7 @@ public sealed class AdminDiagnosticsIntegrationTests
                 }));
 
             var action = await controller.Diagnostics(CancellationToken.None);
+            Assert.True(mutation.MutationInvoked);
             var result = Assert.IsType<OkObjectResult>(action.Result);
             using var json = JsonDocument.Parse(JsonSerializer.Serialize(
                 result.Value, WebJsonOptions));
@@ -116,6 +135,12 @@ public sealed class AdminDiagnosticsIntegrationTests
             Assert.Single(root.GetProperty("recentRuns").EnumerateArray());
             Assert.Single(root.GetProperty("recentValidationRuns").EnumerateArray());
             Assert.Single(root.GetProperty("recentBackups").EnumerateArray());
+
+            // Concurrent mutation действительно закоммичена, но уже открытый diagnostics
+            // snapshot обязан показать целиком предшествующую эпоху всех таблиц.
+            await using var verify = await factory.CreateDbContextAsync();
+            Assert.Equal(0, await verify.Proxies.CountAsync());
+            Assert.Equal(2, await verify.ValidationRuns.CountAsync());
         }
         finally
         {
@@ -124,11 +149,42 @@ public sealed class AdminDiagnosticsIntegrationTests
         }
     }
 
+    private static TestDbFactory RetryFactory(string connectionString, DbCommandInterceptor interceptor)
+    {
+        var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+            .UseNpgsql(connectionString, npgsql =>
+                npgsql.EnableRetryOnFailure(3, TimeSpan.FromMilliseconds(100), null))
+            .AddInterceptors(interceptor)
+            .Options;
+        return new TestDbFactory(options);
+    }
+
     private sealed class TestDbFactory(DbContextOptions<ProxyHarborDbContext> options)
         : IDbContextFactory<ProxyHarborDbContext>
     {
         public ProxyHarborDbContext CreateDbContext() => new(options);
         public Task<ProxyHarborDbContext> CreateDbContextAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult(CreateDbContext());
+    }
+
+    /// <summary>Коммитит изменение непосредственно перед первым чтением validation history.</summary>
+    private sealed class MutateBeforeReadInterceptor(
+        string commandMarker,
+        Func<CancellationToken, Task> mutate) : DbCommandInterceptor
+    {
+        private int _mutationInvoked;
+        internal bool MutationInvoked => Volatile.Read(ref _mutationInvoked) != 0;
+
+        public override async ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            if (command.CommandText.Contains(commandMarker, StringComparison.Ordinal) &&
+                Interlocked.CompareExchange(ref _mutationInvoked, 1, 0) == 0)
+                await mutate(cancellationToken);
+            return result;
+        }
     }
 }

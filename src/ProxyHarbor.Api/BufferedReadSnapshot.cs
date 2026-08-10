@@ -5,7 +5,7 @@ using ProxyHarbor.Infrastructure;
 namespace ProxyHarbor.Api;
 
 /// <summary>
-/// Выполняет несколько буферизованных публичных SQL-чтений в одном REPEATABLE READ snapshot.
+/// Выполняет несколько буферизованных API SQL-чтений в одном REPEATABLE READ snapshot.
 /// В отличие от streaming export, весь ответ ещё можно безопасно повторить при transient failure,
 /// поэтому пользовательская транзакция обязательно обёрнута в настроенную EF execution strategy.
 /// </summary>

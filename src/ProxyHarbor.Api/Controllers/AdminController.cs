@@ -152,9 +152,18 @@ public sealed class AdminController(
 
     [HttpGet("diagnostics")]
     [ProducesResponseType<DiagnosticsResponse>(StatusCodes.Status200OK)]
-    public async Task<ActionResult<DiagnosticsResponse>> Diagnostics(CancellationToken token)
+    public async Task<ActionResult<DiagnosticsResponse>> Diagnostics(CancellationToken requestToken)
     {
-        await using var db = await dbFactory.CreateDbContextAsync(token);
+        await using var db = await dbFactory.CreateDbContextAsync(requestToken);
+        return await BufferedReadSnapshot.ExecuteAsync(
+            db, token => GetDiagnosticsSnapshotAsync(db, token), requestToken);
+    }
+
+    /// <summary>Строит весь database-derived операторский ответ внутри одного read snapshot.</summary>
+    private async Task<ActionResult<DiagnosticsResponse>> GetDiagnosticsSnapshotAsync(
+        ProxyHarborDbContext db,
+        CancellationToken token)
+    {
         var now = DateTimeOffset.UtcNow;
         var validationWindowStart = now.AddMinutes(-5);
         var unseenRetentionCutoff = now.AddDays(-Math.Max(1, collectorOptions.Value.DeadRetentionDays));
