@@ -91,7 +91,7 @@ public sealed class BackupFileSplitterTests
         await File.WriteAllBytesAsync(source, new byte[21]);
         try
         {
-            var exception = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            var exception = await Assert.ThrowsAsync<BackupDeliveryPolicyException>(async () =>
             {
                 await foreach (var _ in BackupFileSplitter.SplitAsync(
                     source, partLimit: 1, maximumParts: 20, CancellationToken.None))
@@ -120,9 +120,13 @@ public sealed class BackupFileSplitterTests
     [Fact]
     public void RequiredPartCountRejectsExtremeLengthWithOperationalErrorInsteadOfOverflow()
     {
-        var exception = Assert.Throws<InvalidOperationException>(() =>
+        var exception = Assert.Throws<BackupDeliveryPolicyException>(() =>
             BackupFileSplitter.RequiredPartCount(long.MaxValue, partLimit: 1, maximumParts: 20));
 
         Assert.Contains("Telegram-част", exception.Message, StringComparison.Ordinal);
+        Assert.StartsWith(
+            BackupService.DeliveryPolicyErrorMarker,
+            BackupService.FormatAuditError(exception),
+            StringComparison.Ordinal);
     }
 }

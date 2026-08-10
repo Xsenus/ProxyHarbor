@@ -18,6 +18,66 @@ public sealed class BackupAuditIntegrationTests
 
     [Fact]
     [Trait("Category", "PostgresIntegration")]
+    public async Task DeliveryPolicyFailureIsPersistentScheduleAnchorButNotCompletedBackup()
+    {
+        var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
+        if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
+
+        var schema = $"proxyharbor_backup_policy_{Guid.NewGuid():N}";
+        var builder = new NpgsqlConnectionStringBuilder(baseConnectionString) { SearchPath = schema };
+        await using var admin = new NpgsqlConnection(baseConnectionString);
+        await admin.OpenAsync();
+        await using (var create = new NpgsqlCommand($"CREATE SCHEMA {schema}", admin))
+            await create.ExecuteNonQueryAsync();
+        try
+        {
+            var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+                .UseNpgsql(builder.ConnectionString)
+                .Options;
+            var factory = new TestDbFactory(options);
+            await using (var seed = await factory.CreateDbContextAsync())
+            {
+                await seed.Database.MigrateAsync();
+                seed.BackupRuns.AddRange(
+                    new BackupRun
+                    {
+                        StartedAt = DateTimeOffset.UtcNow.AddHours(-3),
+                        FinishedAt = DateTimeOffset.UtcNow.AddHours(-2),
+                        Status = "completed"
+                    },
+                    new BackupRun
+                    {
+                        StartedAt = DateTimeOffset.UtcNow.AddHours(-1),
+                        FinishedAt = DateTimeOffset.UtcNow.AddMinutes(-50),
+                        Status = "failed",
+                        Error = BackupService.DeliveryPolicyErrorMarker + "too many parts"
+                    },
+                    new BackupRun
+                    {
+                        StartedAt = DateTimeOffset.UtcNow.AddMinutes(-30),
+                        FinishedAt = DateTimeOffset.UtcNow.AddMinutes(-20),
+                        Status = "failed",
+                        Error = "transient Telegram error"
+                    });
+                await seed.SaveChangesAsync();
+            }
+
+            var completed = await BackupWorker.ReadLastCompletedAtAsync(factory, CancellationToken.None);
+            var scheduleAnchor = await BackupWorker.ReadLastScheduleAnchorAtAsync(
+                factory, CancellationToken.None);
+            Assert.NotNull(completed);
+            Assert.NotNull(scheduleAnchor);
+            Assert.True(scheduleAnchor > completed);
+        }
+        finally
+        {
+            await using var drop = new NpgsqlCommand($"DROP SCHEMA IF EXISTS {schema} CASCADE", admin);
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
     public async Task FailureIsRecordedAndAbandonedRunIsRecovered()
     {
         var connectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");

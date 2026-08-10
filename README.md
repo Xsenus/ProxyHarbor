@@ -273,7 +273,7 @@ Restore сначала проверяет аутентификацию backup, m
 
 Telegram sender является sanitizing trust boundary: transport/custom-handler messages, inner exceptions и response descriptions не покидают его, поэтому URI с bot token, `chat_id` или multipart не могут попасть в `BackupRuns.Error`, application logs и следующий архив. Caller cancellation остаётся `OperationCanceledException`, а безопасный permanent rejection сохраняет числовой HTTP status.
 
-Если архив превышает Telegram-лимит, сервис отправляет не более 20 нумерованных частей. Предел проверяется до создания первого временного part; больший зашифрованный backup остаётся локально и получает failed delivery audit вместо многочасового upload storm. Сначала объедините части, затем расшифруйте:
+Если архив превышает Telegram-лимит, сервис отправляет не более 20 нумерованных частей. Предел проверяется до создания первого временного part; больший зашифрованный backup остаётся локально и получает failed delivery audit вместо многочасового upload storm. Этот permanent delivery-policy отказ не считается успешным и не скрывает stale/RPO alarms, но служит отдельным persisted cadence-якорем: после restart следующий многогигабайтный snapshot создаётся через штатный `Backup__IntervalHours`, а не каждые 15 минут. Сначала объедините части, затем расшифруйте:
 
 ```powershell
 ./tools/Join-BackupParts.ps1 -PartsPattern './proxyharbor.phbackup.part*' -OutputFile './proxyharbor.phbackup'

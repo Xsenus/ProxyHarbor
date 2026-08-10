@@ -24,6 +24,7 @@ public sealed class BackupService(
     private const string PublishedBackupSuffix = ".phbackup";
     private const string PublishedBackupTimestampFormat = "yyyyMMdd-HHmmss-ffff";
     internal const int MaximumTelegramParts = 20;
+    internal const string DeliveryPolicyErrorMarker = "[delivery-policy] ";
     private static readonly TimeSpan AuditWriteTimeout = TimeSpan.FromSeconds(15);
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private static readonly Action<ILogger, string, Exception?> BackupCreated =
@@ -170,7 +171,9 @@ public sealed class BackupService(
             using var timeout = new CancellationTokenSource(AuditWriteTimeout);
             var token = timeout.Token;
             await using var db = await dbFactory.CreateDbContextAsync(token);
-            var error = exception.ToString();
+            // Stable marker позволяет scheduler пережить restart без 15-минутного I/O storm,
+            // но status остаётся failed и не сдвигает RPO/успешные backup metrics.
+            var error = FormatAuditError(exception);
             var file = File.Exists(encryptedPath) ? new FileInfo(encryptedPath) : null;
             // Ошибка также принадлежит только активной попытке: чужой completed/failed
             // результат нельзя перезаписывать при обработке исключения финализации.
@@ -188,6 +191,15 @@ public sealed class BackupService(
             // Сбой вторичного аудита не должен скрывать исходную причину отказа backup.
             BackupAuditFailed(logger, auditException);
         }
+    }
+
+    /// <summary>Кодирует только operational policy как стабильный scheduler marker.</summary>
+    internal static string FormatAuditError(Exception exception)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+        return exception is BackupDeliveryPolicyException
+            ? DeliveryPolicyErrorMarker + exception.Message
+            : exception.ToString();
     }
 
     private static async Task WriteJsonAsync<T>(ZipArchive archive, string name, T value, CancellationToken token)
@@ -606,12 +618,15 @@ internal static class BackupFileSplitter
         ArgumentOutOfRangeException.ThrowIfLessThan(maximumParts, 1);
         var totalParts = length == 0 ? 1 : 1 + ((length - 1) / partLimit);
         if (totalParts > maximumParts)
-            throw new InvalidOperationException(
+            throw new BackupDeliveryPolicyException(
                 $"Backup требует {totalParts:N0} Telegram-частей при допустимом пределе {maximumParts:N0}; " +
                 "зашифрованный локальный файл сохранён для ручного получения.");
         return checked((int)totalParts);
     }
 }
+
+/// <summary>Постоянный operational отказ доставки, который не исправится быстрым retry.</summary>
+internal sealed class BackupDeliveryPolicyException(string message) : InvalidOperationException(message);
 
 /// <summary>Запускает резервное копирование по расписанию только при явном включении.</summary>
 public sealed class BackupWorker(
@@ -620,7 +635,7 @@ public sealed class BackupWorker(
     IOptions<BackupOptions> options,
     ILogger<BackupWorker> logger) : Microsoft.Extensions.Hosting.BackgroundService
 {
-    internal enum CycleOutcome { Succeeded, PeerOwned, Failed }
+    internal enum CycleOutcome { Succeeded, PeerOwned, Failed, DeliveryPolicyRejected }
     private static readonly TimeSpan FailureRetryDelay = TimeSpan.FromMinutes(15);
     private static readonly TimeSpan MaximumScheduleWaitChunk = TimeSpan.FromDays(1);
     private static readonly Action<ILogger, Exception?> BackupFailed =
@@ -628,6 +643,9 @@ public sealed class BackupWorker(
     private static readonly Action<ILogger, Exception?> BackupScheduleReadFailed =
         LoggerMessage.Define(LogLevel.Error, new EventId(1204, "BackupScheduleReadFailed"),
             "Не удалось восстановить расписание резервного копирования из PostgreSQL.");
+    private static readonly Action<ILogger, Exception?> BackupDeliveryPolicyRejected =
+        LoggerMessage.Define(LogLevel.Error, new EventId(1205, "BackupDeliveryPolicyRejected"),
+            "Локальный backup создан, но превышает bounded policy Telegram-доставки.");
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         if (!options.Value.Enabled) return;
@@ -644,6 +662,11 @@ public sealed class BackupWorker(
             {
                 // Другая реплика уже владеет cluster lock; не создаём retry-storm.
                 outcome = CycleOutcome.PeerOwned;
+            }
+            catch (BackupDeliveryPolicyException exception)
+            {
+                BackupDeliveryPolicyRejected(logger, exception);
+                outcome = CycleOutcome.DeliveryPolicyRejected;
             }
             catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
             {
@@ -664,8 +687,8 @@ public sealed class BackupWorker(
         {
             try
             {
-                var completedAt = await ReadLastCompletedAtAsync(dbFactory, token);
-                var delay = InitialDelay(options.Value.IntervalHours, completedAt, DateTimeOffset.UtcNow);
+                var scheduleAnchorAt = await ReadLastScheduleAnchorAtAsync(dbFactory, token);
+                var delay = InitialDelay(options.Value.IntervalHours, scheduleAnchorAt, DateTimeOffset.UtcNow);
                 if (delay == TimeSpan.Zero) return;
                 await Task.Delay(WaitChunk(delay), token);
             }
@@ -687,6 +710,23 @@ public sealed class BackupWorker(
         await using var db = await factory.CreateDbContextAsync(token);
         return await db.BackupRuns.AsNoTracking()
             .Where(run => run.Status == "completed" && run.FinishedAt != null)
+            .MaxAsync(run => (DateTimeOffset?)run.FinishedAt, token);
+    }
+
+    /// <summary>
+    /// Permanent delivery-policy rejection ограничивает cadence, но не считается успехом:
+    /// diagnostics, freshness alarms и RPO по-прежнему используют только completed.
+    /// </summary>
+    internal static async Task<DateTimeOffset?> ReadLastScheduleAnchorAtAsync(
+        IDbContextFactory<ProxyHarborDbContext> factory,
+        CancellationToken token)
+    {
+        await using var db = await factory.CreateDbContextAsync(token);
+        return await db.BackupRuns.AsNoTracking()
+            .Where(run => run.FinishedAt != null &&
+                (run.Status == "completed" ||
+                    (run.Status == "failed" && run.Error != null &&
+                        run.Error.StartsWith(BackupService.DeliveryPolicyErrorMarker))))
             .MaxAsync(run => (DateTimeOffset?)run.FinishedAt, token);
     }
 
@@ -721,6 +761,7 @@ public sealed class BackupWorker(
         return outcome switch
         {
             CycleOutcome.Succeeded => regularDelay,
+            CycleOutcome.DeliveryPolicyRejected => regularDelay,
             CycleOutcome.PeerOwned or CycleOutcome.Failed =>
                 regularDelay <= FailureRetryDelay ? regularDelay : FailureRetryDelay,
             _ => throw new ArgumentOutOfRangeException(nameof(outcome))

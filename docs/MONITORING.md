@@ -43,9 +43,9 @@ curl --fail http://127.0.0.1:9093/-/ready
 | `ProxyHarborValidationBacklogAtRisk` | ETA ещё не арендованной due-очереди 10 минут превышает окно публичной свежести | Проверить latency/timeout, файловые дескрипторы и CPU; после измерения увеличить concurrency либо добавить worker-replica |
 | `ProxyHarborStaleProxyRetention` | устаревшие неарендованные Pending/Dead остаются более 30 минут | Проверить успешность collection, PostgreSQL delete и cluster lock |
 | `ProxyHarborMaintenanceFailed` | ошибка hourly retention не перекрыта успехом 15 минут | Проверить maintenance log, PostgreSQL locks/permissions и свободное место |
-| `ProxyHarborBackupFailed` | последний/первый backup неуспешен | Проверить свободное место, ключ, DB snapshot и backup audit; worker автоматически повторит попытку через 15 минут |
+| `ProxyHarborBackupFailed` | последний/первый backup неуспешен | Проверить место, ключ, DB snapshot и audit; transient failure повторяется через 15 минут, oversized delivery-policy — через штатный interval |
 | `ProxyHarborBackupStale` | успех старше 1.5 интервалов | Запустить admin backup, затем проверить scheduler и cluster lock |
 | `ProxyHarborBackupHung` | backup активен более часа | Проверить размер БД/volume и Telegram delivery; не удалять partial во время работы |
-| `ProxyHarborTelegramDeliveryFailed` | настроенная доставка не подтверждена | Проверить Bot API, chat ID и размер: максимум 20 частей; локальный encrypted backup сохранить либо получить вне Telegram |
+| `ProxyHarborTelegramDeliveryFailed` | настроенная доставка не подтверждена | Проверить Bot API, chat ID и размер: максимум 20 частей; oversized PHB3 остаётся локально, failed alarm сохраняется, повтор идёт через штатный interval вместо 15 минут |
 
 Alert rules находятся в `deploy/prometheus/alerts.yml`, а `alerts.test.yml` фиксирует grace periods и guards. Telegram route и HTML-шаблон находятся в `deploy/alertmanager`. После изменения интервалов приложения правила используют опубликованные configuration metrics; фиксированные пороги длительных операций при необходимости меняйте осознанно и повторно запускайте `promtool test rules` и `amtool check-config`.

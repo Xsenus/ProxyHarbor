@@ -19,6 +19,12 @@ public sealed class BackupWorkerScheduleTests
         Assert.Equal(TimeSpan.FromMinutes(15), BackupWorker.NextDelay(24, BackupWorker.CycleOutcome.Failed));
 
     [Fact]
+    public void PermanentDeliveryPolicyFailureWaitsConfiguredInterval() =>
+        Assert.Equal(
+            TimeSpan.FromHours(24),
+            BackupWorker.NextDelay(24, BackupWorker.CycleOutcome.DeliveryPolicyRejected));
+
+    [Fact]
     public void ClusterLockOwnedByPeerRechecksPersistentAuditAfterBoundedCooldown() =>
         Assert.Equal(TimeSpan.FromMinutes(15), BackupWorker.NextDelay(24, BackupWorker.CycleOutcome.PeerOwned));
 
@@ -80,6 +86,42 @@ public sealed class BackupWorkerScheduleTests
             new TestDbFactory(options), CancellationToken.None);
 
         Assert.Equal(expected, completedAt);
+    }
+
+    [Fact]
+    public async Task PersistentScheduleUsesDeliveryPolicyFailureWithoutCallingItCompleted()
+    {
+        var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+            .UseInMemoryDatabase($"backup-worker-policy-{Guid.NewGuid():N}")
+            .Options;
+        var completedAt = Now.AddHours(-8);
+        var policyRejectedAt = Now.AddHours(-1);
+        await using (var seed = new ProxyHarborDbContext(options))
+        {
+            seed.BackupRuns.AddRange(
+                new BackupRun { StartedAt = Now.AddHours(-9), FinishedAt = completedAt, Status = "completed" },
+                new BackupRun
+                {
+                    StartedAt = Now.AddHours(-2),
+                    FinishedAt = policyRejectedAt,
+                    Status = "failed",
+                    Error = BackupService.DeliveryPolicyErrorMarker + "too many parts"
+                },
+                new BackupRun
+                {
+                    StartedAt = Now.AddMinutes(-30),
+                    FinishedAt = Now.AddMinutes(-20),
+                    Status = "failed",
+                    Error = "transient Telegram error"
+                });
+            await seed.SaveChangesAsync();
+        }
+        var factory = new TestDbFactory(options);
+
+        Assert.Equal(completedAt, await BackupWorker.ReadLastCompletedAtAsync(
+            factory, CancellationToken.None));
+        Assert.Equal(policyRejectedAt, await BackupWorker.ReadLastScheduleAnchorAtAsync(
+            factory, CancellationToken.None));
     }
 
     private sealed class TestDbFactory(DbContextOptions<ProxyHarborDbContext> options)
