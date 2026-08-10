@@ -1,4 +1,5 @@
 using System.Net;
+using ProxyHarbor.Infrastructure;
 
 namespace ProxyHarbor.Api;
 
@@ -35,20 +36,14 @@ internal static class ProductionHostPolicy
         if (host[0] == '[' && host[^1] == ']')
             return !wildcard && IPAddress.TryParse(host[1..^1], out var address) &&
                 address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6 &&
-                !address.Equals(IPAddress.IPv6Any);
+                !address.Equals(IPAddress.IPv6Any) &&
+                string.Equals(address.ToString(), host[1..^1], StringComparison.OrdinalIgnoreCase);
 
         if (IPAddress.TryParse(host, out var literal))
             return !wildcard && literal.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork &&
-                !literal.Equals(IPAddress.Any);
+                !literal.Equals(IPAddress.Any) &&
+                string.Equals(literal.ToString(), host, StringComparison.Ordinal);
 
-        return IsValidDnsName(host);
-    }
-
-    private static bool IsValidDnsName(string host)
-    {
-        var labels = host.Split('.', StringSplitOptions.None);
-        return labels.All(label => label is { Length: >= 1 and <= 63 } &&
-            label[0] != '-' && label[^1] != '-' &&
-            label.All(character => character is >= 'a' and <= 'z' or >= 'A' and <= 'Z' or >= '0' and <= '9' or '-'));
+        return NetworkSafety.IsCanonicalDnsName(host);
     }
 }

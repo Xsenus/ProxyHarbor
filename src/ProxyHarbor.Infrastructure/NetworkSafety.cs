@@ -8,6 +8,22 @@ namespace ProxyHarbor.Infrastructure;
 public static class NetworkSafety
 {
     /// <summary>
+    /// Проверяет canonical ASCII DNS hostname по wire-ограничениям labels.
+    /// Underscore, пустые labels, terminal dot и дефис по краям не являются host name.
+    /// </summary>
+    public static bool IsCanonicalDnsName(string? host)
+    {
+        if (host is not { Length: >= 1 and <= 253 } || host.Any(character => character > 127) ||
+            host.All(character => character is >= '0' and <= '9' or '.'))
+            return false;
+
+        var labels = host.Split('.', StringSplitOptions.None);
+        return labels.All(label => label is { Length: >= 1 and <= 63 } &&
+            label[0] != '-' && label[^1] != '-' &&
+            label.All(character => character is >= 'a' and <= 'z' or >= 'A' and <= 'Z' or >= '0' and <= '9' or '-'));
+    }
+
+    /// <summary>
     /// Non-throwing синтаксический gate, общий для model validation, normalization и DNS-проверки.
     /// Public-маршрутизируемость адресов отдельно подтверждается непосредственно перед connect.
     /// </summary>

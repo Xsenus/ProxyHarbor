@@ -33,6 +33,13 @@ public sealed class OriginIpProviderTests
     [Theory]
     [InlineData("")]
     [InlineData("probe host.example")]
+    [InlineData("probe_host.example")]
+    [InlineData("-probe.example")]
+    [InlineData("probe-.example")]
+    [InlineData("probe..example")]
+    [InlineData("probe.example.")]
+    [InlineData("8.8.8.008")]
+    [InlineData("2001:4860:4860:0:0:0:0:8888")]
     [InlineData("tést.example")]
     [InlineData("probe.example%25")]
     public void InfrastructureOptionsRejectNonCanonicalControlHost(string host)

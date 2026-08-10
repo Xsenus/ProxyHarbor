@@ -28,8 +28,11 @@ public sealed class ProductionHostPolicyTests
     [InlineData("tést.example.com")]
     [InlineData("*.127.0.0.1")]
     [InlineData("0.0.0.0")]
+    [InlineData("127.1")]
+    [InlineData("8.8.8.008")]
     [InlineData("[::]")]
     [InlineData("::1")]
+    [InlineData("[2001:0db8::1]")]
     public void RejectsAllowAllOrAmbiguousHostPatterns(string? value) =>
         Assert.False(ProductionHostPolicy.IsValid(value));
 

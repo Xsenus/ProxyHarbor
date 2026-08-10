@@ -31,10 +31,18 @@ public sealed class CollectorOptions
     public string ProbePath { get; set; } = "/?format=json";
 
     /// <summary>Control host передаётся URI, TLS SNI и сырому HTTP Host одинаковыми ASCII bytes.</summary>
-    public static bool IsProbeHostValid(string? host) =>
-        host is { Length: >= 1 and <= 253 } &&
-        host.All(character => character is >= '!' and <= '~' and not '%') &&
-        Uri.CheckHostName(host) != UriHostNameType.Unknown;
+    public static bool IsProbeHostValid(string? host)
+    {
+        if (host is not { Length: >= 1 and <= 253 } ||
+            host.Any(character => character is < '!' or > '~' or '%'))
+            return false;
+
+        if (System.Net.IPAddress.TryParse(host, out var address))
+            return !address.IsIPv4MappedToIPv6 &&
+                string.Equals(address.ToString(), host, StringComparison.OrdinalIgnoreCase);
+
+        return NetworkSafety.IsCanonicalDnsName(host);
+    }
 
     /// <summary>Требует уже канонический ASCII origin-form, одинаковый для direct и proxy request.</summary>
     public static bool IsProbePathValid(string? path)
