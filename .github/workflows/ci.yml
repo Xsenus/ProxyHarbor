@@ -601,6 +601,18 @@ jobs:
           if grep --ignore-case '^Access-Control-Allow-Origin:' "$security_headers"; then exit 1; fi
           rm "$security_headers"
           curl --fail --silent http://127.0.0.1:5080/api/v1/stats
+          openapi=$(curl --fail --silent http://127.0.0.1:5080/openapi/v1.json)
+          echo "$openapi" | jq --exit-status '
+            .components.securitySchemes.AdminApiKey.type == "apiKey" and
+            .components.securitySchemes.AdminApiKey.name == "X-Admin-Key" and
+            .paths["/api/v1/admin/sources"].post.security[0].AdminApiKey == [] and
+            (.paths["/api/v1/admin/sources"].post.responses | keys | sort) == ["201", "400", "401", "409"] and
+            (.paths["/api/v1/admin/sources/{id}"].put.responses | keys | sort) == ["204", "400", "401", "404", "409"] and
+            (.paths["/api/v1/admin/sources/{id}"].delete.responses | keys | sort) == ["204", "401", "404", "409"] and
+            .paths["/api/v1/admin/sources"].post.responses["409"].content["application/json"].schema["$ref"] ==
+              "#/components/schemas/ProblemDetails" and
+            .paths["/api/v1/admin/collect"].post.responses["409"].content["application/json"].schema["$ref"] ==
+              "#/components/schemas/ProblemDetails"'
           metrics=$(curl --fail --silent http://127.0.0.1:5080/metrics)
           echo "$metrics" | grep 'proxyharbor_sources_enabled 81'
           echo "$metrics" | grep 'proxyharbor_source_catalog_complete 1'
