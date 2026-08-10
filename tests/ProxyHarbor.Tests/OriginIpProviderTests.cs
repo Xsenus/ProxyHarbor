@@ -59,6 +59,28 @@ public sealed class OriginIpProviderTests
     }
 
     [Fact]
+    public async Task ConcurrentProbeReadersObserveOneCoherentCachedSnapshot()
+    {
+        var handler = new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("{\"ip\":\"8.8.8.8\"}")
+        });
+        using var factory = new StubHttpClientFactory(handler);
+        using var provider = new OriginIpProvider(
+            factory,
+            Options.Create(new CollectorOptions()),
+            new ProbeControlHealth());
+
+        var readers = Enumerable.Range(0, 2_000)
+            .Select(_ => Task.Run(() => provider.GetRequiredAsync(CancellationToken.None)))
+            .ToArray();
+        var values = await Task.WhenAll(readers);
+
+        Assert.All(values, value => Assert.Equal("8.8.8.8", value));
+        Assert.Equal(1, handler.RequestCount);
+    }
+
+    [Fact]
     public async Task UnavailableEndpointFailsClosedAndCachesShortFailure()
     {
         var handler = new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));

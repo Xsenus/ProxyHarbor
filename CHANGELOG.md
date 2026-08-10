@@ -7,6 +7,7 @@
 
 ### Changed
 
+- Origin IP cache теперь атомарно публикует immutable value+expiry snapshot для lock-free fast path при сотнях параллельных proxy probes.
 - JSON/XML/TXT/CSV exports теперь гарантированно привязывают каждую запись и финальный writer flush к request cancellation, поэтому оборванный медленный клиент сразу освобождает ограниченный export slot.
 - Legacy export fail-fast отклоняет OFFSET свыше 5 млн, а seek вычисляет hasMore и следующий cursor одним index-only boundary-запросом вместо двух.
 - Исходящие source, origin и Telegram HTTP-клиенты принудительно работают без системного proxy, поэтому DNS-rebinding connect-gate нельзя обойти переносом разрешения target на посредника.

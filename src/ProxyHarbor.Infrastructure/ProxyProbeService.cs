@@ -96,18 +96,21 @@ public sealed class OriginIpProvider(
 {
     private const int MaxDirectResponseBytes = 16 * 1024;
     private readonly SemaphoreSlim _gate = new(1, 1);
-    private string? _value;
-    private DateTimeOffset _expiresAt;
+    // Immutable reference публикует value+expiry одним атомарным snapshot. Отдельные
+    // поля оставляли бы 16-байтовый DateTimeOffset под torn read у сотен probe-задач.
+    private CacheEntry _cache = CacheEntry.Empty;
 
     public async Task<string> GetRequiredAsync(CancellationToken token)
     {
-        if (_expiresAt > DateTimeOffset.UtcNow)
-            return _value ?? throw new ProbeControlUnavailableException();
+        var snapshot = Volatile.Read(ref _cache);
+        if (snapshot.ExpiresAt > DateTimeOffset.UtcNow)
+            return snapshot.Value ?? throw new ProbeControlUnavailableException();
         await _gate.WaitAsync(token);
         try
         {
-            if (_expiresAt > DateTimeOffset.UtcNow)
-                return _value ?? throw new ProbeControlUnavailableException();
+            snapshot = Volatile.Read(ref _cache);
+            if (snapshot.ExpiresAt > DateTimeOffset.UtcNow)
+                return snapshot.Value ?? throw new ProbeControlUnavailableException();
             try
             {
                 var settings = options.Value;
@@ -126,11 +129,14 @@ public sealed class OriginIpProvider(
                 var value = document.RootElement.TryGetProperty("ip", out var ipElement)
                     ? ipElement.GetString()
                     : null;
-                _value = IPAddress.TryParse(value, out var address) && NetworkSafety.IsPublicAddress(address)
+                var publicValue = IPAddress.TryParse(value, out var address) && NetworkSafety.IsPublicAddress(address)
                     ? address.ToString()
                     : null;
-                _expiresAt = DateTimeOffset.UtcNow.AddSeconds(_value is null ? 15 : 60);
-                health.Record(_value is not null);
+                snapshot = new CacheEntry(
+                    publicValue,
+                    DateTimeOffset.UtcNow.AddSeconds(publicValue is null ? 15 : 60));
+                Volatile.Write(ref _cache, snapshot);
+                health.Record(publicValue is not null);
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested)
             {
@@ -140,11 +146,11 @@ public sealed class OriginIpProvider(
             }
             catch (Exception ex) when (ex is HttpRequestException or IOException or InvalidDataException or JsonException or TaskCanceledException)
             {
-                _value = null;
-                _expiresAt = DateTimeOffset.UtcNow.AddSeconds(15);
+                snapshot = new CacheEntry(null, DateTimeOffset.UtcNow.AddSeconds(15));
+                Volatile.Write(ref _cache, snapshot);
                 health.Record(available: false);
             }
-            return _value ?? throw new ProbeControlUnavailableException();
+            return snapshot.Value ?? throw new ProbeControlUnavailableException();
         }
         finally { _gate.Release(); }
     }
@@ -169,6 +175,11 @@ public sealed class OriginIpProvider(
     }
 
     public void Dispose() => _gate.Dispose();
+
+    private sealed record CacheEntry(string? Value, DateTimeOffset ExpiresAt)
+    {
+        internal static CacheEntry Empty { get; } = new(null, DateTimeOffset.MinValue);
+    }
 }
 
 /// <summary>Control endpoint недоступен напрямую, поэтому пакет нельзя объективно проверять.</summary>
