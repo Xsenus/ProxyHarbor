@@ -58,11 +58,21 @@ public static partial class ProxyParser
 
         foreach (Match match in EndpointRegex().Matches(content))
         {
+            // Regex ищет кандидата внутри свободного текста, поэтому границы проверяются
+            // отдельно без unsupported lookaround в NonBacktracking engine. Иначе хвост
+            // пятиоктетного IPv4 или первые пять цифр шестизначного порта становились
+            // самостоятельным ложным endpoint.
+            if (!HasTokenBoundaries(content, match.Index, match.Length)) continue;
             var host = match.Groups["host"].ValueSpan;
             if (host.Length >= 2 && host[0] == '[' && host[^1] == ']') host = host[1..^1];
             var portText = match.Groups["port"].ValueSpan;
             if (!int.TryParse(portText, out var port) || port is < 1 or > 65535)
                 continue;
+
+            // IPAddress.TryParse исторически понимает ведущий ноль IPv4 как octal:
+            // 010.0.0.1 превращается в 8.0.0.1. Feed обязан содержать однозначные
+            // canonical decimal octets, чтобы parser не менял фактический destination.
+            if (host.IndexOf('.') >= 0 && !HasCanonicalIpv4Octets(host)) continue;
 
             // Regex даже не выделяет доменные endpoints: их исключение блокирует DNS rebinding.
             if (!IPAddress.TryParse(host, out var ip) || !NetworkSafety.IsPublicAddress(ip)) continue;
@@ -84,6 +94,29 @@ public static partial class ProxyParser
         }
 
         return new ProxyParseSummary(unique.Count, Truncated: false);
+    }
+
+    private static bool HasTokenBoundaries(string content, int index, int length) =>
+        (index == 0 || !IsEmbeddedTokenCharacter(content[index - 1])) &&
+        (index + length == content.Length || !IsEmbeddedTokenCharacter(content[index + length]));
+
+    /// <summary>Отделители URL/JSON/CSV допустимы, части hostname/числа/идентификатора — нет.</summary>
+    private static bool IsEmbeddedTokenCharacter(char value) =>
+        char.IsAsciiLetterOrDigit(value) || value is '.' or ':' or '_' or '-' or '@';
+
+    /// <summary>Проверяет отсутствие octal-leading-zero без строковых аллокаций.</summary>
+    private static bool HasCanonicalIpv4Octets(ReadOnlySpan<char> host)
+    {
+        var segmentStart = 0;
+        while (segmentStart < host.Length)
+        {
+            var relativeDot = host[segmentStart..].IndexOf('.');
+            var segmentEnd = relativeDot < 0 ? host.Length : segmentStart + relativeDot;
+            if (segmentEnd - segmentStart > 1 && host[segmentStart] == '0') return false;
+            if (relativeDot < 0) return true;
+            segmentStart = segmentEnd + 1;
+        }
+        return false;
     }
 
     private static ProxyProtocol ParseProtocolBefore(ReadOnlySpan<char> prefix, ProxyProtocol fallback) =>

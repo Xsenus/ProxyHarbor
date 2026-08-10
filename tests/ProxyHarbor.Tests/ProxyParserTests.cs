@@ -162,6 +162,39 @@ public sealed class ProxyParserTests
         Assert.Equal(("8.8.8.8", 80, ProxyProtocol.Http), result.Single());
     }
 
+    [Theory]
+    [InlineData("010.0.0.1:80")]
+    [InlineData("001.1.1.1:80")]
+    [InlineData("x8.8.8.8:80")]
+    [InlineData("edge-8.8.8.8:80")]
+    [InlineData("9.8.8.8.8:80")]
+    [InlineData("::ffff:8.8.8.8:80")]
+    [InlineData("8.8.8.8:123456")]
+    [InlineData("8.8.8.8:80ms")]
+    [InlineData("8.8.8.8:80.5")]
+    public void ParseRejectsAmbiguousOrEmbeddedEndpointTokens(string content)
+    {
+        var result = ProxyParser.Parse(content, ProxyProtocol.Http);
+
+        Assert.Empty(result);
+    }
+
+    [Fact]
+    public void ParseAcceptsCanonicalEndpointsWithCommonFeedDelimiters()
+    {
+        const string content = "http://8.8.8.8:80/path\n\"1.1.1.1:81\",country\nproxy=9.9.9.9:82|US";
+
+        var result = ProxyParser.Parse(content, ProxyProtocol.Socks5);
+
+        Assert.Equal(
+            [
+                ("8.8.8.8", 80, ProxyProtocol.Http),
+                ("1.1.1.1", 81, ProxyProtocol.Socks5),
+                ("9.9.9.9", 82, ProxyProtocol.Socks5)
+            ],
+            result);
+    }
+
     [Fact]
     public void ParseHandlesNoiseWithoutThrowing()
     {

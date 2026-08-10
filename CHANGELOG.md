@@ -100,6 +100,7 @@
 
 ### Fixed
 
+- Proxy parser теперь требует строгие token boundaries и canonical decimal IPv4: хвост пятиоктетного адреса, первые пять цифр шестизначного порта, endpoint внутри hostname/идентификатора и octal-leading-zero вроде `010.0.0.1 → 8.0.0.1` больше не загрязняют validation queue. Проверка остаётся allocation-free; adversarial unit-canary и полный production parse 81/81 feed от 50 провайдеров подтвердили 890 996 записей и 291 705 уникальных кандидатов без ошибок/усечения за 5,897 секунды.
 - Collector, validator и operational-maintenance теперь используют общий non-throwing logging boundary: отказ provider не превращает единичный сломанный feed в failed collection, не срывает deferred proxy result/lease heartbeat/cleanup и не завершает background worker после успешного цикла. PostgreSQL-canary подтверждает честный `completed` run с одним failed source, а heartbeat-canary продолжает renewal после одновременного сбоя БД и error observer.
 - Все BackupService/BackupWorker log-вызовы изолированы non-throwing boundary: неисправный logging provider больше не заменяет первичный отказ БД/шифрования/Telegram, не превращает завершённый PHB3 с `completed` audit в ошибку API и не останавливает будущие scheduler-циклы; PostgreSQL-canary воспроизводит успешный backup при logger, бросающем на каждой записи.
 - Потоковый PostgreSQL export теперь использует отдельный non-retrying DbContext: `RepeatableRead` сохраняет единый snapshot для continuation headers и body, а EF retry не может повторить транзакцию после частичной отправки HTTP-ответа.
