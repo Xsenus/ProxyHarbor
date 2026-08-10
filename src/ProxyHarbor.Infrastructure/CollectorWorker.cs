@@ -7,19 +7,55 @@ namespace ProxyHarbor.Infrastructure;
 /// <summary>Запускает сбор по расписанию; сбой одного цикла не останавливает сервис.</summary>
 public sealed class CollectorWorker(ProxyCollector collector, IOptions<CollectorOptions> options, ILogger<CollectorWorker> logger) : BackgroundService
 {
+    internal enum CycleOutcome { Succeeded, PeerOwned, Failed }
+    private static readonly TimeSpan FailureRetryDelay = TimeSpan.FromMinutes(1);
+    private static readonly TimeSpan OverrunCooldown = TimeSpan.FromSeconds(30);
     private static readonly Action<ILogger, Exception?> CollectionFailed =
         LoggerMessage.Define(LogLevel.Error, new EventId(1101, "CollectionFailed"), "Цикл сбора завершился ошибкой.");
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         if (!options.Value.BackgroundWorkersEnabled) return;
         await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
-        using var timer = new PeriodicTimer(TimeSpan.FromMinutes(Math.Max(1, options.Value.CollectionIntervalMinutes)));
-        do
+        while (!stoppingToken.IsCancellationRequested)
         {
-            try { await collector.CollectAsync(stoppingToken); }
-            catch (OperationAlreadyRunningException) { }
-            catch (Exception ex) when (!stoppingToken.IsCancellationRequested) { CollectionFailed(logger, ex); }
-        } while (await timer.WaitForNextTickAsync(stoppingToken));
+            var startedAt = TimeProvider.System.GetTimestamp();
+            var outcome = CycleOutcome.Failed;
+            try
+            {
+                await collector.CollectAsync(stoppingToken);
+                outcome = CycleOutcome.Succeeded;
+            }
+            catch (OperationAlreadyRunningException)
+            {
+                // Другая реплика либо ручной запуск уже выполняет полный цикл.
+                // Полный интервал не позволяет нескольким репликам создать lock storm.
+                outcome = CycleOutcome.PeerOwned;
+            }
+            catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
+            {
+                CollectionFailed(logger, ex);
+            }
+
+            var elapsed = TimeProvider.System.GetElapsedTime(startedAt);
+            await Task.Delay(NextDelay(options.Value.CollectionIntervalMinutes, outcome, elapsed), stoppingToken);
+        }
+    }
+
+    /// <summary>
+    /// Сохраняет заданный start-to-start cadence для штатного быстрого цикла, но
+    /// не допускает немедленного повторного запуска после overrun или общего сбоя.
+    /// </summary>
+    internal static TimeSpan NextDelay(int intervalMinutes, CycleOutcome outcome, TimeSpan elapsed)
+    {
+        var regularDelay = TimeSpan.FromMinutes(Math.Max(1, intervalMinutes));
+        return outcome switch
+        {
+            CycleOutcome.Succeeded when elapsed < regularDelay => regularDelay - elapsed,
+            CycleOutcome.Succeeded => OverrunCooldown,
+            CycleOutcome.PeerOwned => regularDelay,
+            CycleOutcome.Failed => regularDelay <= FailureRetryDelay ? regularDelay : FailureRetryDelay,
+            _ => throw new ArgumentOutOfRangeException(nameof(outcome))
+        };
     }
 }
 
