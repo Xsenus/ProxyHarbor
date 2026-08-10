@@ -158,6 +158,69 @@ public sealed class BackupAuditIntegrationTests
         }
     }
 
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
+    public async Task ChangedAuditOwnershipRejectsOtherwiseSuccessfulTelegramBackup()
+    {
+        var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
+        if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
+
+        var schema = $"proxyharbor_backup_ownership_{Guid.NewGuid():N}";
+        var backupDirectory = Path.Combine(Path.GetTempPath(), $"proxyharbor-ownership-{Guid.NewGuid():N}");
+        var builder = new NpgsqlConnectionStringBuilder(baseConnectionString) { SearchPath = schema };
+        await using var admin = new NpgsqlConnection(baseConnectionString);
+        await admin.OpenAsync();
+        await using (var create = new NpgsqlCommand($"CREATE SCHEMA {schema}", admin))
+            await create.ExecuteNonQueryAsync();
+
+        try
+        {
+            var dbOptions = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+                .UseNpgsql(builder.ConnectionString)
+                .Options;
+            var factory = new TestDbFactory(dbOptions);
+            await using (var migrationDb = await factory.CreateDbContextAsync())
+                await migrationDb.Database.MigrateAsync();
+
+            Directory.CreateDirectory(backupDirectory);
+            using var clients = new ChangingAuditTelegramClientFactory(factory);
+            using var service = new BackupService(
+                factory,
+                clients,
+                Options.Create(new BackupOptions
+                {
+                    Directory = backupDirectory,
+                    EncryptionKey = EncryptionKey,
+                    TelegramBotToken = "test-token",
+                    TelegramChatId = "123456"
+                }),
+                Options.Create(new CollectorOptions()),
+                new ConfigurationBuilder().Build(),
+                NullLogger<BackupService>.Instance);
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+                () => service.CreateAndSendAsync(CancellationToken.None));
+
+            Assert.Contains("ownership", exception.Message, StringComparison.OrdinalIgnoreCase);
+            var publishedBackup = Assert.Single(Directory.EnumerateFiles(backupDirectory, "*.phbackup"));
+            Assert.True(new FileInfo(publishedBackup).Length > 0);
+
+            await using var verify = await factory.CreateDbContextAsync();
+            var parallelResult = await verify.BackupRuns.AsNoTracking().SingleAsync();
+            Assert.Equal("failed", parallelResult.Status);
+            Assert.Equal("parallel failure", parallelResult.Error);
+            Assert.Null(parallelResult.FileName);
+            Assert.Equal(0, parallelResult.SizeBytes);
+            Assert.False(parallelResult.SentToTelegram);
+        }
+        finally
+        {
+            if (Directory.Exists(backupDirectory)) Directory.Delete(backupDirectory, recursive: true);
+            await using var drop = new NpgsqlCommand($"DROP SCHEMA IF EXISTS {schema} CASCADE", admin);
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
+
     private sealed class TestDbFactory(DbContextOptions<ProxyHarborDbContext> options)
         : IDbContextFactory<ProxyHarborDbContext>
     {
@@ -194,5 +257,45 @@ public sealed class BackupAuditIntegrationTests
                 Content = new StringContent(
                     "{\"ok\":false,\"error_code\":400,\"description\":\"delivery rejected\"}")
             });
+    }
+
+    /// <summary>
+    /// Имитирует успешный Telegram, но завершает audit-строку с ошибкой во время внешней
+    /// доставки, чтобы воспроизвести потерю ownership перед переходом в completed.
+    /// </summary>
+    private sealed class ChangingAuditTelegramClientFactory(
+        IDbContextFactory<ProxyHarborDbContext> dbFactory) : IHttpClientFactory, IDisposable
+    {
+        private readonly HttpClient _client = new(new ChangingAuditTelegramHandler(dbFactory));
+
+        public HttpClient CreateClient(string name)
+        {
+            Assert.Equal("telegram", name);
+            return _client;
+        }
+
+        public void Dispose() => _client.Dispose();
+    }
+
+    private sealed class ChangingAuditTelegramHandler(
+        IDbContextFactory<ProxyHarborDbContext> dbFactory) : HttpMessageHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+            await db.BackupRuns
+                .Where(x => x.Status == "running")
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(x => x.Status, "failed")
+                    .SetProperty(x => x.FinishedAt, DateTimeOffset.UtcNow)
+                    .SetProperty(x => x.Error, "parallel failure"), cancellationToken);
+
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{\"ok\":true}")
+            };
+        }
     }
 }

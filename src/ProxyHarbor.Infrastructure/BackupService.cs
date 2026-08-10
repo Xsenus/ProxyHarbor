@@ -127,13 +127,21 @@ public sealed class BackupService(
         await using var db = await dbFactory.CreateDbContextAsync(token);
         var finishedAt = DateTimeOffset.UtcNow;
         var file = new FileInfo(path);
-        await db.BackupRuns.Where(x => x.Id == id).ExecuteUpdateAsync(setters => setters
+        // Завершить можно только собственную незавершённую попытку. Проверка числа строк
+        // не позволяет сообщить об успехе, если audit-запись удалили или изменили параллельно.
+        var updated = await db.BackupRuns
+            .Where(x => x.Id == id && x.Status == "running")
+            .ExecuteUpdateAsync(setters => setters
             .SetProperty(x => x.FinishedAt, finishedAt)
             .SetProperty(x => x.Status, "completed")
             .SetProperty(x => x.FileName, file.Name)
             .SetProperty(x => x.SizeBytes, file.Length)
             .SetProperty(x => x.SentToTelegram, sentToTelegram)
             .SetProperty(x => x.Error, (string?)null), token);
+
+        if (updated != 1)
+            throw new InvalidOperationException(
+                "Backup-аудит потерял ownership своей running-строки.");
 
         var cutoff = finishedAt.AddDays(-historyRetentionDays);
         await db.BackupRuns.Where(x => x.StartedAt < cutoff).ExecuteDeleteAsync(token);
@@ -148,7 +156,11 @@ public sealed class BackupService(
             await using var db = await dbFactory.CreateDbContextAsync(token);
             var error = exception.ToString();
             var file = File.Exists(encryptedPath) ? new FileInfo(encryptedPath) : null;
-            await db.BackupRuns.Where(x => x.Id == id).ExecuteUpdateAsync(setters => setters
+            // Ошибка также принадлежит только активной попытке: чужой completed/failed
+            // результат нельзя перезаписывать при обработке исключения финализации.
+            await db.BackupRuns
+                .Where(x => x.Id == id && x.Status == "running")
+                .ExecuteUpdateAsync(setters => setters
                 .SetProperty(x => x.FinishedAt, DateTimeOffset.UtcNow)
                 .SetProperty(x => x.Status, "failed")
                 .SetProperty(x => x.FileName, file == null ? null : file.Name)

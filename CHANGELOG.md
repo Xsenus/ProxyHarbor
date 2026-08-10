@@ -55,6 +55,7 @@
 
 ### Fixed
 
+- Финализация backup теперь атомарно переводит ровно свою audit-строку из `running` в `completed` и проверяет affected-row count: удалённая или параллельно изменённая запись приводит к fail-closed ошибке даже после успешной публикации и Telegram-доставки, а error-path не перезаписывает чужой `completed`/`failed`; PostgreSQL-регрессия воспроизводит потерю ownership во время внешнего вызова.
 - Публичный `/health/ready`, который обращается к PostgreSQL и не кэширует отрицательные ответы, теперь использует общую per-IP public rate policy; `/health/live` остаётся независимым дешёвым liveness-сигналом, а container smoke доказывает bounded 429 JSON с `Retry-After` после исчерпания readiness budget.
 - Cross-field validation интервалов collector больше не создаёт `TimeSpan` из ещё не проверенных значений: экстремальные `DeadRetryMaxHours`, `SourceFailureBackoffMaxHours` и `DeadRetentionDays` теперь детерминированно дают `OptionsValidationException` с полным списком ошибок вместо необработанного arithmetic exception на startup.
 - `Collector__ProbeHost` теперь использует общий строгий DNS-label parser вместо широкой `Uri.CheckHostName`: underscore, terminal dot, пустые labels, дефис по краям, неоднозначный dotted numeric host и ненормализованные IP literals fail-fast отклоняются до запуска validation workers; production `AllowedHosts` повторно использует тот же DNS-контракт и требует canonical IP literals.
