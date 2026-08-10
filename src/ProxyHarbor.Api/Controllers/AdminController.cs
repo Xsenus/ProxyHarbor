@@ -157,6 +157,7 @@ public sealed class AdminController(
         await using var db = await dbFactory.CreateDbContextAsync(token);
         var now = DateTimeOffset.UtcNow;
         var validationWindowStart = now.AddMinutes(-5);
+        var unseenRetentionCutoff = now.AddDays(-Math.Max(1, collectorOptions.Value.DeadRetentionDays));
         var databaseBytes = await db.Database.SqlQueryRaw<long>("SELECT pg_database_size(current_database()) AS \"Value\"")
             .SingleAsync(token);
         var queue = await db.Proxies.AsNoTracking().GroupBy(_ => 1).Select(x => new
@@ -169,6 +170,10 @@ public sealed class AdminController(
                 (proxy.CheckLeaseUntil == null || proxy.CheckLeaseUntil < now)),
             scheduled = x.Count(proxy => proxy.NextCheckAt > now),
             repeatedlyFailing = x.Count(proxy => proxy.ConsecutiveFailedChecks >= 3),
+            staleUnseen = x.Count(proxy =>
+                (proxy.Status == ProxyStatus.Pending || proxy.Status == ProxyStatus.Dead) &&
+                proxy.LastSeenAt < unseenRetentionCutoff &&
+                (proxy.CheckLeaseUntil == null || proxy.CheckLeaseUntil < now)),
             lastAttemptAt = x.Max(proxy => proxy.LastValidationAttemptAt)
         }).SingleOrDefaultAsync(token);
         var validationRuns = await db.ValidationRuns.AsNoTracking()
@@ -184,6 +189,7 @@ public sealed class AdminController(
             queue.due,
             queue.scheduled,
             queue.repeatedlyFailing,
+            queue.staleUnseen,
             validationTelemetry.Attempts,
             validationTelemetry.Checked,
             validationTelemetry.Alive,
@@ -273,6 +279,7 @@ public sealed record ValidationQueueResponse(
     int Due,
     int Scheduled,
     int RepeatedlyFailing,
+    int StaleUnseen,
     int AttemptsLastFiveMinutes,
     int CheckedLastFiveMinutes,
     int AliveLastFiveMinutes,

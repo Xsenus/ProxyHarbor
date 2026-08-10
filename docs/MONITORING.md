@@ -33,6 +33,7 @@ curl --fail http://127.0.0.1:9093/-/ready
 | `ProxyHarborValidationStalled` | due queue есть, попыток нет 15 минут | Проверить worker logs, leases, лимит файлов и PostgreSQL |
 | `ProxyHarborValidationFailures` | failed batches за последние 5 минут | Проверить первую исходную ошибку в validation audit и доступность БД |
 | `ProxyHarborValidationBacklogAtRisk` | ETA ещё не арендованной due-очереди 10 минут превышает окно публичной свежести | Проверить latency/timeout, файловые дескрипторы и CPU; после измерения увеличить concurrency либо добавить worker-replica |
+| `ProxyHarborStaleProxyRetention` | устаревшие неарендованные Pending/Dead остаются более 30 минут | Проверить успешность collection, PostgreSQL delete и cluster lock |
 | `ProxyHarborBackupFailed` | последний/первый backup неуспешен | Проверить свободное место, ключ, DB snapshot и backup audit; worker автоматически повторит попытку через 15 минут |
 | `ProxyHarborBackupStale` | успех старше 1.5 интервалов | Запустить admin backup, затем проверить scheduler и cluster lock |
 | `ProxyHarborBackupHung` | backup активен более часа | Проверить размер БД/volume и Telegram delivery; не удалять partial во время работы |

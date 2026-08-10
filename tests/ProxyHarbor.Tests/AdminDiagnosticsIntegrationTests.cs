@@ -40,7 +40,13 @@ public sealed class AdminDiagnosticsIntegrationTests
                 await seed.Database.MigrateAsync();
                 var now = DateTimeOffset.UtcNow;
                 seed.Proxies.AddRange(
-                    new ProxyEndpoint { Host = "1.1.1.1", Port = 8080 },
+                    new ProxyEndpoint
+                    {
+                        Host = "1.1.1.1",
+                        Port = 8080,
+                        FirstSeenAt = now.AddDays(-5),
+                        LastSeenAt = now.AddDays(-4)
+                    },
                     new ProxyEndpoint
                     {
                         Host = "8.8.8.8",
@@ -101,6 +107,7 @@ public sealed class AdminDiagnosticsIntegrationTests
             Assert.Equal(1, queue.GetProperty("due").GetInt32());
             Assert.Equal(1, queue.GetProperty("leased").GetInt32());
             Assert.Equal(1, queue.GetProperty("scheduled").GetInt32());
+            Assert.Equal(1, queue.GetProperty("staleUnseen").GetInt32());
             Assert.Equal(10, queue.GetProperty("attemptsLastFiveMinutes").GetInt32());
             Assert.Equal(1, queue.GetProperty("estimatedDrainSeconds").GetInt64());
             Assert.Equal(10, queue.GetProperty("concurrencyLimit").GetInt32());

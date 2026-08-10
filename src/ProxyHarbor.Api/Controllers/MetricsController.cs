@@ -26,6 +26,7 @@ public sealed class MetricsController(
         await using var db = await dbFactory.CreateDbContextAsync(token);
         var now = DateTimeOffset.UtcNow;
         var freshAfter = now.AddMinutes(-collectorOptions.Value.PublicFreshnessMinutes);
+        var unseenRetentionCutoff = now.AddDays(-Math.Max(1, collectorOptions.Value.DeadRetentionDays));
         var validationWindowStart = now.AddMinutes(-5);
         var sourceFreshAfter = now.Subtract(
             SourceCatalogHealth.FreshnessWindow(collectorOptions.Value.CollectionIntervalMinutes));
@@ -39,6 +40,10 @@ public sealed class MetricsController(
                 (proxy.CheckLeaseUntil == null || proxy.CheckLeaseUntil < now)),
             Leased = x.Count(proxy => proxy.CheckLeaseUntil >= now),
             NeverAttempted = x.Count(proxy => proxy.LastValidationAttemptAt == null),
+            StaleUnseen = x.Count(proxy =>
+                (proxy.Status == ProxyStatus.Pending || proxy.Status == ProxyStatus.Dead) &&
+                proxy.LastSeenAt < unseenRetentionCutoff &&
+                (proxy.CheckLeaseUntil == null || proxy.CheckLeaseUntil < now)),
             LastAttemptAt = x.Max(proxy => proxy.LastValidationAttemptAt)
         }).SingleOrDefaultAsync(token);
         var validationRuns = await db.ValidationRuns.AsNoTracking()
@@ -93,6 +98,8 @@ public sealed class MetricsController(
         Gauge(output, "proxyharbor_validation_leased", "Proxy records currently leased by validators.", queue?.Leased ?? 0);
         Gauge(output, "proxyharbor_validation_never_attempted", "Proxy records that have never completed a validation attempt.",
             queue?.NeverAttempted ?? 0);
+        Gauge(output, "proxyharbor_proxies_stale_unseen", "Unleased Pending or Dead proxies past source-membership retention and awaiting cleanup.",
+            queue?.StaleUnseen ?? 0);
         Gauge(output, "proxyharbor_validation_attempts_last_5m", "Validation attempts completed during the last five minutes.",
             validationTelemetry.Attempts);
         Gauge(output, "proxyharbor_validation_checked_last_5m", "Non-deferred proxy checks completed during the last five minutes.",

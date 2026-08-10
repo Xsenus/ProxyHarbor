@@ -187,3 +187,35 @@ tests:
       - eval_time: 11m
         alertname: ProxyHarborValidationBacklogAtRisk
         exp_alerts: []
+
+  - name: Stale proxy retention survives multiple collection intervals
+    interval: 1m
+    input_series:
+      - series: proxyharbor_proxies_stale_unseen
+        values: '2x32'
+      - series: proxyharbor_background_workers_enabled
+        values: '1x32'
+    alert_rule_test:
+      - eval_time: 29m
+        alertname: ProxyHarborStaleProxyRetention
+        exp_alerts: []
+      - eval_time: 31m
+        alertname: ProxyHarborStaleProxyRetention
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Retention устаревших прокси не завершается
+              description: Неарендованные Pending или Dead строки старше retention остаются после нескольких циклов collection.
+
+  - name: Stale proxy retention alert ignores intentionally disabled workers
+    interval: 1m
+    input_series:
+      - series: proxyharbor_proxies_stale_unseen
+        values: '2x32'
+      - series: proxyharbor_background_workers_enabled
+        values: '0x32'
+    alert_rule_test:
+      - eval_time: 31m
+        alertname: ProxyHarborStaleProxyRetention
+        exp_alerts: []

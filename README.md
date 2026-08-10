@@ -110,6 +110,7 @@ Prometheus слушает только `127.0.0.1:9090`, Alertmanager — `127.0
 | `Collector__MaxProxiesPerSource` | Защитный лимит уникальных адресов из одного feed, по умолчанию 500 000; значение подтверждено полным live-аудитом каталога |
 | `Collector__MaxCandidatesPerRun` | Защитный лимит уникальных кандидатов за цикл, по умолчанию 500 000 |
 | `Collector__LastSeenRefreshMinutes` | Минимальный интервал записи повторного обнаружения, по умолчанию 360 минут |
+| `Collector__DeadRetentionDays` | Membership retention для давно не встречавшихся Pending/Dead, по умолчанию 3 дня |
 | `Collector__RunRetentionDays` | Срок хранения истории циклов, по умолчанию 30 дней |
 | `Backup__Enabled` | Включает резервное копирование по расписанию |
 | `Backup__HistoryRetentionDays` | Срок хранения аудита backup-запусков, по умолчанию 365 дней |
@@ -128,7 +129,7 @@ Production требует 1–32 явных ASCII pattern в `AllowedHosts`; п�
 
 ## API
 
-Принудительный admin collection отключает `ETag`/`Last-Modified`: все feed’ы обязаны вернуть полный body и заново пройти parser. Source audit требует `LastContentFetchedAt` внутри границ именно этого run, поэтому исторический `304` не может выдать сохранённый `LastItemCount` за новый полный аудит.
+Принудительный admin collection отключает `ETag`/`Last-Modified`: все feed’ы обязаны вернуть полный body и заново пройти parser. Source audit требует `LastContentFetchedAt` внутри границ именно этого run, поэтому исторический `304` не может выдать сохранённый `LastItemCount` за новый полный аудит. После успешного цикла retention удаляет давно не встречавшиеся и не арендованные `Pending`/`Dead`: недоступный control endpoint больше не позволяет непроверенным строкам расти бесконечно. `Alive` сохраняется до объективной повторной проверки, а свежесть полного feed body принудительно обновляется раньше retention cutoff.
 
 Потоковые export endpoint'ы читают boundary metadata и body в одной PostgreSQL `RepeatableRead` транзакции через отдельный non-retrying контекст. Обычные короткие запросы и workers сохраняют transient retry, но экспорт никогда не повторяется после отправки первых байтов клиенту.
 
@@ -216,7 +217,7 @@ npm run build
 
 Репозиторий ограничивает разработку совместимыми feature band .NET 10 через `global.json`, а release CI и Docker закреплены на security SDK `10.0.302` и runtime `10.0.10`. NuGet restore разрешён только с официального `nuget.org`, полный transitive graph хранится в `packages.lock.json` каждого проекта. При намеренном обновлении пакетов выполните `dotnet restore ProxyHarbor.slnx --force-evaluate`, проверьте изменения lock-файлов и повторите vulnerability-аудит; обычные CI/Docker-сборки используют `--locked-mode`.
 
-CI собирает Cobertura coverage и через `tools/Assert-Coverage.ps1` запрещает опускаться ниже 65% уникальных строк и 68% ветвей рукописного кода. На контрольной CI-эквивалентной базе без внешней БД фактическое покрытие составляет около 68,5%/72,0%, а полный PostgreSQL gate — 89,39%/80,35%; tagged release теперь повторно собирает и проверяет собственный отчёт. Suite выполняется как без внешних зависимостей, так и повторно с настоящей PostgreSQL, поэтому в отдельный gate входят SQL bulk-upsert, lease, backup/restore и транзакционные ветви. Generated `obj` и EF migrations в знаменатель не входят; отдельные pass/fail fixtures защищают расчёт и wiring от незаметного ослабления.
+CI собирает Cobertura coverage и через `tools/Assert-Coverage.ps1` запрещает опускаться ниже 65% уникальных строк и 68% ветвей рукописного кода. На контрольной CI-эквивалентной базе без внешней БД фактическое покрытие составляет около 68,4%/71,9%, а полный PostgreSQL gate — около 89,4%/80,4%; tagged release теперь повторно собирает и проверяет собственный отчёт. Suite выполняется как без внешних зависимостей, так и повторно с настоящей PostgreSQL, поэтому в отдельный gate входят SQL bulk-upsert, lease, backup/restore и транзакционные ветви. Generated `obj` и EF migrations в знаменатель не входят; отдельные pass/fail fixtures защищают расчёт и wiring от незаметного ослабления.
 
 ## Резервные копии и восстановление
 

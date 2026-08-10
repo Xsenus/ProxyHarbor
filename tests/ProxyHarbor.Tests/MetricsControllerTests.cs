@@ -85,6 +85,8 @@ public sealed class MetricsControllerTests
                 {
                     Host = "1.1.1.1",
                     Port = 8081,
+                    FirstSeenAt = sourceAuditedAt.AddDays(-5),
+                    LastSeenAt = sourceAuditedAt.AddDays(-4),
                     LastValidationAttemptAt = sourceAuditedAt.AddMinutes(-2),
                     LastValidationDeferred = true
                 },
@@ -183,6 +185,7 @@ public sealed class MetricsControllerTests
         Assert.Contains("proxyharbor_builtin_providers_present 1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_collection_runs_active 1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_validation_never_attempted 1", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_proxies_stale_unseen 1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_validation_due 3", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_validation_leased 1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_validation_attempts_last_5m 2", metrics, StringComparison.Ordinal);

@@ -195,6 +195,28 @@ public sealed class ProxyCollector(
                 // только принадлежащую этому циклу running-строку. Обычный tracked UPDATE по ID
                 // мог бы затереть параллельный administrative/restore результат.
                 await db.SaveChangesAsync(cancellationToken);
+
+                // Retention является частью collection pipeline, поэтому выполняется до
+                // completed-аудита. Ошибка DELETE/cancellation тогда оставляет честный failed,
+                // а не возвращает клиенту исключение при сохранённом ложном успехе.
+                var unseenCutoff = now.AddDays(-Math.Max(1, options.Value.DeadRetentionDays));
+                // Активная validation lease владеет строкой до сохранения результата.
+                // Просроченная аренда ownership уже не даёт и не должна блокировать retention.
+                // Помимо Dead удаляем так и не проверенные Pending: при длительной проблеме
+                // control endpoint они иначе навсегда накапливаются после исчезновения из feed'ов.
+                // Подтверждённые Alive сохраняются до очередной объективной проверки.
+                await db.Proxies.Where(x =>
+                        (x.Status == ProxyStatus.Pending || x.Status == ProxyStatus.Dead) &&
+                        x.LastSeenAt < unseenCutoff &&
+                        (x.CheckLeaseUntil == null || x.CheckLeaseUntil < now))
+                    .ExecuteDeleteAsync(cancellationToken);
+                var runCutoff = now.AddDays(-options.Value.RunRetentionDays);
+                await db.Runs.Where(x => x.StartedAt < runCutoff).ExecuteDeleteAsync(cancellationToken);
+                // Долгая активная validation-партия другой реплики не должна потерять
+                // ownership своей audit row из-за retention collection-цикла.
+                await db.ValidationRuns.Where(x => x.StartedAt < runCutoff && x.Status != "running")
+                    .ExecuteDeleteAsync(cancellationToken);
+
                 var updated = await db.Runs
                     .Where(item => item.Id == run.Id && item.Status == "running")
                     .ExecuteUpdateAsync(setters => setters
@@ -229,18 +251,6 @@ public sealed class ProxyCollector(
                 run.Status = "completed";
                 run.Error = null;
 
-                var deadCutoff = now.AddDays(-Math.Max(1, options.Value.DeadRetentionDays));
-                // Активная validation lease владеет строкой до сохранения результата.
-                // Просроченная аренда ownership уже не даёт и не должна блокировать retention.
-                await db.Proxies.Where(x => x.Status == ProxyStatus.Dead && x.LastSeenAt < deadCutoff &&
-                        (x.CheckLeaseUntil == null || x.CheckLeaseUntil < now))
-                    .ExecuteDeleteAsync(cancellationToken);
-                var runCutoff = now.AddDays(-options.Value.RunRetentionDays);
-                await db.Runs.Where(x => x.StartedAt < runCutoff).ExecuteDeleteAsync(cancellationToken);
-                // Долгая активная validation-партия другой реплики не должна потерять
-                // ownership своей audit row из-за retention collection-цикла.
-                await db.ValidationRuns.Where(x => x.StartedAt < runCutoff && x.Status != "running")
-                    .ExecuteDeleteAsync(cancellationToken);
                 return run;
             }
             catch (Exception ex)

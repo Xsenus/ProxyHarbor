@@ -179,6 +179,81 @@ public sealed class ProxyCollectorIntegrationTests
 
     [Fact]
     [Trait("Category", "PostgresIntegration")]
+    public async Task RetentionFailureCannotLeaveFalseCompletedCollectionAudit()
+    {
+        var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
+        if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
+
+        var schema = $"proxyharbor_retention_failure_{Guid.NewGuid():N}";
+        var builder = new NpgsqlConnectionStringBuilder(baseConnectionString) { SearchPath = schema };
+        await using var admin = new NpgsqlConnection(baseConnectionString);
+        await admin.OpenAsync();
+        await using (var create = new NpgsqlCommand($"CREATE SCHEMA {schema}", admin))
+            await create.ExecuteNonQueryAsync();
+
+        try
+        {
+            var dbOptions = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+                .UseNpgsql(builder.ConnectionString)
+                .Options;
+            var factory = new TestDbFactory(dbOptions);
+            await using (var seed = await factory.CreateDbContextAsync())
+            {
+                await seed.Database.MigrateAsync();
+                var old = DateTimeOffset.UtcNow.AddDays(-5);
+                seed.Sources.Add(new ProxySource
+                {
+                    Name = "Retention failure feed",
+                    Url = "https://8.8.8.8/feed.txt",
+                    DefaultProtocol = ProxyProtocol.Http
+                });
+                seed.Proxies.Add(new ProxyEndpoint
+                {
+                    Host = "4.2.2.5",
+                    Port = 8080,
+                    Status = ProxyStatus.Pending,
+                    FirstSeenAt = old,
+                    LastSeenAt = old
+                });
+                await seed.SaveChangesAsync();
+                await seed.Database.ExecuteSqlRawAsync("""
+                    CREATE FUNCTION fail_proxy_retention() RETURNS trigger LANGUAGE plpgsql AS $$
+                    BEGIN
+                      RAISE EXCEPTION 'retention failure canary';
+                    END;
+                    $$;
+                    CREATE TRIGGER fail_proxy_retention
+                    BEFORE DELETE ON "Proxies"
+                    FOR EACH STATEMENT EXECUTE FUNCTION fail_proxy_retention();
+                    """);
+            }
+
+            using var clients = new TestHttpClientFactory(new StaticFeedHandler());
+            using var collector = new ProxyCollector(
+                factory,
+                clients,
+                Options.Create(new CollectorOptions { SourceRetryCount = 0 }),
+                NullLogger<ProxyCollector>.Instance);
+
+            var exception = await Assert.ThrowsAsync<PostgresException>(
+                () => collector.CollectAsync(CancellationToken.None, forceAllSources: true));
+
+            Assert.Contains("retention failure canary", exception.Message, StringComparison.Ordinal);
+            await using var verify = await factory.CreateDbContextAsync();
+            var audit = await verify.Runs.AsNoTracking().SingleAsync();
+            Assert.Equal("failed", audit.Status);
+            Assert.NotNull(audit.FinishedAt);
+            Assert.Contains("retention failure canary", audit.Error, StringComparison.Ordinal);
+        }
+        finally
+        {
+            await using var drop = new NpgsqlCommand($"DROP SCHEMA IF EXISTS {schema} CASCADE", admin);
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
     public async Task SuccessfulAndCancelledCyclesRecoverAndFinalizeEveryAuditRow()
     {
         var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
@@ -206,6 +281,8 @@ public sealed class ProxyCollectorIntegrationTests
             var activeValidationRunId = Guid.NewGuid();
             var activelyLeasedDeadProxyId = Guid.NewGuid();
             var expiredLeaseDeadProxyId = Guid.NewGuid();
+            var stalePendingProxyId = Guid.NewGuid();
+            var staleAliveProxyId = Guid.NewGuid();
             await using (var seed = await factory.CreateDbContextAsync())
             {
                 seed.Runs.Add(new CollectionRun
@@ -265,6 +342,27 @@ public sealed class ProxyCollectorIntegrationTests
                         FailedChecks = 1,
                         CheckLeaseId = Guid.NewGuid(),
                         CheckLeaseUntil = DateTimeOffset.UtcNow.AddHours(-1)
+                    },
+                    new ProxyEndpoint
+                    {
+                        Id = stalePendingProxyId,
+                        Host = "4.2.2.3",
+                        Port = 8080,
+                        Status = ProxyStatus.Pending,
+                        FirstSeenAt = oldFirstSeenAt,
+                        LastSeenAt = oldLastSeenAt
+                    },
+                    new ProxyEndpoint
+                    {
+                        Id = staleAliveProxyId,
+                        Host = "4.2.2.4",
+                        Port = 8080,
+                        Status = ProxyStatus.Alive,
+                        FirstSeenAt = oldFirstSeenAt,
+                        LastSeenAt = oldLastSeenAt,
+                        LastCheckedAt = oldLastSeenAt,
+                        LatencyMs = 250,
+                        SuccessfulChecks = 1
                     });
                 await seed.SaveChangesAsync();
             }
@@ -290,6 +388,13 @@ public sealed class ProxyCollectorIntegrationTests
                 Assert.Equal(1, completed.NewProxies);
                 Assert.Equal(1, completed.SourcesTruncated);
                 Assert.True(completed.CandidateLimitReached);
+            }
+            await using (var retention = await factory.CreateDbContextAsync())
+            {
+                Assert.False(await retention.Proxies.AnyAsync(proxy => proxy.Id == stalePendingProxyId));
+                Assert.False(await retention.Proxies.AnyAsync(proxy => proxy.Id == expiredLeaseDeadProxyId));
+                Assert.True(await retention.Proxies.AnyAsync(proxy => proxy.Id == staleAliveProxyId));
+                Assert.True(await retention.Proxies.AnyAsync(proxy => proxy.Id == activelyLeasedDeadProxyId));
             }
             DateTimeOffset firstContentFetchedAt;
             await using (var firstContent = await factory.CreateDbContextAsync())

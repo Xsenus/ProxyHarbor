@@ -491,7 +491,7 @@ describe('ProxyHarbor UI', () => {
     const diagnostics = {
       serverTime: '2026-08-09T07:00:00Z',
       databaseBytes: 25 * 1024 * 1024,
-      validationQueue: { total: 1000, leased: 12, neverChecked: 40, neverAttempted: 38, due: 75, scheduled: 925, repeatedlyFailing: 3, attemptsLastFiveMinutes: 1000, checkedLastFiveMinutes: 994, aliveLastFiveMinutes: 6, deferredLastFiveMinutes: 6, failedRunsLastFiveMinutes: 0, activeRuns: 1, concurrencyLimit: 800, batchSize: 1600, checksPerSecond: 34.4, estimatedDrainSeconds: 3, lastAttemptAt: '2026-08-09T06:59:55Z' },
+      validationQueue: { total: 1000, leased: 12, neverChecked: 40, neverAttempted: 38, due: 75, scheduled: 925, repeatedlyFailing: 3, staleUnseen: 2, attemptsLastFiveMinutes: 1000, checkedLastFiveMinutes: 994, aliveLastFiveMinutes: 6, deferredLastFiveMinutes: 6, failedRunsLastFiveMinutes: 0, activeRuns: 1, concurrencyLimit: 800, batchSize: 1600, checksPerSecond: 34.4, estimatedDrainSeconds: 3, lastAttemptAt: '2026-08-09T06:59:55Z' },
       sourceCatalog: { lastAuditedOn: '2026-08-09', expectedSources: 81, presentSources: 81, enabledSources: 81, healthySources: 79, failingSources: 0, neverAuditedSources: 0, staleSources: 1, truncatedSources: 1, expectedProviders: 50, presentProviders: 50, enabledProviders: 50, isComplete: true, isHealthy: false },
       recentRuns: [{
         id: 'collection-1', startedAt: '2026-08-09T06:59:00Z', finishedAt: '2026-08-09T06:59:05Z',
@@ -529,6 +529,7 @@ describe('ProxyHarbor UI', () => {
 
     expect(await screen.findByLabelText('Диагностика сервиса')).toBeInTheDocument()
     expect(screen.getByText('25 МБ')).toBeInTheDocument()
+    expect(screen.getByText('2 ожидают retention', { exact: false })).toBeInTheDocument()
     expect(screen.getAllByText(/доставлен в Telegram/)).not.toHaveLength(0)
     expect(screen.getByText('184 005 кандидатов', { exact: false })).toBeInTheDocument()
     expect(screen.getByText('1 000 попыток за 5 мин', { exact: false })).toBeInTheDocument()
