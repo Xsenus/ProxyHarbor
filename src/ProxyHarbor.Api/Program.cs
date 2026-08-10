@@ -195,7 +195,47 @@ await using (var startupDb = await dbFactory.CreateDbContextAsync())
     await DatabaseSeeder.InitializeAsync(startupDb);
 }
 
-await app.RunAsync();
+var runtimeLeaseLost = LoggerMessage.Define(
+    LogLevel.Critical,
+    new EventId(1401, "RuntimeLeaseLost"),
+    "Потеряна PostgreSQL lifetime-lock session; API выполняет controlled shutdown.");
+var runtimeLeaseMonitor = MonitorRuntimeLeaseAsync(
+    runtimeLease, app.Lifetime, app.Logger, runtimeLeaseLost);
+try { await app.RunAsync(); }
+finally
+{
+    // Гарантирует завершение timer и heartbeat перед освобождением самой lease.
+    app.Lifetime.StopApplication();
+    await runtimeLeaseMonitor;
+}
+
+// Останавливает реплику, если PostgreSQL session-level lifetime-lock потерян.
+static async Task MonitorRuntimeLeaseAsync(
+    DatabaseRuntimeLease lease,
+    IHostApplicationLifetime lifetime,
+    ILogger logger,
+    Action<ILogger, Exception?> runtimeLeaseLost)
+{
+    using var timer = new PeriodicTimer(TimeSpan.FromSeconds(5));
+    var stopping = lifetime.ApplicationStopping;
+    try
+    {
+        while (await timer.WaitForNextTickAsync(stopping))
+        {
+            using var heartbeatTimeout = CancellationTokenSource.CreateLinkedTokenSource(stopping);
+            heartbeatTimeout.CancelAfter(TimeSpan.FromSeconds(5));
+            try { await lease.VerifyAsync(heartbeatTimeout.Token); }
+            catch (OperationCanceledException) when (stopping.IsCancellationRequested) { return; }
+            catch (Exception exception)
+            {
+                runtimeLeaseLost(logger, exception);
+                lifetime.StopApplication();
+                return;
+            }
+        }
+    }
+    catch (OperationCanceledException) when (stopping.IsCancellationRequested) { }
+}
 
 /// <summary>Маркер для интеграционных тестов WebApplicationFactory.</summary>
 public partial class Program;

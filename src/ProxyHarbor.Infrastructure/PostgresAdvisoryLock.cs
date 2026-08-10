@@ -14,6 +14,8 @@ internal sealed class PostgresAdvisoryLock : IAsyncDisposable
     private readonly long _key;
     private readonly bool _shared;
 
+    internal int BackendProcessId => _connection.ProcessID;
+
     private PostgresAdvisoryLock(NpgsqlConnection connection, long key, bool shared)
     {
         _connection = connection;
@@ -100,6 +102,20 @@ internal sealed class PostgresAdvisoryLock : IAsyncDisposable
         }
         finally { await _connection.DisposeAsync(); }
     }
+
+    /// <summary>
+    /// Проверяет именно выделенную lock-сессию. Успешный запрос доказывает, что backend,
+    /// на котором был получен session-level advisory lock, всё ещё существует.
+    /// </summary>
+    internal async Task VerifySessionAsync(CancellationToken token)
+    {
+        if (_connection.State != System.Data.ConnectionState.Open)
+            throw new NpgsqlException("PostgreSQL advisory-lock session закрыта.");
+        await using var command = new NpgsqlCommand("SELECT 1", _connection);
+        var result = await command.ExecuteScalarAsync(token);
+        if (result is not 1)
+            throw new NpgsqlException("PostgreSQL не подтвердил advisory-lock session heartbeat.");
+    }
 }
 
 /// <summary>
@@ -109,11 +125,14 @@ internal sealed class PostgresAdvisoryLock : IAsyncDisposable
 public static class DatabaseRuntimeGate
 {
     /// <summary>Пытается зарегистрировать живую API-реплику; null означает активный restore.</summary>
-    public static async Task<IAsyncDisposable?> TryAcquireApiLeaseAsync(
+    public static async Task<DatabaseRuntimeLease?> TryAcquireApiLeaseAsync(
         string connectionString,
-        CancellationToken token) =>
-        await PostgresAdvisoryLock.TryAcquireCoreAsync(
+        CancellationToken token)
+    {
+        var lease = await PostgresAdvisoryLock.TryAcquireCoreAsync(
             connectionString, PostgresAdvisoryLock.RuntimeKey, shared: true, token);
+        return lease is null ? null : new DatabaseRuntimeLease(lease);
+    }
 
     /// <summary>Пытается получить эксклюзивное владение БД для destructive restore.</summary>
     public static async Task<IAsyncDisposable?> TryAcquireRestoreLeaseAsync(
@@ -145,6 +164,20 @@ public static class DatabaseRuntimeGate
         internal static readonly NoOpLease Instance = new();
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
+}
+
+/// <summary>Проверяемая lifetime-lease одной API-реплики.</summary>
+public sealed class DatabaseRuntimeLease : IAsyncDisposable
+{
+    private readonly PostgresAdvisoryLock _lease;
+
+    internal DatabaseRuntimeLease(PostgresAdvisoryLock lease) => _lease = lease;
+    internal int BackendProcessId => _lease.BackendProcessId;
+
+    /// <summary>Подтверждает, что PostgreSQL-сессия, владеющая shared lock, не потеряна.</summary>
+    public Task VerifyAsync(CancellationToken token) => _lease.VerifySessionAsync(token);
+
+    public ValueTask DisposeAsync() => _lease.DisposeAsync();
 }
 
 /// <summary>Ожидаемая ошибка повторного cluster-wide запуска операции.</summary>

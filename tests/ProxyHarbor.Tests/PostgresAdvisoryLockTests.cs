@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 using ProxyHarbor.Infrastructure;
 
 namespace ProxyHarbor.Tests;
@@ -103,6 +104,33 @@ public sealed class PostgresAdvisoryLockTests
         var sourceMutation = await new SourceCatalogMutationCoordinator(factory)
             .TryAcquireAsync(CancellationToken.None);
         Assert.Null(sourceMutation);
+    }
+
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
+    public async Task ApiLeaseHeartbeatDetectsTerminatedOwningBackend()
+    {
+        var connectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
+        if (string.IsNullOrWhiteSpace(connectionString)) return;
+
+        await using var apiLease = await DatabaseRuntimeGate.TryAcquireApiLeaseAsync(
+            connectionString, CancellationToken.None);
+        Assert.NotNull(apiLease);
+        await apiLease.VerifyAsync(CancellationToken.None);
+
+        await using (var killer = new NpgsqlConnection(connectionString))
+        {
+            await killer.OpenAsync();
+            await using var terminate = new NpgsqlCommand(
+                "SELECT pg_terminate_backend(@process_id)", killer);
+            terminate.Parameters.AddWithValue("process_id", apiLease.BackendProcessId);
+            Assert.Equal(true, await terminate.ExecuteScalarAsync());
+        }
+
+        await Assert.ThrowsAnyAsync<Exception>(() => apiLease.VerifyAsync(CancellationToken.None));
+        await using var restore = await DatabaseRuntimeGate.TryAcquireRestoreLeaseAsync(
+            connectionString, CancellationToken.None);
+        Assert.NotNull(restore);
     }
 
     private sealed class TestDbFactory(DbContextOptions<ProxyHarborDbContext> options)

@@ -8,6 +8,8 @@ Runtime HTTP SLI публикуются как `proxyharbor_http_requests_total`
 
 Все database-derived series одного scrape вычисляются в общем retry-safe PostgreSQL `REPEATABLE READ` snapshot. Concurrent collection/validation не может смешать старый proxy count с новым source/run состоянием и создать ложную комбинацию alarms; in-process HTTP/maintenance counters считываются после тех же DB-запросов и остаются локальными реплике.
 
+Отдельная PostgreSQL lifetime-lock session каждой API-реплики проверяется bounded heartbeat каждые пять секунд. Потеря owning backend создаёт critical `RuntimeLeaseLost` и инициирует controlled shutdown; Docker restart policy восстанавливает реплику, а per-operation shared locks до остановки не позволяют write pipeline пересечься с exclusive restore.
+
 ## Проверка
 
 ```bash
