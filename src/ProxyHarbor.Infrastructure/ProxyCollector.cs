@@ -179,18 +179,52 @@ public sealed class ProxyCollector(
                 // одного wake достаточно, чтобы validator немедленно начал draining due-очереди.
                 if (candidates.Count > 0) validationWakeSignal?.Pulse();
 
+                var sourcesProcessed = sourceResults.Count;
+                var sourcesSucceeded = sourceResults.Count(x => x.Error is null);
+                var sourcesFailed = sourceResults.Count(x => x.Error is not null);
+                var sourcesSkipped = allSources.Count - sources.Count;
+                var sourcesTruncated = sourceResults.Count(x => x.Truncated);
+                var aliveProxies = await db.Proxies.CountAsync(
+                    x => x.Status == ProxyStatus.Alive, cancellationToken);
+
+                // Сначала фиксируем source health, затем отдельным conditional UPDATE завершаем
+                // только принадлежащую этому циклу running-строку. Обычный tracked UPDATE по ID
+                // мог бы затереть параллельный administrative/restore результат.
+                await db.SaveChangesAsync(cancellationToken);
+                var updated = await db.Runs
+                    .Where(item => item.Id == run.Id && item.Status == "running")
+                    .ExecuteUpdateAsync(setters => setters
+                        .SetProperty(item => item.FinishedAt, now)
+                        .SetProperty(item => item.SourcesProcessed, sourcesProcessed)
+                        .SetProperty(item => item.SourcesSucceeded, sourcesSucceeded)
+                        .SetProperty(item => item.SourcesFailed, sourcesFailed)
+                        .SetProperty(item => item.SourcesSkipped, sourcesSkipped)
+                        .SetProperty(item => item.SourcesTruncated, sourcesTruncated)
+                        .SetProperty(item => item.CandidatesFound, candidates.Count)
+                        .SetProperty(item => item.CandidateLimitReached, candidates.LimitReached)
+                        .SetProperty(item => item.NewProxies, added)
+                        .SetProperty(item => item.AliveProxies, aliveProxies)
+                        .SetProperty(item => item.Status, "completed")
+                        .SetProperty(item => item.Error, (string?)null), cancellationToken);
+                if (updated != 1)
+                    throw new InvalidOperationException(
+                        "Collection-аудит потерял ownership своей running-строки.");
+
+                // Возвращаемый объект отслеживался до ExecuteUpdate, поэтому синхронизируем
+                // его явно без дополнительного UPDATE и второй точки отказа.
                 run.FinishedAt = now;
-                run.SourcesProcessed = sourceResults.Count;
-                run.SourcesSucceeded = sourceResults.Count(x => x.Error is null);
-                run.SourcesFailed = sourceResults.Count(x => x.Error is not null);
-                run.SourcesSkipped = allSources.Count - sources.Count;
-                run.SourcesTruncated = sourceResults.Count(x => x.Truncated);
+                run.SourcesProcessed = sourcesProcessed;
+                run.SourcesSucceeded = sourcesSucceeded;
+                run.SourcesFailed = sourcesFailed;
+                run.SourcesSkipped = sourcesSkipped;
+                run.SourcesTruncated = sourcesTruncated;
                 run.CandidatesFound = candidates.Count;
                 run.CandidateLimitReached = candidates.LimitReached;
                 run.NewProxies = added;
-                run.AliveProxies = await db.Proxies.CountAsync(x => x.Status == ProxyStatus.Alive, cancellationToken);
+                run.AliveProxies = aliveProxies;
                 run.Status = "completed";
-                await db.SaveChangesAsync(cancellationToken);
+                run.Error = null;
+
                 var deadCutoff = now.AddDays(-Math.Max(1, options.Value.DeadRetentionDays));
                 await db.Proxies.Where(x => x.Status == ProxyStatus.Dead && x.LastSeenAt < deadCutoff)
                     .ExecuteDeleteAsync(cancellationToken);
@@ -223,7 +257,10 @@ public sealed class ProxyCollector(
             using var timeout = new CancellationTokenSource(AuditWriteTimeout);
             await using var auditDb = await dbFactory.CreateDbContextAsync(timeout.Token);
             var error = exception.ToString();
-            await auditDb.Runs.Where(item => item.Id == id).ExecuteUpdateAsync(setters => setters
+            // Исключение не даёт права перезаписывать уже завершённую другим владельцем строку.
+            await auditDb.Runs
+                .Where(item => item.Id == id && item.Status == "running")
+                .ExecuteUpdateAsync(setters => setters
                 .SetProperty(item => item.FinishedAt, DateTimeOffset.UtcNow)
                 .SetProperty(item => item.Status, "failed")
                 .SetProperty(item => item.Error, error[..Math.Min(2000, error.Length)]), timeout.Token);

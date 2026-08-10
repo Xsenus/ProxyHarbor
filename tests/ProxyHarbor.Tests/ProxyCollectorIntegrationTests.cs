@@ -107,6 +107,78 @@ public sealed class ProxyCollectorIntegrationTests
 
     [Fact]
     [Trait("Category", "PostgresIntegration")]
+    public async Task ChangedRunOwnershipRejectsOtherwiseSuccessfulCollection()
+    {
+        var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
+        if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
+
+        var schema = $"proxyharbor_collection_ownership_{Guid.NewGuid():N}";
+        var builder = new NpgsqlConnectionStringBuilder(baseConnectionString) { SearchPath = schema };
+        await using var admin = new NpgsqlConnection(baseConnectionString);
+        await admin.OpenAsync();
+        await using (var create = new NpgsqlCommand($"CREATE SCHEMA {schema}", admin))
+            await create.ExecuteNonQueryAsync();
+
+        try
+        {
+            var dbOptions = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+                .UseNpgsql(builder.ConnectionString)
+                .Options;
+            var factory = new TestDbFactory(dbOptions);
+            await using (var migrationDb = await factory.CreateDbContextAsync())
+            {
+                await migrationDb.Database.MigrateAsync();
+                migrationDb.Sources.Add(new ProxySource
+                {
+                    Name = "Ownership integration feed",
+                    Url = "https://8.8.8.8/ownership.txt",
+                    DefaultProtocol = ProxyProtocol.Http
+                });
+                await migrationDb.SaveChangesAsync();
+            }
+
+            using var clients = new TestHttpClientFactory(new AuditChangingFeedHandler(async token =>
+            {
+                await using var parallel = await factory.CreateDbContextAsync(token);
+                await parallel.Runs
+                    .Where(run => run.Status == "running")
+                    .ExecuteUpdateAsync(setters => setters
+                        .SetProperty(run => run.Status, "failed")
+                        .SetProperty(run => run.FinishedAt, DateTimeOffset.UtcNow)
+                        .SetProperty(run => run.Error, "parallel failure"), token);
+            }));
+            using var collector = new ProxyCollector(
+                factory,
+                clients,
+                Options.Create(new CollectorOptions
+                {
+                    SourceRetryCount = 0,
+                    MaxProxiesPerSource = 10,
+                    MaxCandidatesPerRun = 10
+                }),
+                NullLogger<ProxyCollector>.Instance);
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+                () => collector.CollectAsync(CancellationToken.None, forceAllSources: true));
+
+            Assert.Contains("ownership", exception.Message, StringComparison.OrdinalIgnoreCase);
+            await using var verify = await factory.CreateDbContextAsync();
+            var parallelResult = await verify.Runs.AsNoTracking().SingleAsync();
+            Assert.Equal("failed", parallelResult.Status);
+            Assert.Equal("parallel failure", parallelResult.Error);
+            Assert.Equal(0, parallelResult.SourcesProcessed);
+            Assert.Equal(0, parallelResult.CandidatesFound);
+            Assert.Equal(1, await verify.Proxies.CountAsync());
+        }
+        finally
+        {
+            await using var drop = new NpgsqlCommand($"DROP SCHEMA IF EXISTS {schema} CASCADE", admin);
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
     public async Task SuccessfulAndCancelledCyclesRecoverAndFinalizeEveryAuditRow()
     {
         var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
@@ -365,6 +437,21 @@ public sealed class ProxyCollectorIntegrationTests
             };
             response.Headers.ETag = new System.Net.Http.Headers.EntityTagHeaderValue("\"stale-response\"");
             return response;
+        }
+    }
+
+    private sealed class AuditChangingFeedHandler(Func<CancellationToken, Task> changeAudit)
+        : HttpMessageHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            await changeAudit(cancellationToken);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("8.8.4.4:8080")
+            };
         }
     }
 
