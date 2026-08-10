@@ -56,6 +56,7 @@
 
 ### Fixed
 
+- Telegram trust boundary теперь sanitizes все escaping exceptions: caller cancellation сохраняет `OperationCanceledException`, локальный status rejection — HTTP status, но handler message/inner/Data с bot-token URI, chat ID или multipart никогда не попадают в backup audit, логи и следующий архив.
 - Source feed semantic gate теперь отклоняет mislabelled HTML/WAF body, начинающийся с HTML comment, `meta`, `title` или `script`, даже если внутри есть похожий на прокси `IP:port`; mixed feeds отдельно фиксируют per-record HTTP/HTTPS/SOCKS4/SOCKS5 scheme и fallback.
 - SOCKS transport теперь согласован с разрешёнными control-host настройками: публичные IPv4 кодируются нативно в SOCKS4/SOCKS5, IPv6 — через SOCKS5 `ATYP=4`, а DNS по-прежнему использует SOCKS4a/`ATYP=3`; не представимый в SOCKS4 IPv6 target становится `deferred`, а не ложным Dead.
 - HTTP CONNECT handshake теперь читает bounded header блоками вместо allocation и async-read на каждый байт, строго требует HTTP/1.0 или 1.1, ASCII/control-safe headers и отсутствие неожиданных post-header bytes; SOCKS5 отклоняет запрещённый zero-length BND domain.

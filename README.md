@@ -245,6 +245,8 @@ Restore сначала проверяет аутентификацию backup, m
 
 Успешная Telegram-доставка записывается в аудит только после HTTP 2xx и обязательного Bot API подтверждения `ok=true` для файла либо каждой нумерованной части. Ответы 429/5xx и временные сетевые ошибки повторяются до трёх раз; `retry_after` принимается как из HTTP-заголовка, так и из JSON `parameters`. Bot API body читается непосредственно после headers с жёстким пределом 64 КиБ и никогда предварительно не буферизуется `HttpClient`; некорректный/слишком большой ответ не считается успехом, bot token исключён из HTTP-логирования, а redirect запрещён.
 
+Telegram sender является sanitizing trust boundary: transport/custom-handler messages, inner exceptions и response descriptions не покидают его, поэтому URI с bot token, `chat_id` или multipart не могут попасть в `BackupRuns.Error`, application logs и следующий архив. Caller cancellation остаётся `OperationCanceledException`, а безопасный permanent rejection сохраняет числовой HTTP status.
+
 Если архив превышает Telegram-лимит, сервис отправляет нумерованные части. Сначала объедините их, затем расшифруйте:
 
 ```powershell

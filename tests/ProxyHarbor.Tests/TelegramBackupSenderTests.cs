@@ -212,6 +212,49 @@ public sealed class TelegramBackupSenderTests
         finally { File.Delete(path); }
     }
 
+    [Fact]
+    public async Task CallerCancellationRedactsHandlerMessageButPreservesCancellationType()
+    {
+        var path = await TemporaryBackupAsync();
+        try
+        {
+            var handler = new SensitiveCancellationHandler();
+            using var client = new HttpClient(handler);
+            using var cancellation = new CancellationTokenSource();
+
+            var request = TelegramBackupSender.SendAsync(
+                client, path, "backup", "cancellation-secret-token", "-100123", cancellation.Token);
+            await handler.RequestStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            cancellation.Cancel();
+
+            var exception = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => request);
+            Assert.Equal(1, handler.Attempts);
+            Assert.DoesNotContain("cancellation-secret-token", exception.ToString(), StringComparison.Ordinal);
+            Assert.DoesNotContain("-100123", exception.ToString(), StringComparison.Ordinal);
+            Assert.Null(exception.InnerException);
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
+    public async Task UnexpectedHandlerExceptionCannotExposeTelegramSecrets()
+    {
+        var path = await TemporaryBackupAsync();
+        try
+        {
+            using var client = new HttpClient(new SensitiveUnexpectedFailureHandler());
+
+            var exception = await Assert.ThrowsAsync<HttpRequestException>(() =>
+                TelegramBackupSender.SendAsync(
+                    client, path, "backup", "unexpected-secret-token", "-100456", CancellationToken.None));
+
+            Assert.DoesNotContain("unexpected-secret-token", exception.ToString(), StringComparison.Ordinal);
+            Assert.DoesNotContain("-100456", exception.ToString(), StringComparison.Ordinal);
+            Assert.Null(exception.InnerException);
+        }
+        finally { File.Delete(path); }
+    }
+
     private static async Task<string> TemporaryBackupAsync()
     {
         var path = Path.Combine(Path.GetTempPath(), $"proxyharbor-telegram-{Guid.NewGuid():N}.phbackup");
@@ -344,6 +387,41 @@ public sealed class TelegramBackupSenderTests
             await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
             return JsonResponse(HttpStatusCode.OK, """{"ok":true,"result":{}}""");
         }
+    }
+
+    private sealed class SensitiveCancellationHandler : HttpMessageHandler
+    {
+        public int Attempts { get; private set; }
+        public TaskCompletionSource<bool> RequestStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            Attempts++;
+            RequestStarted.TrySetResult(true);
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                throw new OperationCanceledException(
+                    $"Sensitive cancellation URI: {request.RequestUri}; chat=-100123",
+                    cancellationToken);
+            }
+            throw new InvalidOperationException("Недостижимый test path.");
+        }
+    }
+
+    private sealed class SensitiveUnexpectedFailureHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken) =>
+            throw new InvalidOperationException(
+                $"Sensitive unexpected URI: {request.RequestUri}; chat=-100456");
     }
 
     private sealed class OversizedStreamingResponseHandler : HttpMessageHandler

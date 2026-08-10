@@ -59,6 +59,18 @@ internal static class TelegramBackupSender
                     apiResponse?.Parameters?.RetryAfter,
                     attempt);
             }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+                // Даже cancellation от custom/transport handler может включать request URI,
+                // где Telegram Bot API хранит token в path. Сохраняем cancellation semantics
+                // без исходного message/inner exception.
+                throw new OperationCanceledException("Отправка backup в Telegram отменена.", token);
+            }
+            catch (TelegramDeliveryException)
+            {
+                // Исключение создано локально только из числовых status codes и уже безопасно.
+                throw;
+            }
             catch (Exception exception) when (IsTransientTransportFailure(exception, token) && attempt < MaxAttempts)
             {
                 retryDelay = RetryDelay(null, null, attempt);
@@ -68,6 +80,12 @@ internal static class TelegramBackupSender
                 // Не вкладываем исходное исключение: некоторые handlers включают полный URI,
                 // а URI Telegram содержит секретный bot token.
                 throw new HttpRequestException("Telegram недоступен после нескольких попыток отправки backup.");
+            }
+            catch (Exception)
+            {
+                // Неожиданный handler/runtime exception также не пересекает trust boundary:
+                // message, Data и inner chain могут содержать URI, chat_id либо multipart.
+                throw new HttpRequestException("Telegram не выполнил отправку backup.");
             }
 
             // К этому моменту response, multipart и файловый поток уже вышли из using-scope.
