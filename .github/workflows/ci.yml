@@ -72,6 +72,12 @@ jobs:
       - name: Verify supply-chain scanner contracts
         shell: pwsh
         run: ./tools/Test-WorkflowSecurityContracts.ps1
+      - name: Verify workflow-linter contracts
+        shell: pwsh
+        run: ./tools/Test-ActionlintContracts.ps1
+      - name: Lint GitHub Actions workflows
+        shell: pwsh
+        run: ./tools/Invoke-Actionlint.ps1
       - run: npm ci
         working-directory: src/proxyharbor-web
       - run: npm audit --audit-level=moderate

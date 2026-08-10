@@ -8,6 +8,8 @@
 dotnet build ProxyHarbor.slnx -c Release
 dotnet test ProxyHarbor.slnx -c Release --no-build
 dotnet format ProxyHarbor.slnx --verify-no-changes --no-restore
+./tools/Test-ActionlintContracts.ps1
+./tools/Invoke-Actionlint.ps1
 cd src/proxyharbor-web
 npm ci
 npm run lint

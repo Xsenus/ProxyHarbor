@@ -45,6 +45,9 @@ jobs:
           ./tools/Test-Changelog.ps1 -Version $releaseVersion
           ./tools/Test-ChangelogContracts.ps1
           ./tools/Test-WorkflowSecurity.ps1
+          ./tools/Test-WorkflowSecurityContracts.ps1
+          ./tools/Test-ActionlintContracts.ps1
+          ./tools/Invoke-Actionlint.ps1
           ./tools/Test-AuditSourceFeeds.ps1
       - name: Build and test backend against PostgreSQL
         env:
