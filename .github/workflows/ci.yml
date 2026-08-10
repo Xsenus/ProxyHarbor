@@ -585,6 +585,14 @@ jobs:
           Backup__EncryptionKey: integration-backup-key-at-least-32-chars
           Cors__Origins__0: https://dashboard.example
         run: |
+          if Cors__Origins__0=http://dashboard.example \
+            dotnet run --no-build -c Release --no-launch-profile \
+              --project src/ProxyHarbor.Api/ProxyHarbor.Api.csproj > unsafe-cors.log 2>&1; then
+            cat unsafe-cors.log
+            exit 1
+          fi
+          grep 'HTTP разрешён только в Development' unsafe-cors.log
+          rm unsafe-cors.log
           dotnet run --no-build -c Release --no-launch-profile --project src/ProxyHarbor.Api/ProxyHarbor.Api.csproj > api.log 2>&1 &
           api_pid=$!
           trap 'kill $api_pid || true; cat api.log' EXIT
@@ -605,6 +613,10 @@ jobs:
           test "$unauthorized_status" -eq 401
           grep --ignore-case '^WWW-Authenticate: ApiKey' "$security_headers"
           grep --ignore-case '^Cache-Control: no-store' "$security_headers"
+          curl --silent --request OPTIONS --dump-header "$security_headers" --output /dev/null \
+            --header 'Origin: https://dashboard.example' --header 'Access-Control-Request-Method: GET' \
+            http://127.0.0.1:5080/api/v1/proxies
+          grep --ignore-case '^Access-Control-Allow-Origin: https://dashboard.example' "$security_headers"
           curl --silent --request OPTIONS --dump-header "$security_headers" --output /dev/null \
             --header 'Origin: http://localhost:5173' --header 'Access-Control-Request-Method: GET' \
             http://127.0.0.1:5080/api/v1/proxies

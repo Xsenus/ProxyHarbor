@@ -84,15 +84,14 @@ builder.Services.AddOutputCache(options =>
         .SetVaryByQuery([]));
 });
 var configuredCorsOrigins = builder.Configuration.GetSection("Cors:Origins").Get<string[]>();
-var corsOrigins = (configuredCorsOrigins ?? (builder.Environment.IsDevelopment() ? ["http://localhost:5173"] : []))
-    .Where(origin => !string.IsNullOrWhiteSpace(origin))
-    .Select(origin => origin.Trim().TrimEnd('/'))
-    .Distinct(StringComparer.OrdinalIgnoreCase)
-    .ToArray();
-if (corsOrigins.Any(origin => !Uri.TryCreate(origin, UriKind.Absolute, out var uri) ||
-    uri.Scheme is not ("http" or "https") || uri.AbsolutePath != "/" || !string.IsNullOrEmpty(uri.Query) ||
-    !string.IsNullOrEmpty(uri.Fragment) || !string.IsNullOrEmpty(uri.UserInfo)))
-    throw new InvalidOperationException("Cors__Origins должен содержать только HTTP(S) origins без пути, query и fragment.");
+var requestedCorsOrigins = configuredCorsOrigins ??
+    (builder.Environment.IsDevelopment() ? ["http://localhost:5173"] : []);
+if (!CorsOriginPolicy.TryNormalize(
+    requestedCorsOrigins,
+    allowHttp: builder.Environment.IsDevelopment(),
+    out var corsOrigins))
+    throw new InvalidOperationException(
+        "Cors__Origins должен содержать не более 32 HTTPS origins без credentials, path, query и fragment; HTTP разрешён только в Development.");
 builder.Services.AddCors(x => x.AddPolicy("frontend", policy =>
 {
     if (corsOrigins.Length > 0)
