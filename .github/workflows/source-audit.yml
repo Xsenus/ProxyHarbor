@@ -95,6 +95,7 @@ jobs:
             "- Global candidate limit reached: $($report.candidateLimitReached)" >> $env:GITHUB_STEP_SUMMARY
             "- Collection counters match: $($report.collectionCountersMatch)" >> $env:GITHUB_STEP_SUMMARY
             "- Stale source evidence: $($report.staleEvidence)" >> $env:GITHUB_STEP_SUMMARY
+            "- Future source evidence: $($report.futureEvidence)" >> $env:GITHUB_STEP_SUMMARY
             if ($report.error) { "- Error: $($report.error)" >> $env:GITHUB_STEP_SUMMARY }
           }
           if (Test-Path validation-audit.json) {
@@ -106,6 +107,7 @@ jobs:
             "- Alive: $($validation.alive)" >> $env:GITHUB_STEP_SUMMARY
             "- Deferred: $($validation.deferred)" >> $env:GITHUB_STEP_SUMMARY
             "- Published JSON/XML/TXT/CSV: $($validation.jsonRows)/$($validation.xmlRows)/$($validation.txtRows)/$($validation.csvRows)" >> $env:GITHUB_STEP_SUMMARY
+            "- Published ordered-set SHA-256: $($validation.publishedSetSha256)" >> $env:GITHUB_STEP_SUMMARY
           }
       - name: Verify audit evidence artifacts exist
         if: always()

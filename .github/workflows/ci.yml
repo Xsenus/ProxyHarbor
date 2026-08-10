@@ -60,6 +60,9 @@ jobs:
       - name: Verify source-audit evidence contracts
         shell: pwsh
         run: ./tools/Test-AuditSourceFeeds.ps1
+      - name: Verify validation-audit evidence contracts
+        shell: pwsh
+        run: ./tools/Test-AuditValidation.ps1
       - name: Verify release metadata contracts
         shell: pwsh
         run: ./tools/Test-ReleaseMetadata.ps1
