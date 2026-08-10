@@ -4,10 +4,24 @@
 
 ## До первого push
 
-1. Запустите `./tools/Test-PublicationReadiness.ps1 -RequireCleanWorktree`, Gitleaks contract и полный локальный CI-набор из `CONTRIBUTING.md`.
+1. Запустите `./tools/Test-PublicationReadiness.ps1 -RequireCleanWorktree`, `./tools/Test-DocumentationLinks.ps1`, фактический `./tools/Invoke-Gitleaks.ps1` и полный локальный CI-набор из `CONTRIBUTING.md`.
 2. Создайте публичный репозиторий без автоматически сгенерированных README/LICENSE/.gitignore, чтобы не расходилась история.
 3. Добавьте remote и отправьте `main` обычным push. Не применяйте force push и не публикуйте `.env`, backup либо production dump.
 4. Дождитесь первого успешного выполнения CI и CodeQL до включения required checks: GitHub предлагает только checks, которые уже запускались.
+
+Пример после создания пустого репозитория:
+
+```powershell
+git remote add origin https://github.com/YOUR_GITHUB_OWNER/ProxyHarbor.git
+git remote -v
+git push --set-upstream origin main
+```
+
+Если `origin` уже существует, сначала проверьте его через `git remote get-url origin`; не заменяйте неизвестный remote вслепую. После выбора владельца обновите clone URL в `README.md`.
+
+Рекомендуемое описание: `Fast self-hosted free proxy collector, validator and JSON/XML/TXT/CSV API built with ASP.NET Core and React.`
+
+Рекомендуемые topics: `proxy`, `proxy-list`, `proxy-checker`, `socks5`, `aspnet-core`, `react`, `postgresql`, `docker`, `openapi`, `self-hosted`.
 
 ## Actions и безопасность
 
@@ -35,4 +49,14 @@
 
 После первого SemVer tag убедитесь, что появились три GHCR package: `proxyharbor-api`, `proxyharbor-web`, `proxyharbor-restore`. Свяжите их с репозиторием, сделайте публичными для бесплатного сервиса и проверьте digest manifest, SBOM/provenance и GitHub attestation по процедуре выпуска.
 
-В `Settings → General` отключите Wiki/Projects, если они не используются, включите Issues, задайте описание и topics (`proxy`, `proxy-checker`, `react`, `dotnet`, `postgresql`, `docker`). После появления реальных сопровождающих добавьте `.github/CODEOWNERS`; не указывайте вымышленный аккаунт до определения владельцев.
+В `Settings → General` отключите Wiki/Projects, если они не используются, включите Issues, задайте описание и topics. После появления реальных сопровождающих добавьте `.github/CODEOWNERS`; не указывайте вымышленный аккаунт до определения владельцев.
+
+## Проверка после первого push
+
+- README корректно отображает Mermaid-схему и ссылки;
+- Issues показывают bug/source/documentation templates, blank issues отключены;
+- вкладка Security видит `SECURITY.md`, CodeQL и Dependabot;
+- CI job `verify` и оба CodeQL jobs завершились успешно;
+- package/release workflows не запускаются без SemVer tag;
+- repository не содержит `.env`, `.phbackup`, dumps, audit artifacts или собранные proxy lists;
+- clone чистого репозитория проходит `Test-PublicationReadiness.ps1 -RequireCleanWorktree`.

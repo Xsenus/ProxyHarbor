@@ -1,0 +1,33 @@
+name: Ошибка документации
+description: Сообщить о неточной, устаревшей или отсутствующей инструкции
+title: "[Docs]: "
+labels: [documentation]
+body:
+  - type: markdown
+    attributes:
+      value: Не включайте секреты, production dumps, backup-содержимое или реальные proxy lists.
+  - type: input
+    id: page
+    attributes:
+      label: Страница или раздел
+      placeholder: docs/DEPLOYMENT.md — «Первый production-запуск»
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Что неверно или непонятно
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Как должно быть
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Версия или commit
+    validations:
+      required: true

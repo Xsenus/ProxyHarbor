@@ -8,10 +8,14 @@ $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path -LiteralPath $RepositoryRoot).Path
 
 $requiredFiles = @(
-    'LICENSE', 'README.md', 'SECURITY.md', 'CONTRIBUTING.md', 'CHANGELOG.md',
+    'LICENSE', 'README.md', 'SECURITY.md', 'SUPPORT.md', 'CODE_OF_CONDUCT.md',
+    'CONTRIBUTING.md', 'CHANGELOG.md', 'docs/README.md', 'docs/ARCHITECTURE.md',
+    'docs/API.md', 'docs/CONFIGURATION.md', 'docs/BACKUP_RESTORE.md',
+    'docs/PROJECT_STATUS.md',
     '.env.example', '.gitignore', '.dockerignore', '.gitattributes',
     '.github/dependabot.yml', '.github/pull_request_template.md',
     '.github/ISSUE_TEMPLATE/bug_report.yml', '.github/ISSUE_TEMPLATE/source_request.yml',
+    '.github/ISSUE_TEMPLATE/documentation.yml', '.github/ISSUE_TEMPLATE/config.yml',
     '.github/workflows/ci.yml', '.github/workflows/codeql.yml',
     '.github/workflows/release.yml', '.github/workflows/source-audit.yml',
     'docs/DEPLOYMENT.md', 'docs/GITHUB_SETUP.md', 'docs/RELEASING.md'

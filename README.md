@@ -1,322 +1,345 @@
 # ProxyHarbor
 
-Высокопроизводительный сервис на ASP.NET Core 10 + React 19 для агрегации, проверки и публикации бесплатных публичных HTTP(S), SOCKS4 и SOCKS5 прокси.
+Высокопроизводительный сервис на ASP.NET Core 10, React 19 и PostgreSQL для сбора, объективной проверки и публикации бесплатных публичных HTTP(S), SOCKS4 и SOCKS5 прокси.
 
-История заметных изменений ведётся в [CHANGELOG.md](CHANGELOG.md); GitHub Release публикует проверенный раздел соответствующей SemVer-версии.
+ProxyHarbor загружает 81 HTTPS-feed от 50 независимых провайдеров, нормализует и дедуплицирует адреса, проверяет их через настоящий proxy-туннель до доверенного TLS endpoint, измеряет задержку и отдаёт только свежие подтверждённые прокси через API и экспорты JSON, XML, TXT и CSV.
 
-> Публичные прокси контролируются третьими лицами. Не передавайте через них пароли, платёжные данные и иную конфиденциальную информацию. Используйте сервис только законно и с соблюдением правил источников.
+> Публичные прокси принадлежат третьим лицам и могут читать или изменять незашифрованный трафик. Не передавайте через них пароли, cookies, платёжные данные и другие секреты. Используйте сервис законно и соблюдайте условия источников и целевых ресурсов.
+
+## Состояние проекта
+
+- 81 встроенный feed от 50 провайдеров; полный каталог: [docs/SOURCE_CATALOG.md](docs/SOURCE_CATALOG.md).
+- Последний независимый live-аудит feed endpoint: 81/81 успешно, 0 ошибок.
+- Последний полный production-цикл: 888 116 разобранных строк, 290 217 уникальных кандидатов за 4,965 секунды.
+- Проверочная партия: 1 600/1 600 результатов, без `Deferred`; одинаковый набор Alive во всех четырёх форматах.
+- Backend: 598 автоматических тестов; meaningful coverage — 89,21% строк и 80,21% ветвей.
+- Frontend: Vitest, ESLint, TypeScript production build и axe-core accessibility gate.
+- Release build компилируется с warnings-as-errors и обязательной XML-документацией публичного production API.
+- CI проверяет PostgreSQL migrations, backup/restore, OpenAPI, Docker Compose, security contracts, зависимости и Git-историю.
+
+Результаты конкретного аудита описаны в [docs/SOURCES.md](docs/SOURCES.md) и [docs/PERFORMANCE.md](docs/PERFORMANCE.md). Это воспроизводимые измерения, а не гарантия постоянной доступности сторонних бесплатных прокси.
 
 ## Возможности
 
-- параллельная загрузка 81 встроенного HTTPS feed'а от 50 независимых провайдеров с retry, jitter и ограничениями размера/времени;
-- нормализация, защита от приватных адресов/DNS-rebinding и дедупликация с бинарным bulk-upsert PostgreSQL;
-- реальная проверка HTTP CONNECT, SOCKS4a и SOCKS5 через TLS до контрольного сервера;
-- измерение полной задержки, накопительная статистика успешности и адаптивная перепроверка без перегрузки сети;
-- публичный API, фильтрация и экспорт JSON, XML, TXT, CSV;
-- адаптивная React-панель и административные действия по ключу;
-- ограничение частоты запросов, SSRF-защита источников, контейнеры без root и с read-only ФС;
-- потоковые зашифрованные AES-256-GCM снимки БД и настроек с отправкой в Telegram;
-- постоянный аудит создания, размера и подтверждённой Telegram-доставки каждого backup;
-- bounded runtime HTTP counters/histogram и Prometheus alarms для sustained 5xx и p95 latency публичного API;
-- воспроизводимый fail-closed backup-аудит конкретного PHB3-файла и его Telegram delivery evidence;
-- opt-in Prometheus + Alertmanager с bounded retention, проверяемыми alert rules и Telegram-уведомлениями;
-- воспроизводимый public API latency-аудит с cold/hot p95 SLO и JSON-отчётом;
-- CI для backend, frontend, тестов и проверки Docker Compose.
+- параллельный bounded-сбор источников с retry, exponential backoff, ETag/Last-Modified и аудитом полноты;
+- строгий parser `IP:port` и `scheme://IP:port`, защита от HTML/WAF-ответов, private/special-use адресов и DNS rebinding;
+- allocation-conscious дедупликация и PostgreSQL binary COPY для больших циклов;
+- проверка HTTP CONNECT, SOCKS4a и SOCKS5 через TLS 1.2/1.3 до контрольного endpoint;
+- измерение полной latency, exit IP, анонимности, success rate и адаптивное расписание повторных проверок;
+- горизонтально масштабируемая очередь через lease token и `FOR UPDATE SKIP LOCKED`;
+- публичная keyset pagination и потоковый экспорт до 50 000 строк за запрос;
+- React-панель со статистикой, каталогом провайдеров и защищённым административным режимом;
+- OpenAPI, Prometheus-метрики, готовые alerts и operator diagnostics;
+- PHB3 backup БД и безопасных настроек: diskless ZIP → AES-256-GCM → self-verification → atomic publish → Telegram;
+- транзакционный restore всех пяти таблиц с проверкой архива, semantic invariants и полным rollback при ошибке;
+- hardened Docker deployment: non-root, read-only root filesystem, dropped capabilities, healthchecks и resource ceilings;
+- multi-architecture GHCR release workflow с SBOM, provenance и immutable image digests.
 
-## Быстрый запуск в Docker
+## Как работает ProxyHarbor
 
-Требуются Docker Engine 26+ и Docker Compose 2.24.4+. Все сторонние build/runtime/service images записаны как читаемый `tag@sha256:manifest-digest`: тег сообщает ожидаемую версию, а multi-architecture digest запрещает реестру незаметно подменить фактические байты. CI отклоняет новый mutable image reference. Dependabot обновляет поддерживаемые Dockerfile/Compose-ссылки; service containers внутри GitHub Actions он не обновляет, поэтому один PostgreSQL tag/digest необходимо синхронно менять в `docker-compose.yml`, `ci.yml`, `release.yml` и `source-audit.yml`. Build context формируется по allowlist: `.env`, локальная PostgreSQL, backup, Git-метаданные и dependency/build-каталоги никогда не отправляются Docker daemon и не попадают в build cache. Compose ограничивает размер/ротацию логов и PID, запускает API без Linux capabilities и даёт процессу до двух минут на корректную отмену операций, очистку partial backup и запись итогового аудита при остановке.
+```mermaid
+flowchart LR
+    A["81 HTTPS feeds / 50 providers"] --> B["Bounded collector"]
+    B --> C["Normalize + deduplicate"]
+    C --> D["PostgreSQL candidate queue"]
+    D --> E["HTTP/SOCKS validation workers"]
+    E --> F["TLS control endpoint"]
+    E --> G["Alive evidence + latency"]
+    G --> H["REST API"]
+    G --> I["JSON / XML / TXT / CSV"]
+    H --> J["React dashboard"]
+    D --> K["Encrypted PHB3 backup"]
+    K --> L["Telegram administrator"]
+```
+
+Collector отвечает только за обнаружение адресов. Proxy не публикуется как Alive, пока validator не построит реальный туннель, не завершит TLS-проверку доверенного сертификата и не получит канонический внешний IP. Недоступность контрольного endpoint даёт нейтральный `Deferred`, а не ложный Dead.
+
+Подробности: [архитектура](docs/ARCHITECTURE.md), [источники](docs/SOURCES.md), [производительность](docs/PERFORMANCE.md).
+
+## Быстрый запуск через Docker
+
+Требования:
+
+- Docker Engine 26+;
+- Docker Compose 2.24.4+;
+- минимум 4 ГБ RAM для стандартных лимитов;
+- доступ к PostgreSQL и внешним HTTPS endpoint из контейнерной сети.
 
 ```bash
+git clone https://github.com/YOUR_GITHUB_OWNER/ProxyHarbor.git
+cd ProxyHarbor
 cp .env.example .env
-# Заполните все обязательные значения в .env
+```
+
+Замените обязательные значения в `.env`:
+
+```dotenv
+POSTGRES_PASSWORD=REPLACE_ME
+ADMIN_API_KEY=REPLACE_ME
+BACKUP_ENCRYPTION_KEY=REPLACE_ME
+TELEGRAM_BOT_TOKEN=REPLACE_ME
+TELEGRAM_CHAT_ID=-1001234567890
+```
+
+Запустите локальный HTTP-контур:
+
+```bash
 docker compose up -d --build
+docker compose ps
+curl --fail http://localhost:8080/health/ready
 ```
 
-Интерфейс: `http://localhost:8080`. OpenAPI: `http://localhost:8080/openapi/v1.json`. Liveness: `/health/live`, readiness PostgreSQL и актуальной рабочей схемы: `/health/ready` (совместимый `/healthz` перенаправляет на readiness), локальные Prometheus-метрики: `/metrics` (production gateway их не публикует).
+После первого старта:
 
-API автоматически применяет EF Core migrations и синхронизирует встроенный каталог при старте. PostgreSQL advisory lock сериализует этот этап между одновременно запускаемыми репликами: только одна выполняет migrations/seed, остальные ожидают и затем проверяют уже обновлённую схему. Ожидание использует короткий `pg_try_advisory_lock`, а не блокирующий statement snapshot, поэтому не образует deadlock с `CREATE INDEX CONCURRENTLY`. Любая неоднозначность unlock исключает owning session из pool и запускает async+sync попытки физического закрытия; non-throwing cleanup не заменяет результат уже завершённой операции и учитывается в `proxyharbor_advisory_lock_cleanup_failures_total` с critical alert на рост. Фоновый collector сохраняет настроенный start-to-start cadence для быстрых циклов, делает обязательный cooldown после цикла дольше интервала, повторяет общий сбой через минуту и ждёт полный интервал, если cluster lock принадлежит другой реплике; медленный или отказавший внешний feed поэтому не создаёт немедленный тяжёлый restart/retry-storm. Критические port/enum/timeline/lease/counter/status-evidence/run/Telegram-инварианты дополнительно закреплены 17 PostgreSQL CHECK constraints: migration сначала публикует их как `NOT VALID`, а затем проверяет исторические строки через менее блокирующий `VALIDATE CONSTRAINT`. Это позволяет безопасный rolling restart без гонки DDL, дублирования источников и длительной остановки обычных writes.
+- панель: <http://localhost:8080>;
+- OpenAPI: <http://localhost:8080/openapi/v1.json>;
+- readiness: <http://localhost:8080/health/ready>;
+- liveness: <http://localhost:8080/health/live>;
+- локальные метрики: <http://localhost:8080/metrics>.
 
-Первый полезный список появляется не мгновенно: сервис сначала загружает кандидатов, затем непрерывно проверяет их пакетами. После bulk-upsert collector отправляет bounded wake-сигнал validator'у: он немедленно прерывает 30-секундное idle-ожидание, а несколько завершений/ручных запусков объединяются в одно событие без роста памяти. Поэтому первая проверка не зависит от случайной фазы polling-цикла. Скорость регулируется `Collector__ValidationConcurrency`; Docker-профиль гарантирует `nofile=8192` для настроенных 800 параллельных probes, но при ручном запуске лимит файловых дескрипторов и пропускную способность сети контролирует оператор. Методика и результаты live-тюнинга приведены в [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
-
-## Версионированные контейнерные релизы
-
-После подключения репозитория к GitHub push строгого SemVer-тега `vX.Y.Z` запускает отдельный release workflow. Сначала tagged commit повторно проходит locked restore, проверку EF model, все backend-тесты на настоящей PostgreSQL, frontend-тесты/audits и Compose/contracts; write-permissions отсутствуют до успеха этого gate. Затем workflow параллельно публикует `proxyharbor-api`, `proxyharbor-web` и `proxyharbor-restore` для `linux/amd64` и `linux/arm64` в GHCR namespace владельца репозитория. Каждый manifest получает OCI labels, встроенную версию, BuildKit SBOM/provenance и точный digest в `proxyharbor-release.json`; для публичного репозитория дополнительно создаётся подписанная GitHub/Sigstore provenance-attestation. Все внешние actions закреплены полными commit SHA и проверяются отдельным supply-chain gate.
-
-GitHub Release прикладывает base, production и release Compose-файлы. Поэтому проверенную версию можно запустить без локальной сборки:
-
-```bash
-cp .env.example .env
-export PROXYHARBOR_IMAGE_PREFIX=ghcr.io/your-github-owner
-export PROXYHARBOR_IMAGE_TAG=1.2.3
-docker compose -f docker-compose.yml -f docker-compose.release.yml -f docker-compose.production.yml up -d
-```
-
-Для prerelease используется полный нормализованный image tag из release manifest; разделитель `+` SemVer build metadata кодируется как `_build_`, что исключает столкновение с допустимым prerelease-именем. Тег `latest` и плавающий `major.minor` обновляются только стабильными релизами. Compose CI доказывает, что release overlay полностью удаляет локальные `build`-секции. Процедура выпуска и проверка attestations описаны в [docs/RELEASING.md](docs/RELEASING.md).
-
-Перед первым push выполните fail-closed [checklist публикации](docs/GITHUB_SETUP.md): он фиксирует required checks, rulesets, GitHub security settings и GHCR visibility. Локальный `tools/Test-PublicationReadiness.ps1` отклоняет tracked secret-bearing/generated artifacts, включая runtime audit reports, конфликты регистра путей и файлы больше 10 MiB до попадания в GitHub.
+Первый публичный список появится после сбора и проверки кандидатов. Текущее состояние видно в панели, `/api/v1/stats` и admin diagnostics.
 
 ## Production HTTPS
 
-Создайте DNS A/AAAA-запись на сервер, откройте входящие TCP 80/443 и UDP 443, затем задайте в `.env` bare hostname `PUBLIC_HOST` (без `https://` и пути) и контактный `ACME_EMAIL`:
+Создайте DNS A/AAAA-запись, откройте TCP 80/443 и UDP 443, затем задайте в `.env`:
+
+```dotenv
+PUBLIC_HOST=proxy.example.com
+ACME_EMAIL=admin@example.com
+```
+
+Запуск:
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.production.yml up -d --build
-curl https://proxy.example.com/health/ready
+curl --fail https://proxy.example.com/health/ready
 ```
 
-Production override убирает прямой порт `8080` у frontend и публикует только Caddy на 80/443. Caddy автоматически получает и продлевает сертификат, перенаправляет HTTP на HTTPS, сохраняет ACME-состояние в volumes и работает без root, capabilities и writable root filesystem. Базовый `docker compose up` предназначен для локальной проверки по HTTP, а не для публичного сервера. Подробный checklist: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+Production overlay:
 
-Для локально доступной operational history и готовых предупреждений добавьте профиль мониторинга:
+- принудительно включает encrypted backup и Telegram delivery;
+- убирает прямую публикацию frontend-порта `8080`;
+- оставляет единственной публичной точкой входа hardened Caddy;
+- автоматически получает и продлевает TLS-сертификаты;
+- не публикует `/metrics` через gateway;
+- использует Compose secrets вместо secret values в environment контейнеров.
 
-```bash
-docker compose -f docker-compose.yml -f docker-compose.production.yml --profile monitoring up -d --build
-```
+Полная процедура, firewall, restore drill и обновление: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
-Prometheus слушает только `127.0.0.1:9090`, Alertmanager — `127.0.0.1:9093`; production gateway намеренно не публикует `/metrics`. Профиль требует `TELEGRAM_BOT_TOKEN` и числовой `TELEGRAM_CHAT_ID`, передаёт их Alertmanager как Compose secrets и отправляет сгруппированные firing/resolved уведомления. Полный список alarms и действия оператора: [docs/MONITORING.md](docs/MONITORING.md).
-
-## Конфигурация
-
-Настройки задаются стандартным способом ASP.NET Core: значения окружения с `__` заменяют секции JSON.
-
-| Переменная | Назначение |
-|---|---|
-| `ConnectionStrings__Postgres` | Строка подключения PostgreSQL |
-| `Security__AdminApiKey` | Значимый корректный Unicode-ключ длиной 24–256 символов для заголовка `X-Admin-Key` |
-| `Cors__Origins__0...N` | До 32 доверенных browser origins: в Production только HTTPS без credentials/path/query/fragment; HTTP разрешён лишь в Development, список по умолчанию пуст |
-| `ForwardedHeaders__KnownNetworks__0...N` | До 32 канонических CIDR только доверенных reverse proxy; catch-all и сети шире IPv4 `/8` или IPv6 `/24` запрещены, Compose задаёт изолированную `/24` сеть |
-| `AllowedHosts` | Разделённые `;` явные Host names без порта; Production запрещает пустое значение и allow-all `*`, Compose использует `PUBLIC_HOST` |
-| `PUBLIC_HOST` | Публичное DNS-имя production без схемы и пути |
-| `ACME_EMAIL` | Контакт для автоматического выпуска TLS-сертификата |
-| `PROMETHEUS_PORT` | Loopback-порт opt-in Prometheus, по умолчанию 9090 |
-| `PROMETHEUS_RETENTION_TIME` | Максимальный возраст метрик, по умолчанию 30d |
-| `PROMETHEUS_RETENTION_SIZE` | Максимальный объём TSDB, по умолчанию 10GB |
-| `ALERTMANAGER_PORT` | Loopback-порт Alertmanager, по умолчанию 9093 |
-| `ALERTMANAGER_RETENTION_TIME` | Срок notification log и silences, по умолчанию 120h |
-| `POSTGRES_*_LIMIT`, `API_*_LIMIT`, `RESTORE_*_LIMIT`, `WEB_*_LIMIT`, `CADDY_*_LIMIT` | Настраиваемые memory/CPU ceilings core-контейнеров; безопасные defaults перечислены в `.env.example` |
-| `SecretFiles__*` | Абсолютные пути secret manager; Docker Compose задаёт их автоматически |
-| `Collector__BackgroundWorkersEnabled` | Позволяет отключить workers для миграций, CI или отдельной API-реплики |
-| `VALIDATION_CONCURRENCY` / `Collector__ValidationConcurrency` | Параллельность сетевых проверок, по умолчанию 800 |
-| `VALIDATION_BATCH_SIZE` / `Collector__ValidationBatchSize` | Размер одной очереди, по умолчанию 1600 |
-| `Collector__PublicFreshnessMinutes` | Максимальный возраст проверки для публичной выдачи, по умолчанию 15 минут |
-| `Collector__ProbeHost` | Публичный control endpoint, возвращающий JSON `{ "ip": "..." }`: canonical ASCII DNS/IP без схемы и порта; DNS labels содержат только буквы, цифры и внутренний дефис, IP literal уже нормализован; по умолчанию `api.ipify.org` |
-| `Collector__ProbePort` | TLS-порт control endpoint, по умолчанию 443 |
-| `Collector__ProbePath` | Уже escaped printable ASCII origin-form (`/path?query`) без fragment, пробелов и `//` в начале; по умолчанию `/?format=json` |
-| `Collector__DeadRetryBaseMinutes` | Начальная пауза перед повторной проверкой нерабочего прокси, по умолчанию 15 минут |
-| `Collector__DeadRetryMaxHours` | Верхняя граница экспоненциальной паузы для нерабочих прокси, по умолчанию 24 часа |
-| `Collector__SourceConcurrency` | Параллельность загрузки feed'ов, по умолчанию 8 |
-| `Collector__SourceRetryCount` | Повторы временных HTTP/сетевых ошибок, по умолчанию 2 |
-| `Collector__SourceFailureBackoffBaseMinutes` | Начальная пауза после ошибки feed, по умолчанию 15 минут |
-| `Collector__SourceFailureBackoffMaxHours` | Верхняя граница exponential backoff feed, по умолчанию 24 часа |
-| `Collector__MaxProxiesPerSource` | Защитный лимит уникальных адресов из одного feed, по умолчанию 500 000; значение подтверждено полным live-аудитом каталога |
-| `Collector__MaxCandidatesPerRun` | Защитный лимит уникальных кандидатов за цикл, по умолчанию 500 000 |
-| `Collector__LastSeenRefreshMinutes` | Минимальный интервал записи повторного обнаружения, по умолчанию 360 минут |
-| `Collector__DeadRetentionDays` | Membership retention для давно не встречавшихся Pending/Dead, по умолчанию 3 дня |
-| `Collector__RunRetentionDays` | Срок хранения истории циклов, по умолчанию 30 дней |
-| `BACKUP_ENABLED` / `Backup__Enabled` | Включает backup в локальном base Compose; публичный production overlay всегда принудительно задаёт `true` |
-| `Backup__HistoryRetentionDays` | Срок хранения аудита backup-запусков, по умолчанию 365 дней |
-| `Backup__EncryptionKey` | Ключ создания новых копий: 32–1024 случайных символа без управляющих знаков |
-| `Backup__TelegramBotToken` | Token от BotFather: 20–256 printable ASCII символов без URI-разделителей `/`, `\\`, `?`, `#`, `%` |
-| `Backup__TelegramChatId` | Ненулевой signed 64-bit числовой ID администратора/group/channel, совместимый с Alertmanager |
-| `Backup__MaxTelegramFileSizeMb` | Лимит одной Telegram-части, 1–49 МБ; доставка ограничена максимум 20 частями |
-
-Числовой `chat_id` выбран намеренно: Bot API допускает также `@username`, но общий secret одновременно используется [Telegram receiver Alertmanager](https://prometheus.io/docs/alerting/latest/configuration/#telegram_config), где поле имеет тип integer; отправка документа соответствует официальному [`sendDocument`](https://core.telegram.org/bots/api#senddocument).
-
-Публичный `docker-compose.production.yml` всегда задаёт `Backup__Enabled=true`; отключить обязательную копию случайной или забытой environment-переменной нельзя. Отсутствие сильного ключа, Telegram token либо chat ID останавливает startup, поэтому production deployment не может молча перейти в режим без backup или local-only.
-
-Секреты не коммитьте. Docker Compose преобразует значения `.env` для PostgreSQL password, admin key, backup encryption key и Telegram в отдельные read-only `/run/secrets/*`; значений нет в container environment и `docker inspect`. Bounded UTF-8 loader ограничивает каждый файл 16 КиБ, удаляет только один терминальный CRLF/LF и fail-closed отклоняет relative path, invalid UTF-8 и внутренние control characters. При обычном `dotnet run` стандартные environment-настройки остаются совместимыми. В Production административный ключ должен содержать 24–256 символов без управляющих знаков. Middleware принимает ровно одно bounded значение `X-Admin-Key`, сравнивает SHA-256 в constant time и помечает все admin-ответы `no-store`; React хранит ключ только в памяти/sessionStorage текущей вкладки, продолжает работать при заблокированном Storage API и предоставляет явный выход. CORS-доступ включается только для явно перечисленных origins, а `X-Forwarded-*` принимается только от настроенных proxy-сетей с одним разрешённым переходом. API и nginx выставляют CSP, HSTS, frame/content-type/referrer/permissions и cross-origin isolation headers. При `Backup__Enabled=true` startup требует одновременно сильный ключ и валидные Telegram token/chat ID: плановый backup не может молча перейти в локальный-only режим и не доставить архив администратору. Секреты не включаются и в backup: архив содержит данные БД, каталог источников, безопасные параметры сборщика/backup/runtime, CORS origins, доверенные proxy CIDR и manifest. Для admin key и строки БД сохраняются только флаги наличия, но не значения. Новый manifest v5 требует точную типизированную схему всех трёх settings-файлов; каждое свойство `BackupOptions` fail-closed классифицировано как безопасное или секретное, поэтому новый параметр нельзя молча потерять либо отправить в архив. BackupWorker при старте и после каждого cooldown читает время последнего `completed`-аудита: restart/deploy или ручной backup сохраняет оставшуюся часть настроенного интервала и не отправляет лишний архив в Telegram; при отсутствии либо просрочке успешной копии backup запускается сразу, а недоступность БД повторно проверяется через bounded 15 минут без остановки host. Занятый cluster-lock использует тот же короткий cooldown: после успеха peer восстанавливается остаток штатного интервала, а после его аварии просроченный backup повторяется вместо суточной паузы. Разрешённые интервалы длиннее суток выполняются переносимыми суточными timer chunks с повторным чтением аудита, поэтому ручная копия и clock shift не остаются незамеченными на месяцы. ZIP создаётся непосредственно в bounded pipe (пауза producer при 4 МиБ, возобновление при 2 МиБ) и одновременно шифруется в `.phbackup`, поэтому plaintext-архив не записывается в backup volume. После финального PHB3-маркера ciphertext один раз синхронизируется с диском, полностью перечитывается и аутентифицируется без записи plaintext; только после успеха durable partial атомарно публикуется, участвует в retention и отправляется в Telegram. Формат PHB3 потоково шифрует и аутентифицирует содержимое, порядок блоков и завершающий маркер; расшифровщик сохраняет совместимость с PHB2.
-
-Завершение обеих сторон bounded pipe сохраняет failure precedence: faulted reader/writer completion не заменяет исходную ошибку ZIP producer или PHB3 encryptor, а без primary остаётся самостоятельным fail-closed сбоем.
-
-Retention резервных копий управляет только каноническими файлами `proxyharbor-yyyyMMdd-HHmmss-ffff.phbackup`, созданными сервисом. Соседние `manual.phbackup` и даже похожие, но неканонические `proxyharbor-*.phbackup` никогда не удаляются по возрасту или capacity. Аварийная очистка применяет тот же exact ownership parser к legacy ZIP, unpublished partial и Telegram parts, проверяя canonical timestamp, D3-нумерацию и границы `part/total`; похожие ручные файлы остаются нетронутыми. Вторичный отказ удаления partial/part не заменяет исходную ошибку шифрования, PostgreSQL, Telegram или cancellation: тип и stack primary exception сохраняются, cleanup detail добавляется в `Exception.Data`, а orphan повторно удаляется перед следующим backup. Поэтому backup volume можно безопасно использовать вместе с ручными архивами администратора.
-
-Production требует 1–32 явных ASCII pattern в `AllowedHosts`; пустое значение и framework allow-all `*` останавливают startup. Compose передаёт API тот же `PUBLIC_HOST`, который завершает TLS в Caddy, поэтому неизвестный Host отклоняется Kestrel с HTTP 400 до маршрутизации. Это соответствует официальной модели [ASP.NET Core Host Filtering](https://learn.microsoft.com/aspnet/core/fundamentals/servers/kestrel/host-filtering?view=aspnetcore-10.0).
-
-## API
-
-Принудительный admin collection отключает `ETag`/`Last-Modified`: все feed’ы обязаны вернуть полный body и заново пройти parser. Source audit требует `LastContentFetchedAt` внутри границ именно этого run, поэтому исторический `304` не может выдать сохранённый `LastItemCount` за новый полный аудит. После успешного цикла retention удаляет давно не встречавшиеся и не арендованные `Pending`/`Dead`: недоступный control endpoint больше не позволяет непроверенным строкам расти бесконечно. `Alive` сохраняется до объективной повторной проверки, а свежесть полного feed body принудительно обновляется раньше retention cutoff. Дополнительный hourly maintenance worker под отдельной PostgreSQL advisory lock очищает proxy membership и завершённую историю collection/validation/backup независимо от успеха этих pipeline. Живые collection/backup защищены собственными operation locks, validation — активной lease; orphan `running` сначала атомарно переводится в `failed` и только после retention cutoff удаляется. Метрики здоровья, последнего успеха/ошибки, восстановленных и удалённых строк вместе с alarms показывают отказ обслуживания до роста БД.
-
-Потоковые export endpoint'ы читают boundary metadata и body в одной PostgreSQL `RepeatableRead` транзакции через отдельный non-retrying контекст. Обычные короткие запросы и workers сохраняют transient retry, но экспорт никогда не повторяется после отправки первых байтов клиенту.
+## Публичный API
 
 ```text
-GET  /api/v1/proxies?protocol=Socks5&maxLatencyMs=1000&page=1&pageSize=100
-GET  /api/v1/proxies/seek?protocol=Socks5&pageSize=100&after={nextCursor}
-GET  /api/v1/export/json?maxLatencyMs=1500&minSuccessRate=80&limit=50000&offset=0
-GET  /api/v1/export/json/seek?minSuccessRate=80&limit=50000&after={nextCursor}
-GET  /api/v1/export/xml?protocol=Socks5
-GET  /api/v1/export/txt?protocol=Http&maxLatencyMs=1000
-GET  /api/v1/export/csv?minSuccessRate=90
-GET  /api/v1/sources
-GET  /api/v1/stats
+GET /api/v1/proxies
+GET /api/v1/proxies/seek
+GET /api/v1/export/{json|xml|txt|csv}
+GET /api/v1/export/{json|xml|txt|csv}/seek
+GET /api/v1/sources
+GET /api/v1/stats
+GET /health/live
+GET /health/ready
+GET /metrics
+GET /openapi/v1.json
 ```
 
-`/api/v1/sources` без административного ключа возвращает публичный read-only снимок: дату последнего release-аудита, 50 независимых провайдеров, их протоколы и все 81 канонический feed. React-карточка каждого провайдера раскрывает все его конкретные URL с именем и HTTP/HTTPS/SOCKS4/SOCKS5 protocol; свёрнутое состояние сохраняет компактную сетку. Текущее состояние, ошибки и расписание источников остаются только в admin diagnostics и Prometheus.
+Примеры:
 
-Для независимого bounded live-аудита каталога запустите `./tools/Test-BuiltInSourceEndpoints.ps1`: инструмент отключает системный proxy, параллельно проверяет все 81 HTTPS feed с общим per-request timeout, читает не более 256 КиБ распакованного body и требует признак `IP:port`. Режим `-CatalogOnly` без сети фиксирует cardinality/uniqueness/rank contract в CI и release gate; полный JSON-отчёт можно сохранить через `-ReportPath`. Последний независимый endpoint-аудит 10 августа 2026 года в 23:47 (Asia/Novosibirsk) подтвердил 81/81 feed от 50/50 владельцев без ошибок, самый медленный ответ занял 1,111 мс. Полный end-to-end запуск в 23:50 на новой PostgreSQL-схеме обработал те же 81/81 feed за 4,965 секунды: 888 116 распознанных строк, 290 217 уникальных кандидатов, ноль skip/ошибок/усечений и недостигнутый общий лимит. Следующая validation-партия сохранила 1 600/1 600 объективных результатов без `Deferred`, нашла 4 Alive и опубликовала одинаковое множество в JSON/XML/TXT/CSV с SHA-256 `b5775d509884adee1c78673f76943ce0c6e9ec5750b0302afddc447721d8cc5e`.
+```bash
+curl 'http://localhost:8080/api/v1/proxies?protocol=Socks5&maxLatencyMs=1000&pageSize=100'
+curl 'http://localhost:8080/api/v1/proxies/seek?minSuccessRate=80&pageSize=500'
+curl -OJ 'http://localhost:8080/api/v1/export/csv?maxLatencyMs=1500&limit=50000'
+curl 'http://localhost:8080/api/v1/sources'
+curl 'http://localhost:8080/api/v1/stats'
+```
 
-Mixed feed сохраняет scheme каждой отдельной строки (`http`, `https`, `socks4`, `socks5`), а source default применяется только к голому `IP:port`. До разбора кандидатов semantic gate отклоняет HTML media types и mislabelled HTML/WAF envelopes, включая leading comment, `doctype`, `html/head/body`, `meta`, `title` и `script`, поэтому диагностический адрес на error page не становится прокси.
+Для длинного обхода используйте seek endpoint и возвращаемый `nextCursor`/`X-Next-Cursor`. Cursor подписывает позицию и fingerprint фильтров; повреждённое значение или повторное использование с другими фильтрами возвращает `400`.
 
-Экспорт потоково отдаёт до 50 000 свежих проверенных записей за запрос, не собирая многомегабайтный ответ в памяти API, и поддерживает те же `protocol`, `maxLatencyMs` и `minSuccessRate`, что публичный список. Для последовательного обхода большого каталога используйте `/proxies/seek` и `/export/{format}/seek`: они не выполняют полный `COUNT` и не сканируют растущий `OFFSET`. Передайте возвращённый `nextCursor` как `after`; у экспорта продолжение находится в `X-Next-Cursor`, а текущая позиция — в `X-Export-Cursor`. Непрозрачный 44-символьный cursor привязан к фильтрам, поэтому повреждённое значение или его повторное использование с другими фильтрами даёт `400`. Старые `page`/`offset` маршруты сохранены для совместимости, возвращают `X-Next-Offset` и fail-fast отклоняют смещение свыше 5 000 000; для более глубокого обхода обязателен seek.
+Полный контракт фильтров, форматов, заголовков, ошибок и rate limits: [docs/API.md](docs/API.md).
 
-Список и все экспорты используют единый полный порядок latency → число успешных проверок по убыванию → UUID, поэтому записи с одинаковой скоростью имеют однозначный порядок. Внутри одного export-ответа boundary-запрос continuation-заголовков и потоковое тело читаются из единого PostgreSQL `REPEATABLE READ` snapshot, поэтому concurrent validation не может выдать cursor от одной страницы и body от другой. Legacy page тем же способом согласует `items` с точным `total`, `/api/v1/stats` — proxy/source/run агрегаты, а `/metrics` — все значения одного Prometheus scrape; эти полностью буферизованные ответы выполняют транзакцию внутри EF execution strategy и безопасно повторяются целиком при transient failure. Между отдельными запросами фоновые проверки всё ещё могут обновить порядок или freshness; cursor намеренно не является долгоживущим снимком БД. Все continuation-заголовки доступны browser-клиентам через CORS. JSON, XML и CSV содержат стабильные поля protocol/host/port/url/latency/success/exit IP/time; TXT содержит по одному готовому proxy URL на строку. CSV кавычит строки и нейтрализует spreadsheet formula injection. Все четыре streaming-формата прокидывают отключение клиента до чтения PostgreSQL и записи HTTP body; занятый export-слот и read-snapshot освобождаются через `finally`/async disposal. На один IP разрешено 120 обычных публичных запросов, включая DB readiness, 20 административных и 5 тяжёлых экспортов в минуту; дешёвый `/health/live` не ограничивается, чтобы оставаться независимым liveness-сигналом. Один экземпляр API одновременно формирует не более двух экспортов. При превышении лимита сервис отвечает `429` или `503` и `Retry-After`. Короткий server-side cache сводки и legacy-страниц игнорирует неизвестные query-параметры, чтобы ими нельзя было раздувать число cache keys; у cursor-выдачи кэшируется только общая первая страница, а уникальные продолжения обходят cache.
+## Административный API
 
-Каждый streaming export ограничен пятью минутами от открытия DB snapshot до финального flush/commit. Внутренний lifetime token одновременно отменяет SQL, перечисление и запись ответа, поэтому медленный клиент не способен бесконечно удерживать один из двух глобальных export slots и мешающий VACUUM `REPEATABLE READ` snapshot.
-
-Административные запросы требуют `X-Admin-Key`:
+Все маршруты требуют заголовок `X-Admin-Key`:
 
 ```text
 GET    /api/v1/admin/sources
 GET    /api/v1/admin/sources/{id}
-GET    /api/v1/admin/diagnostics
 POST   /api/v1/admin/sources
 PUT    /api/v1/admin/sources/{id}
 DELETE /api/v1/admin/sources/{id}
+GET    /api/v1/admin/diagnostics
 POST   /api/v1/admin/collect
 POST   /api/v1/admin/validate
 POST   /api/v1/admin/backup
 ```
 
-OpenAPI описывает `AdminApiKey` и реальные success/error responses каждого административного маршрута, включая `400/401/404/409 ProblemDetails`. PostgreSQL CI поднимает настоящий API process и fail-closed сверяет security requirement, точные response-коды source CRUD и schema конфликтов collection-lock в `/openapi/v1.json`.
+```powershell
+$adminHeaders = @{ 'X-Admin-Key' = $env:ADMIN_API_KEY }
+Invoke-RestMethod http://localhost:8080/api/v1/admin/diagnostics -Headers $adminHeaders
+Invoke-RestMethod http://localhost:8080/api/v1/admin/collect -Method Post -Headers $adminHeaders
+```
 
-`diagnostics` возвращает доступную due-очередь отдельно от уже арендованных in-flight проверок, точную скорость и ETA оставшейся обработки, состояние встроенного каталога, последние циклы сбора и последние backup-запуски, включая итоговый статус, размер файла и подтверждённый факт Telegram-доставки. Для каждого источника сохраняется `lastResultTruncated`, а цикл содержит `sourcesTruncated` и `candidateLimitReached`, поэтому защитные лимиты не маскируются обычным успешным статусом. Prometheus отдельно публикует completeness и фактическое здоровье каталога через `proxyharbor_source_catalog_complete`, `proxyharbor_source_catalog_healthy`, счётчики встроенных feed'ов/провайдеров, `proxyharbor_builtin_sources_stale`, `proxyharbor_builtin_sources_truncated` и `proxyharbor_last_collection_candidate_limit_reached`, а также backup-сигналы `proxyharbor_last_backup_success`, `proxyharbor_last_backup_sent_to_telegram`, `proxyharbor_last_backup_timestamp_seconds` и `proxyharbor_backup_runs_active`. Успешный feed считается здоровым, только если его свежий результат не был усечён; остановка collector и неполная выборка больше не маскируются исторически зелёным статусом.
+Передавайте ключ только через HTTPS. Ответы admin API получают `Cache-Control: no-store`; middleware ограничивает размер и число header values и сравнивает SHA-256 в constant time.
 
-Повторный запуск `collect` или `backup`, пока операция уже выполняется этой или другой репликой, немедленно получает HTTP `409`. Для `validate` тот же ответ действует внутри одной реплики; разные реплики безопасно арендуют непересекающиеся пакеты PostgreSQL. Validation-lease ограничен 2–5 минутами и продлевается heartbeat независимо от размера пакета: единичный transient-сбой продления логируется и повторяется на следующем периоде, после штатной отмены lease освобождается немедленно, а после аварии процесса очередь автоматически возвращается в работу за bounded-время. Продление, cleanup и запись результата используют точный UUID владельца и не могут затронуть новую аренду другой реплики. Долгие административные запросы поэтому не накапливаются в локальной очереди.
+## Backup и восстановление
 
-После получения распределённой collection-блокировки новый цикл переводит оставшиеся после kill/power loss строки `Runs.status=running` в `failed` с временем и диагностикой аварийного завершения. Успешная финализация атомарно переводит только принадлежащую циклу строку `running → completed`; потеря ownership даёт fail-closed ошибку и не перезаписывает параллельный administrative/restore результат. Ошибка или отмена текущего цикла записывается отдельным DbContext с 15-секундным пределом и только переходом `running → failed`: вторичный сбой аудита не скрывает исходную причину, а следующая попытка гарантированно восстановит незавершённую строку.
+Backup содержит:
 
-Перед арендой validation-пакета сервис напрямую проверяет control endpoint и кэширует результат на короткий срок. Direct-клиент запрещает redirect и private/service DNS, повторно проверяет адрес перед TCP connect и ограничивает распакованный JSON 16 КБ. Если endpoint недоступен, очередь не арендуется. Внутри proxy-туннеля HTTP-reader ограничен 64 КБ и завершает замер сразу после полного `Content-Length` или chunked body, не добавляя ожидание keep-alive EOF к latency. Если уже установленный TLS-туннель получил от control endpoint ошибочный HTTP/JSON-ответ, результат помечается `deferred`: lease освобождается, повтор назначается через минуту, но Status, latency, счётчики успехов/ошибок и failure streak прокси не изменяются. После такого непустого пакета worker продолжает быстро обрабатывать остальные due-записи; 30-секундная idle-пауза применяется только к действительно пустому проходу. При этом `LastValidationAttemptAt` и `LastValidationDeferred` сохраняют сам факт попытки, а `ValidationRuns` аудирует каждую непустую партию, её lease, claimed/checked/alive/deferred, длительность и ошибку. Если часть результатов потеряла точный lease token, ещё принадлежащие результаты сохраняются, чужие строки не изменяются, а партия fail-closed получает статус `failed` вместо ложного `completed`. Crash recovery переводит старый running-аудит в failed только после исчезновения связанной активной lease другой реплики. Эти данные входят в backup/restore и очищаются общей retention-политикой завершённых run'ов. IPv4/IPv6 exit IP канонизируются перед сравнением анонимности. `POST /api/v1/admin/validate` возвращает числа `checked`, `alive` и `deferred`; diagnostics и React показывают точные attempts/alive/deferred за последние пять минут, проверки в секунду, отдельно in-flight lease и прогноз опустошения ещё не арендованной due-очереди. Prometheus публикует те же rolling-сигналы, `proxyharbor_validation_checks_per_second`, `proxyharbor_validation_estimated_drain_seconds`, failed/active batches и здоровье control endpoint. Еженедельный workflow после полного аудита всех feed'ов запускает реальную validation-партию, требует хотя бы один Alive proxy и точное совпадение упорядоченных URL в JSON, XML, TXT и CSV. SHA-256 опубликованного набора вместе с машиночитаемыми отчётами обоих этапов сохраняется в CI summary/artifacts.
+- прокси и их полную validation-статистику;
+- встроенные и пользовательские источники;
+- collection, validation и backup audit;
+- полные безопасные `Collector`/`Backup`/runtime-настройки;
+- manifest версии 5 с явным `secretsIncluded=false`.
 
-Background collector применяет bounded exponential backoff только к feed’ам с последовательными ошибками; `NextFetchAt` виден в admin API и панели. Ручной `POST /api/v1/admin/collect` всегда принудительно проверяет все включённые источники, поэтому используется для полного аудита 81 endpoint. Collection владеет cluster-wide exclusive advisory-lock, а create/update/delete источника — shared-lock того же ключа: параллельные CRUD разрешены, но ни одна реплика не может изменить enabled-каталог между snapshot и финализацией полного аудита; при пересечении API отвечает `409`. Audit-gate требует для каждого enabled feed временное доказательство именно этого запуска — `StartedAt ≤ LastFetchedAt ≤ FinishedAt`; stale и future evidence раздельно попадают в JSON artifact и одинаково fail-closed отклоняются. Пользовательский feed требует непустое имя, известный protocol и публичный HTTPS URL без fragment; единый non-throwing parser ограничивает 2048 символами исходный и нормализованный URL и отклоняет malformed input с HTTP 400 до DNS и обращения к БД. Path/query сравниваются с учётом регистра, поскольку `/Feed` и `/feed` могут быть разными HTTPS-ресурсами. Из встроенного каталога разрешено менять только `Enabled`, все канонические метаданные неизменяемы. HTTP 404 и другие постоянные 4xx не повторяются, а ответ 2xx без единого распознаваемого прокси считается сбоем, а не ложным успехом. После успешного ответа сохраняются bounded `ETag`/`Last-Modified`; следующий цикл отправляет `If-None-Match`/`If-Modified-Since`, а подтверждённый `304` обновляет freshness и аудит без повторного скачивания и парсинга неизменившегося feed'а. Не реже раза в сутки, а при однодневном dead retention — раз в 12 часов, validators намеренно не отправляются: полный body обновляет membership и возвращает кандидатов, которые могли быть удалены retention при неизменном ETag. Время такого ответа хранится отдельно как `LastContentFetchedAt` и видно в admin API/панели. Unsolicited `304`, malformed ETag и `304` без прежнего непустого результата считаются сбоем.
+В архив никогда не входят admin key, PostgreSQL connection string/password, Telegram token/chat ID и encryption key. Их нужно хранить отдельно в secret manager.
 
-Conditional `Last-Modified` нормализуется в UTC и принимается только в диапазоне Unix epoch…`collector clock + 24h`. Старые PostgreSQL infinity/доэпохальные значения не отправляются как `If-Modified-Since` и не легитимизируют `304`; небезопасная дата ответа игнорируется до persistence, не мешая собрать валидное содержимое feed. ETag остаётся независимым validator.
+Ручной backup:
 
-Каждый ответ источника ограничен 10 МБ, а parser использует линейный non-backtracking regex и хранит не более `MaxProxiesPerSource` уникальных публичных IP. После заполнения лимита он ищет только первый следующий новый адрес: его наличие выставляет точный `lastResultTruncated`, после чего разбор немедленно прекращается; хвост из одних дубликатов не создаёт ложную тревогу. Общий конкурентный bounded-набор независимо удерживает не более `MaxCandidatesPerRun` уникальных endpoint'ов и выставляет `candidateLimitReached` только после фактического отбрасывания следующего нового адреса: точное заполнение лимита и последующие дубликаты не создают ложную тревогу. Горячий collector-path передаёт результаты прямо в общий набор и хранит IP/port/protocol как компактный value-key без managed references; отдельные строки и materialized список до 500 000 элементов для каждого из восьми параллельных feed'ов не создаются. Каноническая IP-строка появляется только при последовательной PostgreSQL COPY. Доменные и служебные/private адреса отбрасываются до сохранения. Это удерживает память и CPU в предсказуемых пределах, а полноту результата делает наблюдаемой даже для недоверенного или аномально большого feed'а.
+```powershell
+$adminHeaders = @{ 'X-Admin-Key' = $env:ADMIN_API_KEY }
+Invoke-RestMethod https://proxy.example.com/api/v1/admin/backup -Method Post -Headers $adminHeaders
+```
 
-Источниками можно управлять и из React-панели: добавлять собственные HTTPS feed'ы, менять их активность и удалять пользовательские записи. Встроенные источники помечены провайдером и рангом; их канонические URL и протоколы неизменяемы, а удаление безопасно переводит запись на паузу. Административная панель также показывает размер PostgreSQL, очередь проверки, точную историю validation-партий, последние циклы сбора и историю backup с подтверждённым состоянием Telegram-доставки; все database-derived поля одного diagnostics-ответа принадлежат общему `REPEATABLE READ` snapshot, поэтому активные workers не смешивают очередь и историю разных эпох. Данные автоматически обновляются каждые 15 секунд и после административных действий. Единый busy-gate не позволяет source mutation пересечься с ручным collect/validate/backup или повторным кликом. Вход отправляется по кнопке или Enter; выход, смена ключа, закрытие панели и размонтирование интерфейса отменяют все принадлежащие сессии запросы, а generation-check отбрасывает даже поздние ответы сервера, игнорирующего отмену.
+Inspection без подключения к БД:
 
-Proxy-tunnel control response разбирается как bounded byte stream: HTTP headers требуют ASCII без bare control bytes, Content-Length и chunk sizes считаются в байтах, chunk framing удаляется до strict UTF-8/JSON validation. Поэтому Unicode code point может безопасно пересекать границу chunks, а malformed encoding или JSON shape переводят попытку в `deferred`, не ухудшая статистику прокси и не прерывая validation batch.
+```bash
+docker compose --profile tools run --rm --no-deps -T restore \
+  --input /app/backups/proxyharbor-YYYYMMDD-HHMMSS-ffff.phbackup \
+  --inspect-settings > recovery-settings.json
+```
 
-HTTP CONNECT response читается bounded блоками и требует точный HTTP/1.0 или HTTP/1.1 status line, безопасные ASCII headers и отсутствие post-header bytes до начала TLS. SOCKS4a/SOCKS5 readers поддерживают partial network reads, проверяют protocol/version/reserved fields и полностью потребляют bounded bind endpoint; нулевая длина SOCKS5 domain отклоняется. Настроенные IPv4 literals передаются нативным SOCKS4/SOCKS5 address type, IPv6 — SOCKS5 `ATYP=4`, без зависимости от DNS parser конкретного прокси. Поскольку SOCKS4 не имеет IPv6 address type, такая control-конфигурация даёт `deferred` для SOCKS4, не изменяя его health-статистику.
+Destructive restore выполняйте только после остановки API и пробного восстановления в отдельную БД:
+
+```bash
+docker compose stop web api
+docker compose --profile tools run --rm restore \
+  --input /app/backups/proxyharbor-YYYYMMDD-HHMMSS-ffff.phbackup \
+  --replace-existing-data
+docker compose up -d api web
+```
+
+Криптография, Telegram parts, аудит и disaster-recovery procedure: [docs/BACKUP_RESTORE.md](docs/BACKUP_RESTORE.md).
+
+## Конфигурация
+
+Docker-пользователю обычно достаточно `.env.example`. API поддерживает стандартную ASP.NET Core конфигурацию: `Collector__ValidationConcurrency` соответствует `Collector:ValidationConcurrency`.
+
+Ключевые параметры:
+
+| Параметр | По умолчанию | Назначение |
+|---|---:|---|
+| `BACKGROUND_WORKERS_ENABLED` | `true` | Collector/validator workers этой реплики |
+| `VALIDATION_CONCURRENCY` | `800` | Одновременные proxy probes |
+| `VALIDATION_BATCH_SIZE` | `1600` | Размер одной lease-партии |
+| `BACKUP_ENABLED` | `true` в `.env.example` | Плановый PHB3 backup |
+| `BACKUP_HISTORY_RETENTION_DAYS` | `365` | История backup audit |
+| `BACKEND_SUBNET` | `172.30.0.0/24` | Единственная trusted proxy network |
+| `PUBLIC_HOST` | — | Production hostname без схемы |
+| `ACME_EMAIL` | — | Контакт ACME |
+
+Полный справочник с диапазонами, defaults и secret-file mapping: [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
+
+## Наблюдаемость
+
+Opt-in monitoring profile запускает Prometheus и Alertmanager только на loopback хоста:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.production.yml \
+  --profile monitoring up -d --build
+```
+
+- Prometheus: `127.0.0.1:9090`;
+- Alertmanager: `127.0.0.1:9093`;
+- retention ограничен временем и размером;
+- Telegram firing/resolved уведомления используют Compose secrets;
+- alerts покрывают stale collection, validation backlog, backup RPO/delivery, source completeness, PostgreSQL readiness, API 5xx/p95 и advisory-lock cleanup.
+
+Метрики и действия по каждому alarm: [docs/MONITORING.md](docs/MONITORING.md).
 
 ## Локальная разработка
 
-Запустите PostgreSQL и задайте строку подключения, затем:
+Требования:
 
-```powershell
-dotnet run --project src/ProxyHarbor.Api
-cd src/proxyharbor-web
-npm ci
-npm run dev
-```
+- .NET SDK из [global.json](global.json);
+- Node.js 22;
+- PostgreSQL 17;
+- PowerShell 7 для operator/contract scripts.
 
-Vite проксирует API на `http://localhost:8080`. Для проверки репозитория:
+Backend:
 
 ```powershell
 dotnet restore ProxyHarbor.slnx --locked-mode
 dotnet build ProxyHarbor.slnx -c Release --no-restore
+$env:PROXYHARBOR_INTEGRATION_POSTGRES='Host=localhost;Database=proxyharbor_test;Username=postgres;Password=...'
 dotnet test ProxyHarbor.slnx -c Release --no-build
+dotnet format ProxyHarbor.slnx --verify-no-changes --no-restore
+```
+
+Frontend:
+
+```bash
 cd src/proxyharbor-web
 npm ci
-npm run lint
 npm test
+npm run lint
 npm run build
 ```
 
-Репозиторий ограничивает разработку совместимыми feature band .NET 10 через `global.json`, а release CI и Docker закреплены на security SDK `10.0.302` и runtime `10.0.10`. NuGet restore разрешён только с официального `nuget.org`, полный transitive graph хранится в `packages.lock.json` каждого проекта. При намеренном обновлении пакетов выполните `dotnet restore ProxyHarbor.slnx --force-evaluate`, проверьте изменения lock-файлов и повторите vulnerability-аудит; обычные CI/Docker-сборки используют `--locked-mode`.
+Полный локальный gate и правила изменений: [CONTRIBUTING.md](CONTRIBUTING.md).
 
-CI собирает Cobertura coverage и через `tools/Assert-Coverage.ps1` запрещает опускаться ниже 65% уникальных строк и 68% ветвей рукописного кода. На контрольной CI-эквивалентной базе без внешней БД фактическое покрытие составляет около 67,1%/71,8%, а полный PostgreSQL gate — около 89,3%/81,0%; tagged release теперь повторно собирает и проверяет собственный отчёт. Suite выполняется как без внешних зависимостей, так и повторно с настоящей PostgreSQL, поэтому в отдельный gate входят SQL bulk-upsert, lease, maintenance, backup/restore и транзакционные ветви. Generated `obj` и EF migrations в знаменатель не входят; отдельные pass/fail fixtures защищают расчёт и wiring от незаметного ослабления.
+## Структура репозитория
 
-## Резервные копии и восстановление
-
-Backup хранится в volume `backups` и удаляется по истечении `Backup__RetentionDays`. Все пять database JSON создаются одним `REPEATABLE READ` snapshot: concurrent collection, validation или source CRUD не могут смешать в архиве разные эпохи таблиц; PostgreSQL canary коммитит source из второй сессии между первым и вторым table read и проверяет его отсутствие только в уже зафиксированном snapshot. Локальная retention-политика применяется сразу после атомарной публикации нового архива, ограничивает набор и возрастом, и ожидаемым числом плановых снимков с двумя recovery-слотами и не зависит от доступности Telegram. Поэтому продолжительный внешний сбой не вызывает неограниченный рост volume даже при 15-минутных повторах. История попыток, размер созданного файла и факт успешной Telegram-доставки сохраняются в `BackupRuns`, доступны через admin diagnostics и Prometheus-метрики и очищаются по `Backup__HistoryRetentionDays`. Чтобы расшифровать файл на доверенной машине:
-
-Backup считается завершённым только после атомарного перевода принадлежащей ему audit-строки из `running` в `completed`. Если строку удалили или изменили параллельно, операция завершается fail-closed ошибкой даже при уже опубликованном архиве и успешном ответе Telegram; локальный зашифрованный файл остаётся пригодным для восстановления, а scheduler повторит цикл.
-
-После успешного запуска scheduler ждёт настроенный `Backup__IntervalHours`. После ошибки БД, шифрования или Telegram он автоматически повторяет полный backup через 15 минут; cluster-lock конфликт с другой репликой считается уже обслуживаемым циклом и не создаёт retry-storm.
-
-```powershell
-$keyFile = (Resolve-Path ./backup-key.secret).Path
-./tools/Decrypt-Backup.ps1 -InputFile ./proxyharbor.phbackup -OutputZip ./proxyharbor.zip -EncryptionKeyFile $keyFile
+```text
+src/ProxyHarbor.Domain/          доменные сущности и публичные контракты
+src/ProxyHarbor.Infrastructure/  PostgreSQL, collector, validator, backup
+src/ProxyHarbor.Api/             REST/OpenAPI, middleware, metrics
+src/ProxyHarbor.Restore/         inspect/restore CLI
+src/proxyharbor-web/             React + TypeScript + Vite
+tests/ProxyHarbor.Tests/         unit, transport и PostgreSQL integration tests
+deploy/                          Caddy, Prometheus и Alertmanager configuration
+tools/                           audits, backup utilities и release contracts
+docs/                            архитектура и operator runbooks
+.github/                         CI, CodeQL, Dependabot и contribution templates
 ```
 
-Результат — обычный ZIP с JSON по таблицам и параметрами сборщика. PowerShell-инструмент сначала пишет его в уникальный sibling `.partial`, синхронизирует содержимое и только после полной AEAD-проверки атомарно публикует через move без overwrite: существующий операторский файл не изменяется даже при гонке, а partial удаляется при обрабатываемой ошибке. Проверяйте восстановление на отдельной БД перед аварийной ситуацией. Потеря ключа делает корректно зашифрованный архив невосстановимым.
-Файл ключа должен быть доступен только оператору восстановления; передавайте абсолютный путь через `-EncryptionKeyFile` и удаляйте временную копию безопасным способом после завершения. Inline-параметр оставлен только для обратной совместимости и может раскрыть ключ в истории команд или списке процессов.
+## Документация
 
-Для восстановления ранее созданных PHB2/PHB3 сохранена совместимость с корректными legacy-ключами длиной от 16 символов; новые backup всегда требуют минимум 32. Ключ обязан иметь корректную Unicode-кодировку без unpaired surrogate: сервер, restore CLI и PowerShell-инструмент строго и однозначно кодируют его в UTF-8 перед PBKDF2. Корневой, относительный, пустой или содержащий управляющие символы `Backup__Directory` отклоняется, чтобы retention не работал вне явно выделенного каталога.
+Начните с [индекса документации](docs/README.md):
 
-Для полного восстановления PostgreSQL остановите все API-процессы, задайте секреты через окружение и явно подтвердите замену данных:
+- [что уже реализовано и проверено](docs/PROJECT_STATUS.md);
+- [архитектура и модель данных](docs/ARCHITECTURE.md);
+- [полный API](docs/API.md);
+- [полная конфигурация](docs/CONFIGURATION.md);
+- [backup и restore](docs/BACKUP_RESTORE.md);
+- [production deployment](docs/DEPLOYMENT.md);
+- [мониторинг и incident runbook](docs/MONITORING.md);
+- [производительность](docs/PERFORMANCE.md);
+- [источники и live audit](docs/SOURCES.md);
+- [топ-50 провайдеров](docs/SOURCE_CATALOG.md);
+- [выпуск версии](docs/RELEASING.md);
+- [первая публикация на GitHub](docs/GITHUB_SETUP.md);
+- [политика безопасности](SECURITY.md);
+- [история изменений](CHANGELOG.md).
 
-```powershell
-$env:ConnectionStrings__Postgres='Host=localhost;Database=proxyharbor_restore;Username=proxyharbor;Password=...'
-$env:Backup__EncryptionKey='ваш ключ'
-dotnet run -c Release --project src/ProxyHarbor.Restore -- --input ./proxyharbor.phbackup --replace-existing-data
-```
+## Подготовка к публикации
 
-Вместо environment можно передать абсолютный путь к bounded UTF-8 secret-файлу через `--encryption-key-file`; inline `--encryption-key` оставлен для совместимости, но не рекомендуется, поскольку значение видно в process arguments. Каждая API-реплика держит shared PostgreSQL lifetime-lease от startup до shutdown; restore требует exclusive lease на весь migration+replace pipeline и завершится кодом 1 без изменения БД, пока жива хотя бы одна реплика. Collector, validator, backup, maintenance и source CRUD также держат shared lease на время конкретной записи, поэтому потеря долгоживущей сессии при сетевом сбое не открывает race до остановки процесса. API каждые пять секунд bounded-запросом проверяет именно owning lifetime-сессию и при её потере выполняет controlled shutdown; этот переход выполняется даже при отказе critical logging provider, а monitor failure не заменяет ошибку host. Container restart policy поднимает чистую реплику. Обратный барьер не позволяет API стартовать посередине восстановления. Ctrl+C и container `SIGTERM` отменяют расшифровку/COPY, откатывают транзакцию, удаляют временный plaintext ZIP и завершаются кодом 130.
-
-Вторичный сбой удаления не скрывает исходную cancellation/restore-ошибку и не меняет её exit code: CLI явно указывает оставшийся каталог для немедленного ручного удаления. Без первичной ошибки неподтверждённый cleanup делает команду неуспешной, а сообщение об успешном восстановлении выводится только после удаления plaintext.
-
-До выбора целевой БД можно аутентифицировать backup v5 и извлечь полный безопасный снимок настроек одним JSON-объектом. Команда не подключается к PostgreSQL и не изменяет данные; служебные сообщения идут в stderr, поэтому stdout можно перенаправить в файл:
-
-```powershell
-dotnet run -c Release --project src/ProxyHarbor.Restore -- --input ./proxyharbor.phbackup --inspect-settings > recovery-settings.json
-```
-
-В JSON входят manifest, collector, backup и runtime. Значения admin key, строки подключения, Telegram token/chat ID и ключа шифрования принципиально отсутствуют — для них сохраняются только флаги наличия, а сами секреты нужно восстановить из внешнего secret store. Архивы v2–v4 по-прежнему можно восстановить в БД, но inspection отклоняет их как неполный снимок конфигурации.
-
-На опубликованном Docker Compose-хосте локальный .NET SDK не требуется. Restore вынесен в opt-in profile `tools`, запускается без root с read-only root filesystem и по умолчанию только показывает справку. Сначала остановите процессы, которые пишут в БД, затем запустите одноразовый контейнер с точным именем backup из volume и после успеха верните сервисы:
+Перед первым push:
 
 ```powershell
-docker compose stop web api
-docker compose --profile tools run --rm --no-deps -T restore --input /app/backups/proxyharbor-YYYYMMDD-HHMMSS.phbackup --inspect-settings > recovery-settings.json
-docker compose --profile tools run --rm restore --input /app/backups/proxyharbor-YYYYMMDD-HHMMSS.phbackup --replace-existing-data
-docker compose up -d api web
+./tools/Test-PublicationReadiness.ps1 -RequireCleanWorktree
+./tools/Invoke-Gitleaks.ps1
+./tools/Invoke-Actionlint.ps1
 ```
 
-Команда `run --rm` удаляет контейнер и его анонимный `/restore-temp`; постоянный volume `backups` подключён только для чтения. Расшифрованный ZIP никогда не записывается в `backups`. Inspection лишь возвращает данные для сверки и намеренно не применяет настройки к контейнеру. Перед заменой production-данных всё равно выполните пробное восстановление в отдельную БД, переопределив `ConnectionStrings__Postgres` для restore-контейнера. После проверки архива destructive pipeline получает exclusive database lifetime-lease до завершения migrations и транзакционной замены всех таблиц.
+Затем выполните [полный GitHub checklist](docs/GITHUB_SETUP.md): создайте пустой remote, включите Actions/CodeQL/secret scanning, настройте branch и tag rulesets, дождитесь успешного CI и только после container smoke создавайте первый SemVer tag.
 
-Если CLI сообщает о cleanup-сбое, не запускайте повторную замену вслепую: транзакция могла уже завершиться. Сначала проверьте целевую БД и удалите указанный plaintext-каталог; при `run --rm` его дополнительно удаляет Docker вместе с анонимным volume.
+До публикации замените `YOUR_GITHUB_OWNER` в команде клонирования на фактического владельца репозитория. Runtime-примеры с `proxy.example.com` являются шаблонами и заменяются на `PUBLIC_HOST` вашей установки.
 
-Restore сначала проверяет аутентификацию backup, manifest, точный allowlist ZIP-записей, отсутствие секретов, дубликатов, oversized settings/database-файлов, общий распакованный размер 32 ГиБ и безопасную степень ZIP-сжатия, под общей startup-блокировкой применяет миграции, затем заменяет таблицы прокси, источников, циклов сбора, validation-аудита и backup-аудита в одной транзакции. Перед каждой streaming COPY row отдельно проверяются публичность и каноничность IP, port/enum/URL, длины, неотрицательные счётчики, согласованность run totals/status/finishedAt, lease, Telegram delivery и доказательства статуса: `Alive` обязан иметь дату проверки, latency и успешный check, `Dead` — дату и failed check; семантически повреждённый snapshot откатывает всю транзакцию с понятной ошибкой. Manifest v5 требует `validation-runs.json`, полный snapshot collector/backup/runtime-настроек, точный набор полей и обязательные отрицательные secret-флаги; подмена settings на пустой или частичный JSON отклоняется до изменения БД. Restore продолжает принимать архивы v2–v4. Потоковый PostgreSQL binary COPY ускоряет импорт больших снимков; при любой ошибке исходные данные целевой БД сохраняются. Готовый `.phbackup` публикуется в каталоге атомарно; plaintext ZIP в актуальной версии не создаётся, а новый запуск под cluster lock всё ещё удаляет legacy ZIP, `.partial` и временные Telegram-части после аварийного завершения. PostgreSQL integration-gate создаёт настоящий зашифрованный снимок, удаляет исходный marker и сравнивает после restore все сохраняемые поля пяти таблиц на отдельных схемах; отдельный повреждённый снимок доказывает rollback без потери прежней target-БД.
+## Безопасность и поддержка
 
-Успешная Telegram-доставка записывается в аудит только после HTTP 2xx и обязательного Bot API подтверждения `ok=true` для файла либо каждой нумерованной части. Ответы 429/5xx и временные сетевые ошибки повторяются до трёх раз; `retry_after` принимается как из HTTP-заголовка, так и из JSON `parameters`. Bot API body читается непосредственно после headers с жёстким пределом 64 КиБ и никогда предварительно не буферизуется `HttpClient`; некорректный/слишком большой ответ не считается успехом, bot token исключён из HTTP-логирования, а redirect запрещён.
+- Уязвимости: [SECURITY.md](SECURITY.md). Не публикуйте секреты и exploit details в issue.
+- Пользовательская помощь: [SUPPORT.md](SUPPORT.md).
+- Участие в разработке: [CONTRIBUTING.md](CONTRIBUTING.md).
+- Правила сообщества: [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
 
-Telegram sender является sanitizing trust boundary: transport/custom-handler messages, inner exceptions и response descriptions не покидают его, поэтому URI с bot token, `chat_id` или multipart не могут попасть в `BackupRuns.Error`, application logs и следующий архив. Caller cancellation остаётся `OperationCanceledException`, а безопасный permanent rejection сохраняет числовой HTTP status.
+## Лицензия
 
-Если архив превышает Telegram-лимит, сервис отправляет не более 20 нумерованных частей. Предел проверяется до создания первого временного part; больший зашифрованный backup остаётся локально и получает failed delivery audit вместо многочасового upload storm. Этот permanent delivery-policy отказ не считается успешным и не скрывает stale/RPO alarms, но служит отдельным persisted cadence-якорем: после restart следующий многогигабайтный snapshot создаётся через штатный `Backup__IntervalHours`, а не каждые 15 минут. Сначала объедините части, затем расшифруйте:
-
-```powershell
-./tools/Join-BackupParts.ps1 -PartsPattern './proxyharbor.phbackup.part*' -OutputFile './proxyharbor.phbackup'
-$keyFile = (Resolve-Path './backup-key.secret').Path
-./tools/Decrypt-Backup.ps1 -InputFile './proxyharbor.phbackup' -OutputZip './proxyharbor.zip' -EncryptionKeyFile $keyFile
-```
-
-Join-инструмент fail-closed принимает только один полный набор с общим base-name и `of-N`, требует 2–20 непрерывных номеров `1..N` и ожидаемые размеры частей. Слишком широкий wildcard, смешавший разные backup, превышенный предел, пропущенный/пустой фрагмент или уже существующий output отклоняются до восстановления; целостность собранного ciphertext затем независимо подтверждается PHB3 AEAD при расшифровании.
-
-## Добавление источника
-
-Добавляйте только список, владелец которого разрешает автоматическую загрузку. Источник должен быть публичным HTTPS URL и отдавать строки `host:port` или `scheme://host:port`. Для строк без схемы применяется выбранный протокол. Приватные и loopback IP отбрасываются.
-
-В каталогах бесплатных прокси категория `HTTPS` означает обычный HTTP proxy с поддержкой метода CONNECT к TLS-назначению. Поэтому поле `protocol` остаётся `Https`, но готовый `url` и TXT-экспорт используют корректный транспорт `http://host:port`; SOCKS4 и SOCKS5 сохраняют собственные URI-схемы.
-
-Удобная таблица [всех 50 провайдеров](docs/SOURCE_CATALOG.md), полный встроенный каталог и [команда живого аудита](docs/SOURCES.md) находятся в документации проекта.
-
-## Архитектура
-
-- `ProxyHarbor.Domain` — сущности и контракты без инфраструктурных зависимостей;
-- `ProxyHarbor.Infrastructure` — PostgreSQL, источники, парсер, протокольные probes, распределённые workers и backup;
-- `ProxyHarbor.Api` — публичные/административные HTTP-контракты и защитный middleware;
-- `proxyharbor-web` — React 19 + TypeScript + Vite;
-- `ProxyHarbor.Tests` — быстрые автоматические проверки критичной нормализации;
-- GitHub Actions дополнительно поднимает настоящий PostgreSQL, применяет миграции и проверяет HTTP-контракты.
-
-Валидаторы можно масштабировать горизонтально: строки очереди резервируются через `FOR UPDATE SKIP LOCKED`, а результаты одного пакета записываются через PostgreSQL binary COPY и один bulk-update. Новые адреса проверяются сразу, живые — через стандартный интервал, а повторно нерабочие — с экспоненциальной задержкой до настроенного максимума.
-
-## Перед публикацией
-
-1. Проверьте лицензии и условия каждого включённого источника.
-2. Ограничьте внешний доступ к административным маршрутам на reverse proxy/firewall.
-3. Запустите production override, проверьте TLS-сертификат, внешнюю наблюдаемость и оповещения.
-4. Выполните тестовый backup, Telegram-доставку и расшифровку.
-
-Лицензия: MIT. Встроенные списки принадлежат их авторам и загружаются во время работы; данные прокси в репозиторий не включены.
+Код ProxyHarbor распространяется по лицензии [MIT](LICENSE). Внешние proxy-feed и возвращаемые ими данные принадлежат соответствующим владельцам; списки прокси не включаются в Git-репозиторий и загружаются только во время работы сервиса.

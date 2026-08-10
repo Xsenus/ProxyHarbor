@@ -13,6 +13,8 @@ dotnet format ProxyHarbor.slnx --verify-no-changes --no-restore
 ./tools/Test-GitleaksContracts.ps1
 ./tools/Test-CodeQLContracts.ps1
 ./tools/Test-DocumentationContracts.ps1
+./tools/Test-DocumentationLinks.ps1
+./tools/Test-DocumentationLinksContracts.ps1
 ./tools/Test-PublicationReadiness.ps1
 ./tools/Test-PublicationReadinessContracts.ps1
 cd src/proxyharbor-web
@@ -20,6 +22,8 @@ npm ci
 npm run lint
 npm run build
 ```
+
+Если поведение, конфигурация, API, deployment или restore меняются, обновите соответствующий authoritative документ из [docs/README.md](docs/README.md). Новые локальные Markdown-ссылки обязаны проходить `Test-DocumentationLinks.ps1`.
 
 Для изменений PostgreSQL создайте EF Core migration и убедитесь, что `dotnet ef migrations has-pending-model-changes` не сообщает расхождений. Для сетевой логики добавляйте unit-тест либо воспроизводимый integration-сценарий.
 
@@ -36,6 +40,8 @@ PostgreSQL integration-тесты используют одну внешнюю �
 Не добавляйте сами списки прокси, токены, `.env`, backup-файлы и production-дампы в Git.
 
 Full-history secret scan запускается через `tools/Invoke-Gitleaks.ps1` в Linux x64 CI и локально на Windows x64. Скрипт скачивает соответствующий официальный архив и проверяет отдельный закреплённый SHA-256 до исполнения. Если секрет когда-либо попал в commit, одного удаления из последующего commit недостаточно: немедленно отзовите его и очистите историю согласованным способом до публикации.
+
+Участие в репозитории означает согласие с [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md). Вопросы поддержки направляйте по [SUPPORT.md](SUPPORT.md), security findings — только приватно по [SECURITY.md](SECURITY.md).
 
 ## Release changes
 

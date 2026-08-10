@@ -102,7 +102,10 @@ jobs:
         run: ./tools/Test-CodeQLContracts.ps1
       - name: Verify production documentation contracts
         shell: pwsh
-        run: ./tools/Test-DocumentationContracts.ps1
+        run: |
+          ./tools/Test-DocumentationContracts.ps1
+          ./tools/Test-DocumentationLinks.ps1
+          ./tools/Test-DocumentationLinksContracts.ps1
       - name: Verify publication readiness
         shell: pwsh
         run: |
