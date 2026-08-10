@@ -67,13 +67,17 @@ public sealed class ProxiesController(
         var skip = (int)requestedOffset;
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
         var freshAfter = DateTimeOffset.UtcNow.AddMinutes(-collectorOptions.Value.PublicFreshnessMinutes);
-        var query = ApplyFilters(db.Proxies.AsNoTracking().Where(x =>
-            x.Status == ProxyStatus.Alive && x.LastCheckedAt >= freshAfter), protocol, maxLatencyMs, minSuccessRate);
-        var entities = await OrderForPublication(query)
-            .Skip(skip).Take(pageSize).ToListAsync(cancellationToken);
-        var items = entities.Select(ProxyDto.From).ToList();
-        var total = await query.CountAsync(cancellationToken);
-        return Ok(new PagedResult<ProxyDto>(items, page, pageSize, total));
+        var result = await BufferedReadSnapshot.ExecuteAsync(db, async token =>
+        {
+            var query = ApplyFilters(db.Proxies.AsNoTracking().Where(x =>
+                x.Status == ProxyStatus.Alive && x.LastCheckedAt >= freshAfter),
+                protocol, maxLatencyMs, minSuccessRate);
+            var entities = await OrderForPublication(query)
+                .Skip(skip).Take(pageSize).ToListAsync(token);
+            var total = await query.CountAsync(token);
+            return new PagedResult<ProxyDto>(entities.Select(ProxyDto.From).ToList(), page, pageSize, total);
+        }, cancellationToken);
+        return Ok(result);
     }
 
     /// <summary>
