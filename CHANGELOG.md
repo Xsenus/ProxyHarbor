@@ -7,6 +7,7 @@
 
 ### Changed
 
+- Документация теперь содержит просматриваемый топ-50 всех встроенных proxy-провайдеров с прямыми ссылками, протоколами, числом feed'ов и явным разделением source-аудита от проверки живости отдельных адресов.
 - React polling теперь планирует следующий public/admin refresh только после завершения текущего, отменяет устаревшие fetch при смене фильтра, ключа или закрытии диалога и не позволяет старому admin-ответу восстановить удалённую сессию.
 - Production admin-key policy теперь едина со middleware, отклоняет whitespace-only и некорректный UTF-16, а strict UTF-8 hashing исключает коллизии через replacement characters.
 - Source HTTP validators больше не передаются redirect-target и не сохраняются для перенаправленной representation; неожиданный `304` после redirect отклоняется, исключая cross-origin ETag leakage и ложную неизменность при смене `Location`.
