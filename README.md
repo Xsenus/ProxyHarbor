@@ -51,6 +51,8 @@ docker compose -f docker-compose.yml -f docker-compose.release.yml -f docker-com
 
 Для prerelease используется полный нормализованный image tag из release manifest; разделитель `+` SemVer build metadata кодируется как `_build_`, что исключает столкновение с допустимым prerelease-именем. Тег `latest` и плавающий `major.minor` обновляются только стабильными релизами. Compose CI доказывает, что release overlay полностью удаляет локальные `build`-секции. Процедура выпуска и проверка attestations описаны в [docs/RELEASING.md](docs/RELEASING.md).
 
+Перед первым push выполните fail-closed [checklist публикации](docs/GITHUB_SETUP.md): он фиксирует required checks, rulesets, GitHub security settings и GHCR visibility. Локальный `tools/Test-PublicationReadiness.ps1` отклоняет tracked secret-bearing/generated artifacts, конфликты регистра путей и файлы больше 10 MiB до попадания в GitHub.
+
 ## Production HTTPS
 
 Создайте DNS A/AAAA-запись на сервер, откройте входящие TCP 80/443 и UDP 443, затем задайте в `.env` bare hostname `PUBLIC_HOST` (без `https://` и пути) и контактный `ACME_EMAIL`:

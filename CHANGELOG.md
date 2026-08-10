@@ -9,6 +9,7 @@
 
 - Добавлен fail-closed Gitleaks scan всей Git-истории с закреплёнными версией и SHA-256 архива, redaction вывода и контрактной проверкой CI/release wiring.
 - Добавлен CodeQL SAST для C# и JavaScript/TypeScript с `security-extended`, locked C# build, least-privilege permissions и immutable action pins.
+- Добавлены fail-closed publication-readiness gate и воспроизводимый GitHub checklist: tracked secret-bearing/generated artifacts, case collisions, oversized-файлы, required checks, rulesets и security settings.
 
 ### Added
 

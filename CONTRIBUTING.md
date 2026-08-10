@@ -12,6 +12,8 @@ dotnet format ProxyHarbor.slnx --verify-no-changes --no-restore
 ./tools/Invoke-Actionlint.ps1
 ./tools/Test-GitleaksContracts.ps1
 ./tools/Test-CodeQLContracts.ps1
+./tools/Test-PublicationReadiness.ps1
+./tools/Test-PublicationReadinessContracts.ps1
 cd src/proxyharbor-web
 npm ci
 npm run lint

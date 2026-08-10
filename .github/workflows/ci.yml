@@ -91,6 +91,11 @@ jobs:
       - name: Verify CodeQL contracts
         shell: pwsh
         run: ./tools/Test-CodeQLContracts.ps1
+      - name: Verify publication readiness
+        shell: pwsh
+        run: |
+          ./tools/Test-PublicationReadiness.ps1 -RequireCleanWorktree
+          ./tools/Test-PublicationReadinessContracts.ps1
       - name: Verify supply-chain scanner contracts
         shell: pwsh
         run: ./tools/Test-WorkflowSecurityContracts.ps1
