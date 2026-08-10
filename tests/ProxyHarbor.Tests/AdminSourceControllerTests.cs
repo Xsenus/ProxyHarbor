@@ -1,5 +1,7 @@
 using System.ComponentModel.DataAnnotations;
 using System.Data.Common;
+using System.Reflection;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
@@ -30,6 +32,28 @@ public sealed class AdminSourceControllerTests
 
         Assert.False(valid);
         Assert.Contains(results, result => result.MemberNames.Contains(expectedMember, StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public void OpenApiMetadataDocumentsAdminAuthAndSourceMutationConflicts()
+    {
+        var controllerAuth = typeof(AdminController)
+            .GetCustomAttributes<ProducesResponseTypeAttribute>()
+            .Single(attribute => attribute.StatusCode == StatusCodes.Status401Unauthorized);
+        Assert.Equal(typeof(ProblemDetails), controllerAuth.Type);
+
+        foreach (var methodName in new[]
+                 {
+                     nameof(AdminController.CreateSource),
+                     nameof(AdminController.UpdateSource),
+                     nameof(AdminController.DeleteSource)
+                 })
+        {
+            var conflict = typeof(AdminController).GetMethod(methodName)!
+                .GetCustomAttributes<ProducesResponseTypeAttribute>()
+                .Single(attribute => attribute.StatusCode == StatusCodes.Status409Conflict);
+            Assert.Equal(typeof(ProblemDetails), conflict.Type);
+        }
     }
 
     [Theory]

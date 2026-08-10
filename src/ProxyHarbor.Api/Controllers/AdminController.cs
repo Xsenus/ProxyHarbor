@@ -11,6 +11,7 @@ namespace ProxyHarbor.Api.Controllers;
 
 /// <summary>Операции администратора; доступ ограничивает middleware по X-Admin-Key.</summary>
 [ApiController, Route("api/v1/admin"), EnableRateLimiting("admin")]
+[ProducesResponseType<ProblemDetails>(StatusCodes.Status401Unauthorized)]
 public sealed class AdminController(
     IDbContextFactory<ProxyHarborDbContext> dbFactory,
     ProxyCollector collector,
@@ -21,6 +22,7 @@ public sealed class AdminController(
     IOptions<CollectorOptions> collectorOptions) : ControllerBase
 {
     [HttpGet("sources")]
+    [ProducesResponseType<IReadOnlyList<SourceResponse>>(StatusCodes.Status200OK)]
     public async Task<ActionResult<IReadOnlyList<SourceResponse>>> Sources(CancellationToken token)
     {
         await using var db = await dbFactory.CreateDbContextAsync(token);
@@ -29,6 +31,8 @@ public sealed class AdminController(
     }
 
     [HttpGet("sources/{id:guid}")]
+    [ProducesResponseType<SourceResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<SourceResponse>> GetSource(Guid id, CancellationToken token)
     {
         await using var db = await dbFactory.CreateDbContextAsync(token);
@@ -37,6 +41,9 @@ public sealed class AdminController(
     }
 
     [HttpPost("sources")]
+    [ProducesResponseType<SourceResponse>(StatusCodes.Status201Created)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]
     public async Task<ActionResult<SourceResponse>> CreateSource([FromBody] SourceRequest request, CancellationToken token)
     {
         if (!NetworkSafety.TryParseSafeHttpsUrl(request.Url, out var requestedUri) ||
@@ -60,6 +67,10 @@ public sealed class AdminController(
     }
 
     [HttpPut("sources/{id:guid}")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]
     public async Task<IActionResult> UpdateSource(Guid id, [FromBody] SourceRequest request, CancellationToken token)
     {
         if (!NetworkSafety.TryParseSafeHttpsUrl(request.Url, out var requestedUri))
@@ -114,6 +125,9 @@ public sealed class AdminController(
     }
 
     [HttpDelete("sources/{id:guid}")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]
     public async Task<IActionResult> DeleteSource(Guid id, CancellationToken token)
     {
         await using var mutationLease = await sourceMutationCoordinator.TryAcquireAsync(token);
@@ -137,6 +151,7 @@ public sealed class AdminController(
     });
 
     [HttpGet("diagnostics")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
     public async Task<IActionResult> Diagnostics(CancellationToken token)
     {
         await using var db = await dbFactory.CreateDbContextAsync(token);
@@ -203,6 +218,8 @@ public sealed class AdminController(
     }
 
     [HttpPost("collect")]
+    [ProducesResponseType<CollectionRun>(StatusCodes.Status200OK)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]
     public async Task<IActionResult> Collect(CancellationToken token)
     {
         // Ручной запуск является полным аудитом и намеренно игнорирует background backoff.
@@ -214,6 +231,8 @@ public sealed class AdminController(
     }
 
     [HttpPost("validate")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]
     public async Task<IActionResult> Validate(CancellationToken token)
     {
         (int Checked, int Alive, int Deferred) result;
@@ -226,6 +245,8 @@ public sealed class AdminController(
     }
 
     [HttpPost("backup")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]
     public async Task<IActionResult> Backup(CancellationToken token)
     {
         string path;
