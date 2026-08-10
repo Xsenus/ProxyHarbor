@@ -204,6 +204,8 @@ public sealed class ProxyCollectorIntegrationTests
             var sourceId = Guid.NewGuid();
             var expiredValidationRunId = Guid.NewGuid();
             var activeValidationRunId = Guid.NewGuid();
+            var activelyLeasedDeadProxyId = Guid.NewGuid();
+            var expiredLeaseDeadProxyId = Guid.NewGuid();
             await using (var seed = await factory.CreateDbContextAsync())
             {
                 seed.Runs.Add(new CollectionRun
@@ -235,6 +237,35 @@ public sealed class ProxyCollectorIntegrationTests
                     Url = "https://8.8.8.8/feed.txt",
                     DefaultProtocol = ProxyProtocol.Http
                 });
+                var oldFirstSeenAt = DateTimeOffset.UtcNow.AddDays(-10);
+                var oldLastSeenAt = DateTimeOffset.UtcNow.AddDays(-4);
+                seed.Proxies.AddRange(
+                    new ProxyEndpoint
+                    {
+                        Id = activelyLeasedDeadProxyId,
+                        Host = "4.2.2.1",
+                        Port = 8080,
+                        Status = ProxyStatus.Dead,
+                        FirstSeenAt = oldFirstSeenAt,
+                        LastSeenAt = oldLastSeenAt,
+                        LastCheckedAt = oldLastSeenAt,
+                        FailedChecks = 1,
+                        CheckLeaseId = Guid.NewGuid(),
+                        CheckLeaseUntil = DateTimeOffset.UtcNow.AddHours(1)
+                    },
+                    new ProxyEndpoint
+                    {
+                        Id = expiredLeaseDeadProxyId,
+                        Host = "4.2.2.2",
+                        Port = 8080,
+                        Status = ProxyStatus.Dead,
+                        FirstSeenAt = oldFirstSeenAt,
+                        LastSeenAt = oldLastSeenAt,
+                        LastCheckedAt = oldLastSeenAt,
+                        FailedChecks = 1,
+                        CheckLeaseId = Guid.NewGuid(),
+                        CheckLeaseUntil = DateTimeOffset.UtcNow.AddHours(-1)
+                    });
                 await seed.SaveChangesAsync();
             }
 
@@ -290,8 +321,11 @@ public sealed class ProxyCollectorIntegrationTests
                 await ageContent.Sources.Where(source => source.Id == sourceId)
                     .ExecuteUpdateAsync(setters => setters
                         .SetProperty(source => source.LastContentFetchedAt, staleContentFetchedAt));
-                // Имитируем proxy, уже удалённый retention во время серии 304.
-                await ageContent.Proxies.ExecuteDeleteAsync();
+                // Имитируем обычный proxy, уже удалённый retention во время серии 304;
+                // отдельно арендованная строка остаётся живым canary retention-защиты.
+                await ageContent.Proxies
+                    .Where(proxy => proxy.Id != activelyLeasedDeadProxyId)
+                    .ExecuteDeleteAsync();
             }
             using (var clients = new TestHttpClientFactory(new FullRefreshFeedHandler()))
             using (var collector = new ProxyCollector(
@@ -332,7 +366,9 @@ public sealed class ProxyCollectorIntegrationTests
             Assert.DoesNotContain(runs, run => run.Status == "running" || run.FinishedAt == null);
             Assert.False(await verify.ValidationRuns.AnyAsync(run => run.Id == expiredValidationRunId));
             Assert.True(await verify.ValidationRuns.AnyAsync(run => run.Id == activeValidationRunId && run.Status == "running"));
-            Assert.Equal(1, await verify.Proxies.CountAsync());
+            Assert.True(await verify.Proxies.AnyAsync(proxy => proxy.Id == activelyLeasedDeadProxyId));
+            Assert.False(await verify.Proxies.AnyAsync(proxy => proxy.Id == expiredLeaseDeadProxyId));
+            Assert.Equal(2, await verify.Proxies.CountAsync());
             var source = await verify.Sources.AsNoTracking().SingleAsync(item => item.Id == sourceId);
             Assert.Equal(2, source.LastItemCount);
             Assert.True(source.LastResultTruncated);
