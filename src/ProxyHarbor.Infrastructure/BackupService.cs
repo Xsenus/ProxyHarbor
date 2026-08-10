@@ -41,7 +41,7 @@ public sealed class BackupService(
             var options = backupOptions.Value;
             if (!BackupOptions.IsNewEncryptionKeyValid(options.EncryptionKey))
                 throw new InvalidOperationException(
-                    $"Backup__EncryptionKey должен содержать {BackupOptions.MinimumEncryptionKeyLength}..{BackupOptions.MaximumEncryptionKeyLength} символов без управляющих знаков.");
+                    $"Backup__EncryptionKey должен содержать {BackupOptions.MinimumEncryptionKeyLength}..{BackupOptions.MaximumEncryptionKeyLength} символов с корректной Unicode-кодировкой без управляющих знаков.");
             if (!BackupOptions.IsDirectoryValid(options.Directory))
                 throw new InvalidOperationException(
                     "Backup__Directory должен быть абсолютным безопасным путём длиной не более 1024 символов.");

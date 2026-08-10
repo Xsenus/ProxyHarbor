@@ -503,7 +503,7 @@ internal sealed record RestoreOptions(
             throw new ArgumentException("Не задана ConnectionStrings__Postgres.");
         if (!BackupOptions.IsLegacyDecryptionKeyValid(EncryptionKey))
             throw new ArgumentException(
-                $"Backup__EncryptionKey должен содержать {BackupOptions.MinimumLegacyDecryptionKeyLength}..{BackupOptions.MaximumEncryptionKeyLength} символов без управляющих знаков.");
+                $"Backup__EncryptionKey должен содержать {BackupOptions.MinimumLegacyDecryptionKeyLength}..{BackupOptions.MaximumEncryptionKeyLength} символов с корректной Unicode-кодировкой без управляющих знаков.");
         if (!ConfirmReplace)
             throw new ArgumentException("Операция заменяет данные БД; добавьте --replace-existing-data.");
     }

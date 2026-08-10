@@ -120,6 +120,43 @@ public sealed class BackupEncryptionTests
     }
 
     [Fact]
+    public async Task EncryptionAndDecryptionRejectAmbiguousUnicodeKeys()
+    {
+        using var files = new TemporaryFiles();
+        await File.WriteAllBytesAsync(files.Source, [1, 2, 3]);
+        var malformedKey = new string('k', BackupOptions.MinimumEncryptionKeyLength - 1) + '\uD800';
+
+        Assert.False(BackupOptions.IsNewEncryptionKeyValid(malformedKey));
+        Assert.False(BackupOptions.IsLegacyDecryptionKeyValid(malformedKey));
+        await Assert.ThrowsAsync<ArgumentException>(() => BackupEncryption.EncryptAsync(
+            files.Source, files.Encrypted, malformedKey, CancellationToken.None));
+        Assert.False(File.Exists(files.Encrypted));
+
+        await BackupEncryption.EncryptAsync(files.Source, files.Encrypted, Password, CancellationToken.None);
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            BackupEncryption.VerifyAsync(files.Encrypted, malformedKey, CancellationToken.None));
+        await Assert.ThrowsAsync<ArgumentException>(() => BackupEncryption.DecryptAsync(
+            files.Encrypted, files.Decrypted, malformedKey, CancellationToken.None));
+        Assert.False(File.Exists(files.Decrypted));
+    }
+
+    [Fact]
+    public async Task ValidSupplementaryUnicodeKeyRoundTrips()
+    {
+        using var files = new TemporaryFiles();
+        var unicodeKey = new string('k', BackupOptions.MinimumEncryptionKeyLength - 2) + "\U0001F680";
+        var expected = RandomNumberGenerator.GetBytes(257);
+        await File.WriteAllBytesAsync(files.Source, expected);
+
+        Assert.True(BackupOptions.IsNewEncryptionKeyValid(unicodeKey));
+        await BackupEncryption.EncryptAsync(files.Source, files.Encrypted, unicodeKey, CancellationToken.None);
+        await BackupEncryption.DecryptAsync(
+            files.Encrypted, files.Decrypted, unicodeKey, CancellationToken.None);
+
+        Assert.Equal(expected, await File.ReadAllBytesAsync(files.Decrypted));
+    }
+
+    [Fact]
     public async Task Phb3EncryptsANonSeekableStreamWithoutAPlaintextFile()
     {
         using var files = new TemporaryFiles();
@@ -143,6 +180,22 @@ public sealed class BackupEncryptionTests
         await BackupEncryption.VerifyAsync(files.Encrypted, LegacyPassword, CancellationToken.None);
         await BackupEncryption.DecryptAsync(
             files.Encrypted, files.Decrypted, LegacyPassword, CancellationToken.None);
+
+        Assert.Equal(expected, await File.ReadAllBytesAsync(files.Decrypted));
+    }
+
+    [Fact]
+    public async Task LegacyPhb2WithValidUnicodeKeyRemainsDecryptable()
+    {
+        using var files = new TemporaryFiles();
+        var unicodeLegacyKey = new string('k', BackupOptions.MinimumLegacyDecryptionKeyLength - 2) + "\U0001F680";
+        var expected = RandomNumberGenerator.GetBytes(333);
+        // Helper намеренно использует прежний string-overload PBKDF2: тест доказывает,
+        // что strict byte-overload даёт тот же ключ для корректного Unicode.
+        await WriteLegacyPhb2Async(files.Encrypted, expected, unicodeLegacyKey);
+
+        await BackupEncryption.DecryptAsync(
+            files.Encrypted, files.Decrypted, unicodeLegacyKey, CancellationToken.None);
 
         Assert.Equal(expected, await File.ReadAllBytesAsync(files.Decrypted));
     }

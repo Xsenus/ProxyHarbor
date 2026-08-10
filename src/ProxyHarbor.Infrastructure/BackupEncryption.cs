@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Security.Cryptography;
+using System.Text;
 
 namespace ProxyHarbor.Infrastructure;
 
@@ -11,6 +12,7 @@ public static class BackupEncryption
     private const int TagSize = 16;
     private const int DefaultChunkSize = 1024 * 1024;
     private const int Iterations = 200_000;
+    private static readonly UTF8Encoding StrictUtf8 = new(false, true);
     private static ReadOnlySpan<byte> CurrentMagic => "PHB3"u8;
 
     /// <summary>
@@ -32,7 +34,7 @@ public static class BackupEncryption
         ValidateEncryptionPassword(password);
         if (File.Exists(destination)) throw new IOException("Файл назначения уже существует.");
         var salt = RandomNumberGenerator.GetBytes(SaltSize);
-        var key = Rfc2898DeriveBytes.Pbkdf2(password, salt, Iterations, HashAlgorithmName.SHA256, 32);
+        var key = DeriveKey(password, salt);
         // Один bounded набор буферов обслуживает весь поток. Иначе каждый блок создавал
         // новые мегабайтные LOH-объекты и вызывал дорогие full GC на больших снимках.
         var plaintext = new byte[DefaultChunkSize];
@@ -133,7 +135,7 @@ public static class BackupEncryption
         if (chunkSize is < 65_536 or > 16_777_216)
             throw new InvalidDataException("Недопустимый размер блока backup.");
 
-        var key = Rfc2898DeriveBytes.Pbkdf2(password, salt, Iterations, HashAlgorithmName.SHA256, 32);
+        var key = DeriveKey(password, salt);
         // На restore использованная часть plaintext очищается после каждого блока,
         // а весь bounded буфер — перед выходом из метода при любом результате.
         var nonce = new byte[NonceSize];
@@ -223,11 +225,26 @@ public static class BackupEncryption
         return BinaryPrimitives.ReadInt32LittleEndian(bytes);
     }
 
+    /// <summary>Однозначно кодирует пароль и очищает его временное UTF-8 представление.</summary>
+    private static byte[] DeriveKey(string password, ReadOnlySpan<byte> salt)
+    {
+        var passwordBytes = StrictUtf8.GetBytes(password);
+        try
+        {
+            return Rfc2898DeriveBytes.Pbkdf2(
+                passwordBytes, salt, Iterations, HashAlgorithmName.SHA256, 32);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(passwordBytes);
+        }
+    }
+
     private static void ValidateEncryptionPassword(string password)
     {
         if (!BackupOptions.IsNewEncryptionKeyValid(password))
             throw new ArgumentException(
-                $"Ключ шифрования нового backup должен содержать {BackupOptions.MinimumEncryptionKeyLength}..{BackupOptions.MaximumEncryptionKeyLength} символов без управляющих знаков.",
+                $"Ключ шифрования нового backup должен содержать {BackupOptions.MinimumEncryptionKeyLength}..{BackupOptions.MaximumEncryptionKeyLength} символов с корректной Unicode-кодировкой без управляющих знаков.",
                 nameof(password));
     }
 
@@ -235,7 +252,7 @@ public static class BackupEncryption
     {
         if (!BackupOptions.IsLegacyDecryptionKeyValid(password))
             throw new ArgumentException(
-                $"Ключ расшифрования должен содержать {BackupOptions.MinimumLegacyDecryptionKeyLength}..{BackupOptions.MaximumEncryptionKeyLength} символов без управляющих знаков.",
+                $"Ключ расшифрования должен содержать {BackupOptions.MinimumLegacyDecryptionKeyLength}..{BackupOptions.MaximumEncryptionKeyLength} символов с корректной Unicode-кодировкой без управляющих знаков.",
                 nameof(password));
     }
 }

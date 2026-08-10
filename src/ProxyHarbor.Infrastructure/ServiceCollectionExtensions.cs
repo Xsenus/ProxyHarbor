@@ -52,7 +52,7 @@ public static class ServiceCollectionExtensions
             .Validate(x => x.HistoryRetentionDays is >= 1 and <= 3_650, "HistoryRetentionDays: 1..3650")
             .Validate(x => x.MaxTelegramFileSizeMb is >= 1 and <= 49, "MaxTelegramFileSizeMb: 1..49")
             .Validate(x => !x.Enabled || BackupOptions.IsNewEncryptionKeyValid(x.EncryptionKey),
-                $"Для резервного копирования нужен EncryptionKey длиной {BackupOptions.MinimumEncryptionKeyLength}..{BackupOptions.MaximumEncryptionKeyLength} символов без управляющих знаков")
+                $"Для резервного копирования нужен EncryptionKey длиной {BackupOptions.MinimumEncryptionKeyLength}..{BackupOptions.MaximumEncryptionKeyLength} символов с корректной Unicode-кодировкой без управляющих знаков")
             .Validate(x => !x.Enabled || BackupOptions.IsDirectoryValid(x.Directory),
                 "Backup Directory должен быть абсолютным безопасным путём длиной не более 1024 символов")
             .Validate(x => string.IsNullOrWhiteSpace(x.TelegramBotToken) == string.IsNullOrWhiteSpace(x.TelegramChatId), "TelegramBotToken и TelegramChatId задаются только вместе")

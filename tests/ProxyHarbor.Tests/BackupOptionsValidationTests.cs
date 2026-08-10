@@ -40,6 +40,25 @@ public sealed class BackupOptionsValidationTests
             provider.GetRequiredService<IOptions<BackupOptions>>().Value);
     }
 
+    [Fact]
+    public void EnabledBackupRejectsUnpairedUnicodeSurrogateKey()
+    {
+        var key = new string('k', BackupOptions.MinimumEncryptionKeyLength - 1) + '\uD800';
+        using var provider = BuildProvider(key, Path.GetFullPath("backup-options-test"));
+
+        Assert.Throws<OptionsValidationException>(() =>
+            provider.GetRequiredService<IOptions<BackupOptions>>().Value);
+    }
+
+    [Fact]
+    public void EnabledBackupAcceptsPairedUnicodeSurrogateKey()
+    {
+        var key = new string('k', BackupOptions.MinimumEncryptionKeyLength - 2) + "\U0001F680";
+        using var provider = BuildProvider(key, Path.GetFullPath("backup-options-test"));
+
+        Assert.Equal(key, provider.GetRequiredService<IOptions<BackupOptions>>().Value.EncryptionKey);
+    }
+
     [Theory]
     [InlineData("backups")]
     [InlineData(" ")]

@@ -1,3 +1,5 @@
+using System.Text;
+
 namespace ProxyHarbor.Infrastructure;
 
 /// <summary>Параметры периодического сбора и проверки.</summary>
@@ -31,6 +33,7 @@ public sealed class CollectorOptions
 /// <summary>Параметры шифрованного резервного копирования.</summary>
 public sealed class BackupOptions
 {
+    private static readonly UTF8Encoding StrictUtf8 = new(false, true);
     public const string Section = "Backup";
     public const int MinimumEncryptionKeyLength = 32;
     public const int MinimumLegacyDecryptionKeyLength = 16;
@@ -54,9 +57,23 @@ public sealed class BackupOptions
     public static bool IsLegacyDecryptionKeyValid(string? key) =>
         IsEncryptionKeyValid(key, MinimumLegacyDecryptionKeyLength);
 
-    private static bool IsEncryptionKeyValid(string? key, int minimumLength) =>
-        !string.IsNullOrWhiteSpace(key) && key.Length is <= MaximumEncryptionKeyLength &&
-        key.Length >= minimumLength && !key.Any(char.IsControl);
+    private static bool IsEncryptionKeyValid(string? key, int minimumLength)
+    {
+        if (string.IsNullOrWhiteSpace(key) || key.Length > MaximumEncryptionKeyLength ||
+            key.Length < minimumLength || key.Any(char.IsControl))
+            return false;
+        try
+        {
+            // Строгий encoder запрещает unpaired surrogate. Иначе разные строки ключа
+            // превращаются стандартным UTF-8 encoder в одинаковые replacement bytes.
+            _ = StrictUtf8.GetByteCount(key);
+            return true;
+        }
+        catch (EncoderFallbackException)
+        {
+            return false;
+        }
+    }
 
     /// <summary>Backup должен записываться только в явно заданный абсолютный каталог текущей ОС.</summary>
     internal static bool IsDirectoryValid(string? directory)

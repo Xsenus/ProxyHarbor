@@ -44,6 +44,20 @@ public sealed class RestoreOptionsTests
         Assert.Throws<ArgumentException>(options.Validate);
     }
 
+    [Fact]
+    public void ValidateRejectsUnpairedUnicodeSurrogateKey()
+    {
+        using var input = new TemporaryInput();
+        var options = new RestoreOptions(
+            input.Path,
+            Connection,
+            new string('k', BackupOptions.MinimumLegacyDecryptionKeyLength - 1) + '\uDFFF',
+            ConfirmReplace: true,
+            ShowHelp: false);
+
+        Assert.Throws<ArgumentException>(options.Validate);
+    }
+
     private sealed class TemporaryInput : IDisposable
     {
         public TemporaryInput() => Path = System.IO.Path.GetTempFileName();

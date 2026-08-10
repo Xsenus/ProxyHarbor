@@ -66,6 +66,9 @@ jobs:
       - name: Verify changelog and release-note contracts
         shell: pwsh
         run: ./tools/Test-ChangelogContracts.ps1
+      - name: Verify backup-key Unicode contracts
+        shell: pwsh
+        run: ./tools/Test-BackupKeyContracts.ps1
       - name: Verify workflow supply-chain pins
         shell: pwsh
         run: ./tools/Test-WorkflowSecurity.ps1
