@@ -339,7 +339,11 @@ jobs:
           echo "$openapi_document" | jq --exit-status \
             '.components.securitySchemes.AdminApiKey.type == "apiKey" and
              (.paths["/api/v1/admin/sources"].get.security[0] | has("AdminApiKey")) and
-             (.paths["/api/v1/proxies"].get.security == null)'
+             (.paths["/api/v1/proxies"].get.security == null) and
+             .paths["/api/v1/admin/validate"].post.responses["200"].content["application/json"].schema["$ref"] ==
+               "#/components/schemas/ValidationTriggerResponse" and
+             .paths["/api/v1/admin/backup"].post.responses["200"].content["application/json"].schema["$ref"] ==
+               "#/components/schemas/BackupTriggerResponse"'
           curl --fail --silent http://127.0.0.1:8080/health/live
           index_html=$(curl --fail --silent http://127.0.0.1:8080/)
           asset_path=$(echo "$index_html" | grep --only-matching --extended-regexp '/assets/[^" ]+\.js' | head --lines 1)
@@ -612,7 +616,19 @@ jobs:
             .paths["/api/v1/admin/sources"].post.responses["409"].content["application/json"].schema["$ref"] ==
               "#/components/schemas/ProblemDetails" and
             .paths["/api/v1/admin/collect"].post.responses["409"].content["application/json"].schema["$ref"] ==
-              "#/components/schemas/ProblemDetails"'
+              "#/components/schemas/ProblemDetails" and
+            .paths["/api/v1/admin/validate"].post.responses["200"].content["application/json"].schema["$ref"] ==
+              "#/components/schemas/ValidationTriggerResponse" and
+            .paths["/api/v1/admin/backup"].post.responses["200"].content["application/json"].schema["$ref"] ==
+              "#/components/schemas/BackupTriggerResponse" and
+            (.components.schemas.ValidationTriggerResponse.properties.checked.type | index("integer")) != null and
+            .components.schemas.ValidationTriggerResponse.properties.checked.format == "int32" and
+            (.components.schemas.ValidationTriggerResponse.properties.alive.type | index("integer")) != null and
+            .components.schemas.ValidationTriggerResponse.properties.alive.format == "int32" and
+            (.components.schemas.ValidationTriggerResponse.properties.deferred.type | index("integer")) != null and
+            .components.schemas.ValidationTriggerResponse.properties.deferred.format == "int32" and
+            .components.schemas.BackupTriggerResponse.properties.created.type == "string" and
+            .components.schemas.BackupTriggerResponse.properties.sentToTelegram.type == "boolean"'
           metrics=$(curl --fail --silent http://127.0.0.1:5080/metrics)
           echo "$metrics" | grep 'proxyharbor_sources_enabled 81'
           echo "$metrics" | grep 'proxyharbor_source_catalog_complete 1'

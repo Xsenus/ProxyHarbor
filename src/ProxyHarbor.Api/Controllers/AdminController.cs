@@ -228,7 +228,7 @@ public sealed class AdminController(
     }
 
     [HttpPost("validate")]
-    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType<ValidationTriggerResponse>(StatusCodes.Status200OK)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]
     public async Task<IActionResult> Validate(CancellationToken token)
     {
@@ -238,11 +238,11 @@ public sealed class AdminController(
         {
             return Conflict(new ProblemDetails { Title = exception.Message, Status = 409 });
         }
-        return Ok(new { result.Checked, result.Alive, result.Deferred });
+        return Ok(new ValidationTriggerResponse(result.Checked, result.Alive, result.Deferred));
     }
 
     [HttpPost("backup")]
-    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType<BackupTriggerResponse>(StatusCodes.Status200OK)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]
     public async Task<IActionResult> Backup(CancellationToken token)
     {
@@ -254,9 +254,15 @@ public sealed class AdminController(
         }
         var sent = !string.IsNullOrWhiteSpace(backupOptions.Value.TelegramBotToken) &&
             !string.IsNullOrWhiteSpace(backupOptions.Value.TelegramChatId);
-        return Ok(new { created = Path.GetFileName(path), sentToTelegram = sent });
+        return Ok(new BackupTriggerResponse(Path.GetFileName(path), sent));
     }
 }
+
+/// <summary>Результат одного ручного validation batch.</summary>
+public sealed record ValidationTriggerResponse(int Checked, int Alive, int Deferred);
+
+/// <summary>Результат ручного создания и опциональной Telegram-доставки backup.</summary>
+public sealed record BackupTriggerResponse(string Created, bool SentToTelegram);
 
 /// <summary>Текущий backlog без уже арендованных строк и rolling validation telemetry.</summary>
 public sealed record ValidationQueueResponse(

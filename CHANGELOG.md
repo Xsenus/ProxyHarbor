@@ -23,6 +23,7 @@
 
 ### Changed
 
+- Ручные admin `validate` и `backup` больше не публикуют schema-less anonymous `200`: именованные `ValidationTriggerResponse`/`BackupTriggerResponse` дают generated clients точные поля, reflection contract и два Release process-smoke проверяют реальные OpenAPI `$ref` и primitive types.
 - Test/coverage toolchain обновлён до согласованной для modern VSTest связки `Microsoft.NET.Test.Sdk` 18.8.1 и `coverlet.collector` 10.0.1; locked restore, 489 Release-тестов, Cobertura attachment, внутренний coverage-floor и повторный NuGet vulnerability audit проходят без исключений.
 - Dependabot теперь обновляет `Microsoft.NET.Test.Sdk` и `coverlet.*` одним атомарным `dotnet-tests` PR вместо несовместимых runtime/test PR; supply-chain gate и негативный fixture fail-closed защищают эту группировку.
 - Финальный source connect ограничивает один DNS-ответ максимум 32 публичными адресами до открытия socket; mixed private/public и oversized fan-out отклоняются fail-closed, а детерминированный gate доказывает public-only fallback и немедленную caller cancellation.

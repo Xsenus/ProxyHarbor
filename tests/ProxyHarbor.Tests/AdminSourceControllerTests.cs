@@ -59,6 +59,24 @@ public sealed class AdminSourceControllerTests
             .GetCustomAttributes<ProducesResponseTypeAttribute>()
             .Single(attribute => attribute.StatusCode == StatusCodes.Status200OK);
         Assert.Equal(typeof(DiagnosticsResponse), diagnostics.Type);
+
+        var typedCommands = new Dictionary<string, Type>
+        {
+            [nameof(AdminController.Collect)] = typeof(CollectionRun),
+            [nameof(AdminController.Validate)] = typeof(ValidationTriggerResponse),
+            [nameof(AdminController.Backup)] = typeof(BackupTriggerResponse)
+        };
+        foreach (var command in typedCommands)
+        {
+            var success = typeof(AdminController).GetMethod(command.Key)!
+                .GetCustomAttributes<ProducesResponseTypeAttribute>()
+                .Single(attribute => attribute.StatusCode == StatusCodes.Status200OK);
+            var conflict = typeof(AdminController).GetMethod(command.Key)!
+                .GetCustomAttributes<ProducesResponseTypeAttribute>()
+                .Single(attribute => attribute.StatusCode == StatusCodes.Status409Conflict);
+            Assert.Equal(command.Value, success.Type);
+            Assert.Equal(typeof(ProblemDetails), conflict.Type);
+        }
     }
 
     [Theory]
