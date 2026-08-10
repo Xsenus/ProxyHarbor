@@ -11,9 +11,9 @@ describe('responsive accessibility stylesheet', () => {
     // Этот контракт дополняет browser QA: случайное удаление responsive-правил
     // должно ломать обычный frontend test gate до публикации образа.
     expect(stylesheet).toContain('header>.brand{min-height:44px}')
-    expect(stylesheet).toContain('.provider-grid a{display:inline-flex;align-items:center;min-height:24px}')
+    expect(stylesheet).toContain('.provider-feeds summary,.provider-grid a{display:flex;align-items:center;min-height:24px}')
     expect(stylesheet).toContain('.mobile-admin{width:44px;height:44px}')
-    expect(stylesheet).toContain('.provider-grid a{min-height:44px}')
+    expect(stylesheet).toContain('.provider-feeds summary,.provider-grid a{min-height:44px}')
     expect(stylesheet).toContain('.tabs button{min-width:44px;min-height:44px}')
     expect(stylesheet).toContain('.filters input{height:44px}')
     expect(stylesheet).toContain('.close,.diagnostics-heading button{width:44px;height:44px;padding:0;display:grid;place-items:center}')

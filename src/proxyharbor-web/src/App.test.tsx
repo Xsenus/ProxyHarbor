@@ -23,7 +23,10 @@ const publicSourceCatalog = {
   providers: [
     {
       rank: 1, name: 'ProxyScrape', protocols: ['Http', 'Socks5'],
-      feeds: [{ rank: 1, name: 'ProxyScrape Mixed', url: 'https://api.proxyscrape.com/v4/free-proxy-list/get', protocol: 'Http' }],
+      feeds: [
+        { rank: 1, name: 'ProxyScrape HTTP', url: 'https://api.proxyscrape.com/v4/free-proxy-list/http', protocol: 'Http' },
+        { rank: 2, name: 'ProxyScrape SOCKS5', url: 'https://api.proxyscrape.com/v4/free-proxy-list/socks5', protocol: 'Socks5' },
+      ],
     },
     {
       rank: 3, name: 'OpenProxyList', protocols: ['Http'],
@@ -113,8 +116,15 @@ describe('ProxyHarbor UI', () => {
     expect(screen.getByText('81 HTTPS feed · аудит 2026-08-10')).toBeInTheDocument()
     expect(screen.getByText('ProxyScrape')).toBeInTheDocument()
     expect(screen.getByText('OpenProxyList')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'ProxyScrape: открыть исходный feed' })).toHaveAttribute(
-      'href', 'https://api.proxyscrape.com/v4/free-proxy-list/get')
+    const proxyScrapeFeeds = screen.getByText('ProxyScrape').closest('article')!
+    const feedSummary = screen.getByText('показать все feed (2)')
+    expect(proxyScrapeFeeds).toContainElement(feedSummary)
+    fireEvent.click(feedSummary)
+    expect(screen.getByRole('link', { name: 'ProxyScrape: ProxyScrape HTTP, HTTP' })).toHaveAttribute(
+      'href', 'https://api.proxyscrape.com/v4/free-proxy-list/http')
+    expect(screen.getByRole('link', { name: 'ProxyScrape: ProxyScrape SOCKS5, SOCKS5' })).toHaveAttribute(
+      'href', 'https://api.proxyscrape.com/v4/free-proxy-list/socks5')
+    expect(screen.getAllByRole('link', { name: /ProxyScrape:/ })).toHaveLength(2)
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     expect(vi.mocked(fetch).mock.calls.filter(([input]) => String(input).includes('/api/v1/sources'))).toHaveLength(1)
   })

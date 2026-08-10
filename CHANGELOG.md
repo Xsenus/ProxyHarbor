@@ -7,6 +7,7 @@
 
 ### Added
 
+- Публичная React-панель раскрывает в каждой из 50 provider-карточек полный список конкретных feed'ов: все 81 HTTPS URL, имя и заявленный HTTP/HTTPS/SOCKS4/SOCKS5 protocol доступны как keyboard/touch-friendly ссылки вместо прежней ссылки только на первый feed.
 - OpenAPI admin-контракт теперь явно описывает общий `401 ProblemDetails` и реальные success/400/404/409 responses, включая cluster-wide конфликт source mutation с collection, поэтому сгенерированные клиенты больше не предполагают только happy path.
 - PostgreSQL CI process-smoke fail-closed проверяет фактически сгенерированный `/openapi/v1.json`: `AdminApiKey`, operation security, точные response-коды source CRUD и `ProblemDetails` schema для collection conflicts.
 - Воспроизводимый `Test-BuiltInSourceEndpoints.ps1` выполняет bounded parallel live-аудит 81 feed/50 технических владельцев без системного proxy и публикует JSON failures; network-free `-CatalogOnly` contract включён в CI/release. Четыре последовательных live-run 10 августа подтвердили 81/81 endpoint с `IP:port` и нулём ошибок; последний прогон завершился с worst-case 1,130 мс, максимум серии — 3,110 мс.

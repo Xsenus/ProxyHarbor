@@ -558,7 +558,10 @@ export default function App() {
           <article key={`${provider.rank}-${provider.name}`}>
             <div><span>#{provider.rank}</span><strong>{provider.name}</strong></div>
             <small>{provider.feeds.length} feed · {provider.protocols.map(label).join(' · ')}</small>
-            <a href={provider.feeds[0].url} target="_blank" rel="noreferrer" aria-label={`${provider.name}: открыть исходный feed`}>исходный feed ↗</a>
+            <details className="provider-feeds">
+              <summary>показать все feed ({provider.feeds.length})</summary>
+              <div>{provider.feeds.map(feed => <a key={`${feed.rank}-${feed.url}`} href={feed.url} target="_blank" rel="noreferrer" aria-label={`${provider.name}: ${feed.name}, ${label(feed.protocol)}`}>{label(feed.protocol)} · {feed.name}<span aria-hidden="true">↗</span></a>)}</div>
+            </details>
           </article>)}</div>}
       </section>
 
