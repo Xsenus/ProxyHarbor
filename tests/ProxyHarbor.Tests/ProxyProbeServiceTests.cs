@@ -15,9 +15,13 @@ namespace ProxyHarbor.Tests;
 public sealed class ProxyProbeServiceTests
 {
     [Theory]
-    [InlineData("1.1.1.1", true)]
-    [InlineData("8.8.8.8", false)]
-    public async Task HttpConnectTlsProbePublishesOnlyValidatedExitIp(
+    [InlineData(ProxyProtocol.Http, "1.1.1.1", true)]
+    [InlineData(ProxyProtocol.Http, "8.8.8.8", false)]
+    [InlineData(ProxyProtocol.Https, "1.1.1.1", true)]
+    [InlineData(ProxyProtocol.Socks4, "1.1.1.1", true)]
+    [InlineData(ProxyProtocol.Socks5, "1.1.1.1", true)]
+    public async Task SupportedTunnelTlsProbePublishesOnlyValidatedExitIp(
+        ProxyProtocol protocol,
         string exitIp,
         bool expectedAnonymous)
     {
@@ -38,7 +42,7 @@ public sealed class ProxyProbeServiceTests
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         var releaseConnection = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var server = ServeProxyOnceAsync(
-            listener, certificate, exitIp, releaseConnection.Task, timeout.Token);
+            listener, certificate, exitIp, releaseConnection.Task, protocol, timeout.Token);
         var expectedCertificateHash = certificate.GetCertHashString(HashAlgorithmName.SHA256);
         var probe = new ProxyProbeService(
             settings,
@@ -54,12 +58,7 @@ public sealed class ProxyProbeServiceTests
         ProxyCheckResult result;
         try
         {
-            result = await probe.CheckAsync(new ProxyEndpoint
-            {
-                Host = "203.0.113.10",
-                Port = 31_280,
-                Protocol = ProxyProtocol.Http
-            }, timeout.Token);
+            result = await probe.CheckAsync(Proxy(protocol), timeout.Token);
         }
         finally
         {
@@ -98,7 +97,7 @@ public sealed class ProxyProbeServiceTests
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         var releaseConnection = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var server = ServeProxyOnceAsync(
-            listener, certificate, "1.1.1.1", releaseConnection.Task, timeout.Token);
+            listener, certificate, "1.1.1.1", releaseConnection.Task, ProxyProtocol.Http, timeout.Token);
         // Callback намеренно отсутствует: этот internal-конструктор проходит тем же
         // системным certificate validation path, что публичный production-конструктор.
         var probe = new ProxyProbeService(
@@ -202,11 +201,11 @@ public sealed class ProxyProbeServiceTests
         }
     }
 
-    private static ProxyEndpoint Proxy() => new()
+    private static ProxyEndpoint Proxy(ProxyProtocol protocol = ProxyProtocol.Http) => new()
     {
         Host = "203.0.113.10",
         Port = 31_280,
-        Protocol = ProxyProtocol.Http
+        Protocol = protocol
     };
 
     private static async Task<TcpClient> ConnectLoopbackAsync(int port, CancellationToken token)
@@ -246,15 +245,12 @@ public sealed class ProxyProbeServiceTests
         X509Certificate2 certificate,
         string exitIp,
         Task releaseConnection,
+        ProxyProtocol protocol,
         CancellationToken token)
     {
         using var client = await listener.AcceptTcpClientAsync(token);
         await using var transport = client.GetStream();
-        var connectRequest = await ReadHeadersAsync(transport, token);
-        Assert.StartsWith("CONNECT probe.example:8443 HTTP/1.1\r\n", connectRequest, StringComparison.Ordinal);
-        Assert.Contains("\r\nHost: probe.example:8443\r\n", connectRequest, StringComparison.OrdinalIgnoreCase);
-        await transport.WriteAsync("HTTP/1.1 200 Connection Established\r\n\r\n"u8.ToArray(), token);
-        await transport.FlushAsync(token);
+        await EstablishTunnelAsync(transport, protocol, token);
 
         await using var tls = new SslStream(transport, leaveInnerStreamOpen: false);
         await tls.AuthenticateAsServerAsync(new SslServerAuthenticationOptions
@@ -274,6 +270,83 @@ public sealed class ProxyProbeServiceTests
         await tls.WriteAsync(body, token);
         await tls.FlushAsync(token);
         await releaseConnection.WaitAsync(token);
+    }
+
+    private static async Task EstablishTunnelAsync(
+        Stream transport,
+        ProxyProtocol protocol,
+        CancellationToken token)
+    {
+        switch (protocol)
+        {
+            case ProxyProtocol.Http:
+            case ProxyProtocol.Https:
+                var connectRequest = await ReadHeadersAsync(transport, token);
+                Assert.StartsWith(
+                    "CONNECT probe.example:8443 HTTP/1.1\r\n",
+                    connectRequest,
+                    StringComparison.Ordinal);
+                Assert.Contains(
+                    "\r\nHost: probe.example:8443\r\n",
+                    connectRequest,
+                    StringComparison.OrdinalIgnoreCase);
+                await transport.WriteAsync(
+                    "HTTP/1.1 200 Connection Established\r\n\r\n"u8.ToArray(),
+                    token);
+                break;
+            case ProxyProtocol.Socks4:
+                await AcceptSocks4aAsync(transport, token);
+                break;
+            case ProxyProtocol.Socks5:
+                await AcceptSocks5Async(transport, token);
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(protocol));
+        }
+        await transport.FlushAsync(token);
+    }
+
+    private static async Task AcceptSocks4aAsync(Stream transport, CancellationToken token)
+    {
+        var request = new byte[9];
+        await transport.ReadExactlyAsync(request, token);
+        Assert.Equal(new byte[] { 4, 1, 0x20, 0xFB, 0, 0, 0, 1, 0 }, request);
+        Assert.Equal("probe.example", await ReadNullTerminatedAsciiAsync(transport, token));
+        await transport.WriteAsync(new byte[] { 0, 90, 0, 0, 0, 0, 0, 0 }, token);
+    }
+
+    private static async Task AcceptSocks5Async(Stream transport, CancellationToken token)
+    {
+        var greeting = new byte[3];
+        await transport.ReadExactlyAsync(greeting, token);
+        Assert.Equal(new byte[] { 5, 1, 0 }, greeting);
+        await transport.WriteAsync(new byte[] { 5, 0 }, token);
+        await transport.FlushAsync(token);
+
+        var header = new byte[5];
+        await transport.ReadExactlyAsync(header, token);
+        Assert.Equal(new byte[] { 5, 1, 0, 3, 13 }, header);
+        var addressAndPort = new byte[15];
+        await transport.ReadExactlyAsync(addressAndPort, token);
+        Assert.Equal("probe.example", Encoding.ASCII.GetString(addressAndPort, 0, 13));
+        Assert.Equal(new byte[] { 0x20, 0xFB }, addressAndPort[^2..]);
+        await transport.WriteAsync(new byte[] { 5, 0, 0, 1, 0, 0, 0, 0, 0, 0 }, token);
+    }
+
+    private static async Task<string> ReadNullTerminatedAsciiAsync(
+        Stream stream,
+        CancellationToken token)
+    {
+        using var output = new MemoryStream();
+        var singleByte = new byte[1];
+        while (output.Length <= byte.MaxValue)
+        {
+            await stream.ReadExactlyAsync(singleByte, token);
+            if (singleByte[0] == 0)
+                return Encoding.ASCII.GetString(output.GetBuffer(), 0, checked((int)output.Length));
+            output.WriteByte(singleByte[0]);
+        }
+        throw new InvalidDataException("SOCKS4a test host превысил 255 байт.");
     }
 
     /// <summary>Читает небольшой handshake header с жёсткой верхней границей.</summary>
