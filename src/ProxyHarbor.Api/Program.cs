@@ -176,14 +176,26 @@ app.MapGet("/health/ready", async (DatabaseReadinessProbe probe, CancellationTok
 }).RequireRateLimiting("public");
 app.MapGet("/healthz", () => Results.Redirect("/health/ready"));
 
-await using (var scope = app.Services.CreateAsyncScope())
+var dbFactory = app.Services.GetRequiredService<IDbContextFactory<ProxyHarborDbContext>>();
+string runtimeConnectionString;
+await using (var connectionDb = await dbFactory.CreateDbContextAsync())
 {
-    var factory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<ProxyHarborDbContext>>();
-    await using var db = await factory.CreateDbContextAsync();
-    await DatabaseSeeder.InitializeAsync(db);
+    runtimeConnectionString = connectionDb.Database.GetConnectionString()
+        ?? throw new InvalidOperationException("Не найдена строка подключения PostgreSQL.");
+}
+// Shared lifetime-lease разрешает горизонтальное масштабирование API, но не позволяет
+// destructive restore начаться до остановки последней реплики. Lease берётся до migrations/seed,
+// поэтому новая реплика также не может стартовать посередине восстановления.
+await using var runtimeLease = await DatabaseRuntimeGate.TryAcquireApiLeaseAsync(
+    runtimeConnectionString, CancellationToken.None)
+    ?? throw new InvalidOperationException(
+        "База данных занята восстановлением; запуск API отменён до завершения restore.");
+await using (var startupDb = await dbFactory.CreateDbContextAsync())
+{
+    await DatabaseSeeder.InitializeAsync(startupDb);
 }
 
-app.Run();
+await app.RunAsync();
 
 /// <summary>Маркер для интеграционных тестов WebApplicationFactory.</summary>
 public partial class Program;

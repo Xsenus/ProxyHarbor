@@ -33,6 +33,19 @@ jq --exit-status '.manifest.version == 5 and .manifest.secretsIncluded == false'
 
 Снимок предназначен для операторской сверки и не применяется автоматически. Он содержит collector/backup/runtime, CORS, trusted proxy и logging settings, но никогда не содержит admin key, PostgreSQL connection string, Telegram credentials или encryption key. Эти значения восстановите из внешнего secret store, затем выполните пробный restore в отдельную БД.
 
+Для замены production-БД сначала остановите все API-реплики, выполните restore и только после успеха верните сервисы:
+
+```bash
+docker compose stop web api
+docker compose --profile tools run --rm restore \
+  --input /app/backups/proxyharbor-YYYYMMDD-HHMMSS.phbackup \
+  --replace-existing-data
+docker compose up -d api web
+curl --fail https://proxy.example.com/health/ready
+```
+
+Это требование проверяется самой БД, а не только runbook: каждая API-реплика держит shared PostgreSQL lifetime-lease, restore — exclusive lease на весь migration+replace pipeline. Пока жива хотя бы одна реплика, restore завершится без изменения данных; пока идёт restore, новая API-реплика не стартует. Несколько обычных API-реплик совместимы друг с другом.
+
 ## Обновление и откат
 
 Перед обновлением создайте и проверьте backup. Затем получите новую версию и повторите production-команду `up -d --build`; постоянные volumes не заменяются. Для диагностики используйте:

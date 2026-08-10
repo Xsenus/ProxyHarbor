@@ -60,6 +60,34 @@ public sealed class PostgresAdvisoryLockTests
         Assert.Null(blockedMutation);
     }
 
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
+    public async Task ApiLifetimeLeasesExcludeRestoreAndReleaseRestoresAccess()
+    {
+        var connectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
+        if (string.IsNullOrWhiteSpace(connectionString)) return;
+
+        {
+            await using var firstApi = await DatabaseRuntimeGate.TryAcquireApiLeaseAsync(
+                connectionString, CancellationToken.None);
+            await using var secondApi = await DatabaseRuntimeGate.TryAcquireApiLeaseAsync(
+                connectionString, CancellationToken.None);
+            Assert.NotNull(firstApi);
+            Assert.NotNull(secondApi);
+
+            var blockedRestore = await DatabaseRuntimeGate.TryAcquireRestoreLeaseAsync(
+                connectionString, CancellationToken.None);
+            Assert.Null(blockedRestore);
+        }
+
+        await using var restore = await DatabaseRuntimeGate.TryAcquireRestoreLeaseAsync(
+            connectionString, CancellationToken.None);
+        Assert.NotNull(restore);
+        var blockedApi = await DatabaseRuntimeGate.TryAcquireApiLeaseAsync(
+            connectionString, CancellationToken.None);
+        Assert.Null(blockedApi);
+    }
+
     private sealed class TestDbFactory(DbContextOptions<ProxyHarborDbContext> options)
         : IDbContextFactory<ProxyHarborDbContext>
     {

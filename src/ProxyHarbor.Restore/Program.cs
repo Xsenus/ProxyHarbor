@@ -159,6 +159,12 @@ internal static class RestoreApplication
     {
         using var archive = ZipFile.OpenRead(zipPath);
         BackupArchiveValidator.Validate(archive);
+        // Exclusive lifetime-lease охватывает и migrations, и destructive transaction.
+        // Любая живая API-реплика держит shared lease, поэтому restore fail-closed требует
+        // её явной остановки, а новая реплика не может стартовать посередине замены данных.
+        await using var restoreLease = await DatabaseRuntimeGate.TryAcquireRestoreLeaseAsync(
+            connectionString, token) ?? throw new InvalidOperationException(
+            "База данных используется API. Остановите все API-реплики перед восстановлением.");
         var dbOptions = new DbContextOptionsBuilder<ProxyHarborDbContext>()
             .UseNpgsql(connectionString, npgsql => npgsql.EnableRetryOnFailure(3))
             .Options;
@@ -592,6 +598,8 @@ internal sealed record RestoreOptions(
         SecretFiles__PostgresPassword и SecretFiles__BackupEncryptionKey.
         Для локального secret-файла используйте --encryption-key-file с абсолютным
         путём. Inline --encryption-key совместим, но виден в process arguments.
+        Перед --replace-existing-data остановите все API-реплики: живой API держит
+        shared lifetime-lease, и restore fail-closed не начнёт замену данных.
         Явные CLI-параметры имеют наивысший приоритет.
         """;
 

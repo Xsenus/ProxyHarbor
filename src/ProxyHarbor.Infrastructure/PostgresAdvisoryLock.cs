@@ -9,6 +9,7 @@ internal sealed class PostgresAdvisoryLock : IAsyncDisposable
     internal const long CollectionKey = 0x505248434F4C4C01;
     internal const long BackupKey = 0x5052484241434B02;
     internal const long MaintenanceKey = 0x5052484D41494E04;
+    internal const long RuntimeKey = 0x50524852554E5405;
     private readonly NpgsqlConnection _connection;
     private readonly long _key;
     private readonly bool _shared;
@@ -42,6 +43,16 @@ internal sealed class PostgresAdvisoryLock : IAsyncDisposable
         await using var db = await dbFactory.CreateDbContextAsync(token);
         var connectionString = db.Database.GetConnectionString()
             ?? throw new InvalidOperationException("Не найдена строка подключения PostgreSQL.");
+        return await TryAcquireCoreAsync(connectionString, key, shared, token);
+    }
+
+    internal static async Task<PostgresAdvisoryLock?> TryAcquireCoreAsync(
+        string connectionString,
+        long key,
+        bool shared,
+        CancellationToken token)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
         var connection = new NpgsqlConnection(connectionString);
         try
         {
@@ -74,7 +85,12 @@ internal sealed class PostgresAdvisoryLock : IAsyncDisposable
                     : "SELECT pg_advisory_unlock(@key)";
                 await using var command = new NpgsqlCommand(sql, _connection);
                 command.Parameters.AddWithValue("key", _key);
-                await command.ExecuteNonQueryAsync(CancellationToken.None);
+                var released = (bool)(await command.ExecuteScalarAsync(CancellationToken.None) ?? false);
+                if (!released)
+                {
+                    NpgsqlConnection.ClearPool(_connection);
+                    throw new InvalidOperationException("PostgreSQL не подтвердил освобождение advisory lock.");
+                }
             }
         }
         catch
@@ -84,6 +100,27 @@ internal sealed class PostgresAdvisoryLock : IAsyncDisposable
         }
         finally { await _connection.DisposeAsync(); }
     }
+}
+
+/// <summary>
+/// Database-wide lifetime gate: API-реплики совместно владеют shared lease, а destructive
+/// restore получает exclusive lease только после остановки всех реплик.
+/// </summary>
+public static class DatabaseRuntimeGate
+{
+    /// <summary>Пытается зарегистрировать живую API-реплику; null означает активный restore.</summary>
+    public static async Task<IAsyncDisposable?> TryAcquireApiLeaseAsync(
+        string connectionString,
+        CancellationToken token) =>
+        await PostgresAdvisoryLock.TryAcquireCoreAsync(
+            connectionString, PostgresAdvisoryLock.RuntimeKey, shared: true, token);
+
+    /// <summary>Пытается получить эксклюзивное владение БД для destructive restore.</summary>
+    public static async Task<IAsyncDisposable?> TryAcquireRestoreLeaseAsync(
+        string connectionString,
+        CancellationToken token) =>
+        await PostgresAdvisoryLock.TryAcquireCoreAsync(
+            connectionString, PostgresAdvisoryLock.RuntimeKey, shared: false, token);
 }
 
 /// <summary>Ожидаемая ошибка повторного cluster-wide запуска операции.</summary>

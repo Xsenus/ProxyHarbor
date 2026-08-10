@@ -91,6 +91,26 @@ public sealed class BackupRestoreRoundTripIntegrationTests
             Assert.True(lastCompletedAt.Value > SnapshotTime);
             await VerifySettingsSnapshotAsync(encryptedPath, backupDirectory);
 
+            await using (var apiLease = await DatabaseRuntimeGate.TryAcquireApiLeaseAsync(
+                targetConnection, CancellationToken.None))
+            {
+                Assert.NotNull(apiLease);
+                string? blockedRestoreTemporaryDirectory = null;
+                var blockedExitCode = await RestoreApplication.RunAsync([
+                    "--input", encryptedPath,
+                    "--connection", targetConnection,
+                    "--encryption-key-file", restoreKeyFile,
+                    "--replace-existing-data"],
+                    new RestoreExecutionHooks(
+                        TemporaryDirectoryCreated: directory => blockedRestoreTemporaryDirectory = directory),
+                    CancellationToken.None);
+
+                Assert.Equal(1, blockedExitCode);
+                Assert.NotNull(blockedRestoreTemporaryDirectory);
+                Assert.False(Directory.Exists(blockedRestoreTemporaryDirectory));
+                await AssertTargetMarkersSurvivedAsync(targetOptions);
+            }
+
             var invalidBackup = await CreateSemanticallyInvalidBackupAsync(encryptedPath, backupDirectory);
             var failedExitCode = await RestoreApplication.RunAsync([
                 "--input", invalidBackup,
