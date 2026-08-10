@@ -32,6 +32,48 @@ public sealed class ProxyOriginResponseTests
     }
 
     [Fact]
+    public async Task ReaderSkipsBoundedInformationalResponsesBeforeFinalResponse()
+    {
+        const string body = "{\"ip\":\"8.8.4.4\"}";
+        var response =
+            "HTTP/1.1 103 Early Hints\r\nLink: </probe>; rel=preload\r\n\r\n" +
+            "HTTP/1.1 100 Continue\r\n\r\n" +
+            $"HTTP/1.1 200 OK\r\nContent-Length: {body.Length}\r\n\r\n{body}";
+        await using var stream = new ThrowAfterContentStream(
+            Encoding.ASCII.GetBytes(response),
+            maxChunkSize: 5);
+
+        var received = await ProxyOriginResponse.ReadAsync(stream, 64 * 1024, CancellationToken.None);
+
+        Assert.StartsWith("HTTP/1.1 200 OK\r\n", Encoding.ASCII.GetString(received.Span));
+        Assert.Equal("8.8.4.4", ProxyOriginResponse.ParseExitIp(received));
+    }
+
+    [Theory]
+    [InlineData("HTTP/1.1 103 Early Hints\r\nContent-Length: 0\r\n\r\n")]
+    [InlineData("HTTP/1.1 100 Continue\r\nTransfer-Encoding: chunked\r\n\r\n")]
+    [InlineData("HTTP/1.1 101 Switching Protocols\r\n\r\n")]
+    public async Task ReaderRejectsFramedOrProtocolSwitchingInformationalResponse(string prefix)
+    {
+        const string final = "HTTP/1.1 200 OK\r\nContent-Length: 16\r\n\r\n{\"ip\":\"8.8.8.8\"}";
+        await using var stream = new MemoryStream(Encoding.ASCII.GetBytes(prefix + final));
+
+        await Assert.ThrowsAsync<ProbeControlResponseException>(() =>
+            ProxyOriginResponse.ReadAsync(stream, 1024, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task ReaderBoundsInformationalResponseChain()
+    {
+        var response = string.Concat(Enumerable.Repeat("HTTP/1.1 103 Early Hints\r\n\r\n", 9)) +
+            "HTTP/1.1 200 OK\r\nContent-Length: 16\r\n\r\n{\"ip\":\"8.8.8.8\"}";
+        await using var stream = new MemoryStream(Encoding.ASCII.GetBytes(response));
+
+        await Assert.ThrowsAsync<ProbeControlResponseException>(() =>
+            ProxyOriginResponse.ReadAsync(stream, 2048, CancellationToken.None));
+    }
+
+    [Fact]
     public async Task ReaderRejectsAmbiguousOrDeclaredOversizedFraming()
     {
         await using var ambiguous = new ThrowAfterContentStream(Encoding.ASCII.GetBytes(
@@ -43,6 +85,20 @@ public sealed class ProxyOriginResponseTests
             "HTTP/1.1 200 OK\r\nContent-Length: 10000\r\n\r\n"));
         await Assert.ThrowsAsync<ProbeControlResponseException>(() =>
             ProxyOriginResponse.ReadAsync(oversized, 1024, CancellationToken.None));
+    }
+
+    [Theory]
+    [InlineData("Transfer-Encoding: gzip")]
+    [InlineData("Transfer-Encoding: chunked, gzip")]
+    [InlineData("Transfer-Encoding: chunked, chunked")]
+    [InlineData("Transfer-Encoding: ")]
+    public async Task ReaderRejectsUnsupportedOrAmbiguousTransferEncoding(string header)
+    {
+        await using var stream = new MemoryStream(Encoding.ASCII.GetBytes(
+            $"HTTP/1.1 200 OK\r\n{header}\r\n\r\n"));
+
+        await Assert.ThrowsAsync<ProbeControlResponseException>(() =>
+            ProxyOriginResponse.ReadAsync(stream, 1024, CancellationToken.None));
     }
 
     [Theory]
@@ -147,6 +203,18 @@ public sealed class ProxyOriginResponseTests
             "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n"));
         Assert.Throws<ProbeControlResponseException>(() => ProxyOriginResponse.ParseExitIp(
             "HTTP/1.1 200 OK\r\nContent-Length: 1\r\n\r\n{"));
+    }
+
+    [Theory]
+    [InlineData("HTTP/2 200 OK")]
+    [InlineData("HTTP/X 200 OK")]
+    [InlineData("HTTP/1.1 +200 OK")]
+    [InlineData("HTTP/1.1 2000 OK")]
+    [InlineData("HTTP/1.1\t200 OK")]
+    public void RejectsNonCanonicalStatusLine(string statusLine)
+    {
+        Assert.Throws<ProbeControlResponseException>(() => ProxyOriginResponse.ParseExitIp(
+            $"{statusLine}\r\nContent-Length: 16\r\n\r\n{{\"ip\":\"8.8.8.8\"}}"));
     }
 
     [Theory]
