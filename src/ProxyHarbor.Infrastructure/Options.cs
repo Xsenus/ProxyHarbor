@@ -29,6 +29,28 @@ public sealed class CollectorOptions
     public string ProbeHost { get; set; } = "api.ipify.org";
     public int ProbePort { get; set; } = 443;
     public string ProbePath { get; set; } = "/?format=json";
+
+    /// <summary>Control host передаётся URI, TLS SNI и сырому HTTP Host одинаковыми ASCII bytes.</summary>
+    public static bool IsProbeHostValid(string? host) =>
+        host is { Length: >= 1 and <= 253 } &&
+        host.All(character => character is >= '!' and <= '~' and not '%') &&
+        Uri.CheckHostName(host) != UriHostNameType.Unknown;
+
+    /// <summary>Требует уже канонический ASCII origin-form, одинаковый для direct и proxy request.</summary>
+    public static bool IsProbePathValid(string? path)
+    {
+        if (path is not { Length: >= 1 and <= 2048 } || path[0] != '/' ||
+            path.StartsWith("//", StringComparison.Ordinal) ||
+            path.Any(character => character is < '!' or > '~' or '#'))
+            return false;
+
+        return Uri.TryCreate($"https://probe.invalid{path}", UriKind.Absolute, out var endpoint) &&
+            string.Equals(endpoint.Host, "probe.invalid", StringComparison.Ordinal) &&
+            string.Equals(
+                endpoint.GetComponents(UriComponents.PathAndQuery, UriFormat.UriEscaped),
+                path,
+                StringComparison.Ordinal);
+    }
 }
 
 /// <summary>Параметры шифрованного резервного копирования.</summary>

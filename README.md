@@ -92,9 +92,9 @@ Prometheus слушает только `127.0.0.1:9090`, Alertmanager — `127.0
 | `VALIDATION_CONCURRENCY` / `Collector__ValidationConcurrency` | Параллельность сетевых проверок, по умолчанию 800 |
 | `VALIDATION_BATCH_SIZE` / `Collector__ValidationBatchSize` | Размер одной очереди, по умолчанию 1600 |
 | `Collector__PublicFreshnessMinutes` | Максимальный возраст проверки для публичной выдачи, по умолчанию 15 минут |
-| `Collector__ProbeHost` | DNS-имя доверенного HTTPS endpoint, возвращающего JSON `{ "ip": "..." }` |
-| `Collector__ProbePort` | TCP-порт контрольного endpoint, по умолчанию 443 |
-| `Collector__ProbePath` | HTTP path и query контрольного endpoint, по умолчанию `/?format=json` |
+| `Collector__ProbeHost` | Публичный control endpoint, возвращающий JSON `{ "ip": "..." }`: canonical ASCII DNS/IP без схемы и порта; по умолчанию `api.ipify.org` |
+| `Collector__ProbePort` | TLS-порт control endpoint, по умолчанию 443 |
+| `Collector__ProbePath` | Уже escaped printable ASCII origin-form (`/path?query`) без fragment, пробелов и `//` в начале; по умолчанию `/?format=json` |
 | `Collector__DeadRetryBaseMinutes` | Начальная пауза перед повторной проверкой нерабочего прокси, по умолчанию 15 минут |
 | `Collector__DeadRetryMaxHours` | Верхняя граница экспоненциальной паузы для нерабочих прокси, по умолчанию 24 часа |
 | `Collector__SourceConcurrency` | Параллельность загрузки feed'ов, по умолчанию 8 |

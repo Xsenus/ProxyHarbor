@@ -39,12 +39,12 @@ public static class ServiceCollectionExtensions
             .Validate(x => x.DeadRetentionDays is >= 1 and <= 365, "DeadRetentionDays: 1..365")
             .Validate(x => x.RunRetentionDays is >= 1 and <= 3_650, "RunRetentionDays: 1..3650")
             .Validate(x => x.ProbePort is >= 1 and <= 65_535, "ProbePort: 1..65535")
-            .Validate(x => Uri.CheckHostName(x.ProbeHost) != UriHostNameType.Unknown && !x.ProbeHost.Any(char.IsControl), "ProbeHost должен быть корректным DNS-именем или IP")
+            .Validate(x => CollectorOptions.IsProbeHostValid(x.ProbeHost),
+                "ProbeHost должен быть каноническим ASCII DNS-именем или IP длиной не более 253 символов")
             .Validate(x => !IPAddress.TryParse(x.ProbeHost, out var address) || NetworkSafety.IsPublicAddress(address),
                 "ProbeHost не может быть локальным, private или служебным IP")
-            .Validate(x => x.ProbePath.StartsWith('/') && x.ProbePath.Length <= 2048 &&
-                !x.ProbePath.Any(char.IsControl) && !x.ProbePath.Contains('#'),
-                "ProbePath должен быть безопасным относительным HTTP-путём без fragment")
+            .Validate(x => CollectorOptions.IsProbePathValid(x.ProbePath),
+                "ProbePath должен быть каноническим printable ASCII origin-form без fragment, пробелов или network-path")
             .ValidateOnStart();
         services.AddOptions<BackupOptions>().Bind(configuration.GetSection(BackupOptions.Section))
             .Validate(x => x.IntervalHours is >= 1 and <= 8_760, "IntervalHours: 1..8760")

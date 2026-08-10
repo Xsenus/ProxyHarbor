@@ -30,6 +30,79 @@ public sealed class OriginIpProviderTests
         Assert.Contains("ProbeHost", exception.Message, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData("probe host.example")]
+    [InlineData("tést.example")]
+    [InlineData("probe.example%25")]
+    public void InfrastructureOptionsRejectNonCanonicalControlHost(string host)
+    {
+        using var provider = BuildOptionsProvider("Collector:ProbeHost", host);
+
+        var exception = Assert.Throws<OptionsValidationException>(() =>
+            _ = provider.GetRequiredService<IOptions<CollectorOptions>>().Value);
+
+        Assert.Contains("ProbeHost", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void InfrastructureOptionsRejectOversizedControlHost()
+    {
+        using var provider = BuildOptionsProvider("Collector:ProbeHost", new string('a', 254));
+
+        Assert.Throws<OptionsValidationException>(() =>
+            _ = provider.GetRequiredService<IOptions<CollectorOptions>>().Value);
+    }
+
+    [Theory]
+    [InlineData("probe.example")]
+    [InlineData("8.8.8.8")]
+    [InlineData("2001:4860:4860::8888")]
+    public void InfrastructureOptionsAcceptCanonicalPublicControlHost(string host)
+    {
+        using var provider = BuildOptionsProvider("Collector:ProbeHost", host);
+
+        Assert.Equal(host, provider.GetRequiredService<IOptions<CollectorOptions>>().Value.ProbeHost);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("//other.example/control")]
+    [InlineData("/control path")]
+    [InlineData("/контроль")]
+    [InlineData("/control%zz")]
+    [InlineData("/control#fragment")]
+    [InlineData("control")]
+    public void InfrastructureOptionsRejectNonCanonicalProbePath(string path)
+    {
+        using var provider = BuildOptionsProvider("Collector:ProbePath", path);
+
+        var exception = Assert.Throws<OptionsValidationException>(() =>
+            _ = provider.GetRequiredService<IOptions<CollectorOptions>>().Value);
+
+        Assert.Contains("ProbePath", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void InfrastructureOptionsRejectOversizedProbePath()
+    {
+        using var provider = BuildOptionsProvider("Collector:ProbePath", "/" + new string('a', 2048));
+
+        Assert.Throws<OptionsValidationException>(() =>
+            _ = provider.GetRequiredService<IOptions<CollectorOptions>>().Value);
+    }
+
+    [Theory]
+    [InlineData("/?format=json")]
+    [InlineData("/control?escaped=%2F&value=one")]
+    [InlineData("/control;v=1")]
+    public void InfrastructureOptionsAcceptCanonicalProbePath(string path)
+    {
+        using var provider = BuildOptionsProvider("Collector:ProbePath", path);
+
+        Assert.Equal(path, provider.GetRequiredService<IOptions<CollectorOptions>>().Value.ProbePath);
+    }
+
     [Fact]
     public async Task UsesConfiguredHttpsEndpointAndCachesSuccessfulHealthCheck()
     {
@@ -45,7 +118,7 @@ public sealed class OriginIpProviderTests
             {
                 ProbeHost = "probe.example",
                 ProbePort = 8443,
-                ProbePath = "/who?format=json"
+                ProbePath = "/who?format=json&escaped=%2F"
             }),
             health);
 
@@ -53,7 +126,7 @@ public sealed class OriginIpProviderTests
         Assert.Equal("8.8.8.8", await provider.GetRequiredAsync(CancellationToken.None));
 
         Assert.Equal(1, handler.RequestCount);
-        Assert.Equal("https://probe.example:8443/who?format=json", handler.LastRequestUri?.AbsoluteUri);
+        Assert.Equal("https://probe.example:8443/who?format=json&escaped=%2F", handler.LastRequestUri?.AbsoluteUri);
         Assert.Equal(1, health.Availability);
         Assert.True(health.CheckedAtUnixSeconds > 0);
     }
@@ -159,6 +232,19 @@ public sealed class OriginIpProviderTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => request);
         Assert.Equal(-1, health.Availability);
         Assert.Equal(0, health.CheckedAtUnixSeconds);
+    }
+
+    private static ServiceProvider BuildOptionsProvider(string key, string value)
+    {
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["ConnectionStrings:Postgres"] = "Host=127.0.0.1;Database=unused;Username=unused",
+            [key] = value
+        }).Build();
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddProxyHarborInfrastructure(configuration);
+        return services.BuildServiceProvider();
     }
 
     private sealed class StubHttpClientFactory(HttpMessageHandler handler) : IHttpClientFactory, IDisposable
