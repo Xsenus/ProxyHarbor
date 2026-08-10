@@ -18,6 +18,61 @@ public sealed class ProxyTunnelProtocolTests
         Assert.Equal(
             "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\nProxy-Connection: keep-alive\r\n\r\n",
             Encoding.ASCII.GetString(stream.Written));
+        Assert.Equal(1, stream.ReadCount);
+    }
+
+    [Fact]
+    public async Task HttpConnectHandlesFragmentedHeaderWithoutPerByteAllocations()
+    {
+        await using var stream = new ScriptedDuplexStream(
+            Encoding.ASCII.GetBytes("HTTP/1.1 200 OK\r\nProxy-Agent: fragmented\r\n\r\n"),
+            maxReadSize: 3);
+
+        await ProxyTunnelProtocol.EstablishHttpConnectAsync(
+            stream, "example.com", 443, CancellationToken.None);
+
+        Assert.InRange(stream.ReadCount, 2, 32);
+    }
+
+    [Theory]
+    [InlineData("HTTP/2 200 OK\r\n\r\n")]
+    [InlineData("HTTP/X 200 OK\r\n\r\n")]
+    [InlineData("HTTP/1.1 +200 OK\r\n\r\n")]
+    public async Task HttpConnectRejectsInvalidVersionOrStatusSyntax(string response)
+    {
+        await using var stream = new ScriptedDuplexStream(Encoding.ASCII.GetBytes(response));
+
+        await Assert.ThrowsAsync<IOException>(() => ProxyTunnelProtocol.EstablishHttpConnectAsync(
+            stream, "example.com", 443, CancellationToken.None));
+    }
+
+    [Theory]
+    [InlineData(0x00)]
+    [InlineData(0x0A)]
+    [InlineData(0x7F)]
+    [InlineData(0x80)]
+    public async Task HttpConnectRejectsInvalidHeaderBytes(int invalidByte)
+    {
+        byte[] response =
+        [
+            .. Encoding.ASCII.GetBytes("HTTP/1.1 200 OK\r\nX-Test: before"),
+            checked((byte)invalidByte),
+            .. Encoding.ASCII.GetBytes("after\r\n\r\n")
+        ];
+        await using var stream = new ScriptedDuplexStream(response);
+
+        await Assert.ThrowsAsync<IOException>(() => ProxyTunnelProtocol.EstablishHttpConnectAsync(
+            stream, "example.com", 443, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task HttpConnectRejectsBytesAfterHeaderBoundary()
+    {
+        await using var stream = new ScriptedDuplexStream(
+            [.. Encoding.ASCII.GetBytes("HTTP/1.1 200 OK\r\n\r\n"), 0x00]);
+
+        await Assert.ThrowsAsync<IOException>(() => ProxyTunnelProtocol.EstablishHttpConnectAsync(
+            stream, "example.com", 443, CancellationToken.None));
     }
 
     [Fact]
@@ -93,12 +148,25 @@ public sealed class ProxyTunnelProtocolTests
             stream, "example.com", 443, CancellationToken.None));
     }
 
+    [Fact]
+    public async Task Socks5RejectsEmptyBoundDomain()
+    {
+        await using var stream = new ScriptedDuplexStream([
+            5, 0,
+            5, 0, 0, 3, 0
+        ]);
+
+        await Assert.ThrowsAsync<IOException>(() => ProxyTunnelProtocol.EstablishSocks5Async(
+            stream, "example.com", 443, CancellationToken.None));
+    }
+
     /// <summary>Отдаёт заранее заданные байты сервера и отдельно записывает запрос клиента.</summary>
-    private sealed class ScriptedDuplexStream(byte[] response) : Stream
+    private sealed class ScriptedDuplexStream(byte[] response, int maxReadSize = int.MaxValue) : Stream
     {
         private readonly MemoryStream _read = new(response, writable: false);
         private readonly MemoryStream _written = new();
         public byte[] Written => _written.ToArray();
+        public int ReadCount { get; private set; }
         public override bool CanRead => true;
         public override bool CanSeek => false;
         public override bool CanWrite => true;
@@ -106,8 +174,11 @@ public sealed class ProxyTunnelProtocolTests
         public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
         public override void Flush() { }
         public override int Read(byte[] buffer, int offset, int count) => _read.Read(buffer, offset, count);
-        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default) =>
-            _read.ReadAsync(buffer, cancellationToken);
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            ReadCount++;
+            return _read.ReadAsync(buffer[..Math.Min(buffer.Length, maxReadSize)], cancellationToken);
+        }
         public override void Write(byte[] buffer, int offset, int count) => _written.Write(buffer, offset, count);
         public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default) =>
             _written.WriteAsync(buffer, cancellationToken);

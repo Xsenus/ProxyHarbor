@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -22,8 +23,10 @@ internal static class ProxyTunnelProtocol
         var lineEnd = response.IndexOf("\r\n", StringComparison.Ordinal);
         var statusLine = lineEnd >= 0 ? response[..lineEnd] : response;
         var parts = statusLine.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length < 2 || !parts[0].StartsWith("HTTP/", StringComparison.OrdinalIgnoreCase) ||
-            !int.TryParse(parts[1], out var statusCode) || statusCode is < 200 or >= 300)
+        if (parts.Length < 2 ||
+            parts[0] is not "HTTP/1.0" and not "HTTP/1.1" ||
+            !int.TryParse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture, out var statusCode) ||
+            statusCode is < 200 or >= 300)
             throw new IOException("HTTP CONNECT отклонён прокси.");
     }
 
@@ -81,6 +84,8 @@ internal static class ProxyTunnelProtocol
             3 => await ReadByteAsync(stream, token),
             _ => throw new IOException("Некорректный тип адреса в SOCKS5-ответе.")
         };
+        if (addressLength == 0)
+            throw new IOException("SOCKS5 вернул пустое DNS-имя bind endpoint.");
         await ReadExactlyAsync(stream, new byte[addressLength + 2], token);
     }
 
@@ -99,15 +104,43 @@ internal static class ProxyTunnelProtocol
 
     private static async Task<string> ReadHeadersAsync(Stream stream, CancellationToken token)
     {
-        var buffer = new List<byte>(512);
-        while (buffer.Count < 16 * 1024)
+        const int maxHeaderBytes = 16 * 1024;
+        using var output = new MemoryStream(512);
+        var readBuffer = new byte[1024];
+        while (output.Length < maxHeaderBytes)
         {
-            var value = await ReadByteAsync(stream, token);
-            buffer.Add((byte)value);
-            if (buffer.Count >= 4 && buffer[^4] == 13 && buffer[^3] == 10 && buffer[^2] == 13 && buffer[^1] == 10)
-                return Encoding.ASCII.GetString(buffer.ToArray());
+            var remaining = checked(maxHeaderBytes - (int)output.Length);
+            var read = await stream.ReadAsync(readBuffer.AsMemory(0, Math.Min(readBuffer.Length, remaining)), token);
+            if (read == 0) throw new IOException("Прокси преждевременно закрыл соединение.");
+            await output.WriteAsync(readBuffer.AsMemory(0, read), token);
+
+            var bytes = output.GetBuffer().AsSpan(0, checked((int)output.Length));
+            var separator = bytes.IndexOf("\r\n\r\n"u8);
+            if (separator < 0) continue;
+            if (separator + 4 != bytes.Length)
+                throw new IOException("Прокси прислал неожиданные байты после CONNECT-заголовка.");
+            ValidateHttpHeaderBytes(bytes);
+            return Encoding.ASCII.GetString(bytes);
         }
         throw new IOException("Заголовок ответа прокси слишком велик.");
+    }
+
+    /// <summary>Отклоняет non-ASCII, DEL, NUL и bare CR/LF до разбора status line.</summary>
+    private static void ValidateHttpHeaderBytes(ReadOnlySpan<byte> value)
+    {
+        for (var index = 0; index < value.Length; index++)
+        {
+            var character = value[index];
+            var validCrLf = character switch
+            {
+                (byte)'\r' => index + 1 < value.Length && value[index + 1] == (byte)'\n',
+                (byte)'\n' => index > 0 && value[index - 1] == (byte)'\r',
+                _ => true
+            };
+            if (!validCrLf || character > 0x7E ||
+                character < 0x20 && character is not (byte)'\t' and not (byte)'\r' and not (byte)'\n')
+                throw new IOException("CONNECT-заголовок прокси содержит недопустимые байты.");
+        }
     }
 
     private static async Task<int> ReadByteAsync(Stream stream, CancellationToken token)
