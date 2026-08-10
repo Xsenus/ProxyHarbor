@@ -121,6 +121,30 @@ public static class DatabaseRuntimeGate
         CancellationToken token) =>
         await PostgresAdvisoryLock.TryAcquireCoreAsync(
             connectionString, PostgresAdvisoryLock.RuntimeKey, shared: false, token);
+
+    /// <summary>
+    /// Защищает отдельную write-операцию, даже если долгоживущая API-сессия была потеряна
+    /// из-за сетевого сбоя раньше остановки процесса.
+    /// </summary>
+    public static async Task<IAsyncDisposable?> TryAcquireOperationLeaseAsync(
+        IDbContextFactory<ProxyHarborDbContext> dbFactory,
+        CancellationToken token)
+    {
+        ArgumentNullException.ThrowIfNull(dbFactory);
+        await using var db = await dbFactory.CreateDbContextAsync(token);
+        // Быстрые unit-тесты используют InMemory provider, где межпроцессного restore нет.
+        if (!db.Database.IsRelational()) return NoOpLease.Instance;
+        var connectionString = db.Database.GetConnectionString()
+            ?? throw new InvalidOperationException("Не найдена строка подключения PostgreSQL.");
+        return await PostgresAdvisoryLock.TryAcquireCoreAsync(
+            connectionString, PostgresAdvisoryLock.RuntimeKey, shared: true, token);
+    }
+
+    private sealed class NoOpLease : IAsyncDisposable
+    {
+        internal static readonly NoOpLease Instance = new();
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
 }
 
 /// <summary>Ожидаемая ошибка повторного cluster-wide запуска операции.</summary>

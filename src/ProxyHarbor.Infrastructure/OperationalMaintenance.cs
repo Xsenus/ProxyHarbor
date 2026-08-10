@@ -75,6 +75,9 @@ public sealed class OperationalMaintenanceService(
     {
         try
         {
+            await using var databaseLease = await DatabaseRuntimeGate.TryAcquireOperationLeaseAsync(
+                dbFactory, token);
+            if (databaseLease is null) return null;
             await using var clusterLock = await PostgresAdvisoryLock.TryAcquireAsync(
                 dbFactory, PostgresAdvisoryLock.MaintenanceKey, token);
             if (clusterLock is null) return null;

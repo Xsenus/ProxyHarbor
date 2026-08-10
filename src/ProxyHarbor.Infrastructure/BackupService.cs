@@ -41,6 +41,9 @@ public sealed class BackupService(
             throw new OperationAlreadyRunningException("резервное копирование");
         try
         {
+            await using var databaseLease = await DatabaseRuntimeGate.TryAcquireOperationLeaseAsync(
+                dbFactory, cancellationToken)
+                ?? throw new OperationAlreadyRunningException("восстановление базы данных");
             await using var clusterLock = await PostgresAdvisoryLock.TryAcquireAsync(
                 dbFactory, PostgresAdvisoryLock.BackupKey, cancellationToken)
                 ?? throw new OperationAlreadyRunningException("резервное копирование");

@@ -41,6 +41,9 @@ public sealed class ProxyValidator(
             // Health-gate выполняется до SELECT ... FOR UPDATE: при сбое control endpoint
             // очередь остаётся свободной, а рабочие прокси не получают ложный Dead.
             await probe.EnsureControlEndpointAvailableAsync(cancellationToken);
+            await using var databaseLease = await DatabaseRuntimeGate.TryAcquireOperationLeaseAsync(
+                dbFactory, cancellationToken)
+                ?? throw new OperationAlreadyRunningException("восстановление базы данных");
             var now = DateTimeOffset.UtcNow;
             var concurrency = Math.Clamp(settings.ValidationConcurrency, 1, 1000);
             var batchSize = Math.Clamp(settings.ValidationBatchSize, 1, 100_000);

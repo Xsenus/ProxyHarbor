@@ -33,6 +33,9 @@ public sealed class ProxyCollector(
             throw new OperationAlreadyRunningException("сбор источников");
         try
         {
+            await using var databaseLease = await DatabaseRuntimeGate.TryAcquireOperationLeaseAsync(
+                dbFactory, cancellationToken)
+                ?? throw new OperationAlreadyRunningException("восстановление базы данных");
             await using var clusterLock = await PostgresAdvisoryLock.TryAcquireAsync(
                 dbFactory, PostgresAdvisoryLock.CollectionKey, cancellationToken)
                 ?? throw new OperationAlreadyRunningException("сбор источников");

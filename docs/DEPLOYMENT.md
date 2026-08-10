@@ -44,7 +44,7 @@ docker compose up -d api web
 curl --fail https://proxy.example.com/health/ready
 ```
 
-Это требование проверяется самой БД, а не только runbook: каждая API-реплика держит shared PostgreSQL lifetime-lease, restore — exclusive lease на весь migration+replace pipeline. Пока жива хотя бы одна реплика, restore завершится без изменения данных; пока идёт restore, новая API-реплика не стартует. Несколько обычных API-реплик совместимы друг с другом.
+Это требование проверяется самой БД, а не только runbook: каждая API-реплика держит shared PostgreSQL lifetime-lease, restore — exclusive lease на весь migration+replace pipeline. Каждый collector/validator/backup/maintenance/source-mutation дополнительно защищён short-lived shared operation-lease, поэтому серверная потеря lifetime-сессии не позволяет текущей или новой записи пересечься с restore. Пока жива хотя бы одна реплика или операция, restore завершится без изменения данных; пока идёт restore, новая API-реплика и новые write pipelines не стартуют. Несколько обычных API-реплик и их операции совместимы друг с другом.
 
 ## Обновление и откат
 

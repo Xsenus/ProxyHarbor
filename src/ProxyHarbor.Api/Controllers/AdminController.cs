@@ -146,7 +146,7 @@ public sealed class AdminController(
 
     private ConflictObjectResult SourceMutationConflict() => Conflict(new ProblemDetails
     {
-        Title = "Сбор источников уже выполняется; повторите изменение после его завершения",
+        Title = "Каталог занят сбором источников или восстановлением БД; повторите изменение позже",
         Status = StatusCodes.Status409Conflict
     });
 

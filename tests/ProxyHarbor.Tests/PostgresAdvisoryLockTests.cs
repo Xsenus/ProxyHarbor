@@ -62,10 +62,12 @@ public sealed class PostgresAdvisoryLockTests
 
     [Fact]
     [Trait("Category", "PostgresIntegration")]
-    public async Task ApiLifetimeLeasesExcludeRestoreAndReleaseRestoresAccess()
+    public async Task ApiAndOperationLeasesExcludeRestoreAndReleaseRestoresAccess()
     {
         var connectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
         if (string.IsNullOrWhiteSpace(connectionString)) return;
+        var options = new DbContextOptionsBuilder<ProxyHarborDbContext>().UseNpgsql(connectionString).Options;
+        var factory = new TestDbFactory(options);
 
         {
             await using var firstApi = await DatabaseRuntimeGate.TryAcquireApiLeaseAsync(
@@ -80,12 +82,27 @@ public sealed class PostgresAdvisoryLockTests
             Assert.Null(blockedRestore);
         }
 
+        await using (var operation = await DatabaseRuntimeGate.TryAcquireOperationLeaseAsync(
+            factory, CancellationToken.None))
+        {
+            Assert.NotNull(operation);
+            var blockedRestore = await DatabaseRuntimeGate.TryAcquireRestoreLeaseAsync(
+                connectionString, CancellationToken.None);
+            Assert.Null(blockedRestore);
+        }
+
         await using var restore = await DatabaseRuntimeGate.TryAcquireRestoreLeaseAsync(
             connectionString, CancellationToken.None);
         Assert.NotNull(restore);
         var blockedApi = await DatabaseRuntimeGate.TryAcquireApiLeaseAsync(
             connectionString, CancellationToken.None);
         Assert.Null(blockedApi);
+        var blockedOperation = await DatabaseRuntimeGate.TryAcquireOperationLeaseAsync(
+            factory, CancellationToken.None);
+        Assert.Null(blockedOperation);
+        var sourceMutation = await new SourceCatalogMutationCoordinator(factory)
+            .TryAcquireAsync(CancellationToken.None);
+        Assert.Null(sourceMutation);
     }
 
     private sealed class TestDbFactory(DbContextOptions<ProxyHarborDbContext> options)
