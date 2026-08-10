@@ -86,6 +86,8 @@ export default function App() {
   const sourceCatalogAbortRef = useRef<AbortController | null>(null)
   const adminRequestIdRef = useRef(0)
   const adminAbortRef = useRef<AbortController | null>(null)
+  const adminSessionIdRef = useRef(0)
+  const adminMutationAbortRefs = useRef(new Set<AbortController>())
 
   const cancelPublicRequests = useCallback(() => {
     publicRequestIdRef.current++
@@ -326,15 +328,24 @@ export default function App() {
     lastAdminTriggerRef.current = event.currentTarget
     setAdminOpen(true)
   }
-  const closeAdmin = useCallback(() => {
+  /** Отменяет все чтения и мутации, принадлежавшие предыдущей admin-сессии. */
+  const invalidateAdminSession = useCallback(() => {
+    adminSessionIdRef.current++
     adminRequestIdRef.current++
     adminAbortRef.current?.abort()
-    setAdminLoading(false)
-    setAdminOpen(false)
+    adminMutationAbortRefs.current.forEach(controller => controller.abort())
+    adminMutationAbortRefs.current.clear()
   }, [])
+  useEffect(() => () => invalidateAdminSession(), [invalidateAdminSession])
+  const closeAdmin = useCallback(() => {
+    invalidateAdminSession()
+    setAdminLoading(false)
+    setAction('')
+    setSourceBusy('')
+    setAdminOpen(false)
+  }, [invalidateAdminSession])
   const logoutAdmin = useCallback(() => {
-    adminRequestIdRef.current++
-    adminAbortRef.current?.abort()
+    invalidateAdminSession()
     removeStoredAdminKey()
     setAdminKey('')
     setAdminAuthenticated(false)
@@ -344,11 +355,10 @@ export default function App() {
     setAction('')
     setSourceBusy('')
     window.requestAnimationFrame(() => adminKeyRef.current?.focus())
-  }, [])
+  }, [invalidateAdminSession])
 
   const changeAdminKey = (value: string) => {
-    adminRequestIdRef.current++
-    adminAbortRef.current?.abort()
+    invalidateAdminSession()
     setAdminLoading(false)
     setAdminKey(value)
     setAdminAuthenticated(false)
@@ -395,70 +405,108 @@ export default function App() {
 
   const runAdminAction = async (name: 'collect' | 'validate' | 'backup') => {
     if (!adminAuthenticated) return
+    const sessionId = adminSessionIdRef.current
+    const controller = new AbortController()
+    adminMutationAbortRefs.current.add(controller)
     setAction(name)
     setAdminError('')
     try {
-      const response = await fetch(`${API}/api/v1/admin/${name}`, { method: 'POST', headers: { 'X-Admin-Key': adminKey } })
+      const response = await fetch(`${API}/api/v1/admin/${name}`, { method: 'POST', headers: { 'X-Admin-Key': adminKey }, signal: controller.signal })
+      if (sessionId !== adminSessionIdRef.current) return
       if (!response.ok) {
         if (response.status === 401) { removeStoredAdminKey(); setAdminAuthenticated(false) }
         throw new Error(await responseMessage(response, 'Административная операция не выполнена'))
       }
       await Promise.all([load(), loadAdminData()])
-    } catch (reason) { setAdminError(reason instanceof Error ? reason.message : 'Административная операция не выполнена') }
-    finally { setAction('') }
+    } catch (reason) {
+      if (!isAbortError(reason) && sessionId === adminSessionIdRef.current)
+        setAdminError(reason instanceof Error ? reason.message : 'Административная операция не выполнена')
+    } finally {
+      adminMutationAbortRefs.current.delete(controller)
+      if (sessionId === adminSessionIdRef.current) setAction('')
+    }
   }
 
   const saveSource = async (event: React.FormEvent) => {
     event.preventDefault()
     if (!adminAuthenticated) return
+    const sessionId = adminSessionIdRef.current
+    const controller = new AbortController()
+    adminMutationAbortRefs.current.add(controller)
     setSourceBusy('new')
     setAdminError('')
     try {
       const response = await fetch(`${API}/api/v1/admin/sources`, {
         method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Admin-Key': adminKey },
         body: JSON.stringify({ ...sourceDraft, enabled: true }),
+        signal: controller.signal,
       })
+      if (sessionId !== adminSessionIdRef.current) return
       if (!response.ok) {
         if (response.status === 401) { removeStoredAdminKey(); setAdminAuthenticated(false) }
         throw new Error(await responseMessage(response, 'Не удалось добавить источник'))
       }
       setSourceDraft({ name: '', url: '', protocol: 'Http', priority: 100 })
       await loadAdminData()
-    } catch (reason) { setAdminError(reason instanceof Error ? reason.message : 'Не удалось добавить источник') }
-    finally { setSourceBusy('') }
+    } catch (reason) {
+      if (!isAbortError(reason) && sessionId === adminSessionIdRef.current)
+        setAdminError(reason instanceof Error ? reason.message : 'Не удалось добавить источник')
+    } finally {
+      adminMutationAbortRefs.current.delete(controller)
+      if (sessionId === adminSessionIdRef.current) setSourceBusy('')
+    }
   }
 
   const toggleSource = async (source: Source) => {
     if (!adminAuthenticated) return
+    const sessionId = adminSessionIdRef.current
+    const controller = new AbortController()
+    adminMutationAbortRefs.current.add(controller)
     setSourceBusy(source.id)
     setAdminError('')
     try {
       const response = await fetch(`${API}/api/v1/admin/sources/${source.id}`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json', 'X-Admin-Key': adminKey },
         body: JSON.stringify({ name: source.name, url: source.url, protocol: source.defaultProtocol, priority: source.priority, enabled: !source.enabled }),
+        signal: controller.signal,
       })
+      if (sessionId !== adminSessionIdRef.current) return
       if (!response.ok) {
         if (response.status === 401) { removeStoredAdminKey(); setAdminAuthenticated(false) }
         throw new Error(await responseMessage(response, 'Не удалось изменить состояние источника'))
       }
       await loadAdminData()
-    } catch (reason) { setAdminError(reason instanceof Error ? reason.message : 'Не удалось изменить состояние источника') }
-    finally { setSourceBusy('') }
+    } catch (reason) {
+      if (!isAbortError(reason) && sessionId === adminSessionIdRef.current)
+        setAdminError(reason instanceof Error ? reason.message : 'Не удалось изменить состояние источника')
+    } finally {
+      adminMutationAbortRefs.current.delete(controller)
+      if (sessionId === adminSessionIdRef.current) setSourceBusy('')
+    }
   }
 
   const removeSource = async (source: Source) => {
     if (!adminAuthenticated) return
     if (!window.confirm(`Удалить или отключить источник «${source.name}»?`)) return
+    const sessionId = adminSessionIdRef.current
+    const controller = new AbortController()
+    adminMutationAbortRefs.current.add(controller)
     setSourceBusy(source.id)
     try {
-      const response = await fetch(`${API}/api/v1/admin/sources/${source.id}`, { method: 'DELETE', headers: { 'X-Admin-Key': adminKey } })
+      const response = await fetch(`${API}/api/v1/admin/sources/${source.id}`, { method: 'DELETE', headers: { 'X-Admin-Key': adminKey }, signal: controller.signal })
+      if (sessionId !== adminSessionIdRef.current) return
       if (!response.ok) {
         if (response.status === 401) { removeStoredAdminKey(); setAdminAuthenticated(false) }
         throw new Error(await responseMessage(response, 'Не удалось удалить источник'))
       }
       await loadAdminData()
-    } catch (reason) { setAdminError(reason instanceof Error ? reason.message : 'Не удалось удалить источник') }
-    finally { setSourceBusy('') }
+    } catch (reason) {
+      if (!isAbortError(reason) && sessionId === adminSessionIdRef.current)
+        setAdminError(reason instanceof Error ? reason.message : 'Не удалось удалить источник')
+    } finally {
+      adminMutationAbortRefs.current.delete(controller)
+      if (sessionId === adminSessionIdRef.current) setSourceBusy('')
+    }
   }
 
   const protocolCounts = useMemo(() => Object.fromEntries(stats?.byProtocol.map(x => [x.protocol, x.count]) ?? []), [stats])
@@ -530,7 +578,7 @@ export default function App() {
       <section ref={adminDialogRef} className="admin-modal" role="dialog" aria-modal="true" aria-labelledby="admin-title">
         <button className="close" aria-label="Закрыть" onClick={closeAdmin}><X/></button>
         <span className="kicker">ADMIN CONSOLE</span><h2 id="admin-title">Управление сбором</h2><p>Ключ хранится только до закрытия вкладки.</p>
-        <div className="key-input"><KeyRound size={18}/><input ref={adminKeyRef} type="password" aria-label="Ключ администратора" placeholder="X-Admin-Key" autoComplete="off" autoCapitalize="none" spellCheck={false} maxLength={256} value={adminKey} onChange={e => changeAdminKey(e.target.value)}/><button onClick={() => void loadAdminData(true)} disabled={adminLoading}>{adminLoading ? 'Проверяем…' : 'Войти'}</button>{adminAuthenticated && <button className="logout" onClick={logoutAdmin}>Выйти</button>}</div>
+        <form className="key-input" aria-label="Вход администратора" onSubmit={event => { event.preventDefault(); void loadAdminData(true) }}><KeyRound size={18}/><input ref={adminKeyRef} type="password" aria-label="Ключ администратора" placeholder="X-Admin-Key" autoComplete="off" autoCapitalize="none" spellCheck={false} maxLength={256} value={adminKey} onChange={e => changeAdminKey(e.target.value)}/><button type="submit" disabled={adminLoading}>{adminLoading ? 'Проверяем…' : 'Войти'}</button>{adminAuthenticated && <button type="button" className="logout" onClick={logoutAdmin}>Выйти</button>}</form>
         {adminError && <div className="admin-notice" role="alert"><X size={16}/>{adminError}</div>}
         <div className="admin-actions">
           <button ref={firstAdminActionRef} onClick={() => runAdminAction('collect')} disabled={!adminAuthenticated || !!action}><Play/> {action === 'collect' ? 'Собираем…' : 'Запустить сбор'}</button>

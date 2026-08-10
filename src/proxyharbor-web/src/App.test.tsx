@@ -196,6 +196,53 @@ describe('ProxyHarbor UI', () => {
     expect(sessionStorage.getItem('proxyharbor-admin-key')).toBeNull()
   })
 
+  it('does not restore a logged-out session after a stale admin mutation completes', async () => {
+    let resolveBackup!: (response: Response) => void
+    const pendingBackup = new Promise<Response>(resolve => { resolveBackup = resolve })
+    const backupRequest: { signal?: AbortSignal | null } = {}
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = String(input)
+      if (url.includes('/api/v1/stats')) return jsonResponse(stats)
+      if (url.includes('/api/v1/sources') && !url.includes('/admin/')) return jsonResponse(publicSourceCatalog)
+      if (url.includes('/api/v1/proxies')) return jsonResponse({ items: [], pageSize: 100, hasMore: false, nextCursor: null })
+      if (url.includes('/api/v1/admin/sources')) return jsonResponse([])
+      if (url.includes('/api/v1/admin/diagnostics')) return jsonResponse({
+        serverTime: '2026-08-09T10:00:00Z', databaseBytes: 0,
+        validationQueue: { total: 0, leased: 0, neverChecked: 0, due: 0, scheduled: 0, repeatedlyFailing: 0 },
+        recentRuns: [], recentBackups: [],
+      })
+      if (url.endsWith('/api/v1/admin/backup') && init?.method === 'POST') {
+        backupRequest.signal = init.signal ?? null
+        return pendingBackup
+      }
+      return jsonResponse({ title: 'Unexpected request' }, 500)
+    })
+
+    render(<App />)
+    await screen.findByText('система активна')
+    fireEvent.click(screen.getByRole('button', { name: /^Управление$/ }))
+    fireEvent.change(screen.getByLabelText('Ключ администратора'), { target: { value: 'valid-admin-key' } })
+    // Проверяем и нативную form-семантику: такой submit браузер выполняет по Enter в поле ключа.
+    fireEvent.submit(screen.getByRole('form', { name: 'Вход администратора' }))
+    expect(await screen.findByLabelText('Диагностика сервиса')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Создать backup' }))
+    await waitFor(() => expect(backupRequest.signal).toBeDefined())
+    const adminReadsBeforeLogout = vi.mocked(fetch).mock.calls.filter(([input]) =>
+      /\/api\/v1\/admin\/(sources|diagnostics)/.test(String(input))).length
+    fireEvent.click(screen.getByRole('button', { name: 'Выйти' }))
+
+    expect(backupRequest.signal?.aborted).toBe(true)
+    resolveBackup(jsonResponse({ created: 'stale.phbackup', sentToTelegram: true }))
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+
+    expect(sessionStorage.getItem('proxyharbor-admin-key')).toBeNull()
+    expect(screen.getByLabelText('Ключ администратора')).toHaveValue('')
+    expect(screen.queryByLabelText('Диагностика сервиса')).not.toBeInTheDocument()
+    expect(vi.mocked(fetch).mock.calls.filter(([input]) =>
+      /\/api\/v1\/admin\/(sources|diagnostics)/.test(String(input)))).toHaveLength(adminReadsBeforeLogout)
+  })
+
   it('does not overlap periodic public polling while the current request is pending', async () => {
     vi.useFakeTimers()
     let resolveStats!: (response: Response) => void
