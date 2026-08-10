@@ -239,6 +239,75 @@ public sealed class SourceReliabilityTests
         Assert.Equal(response.Content.Headers.LastModified, result.HttpLastModifiedAt);
     }
 
+    [Fact]
+    public async Task ConditionalValidatorsNeverCrossRedirectOrPersistForRedirectedRepresentation()
+    {
+        var redirect = new HttpResponseMessage(HttpStatusCode.Found);
+        redirect.Headers.Location = new Uri("https://8.8.4.4/final.txt");
+        var final = new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("8.8.8.8:8080")
+        };
+        final.Headers.ETag = new EntityTagHeaderValue("\"target-etag\"");
+        final.Content.Headers.LastModified = new DateTimeOffset(2026, 8, 10, 1, 0, 0, TimeSpan.Zero);
+        var handler = new RedirectRecordingHandler(redirect, final);
+        using var client = new HttpClient(handler);
+        using var collector = new ProxyCollector(
+            null!, null!, Options.Create(new CollectorOptions { SourceRetryCount = 0 }),
+            NullLogger<ProxyCollector>.Instance);
+        var sourceModifiedAt = new DateTimeOffset(2026, 8, 9, 1, 0, 0, TimeSpan.Zero);
+
+        var result = await collector.FetchSourceStateAsync(
+            client,
+            "https://1.1.1.1/source.txt",
+            "\"source-etag\"",
+            sourceModifiedAt,
+            CancellationToken.None);
+
+        Assert.Equal("8.8.8.8:8080", result.Content);
+        Assert.False(result.NotModified);
+        Assert.Null(result.HttpETag);
+        Assert.Null(result.HttpLastModifiedAt);
+        Assert.Collection(handler.Snapshots,
+            initial =>
+            {
+                Assert.Equal("1.1.1.1", initial.Uri.Host);
+                Assert.Equal("\"source-etag\"", initial.IfNoneMatch);
+                Assert.Equal(sourceModifiedAt, initial.IfModifiedSince);
+            },
+            redirected =>
+            {
+                Assert.Equal("8.8.4.4", redirected.Uri.Host);
+                Assert.Null(redirected.IfNoneMatch);
+                Assert.Null(redirected.IfModifiedSince);
+            });
+    }
+
+    [Fact]
+    public async Task RedirectedUnsolicited304IsRejected()
+    {
+        var redirect = new HttpResponseMessage(HttpStatusCode.TemporaryRedirect);
+        redirect.Headers.Location = new Uri("https://8.8.4.4/final.txt");
+        var handler = new RedirectRecordingHandler(
+            redirect,
+            new HttpResponseMessage(HttpStatusCode.NotModified));
+        using var client = new HttpClient(handler);
+        using var collector = new ProxyCollector(
+            null!, null!, Options.Create(new CollectorOptions { SourceRetryCount = 0 }),
+            NullLogger<ProxyCollector>.Instance);
+
+        var exception = await Assert.ThrowsAsync<InvalidDataException>(() =>
+            collector.FetchSourceStateAsync(
+                client,
+                "https://1.1.1.1/source.txt",
+                "\"source-etag\"",
+                null,
+                CancellationToken.None));
+
+        Assert.Contains("Redirect-target", exception.Message, StringComparison.Ordinal);
+        Assert.Null(handler.Snapshots[1].IfNoneMatch);
+    }
+
     [Theory]
     [InlineData(1, 15)]
     [InlineData(2, 30)]
@@ -315,4 +384,26 @@ public sealed class SourceReliabilityTests
             base.Dispose(disposing);
         }
     }
+
+    private sealed class RedirectRecordingHandler(params HttpResponseMessage[] responses) : HttpMessageHandler
+    {
+        private int _index;
+        internal List<RequestSnapshot> Snapshots { get; } = [];
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            Snapshots.Add(new RequestSnapshot(
+                request.RequestUri!,
+                request.Headers.IfNoneMatch.SingleOrDefault()?.ToString(),
+                request.Headers.IfModifiedSince));
+            return Task.FromResult(responses[_index++]);
+        }
+    }
+
+    private sealed record RequestSnapshot(
+        Uri Uri,
+        string? IfNoneMatch,
+        DateTimeOffset? IfModifiedSince);
 }

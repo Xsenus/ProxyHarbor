@@ -321,10 +321,31 @@ public sealed class ProxyCollector(
                 throw new HttpRequestException("Источник или его перенаправление ведёт в запрещённую сеть.");
 
             using var request = new HttpRequestMessage(HttpMethod.Get, current);
-            if (parsedETag is not null) request.Headers.IfNoneMatch.Add(parsedETag);
-            if (httpLastModifiedAt is not null) request.Headers.IfModifiedSince = httpLastModifiedAt;
+            // Conditional validators принадлежат representation исходного URI. Их
+            // перенос на redirect-target способен раскрыть cross-origin ETag и дать
+            // ложный 304, если владелец позже сменит Location на другой feed.
+            if (redirect == 0)
+            {
+                if (parsedETag is not null) request.Headers.IfNoneMatch.Add(parsedETag);
+                if (httpLastModifiedAt is not null) request.Headers.IfModifiedSince = httpLastModifiedAt;
+            }
             var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token);
-            if ((int)response.StatusCode is not (301 or 302 or 303 or 307 or 308)) return response;
+            if ((int)response.StatusCode is not (301 or 302 or 303 or 307 or 308))
+            {
+                if (redirect == 0) return response;
+                if (response.StatusCode == System.Net.HttpStatusCode.NotModified)
+                {
+                    response.Dispose();
+                    throw new InvalidDataException(
+                        "Redirect-target вернул 304 без принадлежащего ему conditional validator.");
+                }
+
+                // Модель хранит validators по исходному Source.Url и не хранит effective
+                // redirect URI. Не сохраняем ETag/Last-Modified другой representation.
+                response.Headers.ETag = null;
+                response.Content.Headers.LastModified = null;
+                return response;
+            }
 
             var location = response.Headers.Location;
             response.Dispose();
