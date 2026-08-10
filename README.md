@@ -79,7 +79,7 @@ Prometheus слушает только `127.0.0.1:9090`, Alertmanager — `127.0
 | `ConnectionStrings__Postgres` | Строка подключения PostgreSQL |
 | `Security__AdminApiKey` | Значимый корректный Unicode-ключ длиной 24–256 символов для заголовка `X-Admin-Key` |
 | `Cors__Origins__0...N` | До 32 доверенных browser origins: в Production только HTTPS без credentials/path/query/fragment; HTTP разрешён лишь в Development, список по умолчанию пуст |
-| `ForwardedHeaders__KnownNetworks__0...N` | CIDR только доверенных reverse proxy; Docker Compose задаёт изолированную `/24` сеть |
+| `ForwardedHeaders__KnownNetworks__0...N` | До 32 канонических CIDR только доверенных reverse proxy; catch-all и сети шире IPv4 `/8` или IPv6 `/24` запрещены, Compose задаёт изолированную `/24` сеть |
 | `AllowedHosts` | Разделённые `;` явные Host names без порта; Production запрещает пустое значение и allow-all `*`, Compose использует `PUBLIC_HOST` |
 | `PUBLIC_HOST` | Публичное DNS-имя production без схемы и пути |
 | `ACME_EMAIL` | Контакт для автоматического выпуска TLS-сертификата |

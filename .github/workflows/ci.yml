@@ -584,6 +584,7 @@ jobs:
           Backup__Directory: /tmp/proxyharbor-backups
           Backup__EncryptionKey: integration-backup-key-at-least-32-chars
           Cors__Origins__0: https://dashboard.example
+          ForwardedHeaders__KnownNetworks__0: 127.0.0.1/32
         run: |
           if Cors__Origins__0=http://dashboard.example \
             dotnet run --no-build -c Release --no-launch-profile \
@@ -593,6 +594,14 @@ jobs:
           fi
           grep 'HTTP разрешён только в Development' unsafe-cors.log
           rm unsafe-cors.log
+          if ForwardedHeaders__KnownNetworks__0=0.0.0.0/0 \
+            dotnet run --no-build -c Release --no-launch-profile \
+              --project src/ProxyHarbor.Api/ProxyHarbor.Api.csproj > unsafe-forwarded-network.log 2>&1; then
+            cat unsafe-forwarded-network.log
+            exit 1
+          fi
+          grep 'минимальная маска IPv4 /8, IPv6 /24' unsafe-forwarded-network.log
+          rm unsafe-forwarded-network.log
           dotnet run --no-build -c Release --no-launch-profile --project src/ProxyHarbor.Api/ProxyHarbor.Api.csproj > api.log 2>&1 &
           api_pid=$!
           trap 'kill $api_pid || true; cat api.log' EXIT

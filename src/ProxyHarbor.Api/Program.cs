@@ -139,6 +139,11 @@ builder.Services.AddRateLimiter(x =>
         }));
 });
 builder.Services.Configure<ApiBehaviorOptions>(x => x.SuppressMapClientErrors = false);
+if (!ForwardedNetworkPolicy.TryParse(
+    builder.Configuration.GetSection("ForwardedHeaders:KnownNetworks").Get<string[]>(),
+    out var knownProxyNetworks))
+    throw new InvalidOperationException(
+        "ForwardedHeaders__KnownNetworks должен содержать не более 32 канонических CIDR; минимальная маска IPv4 /8, IPv6 /24.");
 
 var app = builder.Build();
 var forwardedHeaders = new ForwardedHeadersOptions
@@ -147,12 +152,7 @@ var forwardedHeaders = new ForwardedHeadersOptions
     ForwardLimit = 1,
     RequireHeaderSymmetry = true
 };
-foreach (var network in builder.Configuration.GetSection("ForwardedHeaders:KnownNetworks").Get<string[]>() ?? [])
-{
-    if (!System.Net.IPNetwork.TryParse(network, out var parsedNetwork))
-        throw new InvalidOperationException($"Некорректная доверенная сеть ForwardedHeaders__KnownNetworks: {network}");
-    forwardedHeaders.KnownIPNetworks.Add(parsedNetwork);
-}
+foreach (var network in knownProxyNetworks) forwardedHeaders.KnownIPNetworks.Add(network);
 app.UseForwardedHeaders(forwardedHeaders);
 app.UseMiddleware<SecurityHeadersMiddleware>();
 app.UseExceptionHandler();
