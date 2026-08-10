@@ -6,6 +6,8 @@
 
 Runtime HTTP SLI публикуются как `proxyharbor_http_requests_total` и cumulative `proxyharbor_http_request_duration_seconds`. Labels ограничены фиксированными группами route/status; произвольные URL, IP и заголовки никогда не попадают в time-series, а `/metrics` исключён из измерения. Counters локальны реплике и сбрасываются при рестарте, поэтому alarms используют `rate()` и суммируют все scrape targets.
 
+Все database-derived series одного scrape вычисляются в общем retry-safe PostgreSQL `REPEATABLE READ` snapshot. Concurrent collection/validation не может смешать старый proxy count с новым source/run состоянием и создать ложную комбинацию alarms; in-process HTTP/maintenance counters считываются после тех же DB-запросов и остаются локальными реплике.
+
 ## Проверка
 
 ```bash

@@ -97,9 +97,57 @@ public sealed class PublicReadSnapshotIntegrationTests
             Assert.True(statsInterceptor.MutationInvoked);
             Assert.Equal(1, stats.Alive);
             Assert.Equal(1, stats.Sources);
-            await using var statsVerify = await plainFactory.CreateDbContextAsync();
-            Assert.Equal(0, await statsVerify.Proxies.CountAsync(proxy => proxy.Status == ProxyStatus.Alive));
-            Assert.Equal(0, await statsVerify.Sources.CountAsync(source => source.Enabled));
+            await using (var statsVerify = await plainFactory.CreateDbContextAsync())
+            {
+                Assert.Equal(0, await statsVerify.Proxies.CountAsync(proxy => proxy.Status == ProxyStatus.Alive));
+                Assert.Equal(0, await statsVerify.Sources.CountAsync(source => source.Enabled));
+            }
+
+            await using (var reset = await plainFactory.CreateDbContextAsync())
+            {
+                await reset.Proxies.ExecuteDeleteAsync();
+                await reset.Sources.ExecuteDeleteAsync();
+            }
+            var metricsProxyId = Guid.Parse("30000000-0000-0000-0000-000000000001");
+            var metricsSourceId = Guid.Parse("30000000-0000-0000-0000-000000000002");
+            await using (var seed = await plainFactory.CreateDbContextAsync())
+            {
+                seed.Proxies.Add(Endpoint(metricsProxyId, "4.2.2.2", 90, now));
+                seed.Sources.Add(new ProxySource
+                {
+                    Id = metricsSourceId,
+                    Name = "metrics-snapshot-source",
+                    Url = "https://example.com/metrics-snapshot.txt",
+                    Enabled = true
+                });
+                await seed.SaveChangesAsync();
+            }
+
+            var metricsInterceptor = new MutateBeforeReadInterceptor("FROM \"Sources\"", 1, async token =>
+            {
+                await using var update = await plainFactory.CreateDbContextAsync(token);
+                await update.Proxies.Where(proxy => proxy.Id == metricsProxyId)
+                    .ExecuteUpdateAsync(setters => setters
+                        .SetProperty(proxy => proxy.Status, ProxyStatus.Dead)
+                        .SetProperty(proxy => proxy.FailedChecks, proxy => proxy.FailedChecks + 1)
+                        .SetProperty(proxy => proxy.ConsecutiveFailedChecks, 1), token);
+                await update.Sources.Where(source => source.Id == metricsSourceId)
+                    .ExecuteUpdateAsync(setters => setters.SetProperty(source => source.Enabled, false), token);
+            });
+            var metricsController = new MetricsController(
+                RetryFactory(builder.ConnectionString, metricsInterceptor),
+                Options.Create(new CollectorOptions { PublicFreshnessMinutes = 15 }),
+                Options.Create(new BackupOptions()),
+                new ProbeControlHealth());
+
+            var metricsResult = Assert.IsType<ContentResult>(
+                await metricsController.Get(CancellationToken.None));
+            Assert.True(metricsInterceptor.MutationInvoked);
+            Assert.Contains("proxyharbor_proxies{status=\"alive\",protocol=\"http\"} 1", metricsResult.Content);
+            Assert.Contains("proxyharbor_sources_enabled 1", metricsResult.Content);
+            await using var metricsVerify = await plainFactory.CreateDbContextAsync();
+            Assert.Equal(0, await metricsVerify.Proxies.CountAsync(proxy => proxy.Status == ProxyStatus.Alive));
+            Assert.Equal(0, await metricsVerify.Sources.CountAsync(source => source.Enabled));
         });
     }
 

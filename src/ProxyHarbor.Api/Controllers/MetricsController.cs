@@ -23,9 +23,16 @@ public sealed class MetricsController(
     [HttpGet]
     [Produces("text/plain")]
     [OutputCache(PolicyName = "public-summary")]
-    public async Task<IActionResult> Get(CancellationToken token)
+    public async Task<IActionResult> Get(CancellationToken requestToken)
     {
-        await using var db = await dbFactory.CreateDbContextAsync(token);
+        await using var db = await dbFactory.CreateDbContextAsync(requestToken);
+        return await BufferedReadSnapshot.ExecuteAsync(
+            db, token => GetSnapshotAsync(db, token), requestToken);
+    }
+
+    /// <summary>Строит весь database-derived exposition внутри уже открытого read snapshot.</summary>
+    private async Task<IActionResult> GetSnapshotAsync(ProxyHarborDbContext db, CancellationToken token)
+    {
         var now = DateTimeOffset.UtcNow;
         var freshAfter = now.AddMinutes(-collectorOptions.Value.PublicFreshnessMinutes);
         var unseenRetentionCutoff = now.AddDays(-Math.Max(1, collectorOptions.Value.DeadRetentionDays));
