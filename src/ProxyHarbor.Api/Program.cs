@@ -107,9 +107,14 @@ builder.Services.AddRateLimiter(x =>
     x.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
     x.OnRejected = async (context, token) =>
     {
-        if (context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var retryAfter))
-            context.HttpContext.Response.Headers.RetryAfter =
-                Math.Max(1, (int)Math.Ceiling(retryAfter.TotalSeconds)).ToString(CultureInfo.InvariantCulture);
+        // Не все встроенные limiter lease обязаны возвращать RetryAfter metadata.
+        // Контракт API всё равно обещает header для 429, поэтому используем bounded
+        // fallback и никогда не отправляем клиенту бессмысленный ноль.
+        var retryAfterSeconds = context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var retryAfter)
+            ? Math.Max(1, (int)Math.Ceiling(retryAfter.TotalSeconds))
+            : 1;
+        context.HttpContext.Response.Headers.RetryAfter =
+            retryAfterSeconds.ToString(CultureInfo.InvariantCulture);
         await context.HttpContext.Response.WriteAsJsonAsync(new ProblemDetails
         {
             Title = "Слишком много запросов",
