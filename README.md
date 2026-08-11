@@ -66,7 +66,7 @@ Collector отвечает только за обнаружение адресо
 - доступ к PostgreSQL и внешним HTTPS endpoint из контейнерной сети.
 
 ```bash
-git clone https://github.com/YOUR_GITHUB_OWNER/ProxyHarbor.git
+git clone https://github.com/Xsenus/ProxyHarbor.git
 cd ProxyHarbor
 cp .env.example .env
 ```
@@ -331,7 +331,7 @@ docs/                            архитектура и operator runbooks
 
 Затем выполните [полный GitHub checklist](docs/GITHUB_SETUP.md): создайте пустой remote, включите Actions/CodeQL/secret scanning, настройте branch и tag rulesets, дождитесь успешного CI и только после container smoke создавайте первый SemVer tag.
 
-До публикации замените `YOUR_GITHUB_OWNER` в команде клонирования на фактического владельца репозитория. Runtime-примеры с `proxy.example.com` являются шаблонами и заменяются на `PUBLIC_HOST` вашей установки.
+Runtime-примеры с `proxy.example.com` являются шаблонами и заменяются на `PUBLIC_HOST` вашей установки.
 
 ## Безопасность и поддержка
 
