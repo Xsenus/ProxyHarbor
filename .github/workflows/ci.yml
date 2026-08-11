@@ -286,7 +286,10 @@ jobs:
           printf '%s' "$BACKUP_ENCRYPTION_KEY" > .tmp-ci-secrets/backup_encryption_key
           printf '%s' "$TELEGRAM_BOT_TOKEN" > .tmp-ci-secrets/telegram_bot_token
           printf '%s' "$TELEGRAM_CHAT_ID" > .tmp-ci-secrets/telegram_chat_id
-          chmod 600 .tmp-ci-secrets/*
+          # Bind-mounted Compose secrets сохраняют host mode. Контейнеры работают
+          # не от root, поэтому чтение даёт 0444, а каталог 0700 закрывает значения
+          # от остальных host-пользователей runner-а.
+          chmod 444 .tmp-ci-secrets/*
           export COMPOSE_FILE=docker-compose.yml:docker-compose.ci.yml
           cleanup() {
             status=$?
@@ -418,8 +421,10 @@ jobs:
           # Fake Telegram secrets выше нужны для проверки secret mounts, но manual
           # backup не должен обращаться к реальному Bot API. Пересоздаём только API
           # с пустыми secret-файлами и тем самым тестируем локальный delivery-mode.
+          chmod 600 .tmp-ci-secrets/telegram_bot_token .tmp-ci-secrets/telegram_chat_id
           : > .tmp-ci-secrets/telegram_bot_token
           : > .tmp-ci-secrets/telegram_chat_id
+          chmod 444 .tmp-ci-secrets/telegram_bot_token .tmp-ci-secrets/telegram_chat_id
           docker compose up --detach --no-deps --force-recreate api
           for attempt in {1..60}; do
             if curl --fail --silent http://127.0.0.1:8080/health/ready; then break; fi
