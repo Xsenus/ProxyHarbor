@@ -17,6 +17,7 @@
 
 ### Fixed
 
+- Container smoke сверяет загруженный Prometheus-каталог со всеми 23 alert-правилами вместо устаревшего значения 17.
 - Production `AllowedHosts` разрешает внутреннее Docker DNS-имя `api`, чтобы изолированный Prometheus мог напрямую собирать `/metrics`; API по-прежнему не публикуется из backend network, а внешний произвольный Host отклоняется.
 - Production Caddy сохраняет только `NET_BIND_SERVICE` в capability bounding set: официальный file-capability binary теперь запускается совместно с non-root, read-only, `init` и `no-new-privileges`, тогда как все остальные Linux capabilities остаются удалены.
 - Любой rate-limit `429` теперь гарантированно содержит положительный `Retry-After`, даже если конкретный .NET limiter lease не предоставил metadata; runtime smoke проверяет согласованность header и `ProblemDetails`.
