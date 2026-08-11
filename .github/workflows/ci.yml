@@ -407,7 +407,7 @@ jobs:
           # Fake Telegram secrets выше нужны для проверки secret mounts, но manual
           # backup не должен обращаться к реальному Bot API. Пересоздаём только API
           # с пустыми secret-файлами и тем самым тестируем локальный delivery-mode.
-          TELEGRAM_BOT_TOKEN= TELEGRAM_CHAT_ID= docker compose \
+          env TELEGRAM_BOT_TOKEN='' TELEGRAM_CHAT_ID='' docker compose \
             up --detach --no-deps --force-recreate api
           for attempt in {1..60}; do
             if curl --fail --silent http://127.0.0.1:8080/health/ready; then break; fi
@@ -662,7 +662,7 @@ jobs:
           dotnet run --no-build -c Release --no-launch-profile --project src/ProxyHarbor.Api/ProxyHarbor.Api.csproj > api.log 2>&1 &
           api_pid=$!
           trap 'kill $api_pid || true; cat api.log' EXIT
-          for attempt in {1..60}; do
+          for _ in {1..60}; do
             curl --fail --silent http://127.0.0.1:5080/health/ready && break
             sleep 1
           done
@@ -829,8 +829,17 @@ jobs:
              .recentBackups[0].sizeBytes > 0 and
              .recentBackups[0].telegramConfigured == false and
              .recentBackups[0].sentToTelegram == false'
-          curl --fail --silent http://127.0.0.1:5080/metrics | \
-            grep 'proxyharbor_last_backup_success 1'
+          backup_metric_ready=false
+          for attempt in {1..20}; do
+            backup_metrics=$(curl --fail --silent http://127.0.0.1:5080/metrics)
+            if echo "$backup_metrics" | grep --quiet '^proxyharbor_last_backup_success 1$'; then
+              backup_metric_ready=true
+              break
+            fi
+            if [ "$attempt" -eq 20 ]; then echo "$backup_metrics"; fi
+            sleep 0.25
+          done
+          test "$backup_metric_ready" = true
           PGPASSWORD=integration-password psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -U proxyharbor -d proxyharbor \
             -c "DELETE FROM \"Proxies\" WHERE \"Id\" = '20000000-0000-0000-0000-000000000001';"
           test "$(PGPASSWORD=integration-password psql -tAc \
@@ -842,7 +851,7 @@ jobs:
           wait "$api_pid" || true
           dotnet run --no-build -c Release --no-launch-profile --project src/ProxyHarbor.Api/ProxyHarbor.Api.csproj >> api.log 2>&1 &
           api_pid=$!
-          for attempt in {1..60}; do
+          for _ in {1..60}; do
             curl --fail --silent http://127.0.0.1:5080/health/ready && break
             sleep 1
           done
@@ -874,7 +883,7 @@ jobs:
             --input "/tmp/proxyharbor-backups/$backup_file" --replace-existing-data
           dotnet run --no-build -c Release --no-launch-profile --project src/ProxyHarbor.Api/ProxyHarbor.Api.csproj >> api.log 2>&1 &
           api_pid=$!
-          for attempt in {1..60}; do
+          for _ in {1..60}; do
             curl --fail --silent http://127.0.0.1:5080/health/ready && break
             sleep 1
           done

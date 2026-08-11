@@ -35,7 +35,7 @@ foreach ($workflowName in 'ci.yml', 'release.yml') {
 # обращается к Bot API с заведомо неверным token и падает не по причине продукта.
 $ciWorkflow = Get-Content -LiteralPath (Join-Path $repositoryRoot '.github/workflows/ci.yml') -Raw
 $requiredContainerSmokeFragments = @(
-    'TELEGRAM_BOT_TOKEN= TELEGRAM_CHAT_ID= docker compose \',
+    'env TELEGRAM_BOT_TOKEN='''' TELEGRAM_CHAT_ID='''' docker compose \',
     'up --detach --no-deps --force-recreate api',
     'echo "$backup_response" | jq --exit-status ''.sentToTelegram == false''',
     '.recentBackups[0].telegramConfigured == false',
