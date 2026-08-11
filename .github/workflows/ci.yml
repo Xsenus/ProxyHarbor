@@ -181,7 +181,7 @@ jobs:
             config --format json)
           echo "$production_config" | jq --exit-status '
             ((.services.web.ports // []) | length == 0) and
-            .services.caddy.image == "caddy:2.11.4-alpine" and
+            .services.caddy.image == "caddy:2.11.4-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648" and
             .services.caddy.user == "65532:65532" and
             .services.caddy.read_only == true and
             .services.caddy.healthcheck.test[0] == "CMD-SHELL" and
@@ -192,11 +192,11 @@ jobs:
             .services.caddy.healthcheck.retries == 3 and
             ((.services.caddy.cap_drop // []) | index("ALL") != null) and
             ([.services.caddy.ports[].published | tostring] | sort) == ["443", "443", "80"] and
-            .services.prometheus.image == "prom/prometheus:v3.13.2-distroless" and
+            .services.prometheus.image == "prom/prometheus:v3.13.2-distroless@sha256:64f71bb84e03c855948418b0fc5dea53e9543d8e3fc9931598f583805507f05e" and
             .services.prometheus.user == "65532:65532" and
             .services.prometheus.read_only == true and
             .services.prometheus.ports[0].host_ip == "127.0.0.1" and
-            .services.alertmanager.image == "prom/alertmanager:v0.32.1" and
+            .services.alertmanager.image == "prom/alertmanager:v0.32.1@sha256:51a825c2a40acc3e338fdd00d622e01ec090f72be2b3ea46be0839cd47a4d286" and
             .services.alertmanager.user == "65534:65534" and
             .services.alertmanager.read_only == true and
             .services.alertmanager.ports[0].host_ip == "127.0.0.1" and
@@ -830,13 +830,15 @@ jobs:
              .recentBackups[0].telegramConfigured == false and
              .recentBackups[0].sentToTelegram == false'
           backup_metric_ready=false
-          for attempt in {1..20}; do
+          # /metrics кешируется на 15 секунд. Даём предыдущему snapshot гарантированно
+          # истечь, но продолжаем опрашивать быстро, если кеш ещё не был заполнен.
+          for attempt in {1..80}; do
             backup_metrics=$(curl --fail --silent http://127.0.0.1:5080/metrics)
-            if echo "$backup_metrics" | grep --quiet '^proxyharbor_last_backup_success 1$'; then
+            if grep --quiet '^proxyharbor_last_backup_success 1$' <<< "$backup_metrics"; then
               backup_metric_ready=true
               break
             fi
-            if [ "$attempt" -eq 20 ]; then echo "$backup_metrics"; fi
+            if [ "$attempt" -eq 80 ]; then echo "$backup_metrics"; fi
             sleep 0.25
           done
           test "$backup_metric_ready" = true
