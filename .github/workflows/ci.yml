@@ -378,7 +378,7 @@ jobs:
           echo "$metrics" | grep 'proxyharbor_validation_last_attempt_timestamp_seconds 0'
           echo "$metrics" | grep 'proxyharbor_validation_runs_active 0'
           echo "$metrics" | grep 'proxyharbor_background_workers_enabled 0'
-          echo "$metrics" | grep 'proxyharbor_collection_interval_seconds 900'
+          echo "$metrics" | grep 'proxyharbor_collection_interval_seconds 300'
           echo "$metrics" | grep 'proxyharbor_public_freshness_seconds 900'
           echo "$metrics" | grep 'proxyharbor_validation_concurrency_limit 800'
           echo "$metrics" | grep 'proxyharbor_validation_batch_size 1600'

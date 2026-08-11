@@ -42,8 +42,8 @@ Defaults ниже соответствуют `src/ProxyHarbor.Api/appsettings.js
 | Ключ `Collector:*` | Default | Допустимо | Назначение |
 |---|---:|---:|---|
 | `BackgroundWorkersEnabled` | `true` | bool | Фоновые циклы этой реплики |
-| `CollectionIntervalMinutes` | 15 | 1..10080 | Период полного сбора |
-| `ValidationIntervalMinutes` | 5 | 1..1440 | Пауза validator worker |
+| `CollectionIntervalMinutes` | 5 | 1..10080 | Период полного сбора |
+| `ValidationIntervalMinutes` | 2 | 1..1440 | Интервал повторной проверки Alive-прокси |
 | `PublicFreshnessMinutes` | 15 | 2..2880 | Максимальный возраст Alive-проверки; не меньше validation interval |
 | `DeadRetryBaseMinutes` | 15 | 1..1440 | Начало exponential backoff Dead-прокси |
 | `DeadRetryMaxHours` | 24 | 1..720 | Максимальный Dead backoff |

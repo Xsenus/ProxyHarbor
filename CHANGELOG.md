@@ -48,6 +48,8 @@
 
 ### Changed
 
+- Production defaults теперь собирают все source feeds каждые 5 минут и повторно проверяют Alive-прокси каждые 2 минуты; runtime-конфигурация, метрики, документация и CI-контракты используют одинаковые интервалы.
+
 - Diskless backup pipe больше не позволяет faulted `PipeWriter/PipeReader.CompleteAsync` скрыть primary ZIP producer или PHB3 encryptor failure: secondary stage/type bounded прикрепляется к исходному исключению, а самостоятельный completion failure остаётся fail-closed. Симметричный canary проверяет обе ветви без зависимости от PostgreSQL.
 - API lifetime-lock monitor теперь инициирует controlled shutdown в `finally`, даже если critical logging provider сам выбрасывает исключение при потере owning PostgreSQL session. Bounded stderr fallback раскрывает только тип logging-сбоя; monitor task остаётся non-throwing и не может позже скрыть primary `app.RunAsync` failure. Детерминированный canary доказывает исходную lease-ошибку, ровно один `StopApplication` и отменённый stopping token при одновременно сломанном logger delegate.
 - Общий PostgreSQL advisory-lock lifecycle теперь сохраняет primary acquire failure при secondary dispose-сбое, идемпотентно и non-throwing освобождает уже использованную lease, всегда исключает неоднозначную сессию из pool и выполняет физический dispose. Process-monotonic Prometheus counter и проверенный critical alert делают любой cleanup-инцидент видимым без exception messages/connection strings; canary ломает acquire/unlock/dispose и доказывает повторную доступность обоих lock из новых backend-сессий.

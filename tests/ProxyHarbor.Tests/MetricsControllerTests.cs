@@ -34,7 +34,7 @@ public sealed class MetricsControllerTests
         var httpTelemetry = new HttpRequestTelemetry();
         httpTelemetry.Record(HttpRouteGroup.Proxies, 503, TimeSpan.FromMilliseconds(250));
         var controller = new MetricsController(
-            new TestDbFactory(options), Options.Create(new CollectorOptions { CollectionIntervalMinutes = 15 }),
+            new TestDbFactory(options), Options.Create(new CollectorOptions { CollectionIntervalMinutes = 5 }),
             Options.Create(new BackupOptions()),
             new ProbeControlHealth(),
             httpTelemetry: httpTelemetry);
@@ -52,7 +52,7 @@ public sealed class MetricsControllerTests
         Assert.Contains("proxyharbor_maintenance_last_deleted_rows 0", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_maintenance_last_recovered_rows 0", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_maintenance_healthy -1", metrics, StringComparison.Ordinal);
-        Assert.Contains("proxyharbor_collection_interval_seconds 900", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_collection_interval_seconds 300", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_public_freshness_seconds 900", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_backup_enabled 0", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_backup_interval_seconds 86400", metrics, StringComparison.Ordinal);
