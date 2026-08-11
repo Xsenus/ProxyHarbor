@@ -5,7 +5,7 @@ services:
     environment:
       # Runtime image всегда Production и обязан иметь bounded Host allowlist даже
       # в базовом (не TLS) smoke-профиле.
-      AllowedHosts: ${PUBLIC_HOST:-localhost};127.0.0.1
+      AllowedHosts: ${PUBLIC_HOST:-localhost};127.0.0.1;api
 
 secrets:
   postgres_password: !override
