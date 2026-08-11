@@ -521,6 +521,9 @@ jobs:
           caddy_id=$(docker compose -f docker-compose.yml -f docker-compose.production.yml \
             -f docker-compose.ci.yml \
             ps --quiet caddy)
+          production_web_id=$(docker compose -f docker-compose.yml -f docker-compose.production.yml \
+            -f docker-compose.ci.yml \
+            ps --quiet web)
           prometheus_id=$(docker compose -f docker-compose.yml -f docker-compose.production.yml \
             -f docker-compose.ci.yml \
             --profile monitoring ps --quiet prometheus)
@@ -552,10 +555,8 @@ jobs:
           assert_secret_values_absent "$alertmanager_id"
           docker inspect --format '{{json .Mounts}}' "$alertmanager_id" | jq --exit-status \
             '[.[] | select(.Destination | startswith("/run/secrets/"))] | length == 2'
-          web_port=$(docker compose -f docker-compose.yml -f docker-compose.production.yml \
-            -f docker-compose.ci.yml \
-            port web 80 2>/dev/null || true)
-          test -z "$web_port"
+          docker inspect "$production_web_id" | jq --exit-status \
+            '.[0].HostConfig.PortBindings // {} | length == 0'
           for attempt in {1..90}; do
             if curl --fail --silent --insecure --resolve localhost:443:127.0.0.1 \
               https://localhost/health/ready; then break; fi
