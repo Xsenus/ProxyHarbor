@@ -203,7 +203,7 @@ jobs:
             (.services.alertmanager.environment | length) == 0 and
             .services.postgres.environment.POSTGRES_PASSWORD == null and
             .services.postgres.environment.POSTGRES_PASSWORD_FILE == "/run/secrets/postgres_password" and
-            .services.api.environment.AllowedHosts == "localhost" and
+            .services.api.environment.AllowedHosts == "localhost;127.0.0.1" and
             .services.api.environment.Backup__Enabled == "true" and
             .services.api.environment.Security__AdminApiKey == null and
             .services.api.environment.Backup__EncryptionKey == null and

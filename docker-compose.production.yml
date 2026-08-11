@@ -1,8 +1,9 @@
 services:
-  # Kestrel Host Filtering получает тот же единственный hostname, что и TLS gateway.
+  # Kestrel Host Filtering принимает публичный hostname и loopback Host внутреннего
+  # web-healthcheck; API по-прежнему не публикуется из backend network напрямую.
   api:
     environment:
-      AllowedHosts: ${PUBLIC_HOST:?set PUBLIC_HOST to the public DNS name}
+      AllowedHosts: ${PUBLIC_HOST:?set PUBLIC_HOST to the public DNS name};127.0.0.1
       # Публичный сервис обязан создавать шифрованные backup и подтверждать Telegram-доставку.
       # Отсутствующие или некорректные secret-файлы остановят API через options validation.
       Backup__Enabled: true

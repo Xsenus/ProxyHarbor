@@ -84,7 +84,7 @@ Defaults ниже соответствуют `src/ProxyHarbor.Api/appsettings.js
 
 ## Web, CORS и reverse proxy
 
-- `AllowedHosts` в Production должен содержать 1–32 явных ASCII host pattern; `*` запрещён. Production Compose связывает его с `PUBLIC_HOST`.
+- `AllowedHosts` в Production должен содержать 1–32 явных ASCII host pattern; `*` запрещён. Production Compose связывает его с `PUBLIC_HOST` и добавляет `127.0.0.1` только для внутреннего frontend healthcheck, при этом API не публикуется из backend network.
 - `Cors__Origins__N` принимает максимум 32 точных origin без credentials/path/query/fragment; HTTP разрешён только в Development.
 - `ForwardedHeaders__KnownNetworks__N` принимает максимум 32 канонических CIDR, IPv4 не шире `/8`, IPv6 не шире `/24`.
 - Forwarded headers принимаются только от настроенной сети и только на один hop.
