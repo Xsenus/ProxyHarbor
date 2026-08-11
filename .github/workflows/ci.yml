@@ -586,7 +586,8 @@ jobs:
           redirect_status=$(curl --silent --resolve localhost:80:127.0.0.1 \
             --dump-header "$redirect_headers" \
             --output /dev/null --write-out '%{http_code}' http://localhost/)
-          test "$redirect_status" -eq 308
+          # Caddy `redir ... permanent` канонически адаптируется в HTTP 301.
+          test "$redirect_status" -eq 301
           grep --ignore-case '^Location: https://localhost/' "$redirect_headers"
           rm "$redirect_headers"
           oversized_body=$(mktemp)
