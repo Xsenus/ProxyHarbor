@@ -36,9 +36,9 @@ jobs:
       - name: Verify tagged repository history contains no secrets
         shell: pwsh
         run: ./tools/Invoke-Gitleaks.ps1
-      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with: { dotnet-version: '10.0.302' }
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with: { node-version: '22', cache: npm, cache-dependency-path: src/proxyharbor-web/package-lock.json }
       - name: Validate release and workflow contracts
         shell: pwsh
