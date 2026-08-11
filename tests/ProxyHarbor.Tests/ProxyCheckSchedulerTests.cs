@@ -9,7 +9,7 @@ public sealed class ProxyCheckSchedulerTests
     private static readonly DateTimeOffset Now = new(2026, 8, 9, 12, 0, 0, TimeSpan.Zero);
     private static readonly CollectorOptions Options = new()
     {
-        ValidationIntervalMinutes = 5,
+        ValidationIntervalMinutes = 2,
         DeadRetryBaseMinutes = 15,
         DeadRetryMaxHours = 24
     };
@@ -20,7 +20,7 @@ public sealed class ProxyCheckSchedulerTests
         var scheduled = ProxyCheckScheduler.Create(Result(alive: true), 9, Guid.NewGuid(), Now, Options);
 
         Assert.Equal(0, scheduled.FailureStreak);
-        Assert.Equal(Now.AddMinutes(5), scheduled.NextCheckAt);
+        Assert.Equal(Now.AddMinutes(2), scheduled.NextCheckAt);
     }
 
     [Theory]

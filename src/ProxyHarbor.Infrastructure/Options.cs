@@ -11,9 +11,9 @@ public sealed class CollectorOptions
     /// <summary>Запускать ли collector/validator background workers в этой реплике.</summary>
     public bool BackgroundWorkersEnabled { get; set; } = true;
     /// <summary>Базовый период планового сбора источников.</summary>
-    public int CollectionIntervalMinutes { get; set; } = 15;
+    public int CollectionIntervalMinutes { get; set; } = 5;
     /// <summary>Пауза между проходами validation worker.</summary>
-    public int ValidationIntervalMinutes { get; set; } = 5;
+    public int ValidationIntervalMinutes { get; set; } = 2;
     /// <summary>Максимальный возраст Alive-проверки для публичной выдачи.</summary>
     public int PublicFreshnessMinutes { get; set; } = 15;
     /// <summary>Начальная задержка повторной проверки Dead-прокси.</summary>
