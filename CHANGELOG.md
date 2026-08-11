@@ -17,6 +17,7 @@
 
 ### Fixed
 
+- Production Caddy сохраняет только `NET_BIND_SERVICE` в capability bounding set: официальный file-capability binary теперь запускается совместно с non-root, read-only, `init` и `no-new-privileges`, тогда как все остальные Linux capabilities остаются удалены.
 - Любой rate-limit `429` теперь гарантированно содержит положительный `Retry-After`, даже если конкретный .NET limiter lease не предоставил metadata; runtime smoke проверяет согласованность header и `ProblemDetails`.
 - Container smoke использует одноразовые file-backed Compose secrets и поэтому одинаково запускает read-only сервисы в Docker Compose v2/v5; production-конфигурация по-прежнему проверяется отдельно на отсутствие secret values.
 - Внутренний healthcheck React/nginx теперь передаёт разрешённый loopback Host в Kestrel, а production allowlist явно включает только этот дополнительный Host; контейнер больше не становится `unhealthy` из-за Docker DNS-имени `api` при полностью рабочем публичном сайте.

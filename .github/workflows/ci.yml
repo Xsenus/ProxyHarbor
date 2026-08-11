@@ -191,6 +191,7 @@ jobs:
             .services.caddy.healthcheck.start_period == "20s" and
             .services.caddy.healthcheck.retries == 3 and
             ((.services.caddy.cap_drop // []) | index("ALL") != null) and
+            ((.services.caddy.cap_add // []) | index("NET_BIND_SERVICE") != null) and
             ([.services.caddy.ports[].published | tostring] | sort) == ["443", "443", "80"] and
             .services.prometheus.image == "prom/prometheus:v3.13.2-distroless@sha256:64f71bb84e03c855948418b0fc5dea53e9543d8e3fc9931598f583805507f05e" and
             .services.prometheus.user == "65532:65532" and
@@ -212,7 +213,7 @@ jobs:
             (.services.restore.secrets | length) == 2 and
             (.services.alertmanager.secrets | length) == 2'
           for secret_value in ci-password ci-admin-key ci-encryption-key-at-least-32-chars 9000000000000000000:CI_ONLY_PLACEHOLDER_NOT_A_REAL_TOKEN -1009000000001234; do
-            if echo "$production_config" | grep --fixed-strings "$secret_value"; then
+            if echo "$production_config" | grep --fixed-strings -- "$secret_value"; then
               echo "Secret value leaked into rendered Compose configuration."
               exit 1
             fi
@@ -318,7 +319,7 @@ jobs:
             environment=$(docker inspect --format '{{json .Config.Env}}' "$container_id")
             for secret_value in ci-password ci-admin-key-at-least-24-chars \
               ci-encryption-key-at-least-32-chars 9000000000000000000:CI_ONLY_PLACEHOLDER_NOT_A_REAL_TOKEN -1009000000001234; do
-              if echo "$environment" | grep --fixed-strings "$secret_value"; then
+              if echo "$environment" | grep --fixed-strings -- "$secret_value"; then
                 echo "Secret value leaked into container environment."
                 exit 1
               fi
@@ -531,6 +532,7 @@ jobs:
           test "$(docker inspect --format '{{.HostConfig.PidsLimit}}' "$caddy_id")" = '128'
           test "$(docker inspect --format '{{.HostConfig.Init}}' "$caddy_id")" = 'true'
           docker inspect --format '{{json .HostConfig.CapDrop}}' "$caddy_id" | grep --ignore-case 'ALL'
+          docker inspect --format '{{json .HostConfig.CapAdd}}' "$caddy_id" | grep 'NET_BIND_SERVICE'
           test "$(docker inspect --format '{{.Config.User}}' "$prometheus_id")" = '65532:65532'
           test "$(docker inspect --format '{{.HostConfig.ReadonlyRootfs}}' "$prometheus_id")" = 'true'
           test "$(docker inspect --format '{{.HostConfig.PidsLimit}}' "$prometheus_id")" = '128'
