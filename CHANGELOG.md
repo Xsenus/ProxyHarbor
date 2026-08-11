@@ -17,6 +17,7 @@
 
 ### Fixed
 
+- Container smoke использует одноразовые file-backed Compose secrets и поэтому одинаково запускает read-only сервисы в Docker Compose v2/v5; production-конфигурация по-прежнему проверяется отдельно на отсутствие secret values.
 - Внутренний healthcheck React/nginx теперь передаёт разрешённый loopback Host в Kestrel, а production allowlist явно включает только этот дополнительный Host; контейнер больше не становится `unhealthy` из-за Docker DNS-имени `api` при полностью рабочем публичном сайте.
 - Первый публичный GitHub CI теперь проходит Linux ShellCheck без платформенных расхождений и bounded ожидает видимость завершённого backup в Prometheus smoke вместо мгновенного потенциально гоняющегося чтения.
 - Удалено глобальное подавление `CS1591`: все публичные члены Domain, Infrastructure, API и Restore теперь имеют содержательную XML-документацию, а обычная Release-сборка fail-closed запрещает добавлять недокументированный production API; точечное исключение оставлено только для самодокументируемых имён xUnit-тестов, а отдельный CI/release contract не позволяет расширить suppression.

@@ -16,4 +16,5 @@ artifacts/
 TestResults/
 TestResults-*/
 .tmp-postgres/
+.tmp-ci-secrets/
 src/proxyharbor-web/src/assets/

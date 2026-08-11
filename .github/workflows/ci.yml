@@ -280,15 +280,26 @@ jobs:
           TELEGRAM_BOT_TOKEN: 9000000000000000000:CI_ONLY_PLACEHOLDER_NOT_A_REAL_TOKEN
           TELEGRAM_CHAT_ID: "-1009000000001234"
         run: |
+          mkdir --mode=700 .tmp-ci-secrets
+          printf '%s' "$POSTGRES_PASSWORD" > .tmp-ci-secrets/postgres_password
+          printf '%s' "$ADMIN_API_KEY" > .tmp-ci-secrets/admin_api_key
+          printf '%s' "$BACKUP_ENCRYPTION_KEY" > .tmp-ci-secrets/backup_encryption_key
+          printf '%s' "$TELEGRAM_BOT_TOKEN" > .tmp-ci-secrets/telegram_bot_token
+          printf '%s' "$TELEGRAM_CHAT_ID" > .tmp-ci-secrets/telegram_chat_id
+          chmod 600 .tmp-ci-secrets/*
+          export COMPOSE_FILE=docker-compose.yml:docker-compose.ci.yml
           cleanup() {
             status=$?
             if [ "$status" -ne 0 ]; then
               docker compose -f docker-compose.yml -f docker-compose.production.yml \
+                -f docker-compose.ci.yml \
                 --profile monitoring logs --no-color || true
             fi
             docker compose -f docker-compose.yml -f docker-compose.production.yml \
+              -f docker-compose.ci.yml \
               --profile monitoring down --volumes --remove-orphans || true
             docker compose down --volumes --remove-orphans || true
+            rm -rf .tmp-ci-secrets
             exit "$status"
           }
           trap cleanup EXIT
@@ -407,8 +418,9 @@ jobs:
           # Fake Telegram secrets выше нужны для проверки secret mounts, но manual
           # backup не должен обращаться к реальному Bot API. Пересоздаём только API
           # с пустыми secret-файлами и тем самым тестируем локальный delivery-mode.
-          env TELEGRAM_BOT_TOKEN='' TELEGRAM_CHAT_ID='' docker compose \
-            up --detach --no-deps --force-recreate api
+          : > .tmp-ci-secrets/telegram_bot_token
+          : > .tmp-ci-secrets/telegram_chat_id
+          docker compose up --detach --no-deps --force-recreate api
           for attempt in {1..60}; do
             if curl --fail --silent http://127.0.0.1:8080/health/ready; then break; fi
             if [ "$attempt" -eq 60 ]; then exit 1; fi
@@ -488,13 +500,17 @@ jobs:
           # Повторяем запуск через production override и проверяем не только
           # доступность TLS, но и фактическое container hardening.
           docker compose down --volumes
-          docker compose -f docker-compose.yml -f docker-compose.production.yml --profile monitoring \
+          docker compose -f docker-compose.yml -f docker-compose.production.yml -f docker-compose.ci.yml \
+            --profile monitoring \
             up --detach --build
           caddy_id=$(docker compose -f docker-compose.yml -f docker-compose.production.yml \
+            -f docker-compose.ci.yml \
             ps --quiet caddy)
           prometheus_id=$(docker compose -f docker-compose.yml -f docker-compose.production.yml \
+            -f docker-compose.ci.yml \
             --profile monitoring ps --quiet prometheus)
           alertmanager_id=$(docker compose -f docker-compose.yml -f docker-compose.production.yml \
+            -f docker-compose.ci.yml \
             --profile monitoring ps --quiet alertmanager)
           test "$(docker inspect --format '{{.Config.User}}' "$caddy_id")" = '65532:65532'
           test "$(docker inspect --format '{{.HostConfig.ReadonlyRootfs}}' "$caddy_id")" = 'true'
@@ -521,6 +537,7 @@ jobs:
           docker inspect --format '{{json .Mounts}}' "$alertmanager_id" | jq --exit-status \
             '[.[] | select(.Destination | startswith("/run/secrets/"))] | length == 2'
           web_port=$(docker compose -f docker-compose.yml -f docker-compose.production.yml \
+            -f docker-compose.ci.yml \
             port web 80 2>/dev/null || true)
           test -z "$web_port"
           for attempt in {1..90}; do

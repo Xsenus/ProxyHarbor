@@ -1,0 +1,13 @@
+# Docker Compose v5 разрешает read-only service только с file-backed secrets.
+# CI создаёт эти короткоживущие файлы перед smoke-тестом и удаляет в cleanup.
+secrets:
+  postgres_password: !override
+    file: ./.tmp-ci-secrets/postgres_password
+  admin_api_key: !override
+    file: ./.tmp-ci-secrets/admin_api_key
+  backup_encryption_key: !override
+    file: ./.tmp-ci-secrets/backup_encryption_key
+  telegram_bot_token: !override
+    file: ./.tmp-ci-secrets/telegram_bot_token
+  telegram_chat_id: !override
+    file: ./.tmp-ci-secrets/telegram_chat_id
