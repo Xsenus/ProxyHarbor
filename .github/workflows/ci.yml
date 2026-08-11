@@ -504,6 +504,13 @@ jobs:
             sleep 1
           done
 
+          # Production profile требует настроенную Telegram delivery policy.
+          # Возвращаем fake mount values после завершения local-only backup smoke.
+          chmod 600 .tmp-ci-secrets/telegram_bot_token .tmp-ci-secrets/telegram_chat_id
+          printf '%s' "$TELEGRAM_BOT_TOKEN" > .tmp-ci-secrets/telegram_bot_token
+          printf '%s' "$TELEGRAM_CHAT_ID" > .tmp-ci-secrets/telegram_chat_id
+          chmod 444 .tmp-ci-secrets/telegram_bot_token .tmp-ci-secrets/telegram_chat_id
+
           # Повторяем запуск через production override и проверяем не только
           # доступность TLS, но и фактическое container hardening.
           docker compose down --volumes
