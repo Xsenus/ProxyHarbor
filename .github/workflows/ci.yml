@@ -385,7 +385,9 @@ jobs:
           echo "$metrics" | grep 'proxyharbor_validation_estimated_drain_seconds 0'
           echo "$metrics" | grep 'proxyharbor_backup_enabled 0'
           echo "$metrics" | grep 'proxyharbor_backup_interval_seconds 86400'
-          echo "$metrics" | grep 'proxyharbor_backup_telegram_configured 0'
+          # На первом запуске CI использует синтаксически валидные fake secrets,
+          # чтобы проверить mounts; перед реальным backup они очищаются ниже.
+          echo "$metrics" | grep 'proxyharbor_backup_telegram_configured 1'
           echo "$metrics" | grep 'proxyharbor_advisory_lock_cleanup_failures_total 0'
           openapi_document=$(curl --fail --silent http://127.0.0.1:8080/openapi/v1.json)
           echo "$openapi_document" | jq --exit-status \
