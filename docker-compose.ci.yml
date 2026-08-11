@@ -1,5 +1,12 @@
 # Docker Compose v5 разрешает read-only service только с file-backed secrets.
 # CI создаёт эти короткоживущие файлы перед smoke-тестом и удаляет в cleanup.
+services:
+  api:
+    environment:
+      # Runtime image всегда Production и обязан иметь bounded Host allowlist даже
+      # в базовом (не TLS) smoke-профиле.
+      AllowedHosts: ${PUBLIC_HOST:-localhost};127.0.0.1
+
 secrets:
   postgres_password: !override
     file: ./.tmp-ci-secrets/postgres_password
