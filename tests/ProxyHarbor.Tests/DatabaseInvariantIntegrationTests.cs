@@ -104,13 +104,13 @@ public sealed class DatabaseInvariantIntegrationTests
             // совместимым именно со старой схемой, которую и должен чинить следующий шаг.
             await db.Database.ExecuteSqlInterpolatedAsync($"""
                 INSERT INTO "Proxies"
-                    ("Id", "Host", "Port", "Protocol", "Status", "FirstSeenAt", "LastSeenAt",
+                    ("Id", "Host", "Port", "Protocol", "Status", "IsAnonymous", "FirstSeenAt", "LastSeenAt",
                      "NextCheckAt", "SuccessfulChecks", "FailedChecks", "ConsecutiveFailedChecks",
                      "LastValidationDeferred")
                 VALUES
-                    ({aliveId}, '8.8.8.8', 8080, 0, 1, {seenAt}, {seenAt},
+                    ({aliveId}, '8.8.8.8', 8080, 0, 1, FALSE, {seenAt}, {seenAt},
                      {nextCheckAt}, 0, 0, 0, FALSE),
-                    ({deadId}, '1.1.1.1', 8080, 0, 2, {seenAt}, {seenAt},
+                    ({deadId}, '1.1.1.1', 8080, 0, 2, FALSE, {seenAt}, {seenAt},
                      {nextCheckAt}, 0, 0, 0, FALSE)
                 """);
 
