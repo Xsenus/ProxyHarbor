@@ -257,7 +257,7 @@ internal static class RestoreApplication
                 archive,
                 "database/proxies.json",
                 connection,
-                """COPY "Proxies" ("Id", "Host", "Port", "Protocol", "Status", "LatencyMs", "ExitIp", "CountryCode", "IsAnonymous", "FirstSeenAt", "LastSeenAt", "LastCheckedAt", "LastValidationAttemptAt", "LastValidationDeferred", "NextCheckAt", "CheckLeaseUntil", "CheckLeaseId", "SuccessfulChecks", "FailedChecks", "ConsecutiveFailedChecks", "LastError") FROM STDIN (FORMAT BINARY)""",
+                """COPY "Proxies" ("Id", "Host", "Port", "Protocol", "Status", "LatencyMs", "ExitIp", "CountryCode", "IsAnonymous", "FirstSeenAt", "LastSeenAt", "LastCheckedAt", "FirstAliveAt", "LastAliveAt", "CurrentAliveSince", "LastValidationAttemptAt", "LastValidationDeferred", "NextCheckAt", "CheckLeaseUntil", "CheckLeaseId", "SuccessfulChecks", "FailedChecks", "ConsecutiveFailedChecks", "LastError") FROM STDIN (FORMAT BINARY)""",
                 RestoreEntityValidator.ValidateProxy,
                 WriteProxyAsync,
                 hooks,
@@ -354,6 +354,9 @@ internal static class RestoreApplication
         await writer.WriteAsync(entity.FirstSeenAt, token);
         await writer.WriteAsync(entity.LastSeenAt, token);
         await WriteNullableValueAsync(writer, entity.LastCheckedAt, token);
+        await WriteNullableValueAsync(writer, entity.FirstAliveAt, token);
+        await WriteNullableValueAsync(writer, entity.LastAliveAt, token);
+        await WriteNullableValueAsync(writer, entity.CurrentAliveSince, token);
         await WriteNullableValueAsync(writer, entity.LastValidationAttemptAt, token);
         await writer.WriteAsync(entity.LastValidationDeferred, token);
         await WriteNullableValueAsync(writer, entity.NextCheckAt, token);
@@ -488,6 +491,25 @@ internal static class RestoreEntityValidator
         RequireOptionalText(entity.LastError, 500, "proxy.lastError", allowControlCharacters: true);
         if (entity.FirstSeenAt == default || entity.LastSeenAt < entity.FirstSeenAt)
             Invalid("proxy firstSeenAt/lastSeenAt имеют некорректный порядок.");
+        // Архивы PHB3, созданные до появления availability timeline, остаются
+        // восстанавливаемыми: существующее доказательство SuccessfulChecks безопасно
+        // преобразуется в консервативную историю перед COPY.
+        if (entity.SuccessfulChecks > 0 && entity.FirstAliveAt is null)
+        {
+            entity.FirstAliveAt = entity.FirstSeenAt;
+            entity.LastAliveAt = entity.Status == ProxyStatus.Alive
+                ? entity.LastCheckedAt
+                : entity.FirstSeenAt;
+            entity.CurrentAliveSince = entity.Status == ProxyStatus.Alive
+                ? entity.LastCheckedAt
+                : null;
+        }
+        if (entity.FirstAliveAt.HasValue != entity.LastAliveAt.HasValue ||
+            entity.FirstAliveAt < entity.FirstSeenAt || entity.LastAliveAt < entity.FirstAliveAt)
+            Invalid("proxy firstAliveAt/lastAliveAt имеют некорректный порядок.");
+        if ((entity.Status == ProxyStatus.Alive) != entity.CurrentAliveSince.HasValue ||
+            entity.CurrentAliveSince < entity.FirstAliveAt || entity.LastAliveAt < entity.CurrentAliveSince)
+            Invalid("proxy currentAliveSince не соответствует текущему статусу.");
         if (entity.CheckLeaseUntil.HasValue != entity.CheckLeaseId.HasValue)
             Invalid("proxy check lease должен содержать одновременно время и token.");
         if (entity.LastValidationDeferred && entity.LastValidationAttemptAt is null)

@@ -21,7 +21,11 @@
   "latencyMs": 321,
   "successRate": 87.5,
   "exitIp": "198.51.100.25",
-  "lastCheckedAt": "2026-08-10T16:30:00Z"
+  "lastCheckedAt": "2026-08-24T10:00:00Z",
+  "firstAliveAt": "2026-08-23T08:00:00Z",
+  "lastAliveAt": "2026-08-24T10:00:00Z",
+  "activeSince": "2026-08-24T06:00:00Z",
+  "activeForSeconds": 14400
 }
 ```
 
@@ -41,7 +45,7 @@ Filter fingerprint включён в cursor. Cursor нельзя использ�
 
 ## GET `/api/v1/proxies`
 
-Legacy offset page с точным `total`.
+Страница с точным `total`; этот контракт использует React-интерфейс для серверной пагинации.
 
 Дополнительные параметры:
 
@@ -145,9 +149,9 @@ CSV нейтрализует spreadsheet formula injection. JSON/XML/TXT/CSV и�
 
 ```json
 {
-  "lastAuditedOn": "2026-08-10",
-  "feedCount": 81,
-  "providerCount": 50,
+  "lastAuditedOn": "2026-08-24",
+  "feedCount": 98,
+  "providerCount": 56,
   "providers": [
     {
       "rank": 1,

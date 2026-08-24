@@ -53,7 +53,7 @@ sequenceDiagram
 
 ### Каталог
 
-Встроенный каталог компилируется в приложение и содержит 81 HTTPS endpoint от 50 независимых provider identities. GitHub raw feed считается принадлежащим owner репозитория; остальные — DNS hostname. Startup seed синхронизирует канонические URL, protocol, name и priority, сохраняя операторский `Enabled`.
+Встроенный каталог компилируется в приложение и содержит 98 HTTPS endpoint от 56 независимых provider identities. GitHub raw feed считается принадлежащим owner репозитория; остальные — DNS hostname. Startup seed синхронизирует канонические URL, protocol, name и priority, сохраняя операторский `Enabled`.
 
 ### Загрузка
 
@@ -131,7 +131,9 @@ Database constraints дополнительно защищают enum, port, non
 
 Стабильный порядок: latency по возрастанию → successful checks по убыванию → UUID. Для больших обходов используется keyset cursor, связанный с fingerprint фильтров.
 
-Обычная страница и агрегаты читаются из PostgreSQL `REPEATABLE READ` snapshot. Streaming export использует отдельный non-retrying context: после отправки первых байтов операция никогда не повторяется. Один export ограничен пятью минутами, 50 000 строками и одним из двух process-wide slots.
+Обычная страница и агрегаты читаются из PostgreSQL `REPEATABLE READ` snapshot. React-таблица использует точные серверные `page/pageSize/total`, а полный машинный обход — keyset cursor. Streaming export использует отдельный non-retrying context: после отправки первых байтов операция никогда не повторяется. Один export ограничен пятью минутами, 50 000 строками и одним из двух process-wide slots.
+
+У каждой строки сохраняются `FirstAliveAt`, `LastAliveAt` и `CurrentAliveSince`. Успех начинает или продолжает Alive-серию, объективный Dead завершает её, Deferred историю не меняет. Retention удаляет только старые адреса без единой успешной проверки; однажды работавшие прокси остаются в PostgreSQL как история.
 
 ## Coordination и отказоустойчивость
 

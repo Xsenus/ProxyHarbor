@@ -357,6 +357,13 @@ public sealed class ProxyValidator(
                     "NextCheckAt" = incoming.next_check_at,
                     "CheckLeaseUntil" = NULL,
                     "CheckLeaseId" = NULL,
+                    "FirstAliveAt" = CASE WHEN incoming.outcome = 1 THEN COALESCE(proxy."FirstAliveAt", incoming.checked_at) ELSE proxy."FirstAliveAt" END,
+                    "LastAliveAt" = CASE WHEN incoming.outcome = 1 THEN incoming.checked_at ELSE proxy."LastAliveAt" END,
+                    "CurrentAliveSince" = CASE
+                        WHEN incoming.outcome = 1 THEN CASE WHEN proxy."Status" = 1 AND proxy."CurrentAliveSince" IS NOT NULL THEN proxy."CurrentAliveSince" ELSE incoming.checked_at END
+                        WHEN incoming.outcome = 0 THEN NULL
+                        ELSE proxy."CurrentAliveSince"
+                    END,
                     "Status" = CASE incoming.outcome WHEN 1 THEN 1 WHEN 0 THEN 2 ELSE proxy."Status" END,
                     "LatencyMs" = CASE WHEN incoming.outcome = 2 THEN proxy."LatencyMs" ELSE incoming.latency_ms END,
                     "ExitIp" = CASE WHEN incoming.outcome = 2 THEN proxy."ExitIp" ELSE incoming.exit_ip END,

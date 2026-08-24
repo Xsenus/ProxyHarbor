@@ -426,6 +426,9 @@ public sealed class ProxyValidationPersistenceIntegrationTests
             Assert.False(completed.LastValidationDeferred);
             Assert.Equal(ProxyStatus.Alive, completed.Status);
             Assert.Equal(88, completed.LatencyMs);
+            Assert.Equal(checkedAt.AddMinutes(2), completed.FirstAliveAt);
+            Assert.Equal(checkedAt.AddMinutes(2), completed.LastAliveAt);
+            Assert.Equal(checkedAt.AddMinutes(2), completed.CurrentAliveSince);
         }
         finally
         {

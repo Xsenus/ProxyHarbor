@@ -31,6 +31,9 @@ public sealed class OperationalMaintenanceIntegrationTests
                     Proxy("4.2.2.11", ProxyStatus.Dead, old, failedChecks: 1,
                         leaseUntil: now.AddMinutes(-1)),
                     Proxy("4.2.2.12", ProxyStatus.Alive, old, successfulChecks: 1),
+                    // Исторический endpoint однажды работал, но сейчас Dead: membership
+                    // обязана сохраниться независимо от LastSeen retention.
+                    Proxy("4.2.2.16", ProxyStatus.Dead, old, successfulChecks: 1, failedChecks: 1),
                     Proxy("4.2.2.13", ProxyStatus.Pending, old,
                         leaseUntil: now.AddMinutes(5)),
                     Proxy("4.2.2.14", ProxyStatus.Pending, fresh));
@@ -72,10 +75,11 @@ public sealed class OperationalMaintenanceIntegrationTests
             Assert.Equal(1, maintenance.Status);
 
             await using var verify = await factory.CreateDbContextAsync();
-            Assert.Equal(3, await verify.Proxies.CountAsync());
+            Assert.Equal(4, await verify.Proxies.CountAsync());
             Assert.True(await verify.Proxies.AnyAsync(proxy => proxy.Host == "4.2.2.12"));
             Assert.True(await verify.Proxies.AnyAsync(proxy => proxy.Host == "4.2.2.13"));
             Assert.True(await verify.Proxies.AnyAsync(proxy => proxy.Host == "4.2.2.14"));
+            Assert.True(await verify.Proxies.AnyAsync(proxy => proxy.Host == "4.2.2.16"));
             Assert.Equal(1, await verify.Runs.CountAsync());
             Assert.Equal(1, await verify.ValidationRuns.CountAsync());
             Assert.Equal(1, await verify.BackupRuns.CountAsync());
@@ -227,6 +231,9 @@ public sealed class OperationalMaintenanceIntegrationTests
             FirstSeenAt = seenAt.AddDays(-1),
             LastSeenAt = seenAt,
             LastCheckedAt = successfulChecks + failedChecks > 0 ? seenAt : null,
+            FirstAliveAt = successfulChecks > 0 ? seenAt.AddHours(-1) : null,
+            LastAliveAt = successfulChecks > 0 ? seenAt : null,
+            CurrentAliveSince = status == ProxyStatus.Alive ? seenAt : null,
             LatencyMs = successfulChecks > 0 ? 250 : null,
             SuccessfulChecks = successfulChecks,
             FailedChecks = failedChecks,

@@ -51,6 +51,12 @@ public sealed class ProxyEndpoint
     public DateTimeOffset LastSeenAt { get; set; } = DateTimeOffset.UtcNow;
     /// <summary>Время последней объективной Alive/Dead-проверки.</summary>
     public DateTimeOffset? LastCheckedAt { get; set; }
+    /// <summary>Момент первого когда-либо подтверждённого успешного подключения.</summary>
+    public DateTimeOffset? FirstAliveAt { get; set; }
+    /// <summary>Момент последнего подтверждённого успешного подключения.</summary>
+    public DateTimeOffset? LastAliveAt { get; set; }
+    /// <summary>Начало текущей непрерывной серии Alive; null для Pending и Dead.</summary>
+    public DateTimeOffset? CurrentAliveSince { get; set; }
     /// <summary>Время последней завершённой попытки, включая нейтральный Deferred-результат.</summary>
     public DateTimeOffset? LastValidationAttemptAt { get; set; }
     /// <summary>Последняя попытка не смогла объективно оценить прокси и не изменила его качество.</summary>

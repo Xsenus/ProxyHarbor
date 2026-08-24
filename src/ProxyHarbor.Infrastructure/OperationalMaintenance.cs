@@ -18,6 +18,9 @@ internal static class OperationalRetention
         var cutoff = now.AddDays(-Math.Max(1, retentionDays));
         return db.Proxies.Where(proxy =>
                 (proxy.Status == ProxyStatus.Pending || proxy.Status == ProxyStatus.Dead) &&
+                // Любой когда-либо работавший endpoint остаётся исторической записью.
+                // Retention удаляет только кандидатов, ни разу не прошедших проверку.
+                proxy.FirstAliveAt == null && proxy.SuccessfulChecks == 0 &&
                 proxy.LastSeenAt < cutoff &&
                 (proxy.CheckLeaseUntil == null || proxy.CheckLeaseUntil < now))
             .ExecuteDeleteAsync(token);

@@ -58,7 +58,7 @@ Defaults ниже соответствуют `src/ProxyHarbor.Api/appsettings.js
 | `MaxProxiesPerSource` | 500000 | 1..1000000 | Защита от слишком большого feed |
 | `MaxCandidatesPerRun` | 500000 | 1..5000000 | Лимит объединённого цикла |
 | `LastSeenRefreshMinutes` | 360 | 1..10080 | Ограничение write amplification |
-| `DeadRetentionDays` | 3 | 1..365 | Хранение старых Pending/Dead |
+| `DeadRetentionDays` | 3 | 1..365 | Хранение старых Pending/Dead, которые ни разу не были Alive; исторически рабочие строки не удаляются |
 | `RunRetentionDays` | 30 | 1..3650 | Хранение collection/validation audit |
 | `ProbeHost` | `api.ipify.org` | canonical public host/IP | Контрольный TLS endpoint |
 | `ProbePort` | 443 | 1..65535 | Порт контрольного endpoint |

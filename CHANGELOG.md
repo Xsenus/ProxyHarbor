@@ -13,10 +13,15 @@
 
 ### Added
 
+- Добавлены 17 живых HTTP/HTTPS/SOCKS feed от шести независимых провайдеров; встроенный каталог расширен до 98 endpoint и 56 provider identities, а CI/completeness-gates обновлены синхронно.
+- PostgreSQL теперь хранит первое/последнее подтверждение Alive и начало текущей непрерывной серии; однажды работавшие endpoint больше не удаляются membership retention.
+- Главная React-таблица получила точную серверную пагинацию, выбор размера страницы, быстрый переход и колонку длительности активности; вход и консоль администратора разделены на `/admin/login` и `/admin`.
+
 - Подготовлен publication-oriented комплект документации: компактный GitHub README, карта реализованного продукта, архитектура, полный API/configuration/backup-restore reference, индекс runbook'ов, support/community policies и fail-closed проверка локальных Markdown-ссылок в CI/release; GitHub issue/PR templates и first-push checklist приведены к публичному сопровождению.
 
 ### Fixed
 
+- Публичная главная больше не загружает и не раскрывает список провайдеров; диагностические сведения остаются в отдельной административной консоли.
 - Container smoke сверяет загруженный Prometheus-каталог со всеми 23 alert-правилами вместо устаревшего значения 17.
 - Production `AllowedHosts` разрешает внутреннее Docker DNS-имя `api`, чтобы изолированный Prometheus мог напрямую собирать `/metrics`; API по-прежнему не публикуется из backend network, а внешний произвольный Host отклоняется.
 - Production Caddy сохраняет только `NET_BIND_SERVICE` в capability bounding set: официальный file-capability binary теперь запускается совместно с non-root, read-only, `init` и `no-new-privileges`, тогда как все остальные Linux capabilities остаются удалены.

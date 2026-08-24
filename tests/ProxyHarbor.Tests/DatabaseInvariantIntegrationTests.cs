@@ -17,6 +17,7 @@ public sealed class DatabaseInvariantIntegrationTests
     [
         "CK_BackupRuns_Result",
         "CK_BackupRuns_State",
+        "CK_Proxies_AliveTimeline",
         "CK_Proxies_CheckCounters",
         "CK_Proxies_DeferredAttempt",
         "CK_Proxies_Identity",
@@ -57,9 +58,10 @@ public sealed class DatabaseInvariantIntegrationTests
         var operations = new EnforceDataInvariants().UpOperations.OfType<SqlOperation>()
             .Concat(new AddSourceContentRefresh().UpOperations.OfType<SqlOperation>())
             .Concat(new EnforcePublishedProxyEvidence().UpOperations.OfType<SqlOperation>())
+            .Concat(new TrackProxyAvailabilityHistory().UpOperations.OfType<SqlOperation>())
             .ToArray();
 
-        Assert.Equal(ExpectedConstraints.Length * 2 + 1, operations.Length);
+        Assert.Equal(ExpectedConstraints.Length * 2 + 2, operations.Length);
         Assert.All(operations, operation => Assert.True(operation.SuppressTransaction));
         Assert.Equal(ExpectedConstraints.Length, operations.Count(operation => operation.Sql.Contains("NOT VALID")));
         Assert.Equal(
@@ -67,6 +69,7 @@ public sealed class DatabaseInvariantIntegrationTests
             operations.Count(operation => operation.Sql.Contains("VALIDATE CONSTRAINT")));
         Assert.All(ExpectedConstraints, name => Assert.Equal(2, operations.Count(operation => operation.Sql.Contains(name))));
         Assert.Single(operations, operation => operation.Sql.Contains("SET \"Status\" = 0"));
+        Assert.Single(operations, operation => operation.Sql.Contains("SET \"FirstAliveAt\""));
         Assert.Contains("IF NOT EXISTS", Assert.Single(operations, operation =>
             operation.Sql.Contains("CK_Proxies_StatusEvidence") && operation.Sql.Contains("NOT VALID")).Sql);
     }

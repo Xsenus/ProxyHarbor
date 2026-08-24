@@ -2,21 +2,18 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Activity, ArrowDownToLine, Check, Clock3, Database, Gauge, KeyRound, Network, Play, RefreshCw, Server, ShieldCheck, Wifi, X } from 'lucide-react'
 
 type Protocol = 'Http' | 'Https' | 'Socks4' | 'Socks5'
-type Proxy = { host: string; port: number; protocol: Protocol; url: string; latencyMs: number; successRate: number; exitIp?: string; lastCheckedAt: string }
-type CursorPage<T> = { items: T[]; pageSize: number; hasMore: boolean; nextCursor?: string | null }
+type Proxy = { host: string; port: number; protocol: Protocol; url: string; latencyMs: number; successRate: number; exitIp?: string; lastCheckedAt: string; firstAliveAt?: string; lastAliveAt?: string; activeSince?: string; activeForSeconds?: number }
+type PagedResult<T> = { items: T[]; page: number; pageSize: number; total: number }
 type Stats = { alive: number; staleAlive: number; pending: number; dead: number; dueForCheck: number; checksInProgress: number; scheduledChecks: number; averageLatencyMs: number | null; sources: number; failingSources: number; repeatedlyFailingSources: number; truncatedSources: number; byProtocol: { protocol: Protocol; count: number }[]; lastRun?: { startedAt: string; candidatesFound: number; newProxies: number; sourcesTruncated: number; candidateLimitReached: boolean; status: string } }
 type Source = { id: string; name: string; url: string; defaultProtocol: Protocol; enabled: boolean; priority: number; lastItemCount: number; lastResultTruncated: boolean; lastFetchedAt?: string; lastSucceededAt?: string; lastContentFetchedAt?: string; nextFetchAt?: string; consecutiveFailures: number; lastError?: string; isBuiltIn: boolean; provider?: string; providerIdentity?: string; catalogRank?: number }
 type CollectionRun = { id: string; startedAt: string; finishedAt?: string; sourcesProcessed: number; sourcesSucceeded: number; sourcesFailed: number; sourcesSkipped: number; sourcesTruncated: number; candidatesFound: number; candidateLimitReached: boolean; newProxies: number; status: string; error?: string }
 type ValidationRun = { id: string; startedAt: string; finishedAt?: string; claimed: number; checked: number; alive: number; deferred: number; status: string; error?: string }
 type BackupRun = { id: string; startedAt: string; finishedAt?: string; status: string; fileName?: string; sizeBytes: number; telegramConfigured: boolean; sentToTelegram: boolean; error?: string }
 type SourceCatalogSnapshot = { lastAuditedOn: string; expectedSources: number; presentSources: number; enabledSources: number; healthySources: number; failingSources: number; neverAuditedSources: number; staleSources: number; truncatedSources: number; expectedProviders: number; presentProviders: number; enabledProviders: number; isComplete: boolean; isHealthy: boolean }
-type PublicSourceFeed = { rank: number; name: string; url: string; protocol: Protocol }
-type PublicSourceProvider = { rank: number; name: string; protocols: Protocol[]; feeds: PublicSourceFeed[] }
-type PublicSourceCatalog = { lastAuditedOn: string; feedCount: number; providerCount: number; providers: PublicSourceProvider[] }
 type Diagnostics = {
   serverTime: string
   databaseBytes: number
-  validationQueue?: { total: number; leased: number; neverChecked: number; neverAttempted: number; due: number; scheduled: number; repeatedlyFailing: number; staleUnseen: number; attemptsLastFiveMinutes: number; checkedLastFiveMinutes: number; aliveLastFiveMinutes: number; deferredLastFiveMinutes: number; failedRunsLastFiveMinutes: number; activeRuns: number; concurrencyLimit: number; batchSize: number; checksPerSecond: number; estimatedDrainSeconds?: number; lastAttemptAt?: string }
+  validationQueue?: { total: number; everAlive: number; historicalDead: number; leased: number; neverChecked: number; neverAttempted: number; due: number; scheduled: number; repeatedlyFailing: number; staleUnseen: number; attemptsLastFiveMinutes: number; checkedLastFiveMinutes: number; aliveLastFiveMinutes: number; deferredLastFiveMinutes: number; failedRunsLastFiveMinutes: number; activeRuns: number; concurrencyLimit: number; batchSize: number; checksPerSecond: number; estimatedDrainSeconds?: number; lastAttemptAt?: string }
   sourceCatalog?: SourceCatalogSnapshot
   recentRuns: CollectionRun[]
   recentValidationRuns?: ValidationRun[]
@@ -54,14 +51,13 @@ export default function App() {
   const [protocol, setProtocol] = useState<Protocol | 'All'>('All')
   const [maxLatency, setMaxLatency] = useState(2000)
   const [loading, setLoading] = useState(true)
-  const [loadingMore, setLoadingMore] = useState(false)
-  const [hasMore, setHasMore] = useState(false)
-  const [nextCursor, setNextCursor] = useState<string | null>(null)
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(25)
+  const [total, setTotal] = useState(0)
   const [apiError, setApiError] = useState('')
-  const [sourceCatalog, setSourceCatalog] = useState<PublicSourceCatalog | null>(null)
-  const [sourceCatalogError, setSourceCatalogError] = useState('')
-  const [sourceCatalogLoading, setSourceCatalogLoading] = useState(false)
-  const [adminOpen, setAdminOpen] = useState(false)
+  const currentPath = window.location.pathname.replace(/\/+$/, '') || '/'
+  const loginPage = currentPath === '/admin/login'
+  const adminOpen = currentPath === '/admin'
   const [adminKey, setAdminKey] = useState(readStoredAdminKey)
   const [adminAuthenticated, setAdminAuthenticated] = useState(false)
   const [adminError, setAdminError] = useState('')
@@ -71,19 +67,12 @@ export default function App() {
   const [action, setAction] = useState('')
   const [sourceBusy, setSourceBusy] = useState('')
   const [sourceDraft, setSourceDraft] = useState<{name: string; url: string; protocol: Protocol; priority: number}>({ name: '', url: '', protocol: 'Http', priority: 100 })
-  const lastAdminTriggerRef = useRef<HTMLButtonElement>(null)
-  const adminDialogRef = useRef<HTMLElement>(null)
-  const adminKeyRef = useRef<HTMLInputElement>(null)
   const firstAdminActionRef = useRef<HTMLButtonElement>(null)
   const focusAdminActionAfterLoginRef = useRef(false)
   const autoLoginAttemptedRef = useRef(false)
-  const extendedCatalogRef = useRef(false)
   const catalogRequestIdRef = useRef(0)
   const publicRequestIdRef = useRef(0)
   const publicAbortRef = useRef<AbortController | null>(null)
-  const loadMoreAbortRef = useRef<AbortController | null>(null)
-  const sourceCatalogRequestIdRef = useRef(0)
-  const sourceCatalogAbortRef = useRef<AbortController | null>(null)
   const adminRequestIdRef = useRef(0)
   const adminAbortRef = useRef<AbortController | null>(null)
   const adminSessionIdRef = useRef(0)
@@ -93,42 +82,7 @@ export default function App() {
     publicRequestIdRef.current++
     catalogRequestIdRef.current++
     publicAbortRef.current?.abort()
-    loadMoreAbortRef.current?.abort()
   }, [])
-
-  const loadSourceCatalog = useCallback(async () => {
-    const requestId = ++sourceCatalogRequestIdRef.current
-    sourceCatalogAbortRef.current?.abort()
-    const controller = new AbortController()
-    sourceCatalogAbortRef.current = controller
-    setSourceCatalogLoading(true)
-    try {
-      const response = await fetch(`${API}/api/v1/sources`, { signal: controller.signal })
-      if (!response.ok) throw new Error('Каталог источников временно недоступен')
-      const snapshot = await response.json() as PublicSourceCatalog
-      if (requestId !== sourceCatalogRequestIdRef.current) return
-      setSourceCatalog(snapshot)
-      setSourceCatalogError('')
-    } catch (reason) {
-      if (!isAbortError(reason) && requestId === sourceCatalogRequestIdRef.current)
-        setSourceCatalogError(reason instanceof Error ? reason.message : 'Каталог источников временно недоступен')
-    } finally {
-      if (requestId === sourceCatalogRequestIdRef.current) {
-        sourceCatalogAbortRef.current = null
-        setSourceCatalogLoading(false)
-      }
-    }
-  }, [])
-
-  const cancelSourceCatalogRequest = useCallback(() => {
-    sourceCatalogRequestIdRef.current++
-    sourceCatalogAbortRef.current?.abort()
-  }, [])
-
-  useEffect(() => {
-    void loadSourceCatalog()
-    return cancelSourceCatalogRequest
-  }, [loadSourceCatalog, cancelSourceCatalogRequest])
 
   /** Обновляет статистику и, при необходимости, первую keyset-страницу каталога. */
   const load = useCallback(async (includeCatalog = true) => {
@@ -138,21 +92,22 @@ export default function App() {
     const controller = new AbortController()
     publicAbortRef.current = controller
     try {
-      const query = new URLSearchParams({ pageSize: '100', maxLatencyMs: String(maxLatency) })
+      const query = new URLSearchParams({ page: String(page), pageSize: String(pageSize), maxLatencyMs: String(maxLatency) })
       if (protocol !== 'All') query.set('protocol', protocol)
       const [statsResponse, proxyResponse] = await Promise.all([
         fetch(`${API}/api/v1/stats`, { signal: controller.signal }),
-        includeCatalog ? fetch(`${API}/api/v1/proxies/seek?${query}`, { signal: controller.signal }) : Promise.resolve(null),
+        includeCatalog ? fetch(`${API}/api/v1/proxies?${query}`, { signal: controller.signal }) : Promise.resolve(null),
       ])
       if (!statsResponse.ok || (proxyResponse && !proxyResponse.ok)) throw new Error('API пока недоступен')
       const statsSnapshot = await statsResponse.json()
       if (requestId !== publicRequestIdRef.current) return
       setStats(statsSnapshot)
       if (proxyResponse && catalogRequestId === catalogRequestIdRef.current) {
-        const page = await proxyResponse.json() as CursorPage<Proxy>
-        setProxies(page.items)
-        setHasMore(page.hasMore)
-        setNextCursor(page.nextCursor ?? null)
+        const snapshot = await proxyResponse.json() as PagedResult<Proxy>
+        setProxies(snapshot.items)
+        setTotal(snapshot.total)
+        const availablePages = Math.max(1, Math.ceil(snapshot.total / pageSize))
+        if (page > availablePages) setPage(availablePages)
       }
       setApiError('')
     } catch (reason) {
@@ -166,15 +121,15 @@ export default function App() {
         setLoading(false)
       }
     }
-  }, [protocol, maxLatency])
+  }, [protocol, maxLatency, page, pageSize])
 
   useEffect(() => {
     // Смена фильтра начинает новый обход; старые ответы больше не могут заменить его результаты.
-    extendedCatalogRef.current = false
+    if (currentPath !== '/') return
     let stopped = false
     let refreshTimer: number | undefined
     const refresh = async () => {
-      await load(!extendedCatalogRef.current)
+      await load(true)
       if (!stopped) refreshTimer = window.setTimeout(() => void refresh(), 15_000)
     }
     void refresh()
@@ -183,64 +138,22 @@ export default function App() {
       if (refreshTimer !== undefined) window.clearTimeout(refreshTimer)
       cancelPublicRequests()
     }
-  }, [load, cancelPublicRequests])
-
-  /** Добавляет следующую страницу, не выполняя дорожающий OFFSET и не дублируя изменившиеся строки. */
-  const loadMore = async () => {
-    if (!nextCursor || loadingMore) return
-    extendedCatalogRef.current = true
-    setLoadingMore(true)
-    const catalogRequestId = catalogRequestIdRef.current
-    loadMoreAbortRef.current?.abort()
-    const controller = new AbortController()
-    loadMoreAbortRef.current = controller
-    try {
-      const query = new URLSearchParams({ pageSize: '100', maxLatencyMs: String(maxLatency), after: nextCursor })
-      if (protocol !== 'All') query.set('protocol', protocol)
-      const response = await fetch(`${API}/api/v1/proxies/seek?${query}`, { signal: controller.signal })
-      if (!response.ok) throw new Error(await responseMessage(response, 'Не удалось загрузить следующую страницу'))
-      const page = await response.json() as CursorPage<Proxy>
-      if (catalogRequestId !== catalogRequestIdRef.current) return
-      setProxies(current => {
-        const known = new Set(current.map(proxy => proxy.url))
-        return [...current, ...page.items.filter(proxy => !known.has(proxy.url))]
-      })
-      setHasMore(page.hasMore)
-      setNextCursor(page.nextCursor ?? null)
-      setApiError('')
-    } catch (reason) {
-      if (!isAbortError(reason) && catalogRequestId === catalogRequestIdRef.current) {
-        setApiError(reason instanceof Error ? reason.message : 'Ошибка загрузки')
-      }
-    }
-    finally {
-      if (loadMoreAbortRef.current === controller) {
-        loadMoreAbortRef.current = null
-        setLoadingMore(false)
-      }
-    }
-  }
+  }, [load, cancelPublicRequests, currentPath])
 
   /** Инвалидирует предыдущий cursor до запуска запроса с новым фильтром. */
   const changeProtocol = (value: Protocol | 'All') => {
     if (value === protocol) return
     catalogRequestIdRef.current++
-    loadMoreAbortRef.current?.abort()
-    extendedCatalogRef.current = false
     setLoading(true)
-    setHasMore(false)
-    setNextCursor(null)
+    setPage(1)
     setProtocol(value)
   }
 
   const changeMaxLatency = (value: number) => {
     if (value === maxLatency) return
     catalogRequestIdRef.current++
-    loadMoreAbortRef.current?.abort()
-    extendedCatalogRef.current = false
     setLoading(true)
-    setHasMore(false)
-    setNextCursor(null)
+    setPage(1)
     setMaxLatency(value)
   }
 
@@ -265,6 +178,7 @@ export default function App() {
       const unauthorizedResponse = [sourcesResponse, diagnosticsResponse].find(response => response.status === 401)
       if (unauthorizedResponse) {
         removeStoredAdminKey()
+        setAdminKey('')
         setAdminAuthenticated(false)
         setSources([])
         setDiagnostics(null)
@@ -312,6 +226,10 @@ export default function App() {
   }, [adminOpen, adminKey, loadAdminData])
 
   useEffect(() => {
+    if (adminOpen && !adminKey) window.location.replace('/admin/login')
+  }, [adminOpen, adminKey])
+
+  useEffect(() => {
     if (!adminOpen || !adminAuthenticated) return
     let stopped = false
     let refreshTimer = window.setTimeout(async function refresh() {
@@ -324,10 +242,6 @@ export default function App() {
     }
   }, [adminOpen, adminAuthenticated, loadAdminData])
 
-  const openAdmin = (event: React.MouseEvent<HTMLButtonElement>) => {
-    lastAdminTriggerRef.current = event.currentTarget
-    setAdminOpen(true)
-  }
   /** Отменяет все чтения и мутации, принадлежавшие предыдущей admin-сессии. */
   const invalidateAdminSession = useCallback(() => {
     adminSessionIdRef.current++
@@ -337,13 +251,6 @@ export default function App() {
     adminMutationAbortRefs.current.clear()
   }, [])
   useEffect(() => () => invalidateAdminSession(), [invalidateAdminSession])
-  const closeAdmin = useCallback(() => {
-    invalidateAdminSession()
-    setAdminLoading(false)
-    setAction('')
-    setSourceBusy('')
-    setAdminOpen(false)
-  }, [invalidateAdminSession])
   const logoutAdmin = useCallback(() => {
     invalidateAdminSession()
     removeStoredAdminKey()
@@ -354,57 +261,8 @@ export default function App() {
     setDiagnostics(null)
     setAction('')
     setSourceBusy('')
-    window.requestAnimationFrame(() => adminKeyRef.current?.focus())
+    window.location.replace('/admin/login')
   }, [invalidateAdminSession])
-
-  const changeAdminKey = (value: string) => {
-    invalidateAdminSession()
-    setAdminLoading(false)
-    setAdminKey(value)
-    setAdminAuthenticated(false)
-    setAdminError('')
-    setSources([])
-    setDiagnostics(null)
-  }
-
-  useEffect(() => {
-    if (!adminOpen) return
-    const previousFocus = document.activeElement instanceof HTMLElement && document.activeElement !== document.body
-      ? document.activeElement
-      : lastAdminTriggerRef.current
-    const previousOverflow = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
-    window.requestAnimationFrame(() => adminKeyRef.current?.focus())
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault()
-        closeAdmin()
-        return
-      }
-      if (event.key !== 'Tab' || !adminDialogRef.current) return
-      const focusable = [...adminDialogRef.current.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), select:not([disabled]), a[href]')]
-        .filter(element => !element.hidden && element.getAttribute('aria-hidden') !== 'true')
-      if (focusable.length === 0) return
-      const first = focusable[0]
-      const last = focusable[focusable.length - 1]
-      if (!adminDialogRef.current.contains(document.activeElement)) {
-        event.preventDefault()
-        ;(event.shiftKey ? last : first).focus()
-      } else if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault()
-        last.focus()
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault()
-        first.focus()
-      }
-    }
-    document.addEventListener('keydown', handleKeyDown)
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown)
-      document.body.style.overflow = previousOverflow
-      previousFocus?.focus()
-    }
-  }, [adminOpen, closeAdmin])
 
   const runAdminAction = async (name: 'collect' | 'validate' | 'backup') => {
     if (!adminAuthenticated || action || sourceBusy) return
@@ -417,7 +275,7 @@ export default function App() {
       const response = await fetch(`${API}/api/v1/admin/${name}`, { method: 'POST', headers: { 'X-Admin-Key': adminKey }, signal: controller.signal })
       if (sessionId !== adminSessionIdRef.current) return
       if (!response.ok) {
-        if (response.status === 401) { removeStoredAdminKey(); setAdminAuthenticated(false) }
+        if (response.status === 401) { removeStoredAdminKey(); setAdminKey(''); setAdminAuthenticated(false) }
         throw new Error(await responseMessage(response, 'Административная операция не выполнена'))
       }
       await Promise.all([load(), loadAdminData()])
@@ -446,7 +304,7 @@ export default function App() {
       })
       if (sessionId !== adminSessionIdRef.current) return
       if (!response.ok) {
-        if (response.status === 401) { removeStoredAdminKey(); setAdminAuthenticated(false) }
+        if (response.status === 401) { removeStoredAdminKey(); setAdminKey(''); setAdminAuthenticated(false) }
         throw new Error(await responseMessage(response, 'Не удалось добавить источник'))
       }
       setSourceDraft({ name: '', url: '', protocol: 'Http', priority: 100 })
@@ -475,7 +333,7 @@ export default function App() {
       })
       if (sessionId !== adminSessionIdRef.current) return
       if (!response.ok) {
-        if (response.status === 401) { removeStoredAdminKey(); setAdminAuthenticated(false) }
+        if (response.status === 401) { removeStoredAdminKey(); setAdminKey(''); setAdminAuthenticated(false) }
         throw new Error(await responseMessage(response, 'Не удалось изменить состояние источника'))
       }
       await loadAdminData()
@@ -499,7 +357,7 @@ export default function App() {
       const response = await fetch(`${API}/api/v1/admin/sources/${source.id}`, { method: 'DELETE', headers: { 'X-Admin-Key': adminKey }, signal: controller.signal })
       if (sessionId !== adminSessionIdRef.current) return
       if (!response.ok) {
-        if (response.status === 401) { removeStoredAdminKey(); setAdminAuthenticated(false) }
+        if (response.status === 401) { removeStoredAdminKey(); setAdminKey(''); setAdminAuthenticated(false) }
         throw new Error(await responseMessage(response, 'Не удалось удалить источник'))
       }
       await loadAdminData()
@@ -522,16 +380,19 @@ export default function App() {
   const latestCollection = diagnostics?.recentRuns[0]
   const latestBackup = diagnostics?.recentBackups[0]
   const adminMutationBusy = !!action || !!sourceBusy
+  const totalPages = Math.max(1, Math.ceil(total / pageSize))
+
+  if (loginPage) return <AdminLoginPage/>
 
   return <div className="app-shell">
-    <header aria-hidden={adminOpen || undefined} inert={adminOpen || undefined}>
+    {!adminOpen && <><header>
       <a className="brand" href="#top" aria-label="ProxyHarbor — наверх"><span className="brand-mark"><Network size={20}/></span><span>Proxy<span>Harbor</span></span></a>
-      <nav><a href="#sources">Источники</a><a href="#catalog">Прокси</a><a href="#api">API</a><button className="admin-link" onClick={openAdmin}><KeyRound size={15}/> Управление</button></nav>
-      <button className="mobile-admin" aria-label="Открыть управление" onClick={openAdmin}><KeyRound size={17}/></button>
+      <nav><a href="#catalog">Прокси</a><a href="#api">API</a><a className="admin-link" href="/admin/login"><KeyRound size={15}/> Управление</a></nav>
+      <a className="mobile-admin" aria-label="Войти в управление" href="/admin/login"><KeyRound size={17}/></a>
       <div className={`live-pill ${apiError ? 'offline' : ''}`} aria-live="polite"><span/> {loading ? 'проверка…' : apiError ? 'API недоступен' : 'система активна'}</div>
     </header>
 
-    <main id="top" aria-hidden={adminOpen || undefined} inert={adminOpen || undefined}>
+    <main id="top">
       <section className="hero">
         <div className="eyebrow"><ShieldCheck size={15}/> Проверено в реальном времени</div>
         <h1>Чистый поток<br/><em>рабочих прокси.</em></h1>
@@ -547,47 +408,36 @@ export default function App() {
       <section className="metrics" aria-label="Главные показатели">
         <Metric icon={<Activity/>} label="Живых адресов" value={formatNumber(stats?.alive)} note={stats?.staleAlive ? `${formatNumber(stats.staleAlive)} скрыто как устаревшие` : 'прошли свежую проверку'}/>
         <Metric icon={<Gauge/>} label="Средняя задержка" value={stats?.averageLatencyMs ? `${Math.round(stats.averageLatencyMs)} мс` : '—'} note="до контрольного HTTPS"/>
-        <Metric icon={<Database/>} label="Feed-источников" value={formatNumber(stats?.sources)} note={stats?.failingSources ? `${stats.failingSources} требуют внимания` : stats?.truncatedSources ? `${stats.truncatedSources} упёрлись в лимит` : sourceCatalog ? `${sourceCatalog.providerCount} независимых провайдеров` : 'все источники стабильны'}/>
+        <Metric icon={<Database/>} label="Поток данных" value="24 / 7" note="непрерывный автоматический сбор"/>
         <Metric icon={<Clock3/>} label="Готовы к проверке" value={formatNumber(stats?.dueForCheck)} note={`${formatNumber(stats?.checksInProgress)} выполняется · ${formatNumber(stats?.scheduledChecks)} запланировано позже`}/>
       </section>
 
-      <section id="sources" className="public-sources" aria-label="Встроенные источники прокси">
-        <div className="section-heading"><div><span className="kicker">SOURCE TRANSPARENCY</span><h2>{sourceCatalog?.providerCount ?? 50} независимых провайдеров</h2></div><p>{sourceCatalog ? `${sourceCatalog.feedCount} HTTPS feed · аудит ${sourceCatalog.lastAuditedOn}` : 'Публичный read-only каталог'}</p></div>
-        {sourceCatalogError && <div className="source-catalog-error" role="status" aria-label="Состояние каталога источников"><span>{sourceCatalogError}</span><button onClick={() => void loadSourceCatalog()} disabled={sourceCatalogLoading}>{sourceCatalogLoading ? 'повторяем…' : 'повторить'}</button></div>}
-        {sourceCatalog && <div className="provider-grid">{sourceCatalog.providers.map(provider =>
-          <article key={`${provider.rank}-${provider.name}`}>
-            <div><span>#{provider.rank}</span><strong>{provider.name}</strong></div>
-            <small>{provider.feeds.length} feed · {provider.protocols.map(label).join(' · ')}</small>
-            <details className="provider-feeds">
-              <summary>показать все feed ({provider.feeds.length})</summary>
-              <div>{provider.feeds.map(feed => <a key={`${feed.rank}-${feed.url}`} href={feed.url} target="_blank" rel="noreferrer" aria-label={`${provider.name}: ${feed.name}, ${label(feed.protocol)}`}>{label(feed.protocol)} · {feed.name}<span aria-hidden="true">↗</span></a>)}</div>
-            </details>
-          </article>)}</div>}
-      </section>
-
       <section id="catalog" className="catalog">
-        <div className="section-heading"><div><span className="kicker">LIVE CATALOG</span><h2>Лучшие прямо сейчас</h2></div><p>Быстрый обход без глубокого OFFSET</p></div>
+        <div className="section-heading"><div><span className="kicker">LIVE CATALOG</span><h2>Лучшие прямо сейчас</h2></div><p>Серверная выборка · {formatNumber(total)} найдено</p></div>
         <div className="filters"><div className="tabs" aria-label="Фильтр по протоколу"><button aria-pressed={protocol === 'All'} className={protocol === 'All' ? 'active' : ''} onClick={() => changeProtocol('All')}>Все</button>{protocols.map(x => <button key={x} aria-pressed={protocol === x} className={protocol === x ? 'active' : ''} onClick={() => changeProtocol(x)}>{label(x)}</button>)}</div><label>до <b>{maxLatency} мс</b><input type="range" min="200" max="5000" step="100" value={maxLatency} onChange={e => changeMaxLatency(Number(e.target.value))}/></label></div>
         {apiError && <div className="error-banner" role="alert"><X size={17}/>{apiError}<button onClick={() => { setApiError(''); setLoading(true); void load() }}>повторить</button></div>}
         <div className="proxy-table" role="table" aria-label="Проверенные прокси" aria-busy={loading}>
-          <div role="rowgroup"><div className="table-row table-head" role="row"><span role="columnheader">Адрес</span><span role="columnheader">Протокол</span><span role="columnheader">Задержка</span><span role="columnheader">Надёжность</span><span role="columnheader">Проверен</span></div></div>
+          <div role="rowgroup"><div className="table-row table-head" role="row"><span role="columnheader">Адрес</span><span role="columnheader">Протокол</span><span role="columnheader">Задержка</span><span role="columnheader">Надёжность</span><span role="columnheader">Активен</span><span role="columnheader">Проверен</span></div></div>
           <div role="rowgroup">
-            {loading ? <div role="row"><div className="empty" role="cell" aria-live="polite" aria-label="Состояние каталога прокси"><RefreshCw className="spin"/> Загружаем свежий каталог…</div></div> : proxies.length === 0 ? <div role="row"><div className="empty" role="cell" aria-live="polite" aria-label="Состояние каталога прокси"><Server/> Живые прокси появятся после первого цикла проверки.</div></div> : proxies.map(proxy => <div className="table-row" role="row" key={proxy.url}><code role="cell">{proxy.host}<i>:</i>{proxy.port}</code><span role="cell" className={`badge ${proxy.protocol.toLowerCase()}`}>{label(proxy.protocol)}</span><span role="cell" className="latency"><i className={proxy.latencyMs < 800 ? 'fast' : proxy.latencyMs < 1800 ? 'medium' : 'slow'}/>{proxy.latencyMs} мс</span><span role="cell">{proxy.successRate}%</span><span role="cell">{timeAgo(proxy.lastCheckedAt)}</span></div>)}
+            {loading ? <div role="row"><div className="empty" role="cell" aria-live="polite" aria-label="Состояние каталога прокси"><RefreshCw className="spin"/> Загружаем свежий каталог…</div></div> : proxies.length === 0 ? <div role="row"><div className="empty" role="cell" aria-live="polite" aria-label="Состояние каталога прокси"><Server/> Живые прокси появятся после первого цикла проверки.</div></div> : proxies.map(proxy => <div className="table-row" role="row" key={proxy.url}><code role="cell">{proxy.host}<i>:</i>{proxy.port}</code><span role="cell" className={`badge ${proxy.protocol.toLowerCase()}`}>{label(proxy.protocol)}</span><span role="cell" className="latency"><i className={proxy.latencyMs < 800 ? 'fast' : proxy.latencyMs < 1800 ? 'medium' : 'slow'}/>{proxy.latencyMs} мс</span><span role="cell">{proxy.successRate}%</span><span role="cell" title={proxy.activeSince ? `С ${new Date(proxy.activeSince).toLocaleString('ru-RU')}` : undefined}>{formatActiveDuration(proxy.activeForSeconds)}</span><span role="cell">{timeAgo(proxy.lastCheckedAt)}</span></div>)}
           </div>
         </div>
-        {hasMore && nextCursor && !loading && <div className="catalog-more" aria-live="polite"><button onClick={loadMore} disabled={loadingMore}>{loadingMore ? <><RefreshCw className="spin"/> Загружаем…</> : <>Показать ещё <span>· загружено {formatNumber(proxies.length)}</span></>}</button></div>}
+        {!loading && total > 0 && <ProxyPagination
+          page={page} pageSize={pageSize} total={total} totalPages={totalPages}
+          onPageChange={next => { setLoading(true); setPage(next); document.getElementById('catalog')?.scrollIntoView?.({ behavior: 'smooth' }) }}
+          onPageSizeChange={size => { setLoading(true); setPageSize(size); setPage(1) }}/>
+        }
       </section>
 
       <section id="api" className="api-panel"><div><span className="kicker">ONE-CLICK EXPORT</span><h2>Забирайте как удобно</h2><p>Фильтруйте через API или скачивайте готовый список. Экспорт содержит только свежие Alive-прокси; большие наборы обходятся последовательными cursor-страницами без замедляющего OFFSET.</p></div><div className="export-grid">{['json','xml','txt','csv'].map(format => <a key={format} href={`${API}/api/v1/export/${format}?${exportQuery}`}><span>.{format}</span><ArrowDownToLine size={18}/></a>)}</div><div className="endpoint"><span>GET</span><code>/api/v1/proxies/seek?protocol=Socks5&amp;maxLatencyMs=1000</code></div></section>
     </main>
 
-    <footer aria-hidden={adminOpen || undefined} inert={adminOpen || undefined}><div className="brand"><span className="brand-mark"><Network size={18}/></span><span>Proxy<span>Harbor</span></span></div><p>Используйте публичные прокси ответственно и в рамках закона.</p><span>v{APP_VERSION} · © {new Date().getFullYear()}</span></footer>
+    <footer><div className="brand"><span className="brand-mark"><Network size={18}/></span><span>Proxy<span>Harbor</span></span></div><p>Используйте публичные прокси ответственно и в рамках закона.</p><span>v{APP_VERSION} · © {new Date().getFullYear()}</span></footer></>}
 
-    {adminOpen && <div className="modal-backdrop" onMouseDown={e => e.target === e.currentTarget && closeAdmin()}>
-      <section ref={adminDialogRef} className="admin-modal" role="dialog" aria-modal="true" aria-labelledby="admin-title">
-        <button className="close" aria-label="Закрыть" onClick={closeAdmin}><X/></button>
+    {adminOpen && <main className="admin-page">
+      <header className="admin-page-header"><a className="brand" href="/"><span className="brand-mark"><Network size={20}/></span><span>Proxy<span>Harbor</span></span></a><button onClick={logoutAdmin}>Выйти</button></header>
+      <section className="admin-modal admin-page-panel" aria-labelledby="admin-title">
         <span className="kicker">ADMIN CONSOLE</span><h2 id="admin-title">Управление сбором</h2><p>Ключ хранится только до закрытия вкладки.</p>
-        <form className="key-input" aria-label="Вход администратора" onSubmit={event => { event.preventDefault(); void loadAdminData(true) }}><KeyRound size={18}/><input ref={adminKeyRef} type="password" aria-label="Ключ администратора" placeholder="X-Admin-Key" autoComplete="off" autoCapitalize="none" spellCheck={false} maxLength={256} value={adminKey} onChange={e => changeAdminKey(e.target.value)}/><button type="submit" disabled={adminLoading}>{adminLoading ? 'Проверяем…' : 'Войти'}</button>{adminAuthenticated && <button type="button" className="logout" onClick={logoutAdmin}>Выйти</button>}</form>
         {adminError && <div className="admin-notice" role="alert"><X size={16}/>{adminError}</div>}
         <div className="admin-actions">
           <button ref={firstAdminActionRef} onClick={() => runAdminAction('collect')} disabled={!adminAuthenticated || adminMutationBusy}><Play/> {action === 'collect' ? 'Собираем…' : 'Запустить сбор'}</button>
@@ -600,7 +450,7 @@ export default function App() {
             <article title={`Параллельность ${formatNumber(diagnostics?.validationQueue?.concurrencyLimit)}, партия ${formatNumber(diagnostics?.validationQueue?.batchSize)}`}><span>Очередь проверки</span><strong>{formatNumber(diagnostics?.validationQueue?.due)}</strong><small>{formatNumber(diagnostics?.validationQueue?.attemptsLastFiveMinutes)} попыток за 5 мин · {formatRate(diagnostics?.validationQueue?.checksPerSecond)} · лимит {formatNumber(diagnostics?.validationQueue?.concurrencyLimit)} × {formatNumber(diagnostics?.validationQueue?.batchSize)} · ETA {formatDuration(diagnostics?.validationQueue?.estimatedDrainSeconds)} · {formatNumber(diagnostics?.validationQueue?.aliveLastFiveMinutes)} живых · {formatNumber(diagnostics?.validationQueue?.deferredLastFiveMinutes)} отложено</small></article>
             <article><span>Последний сбор</span><strong className={latestCollection?.candidateLimitReached || latestCollection?.sourcesTruncated ? 'status-running' : statusClass(latestCollection?.status)}>{latestCollection?.candidateLimitReached || latestCollection?.sourcesTruncated ? 'достигнут лимит' : statusLabel(latestCollection?.status)}</strong><small>{latestCollection ? `${formatNumber(latestCollection.candidatesFound)} кандидатов · ${timeAgo(latestCollection.startedAt)}` : 'Циклов пока нет'}</small></article>
             <article><span>Последний backup</span><strong className={statusClass(latestBackup?.status)}>{statusLabel(latestBackup?.status)}</strong><small>{latestBackup ? `${formatBytes(latestBackup.sizeBytes)} · ${backupDelivery(latestBackup)}` : 'Backup ещё не создавался'}</small></article>
-            <article><span>Размер PostgreSQL</span><strong>{formatBytes(diagnostics?.databaseBytes)}</strong><small>{formatNumber(diagnostics?.validationQueue?.total)} известных прокси · {formatNumber(diagnostics?.validationQueue?.staleUnseen)} ожидают retention</small></article>
+            <article><span>История PostgreSQL</span><strong>{formatNumber(diagnostics?.validationQueue?.everAlive)}</strong><small>{formatNumber(diagnostics?.validationQueue?.total)} известных всего · {formatNumber(diagnostics?.validationQueue?.historicalDead)} ранее работали, сейчас Dead · {formatBytes(diagnostics?.databaseBytes)}</small></article>
             <article aria-label="Состояние встроенного каталога"><span>Встроенный каталог</span><strong className={catalogStatusClass(diagnostics?.sourceCatalog)}>{diagnostics?.sourceCatalog ? `${diagnostics.sourceCatalog.enabledSources}/${diagnostics.sourceCatalog.expectedSources}` : '—'}</strong><small>{diagnostics?.sourceCatalog ? `${diagnostics.sourceCatalog.enabledProviders}/${diagnostics.sourceCatalog.expectedProviders} провайдеров · ${diagnostics.sourceCatalog.healthySources} полных и свежих · release-аудит ${diagnostics.sourceCatalog.lastAuditedOn}${diagnostics.sourceCatalog.truncatedSources ? ` · ${diagnostics.sourceCatalog.truncatedSources} усечено` : ''}${diagnostics.sourceCatalog.staleSources ? ` · ${diagnostics.sourceCatalog.staleSources} устарело` : ''}` : 'Снимок недоступен'}</small></article>
           </div>
           <div className="diagnostic-history">
@@ -623,8 +473,66 @@ export default function App() {
           <div className="source-controls"><span title={source.isBuiltIn ? `Встроенный источник · ${source.provider} · ${source.providerIdentity} · ранг ${source.catalogRank}` : 'Пользовательский источник'} className="source-kind">{source.isBuiltIn ? source.provider : 'свой'}</span><span title={source.lastError} className={source.lastError ? 'source-error' : 'source-ok'}>{source.lastError ? 'ошибка' : source.enabled ? 'активен' : 'пауза'}</span><button disabled={adminMutationBusy} onClick={() => toggleSource(source)}>{source.enabled ? 'Пауза' : 'Включить'}</button>{!source.isBuiltIn && <button className="danger" disabled={adminMutationBusy} onClick={() => removeSource(source)}>Удалить</button>}</div>
         </article>)}</div>
       </section>
-    </div>}
+    </main>}
   </div>
+}
+
+/** Изолированная страница входа: на ней нет публичного каталога и элементов админ-панели. */
+function AdminLoginPage() {
+  const [key, setKey] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault()
+    if (!key || busy) return
+    setBusy(true)
+    setError('')
+    try {
+      const response = await fetch(`${API}/api/v1/admin/diagnostics`, { headers: { 'X-Admin-Key': key } })
+      if (!response.ok) throw new Error(await responseMessage(response, 'Неверный ключ администратора'))
+      storeAdminKey(key)
+      window.location.assign('/admin')
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Не удалось выполнить вход')
+      setBusy(false)
+    }
+  }
+
+  return <main className="login-page">
+    <a className="brand" href="/"><span className="brand-mark"><Network size={20}/></span><span>Proxy<span>Harbor</span></span></a>
+    <section className="login-card" aria-labelledby="login-title">
+      <span className="kicker">ADMIN ACCESS</span>
+      <h1 id="login-title">Вход в управление</h1>
+      <p>Введите административный ключ. Он сохранится только до закрытия этой вкладки.</p>
+      <form onSubmit={submit}>
+        <label htmlFor="admin-key">Ключ администратора</label>
+        <div className="key-input"><KeyRound size={18}/><input id="admin-key" autoFocus type="password" placeholder="X-Admin-Key" autoComplete="off" autoCapitalize="none" spellCheck={false} maxLength={256} value={key} onChange={event => setKey(event.target.value)} data-lpignore="true"/><button type="submit" disabled={busy || !key}>{busy ? 'Проверяем…' : 'Войти'}</button></div>
+      </form>
+      {error && <div className="admin-notice" role="alert"><X size={16}/>{error}</div>}
+      <a className="back-link" href="/">← Вернуться на главную</a>
+    </section>
+  </main>
+}
+
+/** Пагинация повторяет серверный UX RMS: размер, страницы, быстрый переход и итог. */
+function ProxyPagination({page, pageSize, total, totalPages, onPageChange, onPageSizeChange}: {page: number; pageSize: number; total: number; totalPages: number; onPageChange: (page: number) => void; onPageSizeChange: (size: number) => void}) {
+  const [jump, setJump] = useState('')
+  const pages = paginationWindow(page, totalPages)
+  const go = (next: number) => onPageChange(Math.min(totalPages, Math.max(1, next)))
+  return <nav className="pagination" aria-label="Пагинация каталога">
+    <div className="page-sizes"><span>Показывать:</span>{[25, 50, 100].map(size => <button key={size} className={pageSize === size ? 'active' : ''} aria-pressed={pageSize === size} onClick={() => onPageSizeChange(size)}>{size}</button>)}</div>
+    <div className="page-controls"><button aria-label="Предыдущая страница" disabled={page === 1} onClick={() => go(page - 1)}>←</button>{pages.map((item, index) => item === '…' ? <span key={`ellipsis-${index}`}>…</span> : <button key={item} className={item === page ? 'active' : ''} aria-current={item === page ? 'page' : undefined} onClick={() => go(item)}>{item}</button>)}<button aria-label="Следующая страница" disabled={page === totalPages} onClick={() => go(page + 1)}>→</button></div>
+    <form className="page-jump" onSubmit={event => { event.preventDefault(); const value = Number(jump); if (Number.isInteger(value) && value > 0) { go(value); setJump('') } }}><label htmlFor="page-jump">Перейти:</label><input id="page-jump" inputMode="numeric" min={1} max={totalPages} type="number" value={jump} onChange={event => setJump(event.target.value)}/><button type="submit">ОК</button></form>
+    <p>Страница {page} из {totalPages} · Найдено: {formatNumber(total)}</p>
+  </nav>
+}
+
+function paginationWindow(page: number, totalPages: number): (number | '…')[] {
+  if (totalPages <= 7) return Array.from({ length: totalPages }, (_, index) => index + 1)
+  if (page <= 4) return [1, 2, 3, 4, 5, '…', totalPages]
+  if (page >= totalPages - 3) return [1, '…', totalPages - 4, totalPages - 3, totalPages - 2, totalPages - 1, totalPages]
+  return [1, '…', page - 1, page, page + 1, '…', totalPages]
 }
 
 function Metric({icon, label, value, note}: {icon: React.ReactNode; label: string; value: string; note: string}) { return <article className="metric"><div className="metric-icon">{icon}</div><div><span>{label}</span><strong>{value}</strong><small>{note}</small></div></article> }
@@ -638,6 +546,15 @@ function formatBytes(value?: number) {
 }
 function formatRate(value?: number) { return value === undefined || value <= 0 ? 'скорость неизвестна' : `${value.toLocaleString('ru-RU', { maximumFractionDigits: 1 })}/с` }
 function formatDuration(value?: number) { if (value === undefined || value <= 0) return '—'; if (value < 60) return `${Math.ceil(value)} сек`; const minutes = Math.ceil(value / 60); if (minutes < 60) return `${minutes} мин`; return `${Math.floor(minutes / 60)} ч ${minutes % 60} мин` }
+function formatActiveDuration(value?: number) {
+  if (value === undefined) return '—'
+  if (value < 60) return '< 1 мин'
+  const minutes = Math.floor(value / 60)
+  if (minutes < 60) return `${minutes} мин`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours} ч ${minutes % 60} мин`
+  return `${Math.floor(hours / 24)} д ${hours % 24} ч`
+}
 function statusClass(status?: string) { return status === 'completed' ? 'status-ok' : status === 'failed' ? 'status-failed' : 'status-running' }
 function catalogStatusClass(catalog?: SourceCatalogSnapshot) { return !catalog ? '' : catalog.isHealthy ? 'status-ok' : catalog.isComplete ? 'status-running' : 'status-failed' }
 function statusLabel(status?: string) { return status === 'completed' ? 'успешно' : status === 'failed' ? 'ошибка' : status === 'running' ? 'выполняется' : 'нет данных' }

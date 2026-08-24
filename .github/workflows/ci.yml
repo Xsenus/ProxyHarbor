@@ -367,11 +367,11 @@ jobs:
             prom/prometheus:v3.13.2-distroless check metrics
           echo "$metrics" | grep 'proxyharbor_http_requests_total{route="stats",status="2xx"} 1'
           echo "$metrics" | grep 'proxyharbor_http_request_duration_seconds_count{route="stats"} 1'
-          echo "$metrics" | grep 'proxyharbor_sources_enabled 81'
+          echo "$metrics" | grep 'proxyharbor_sources_enabled 98'
           echo "$metrics" | grep 'proxyharbor_source_catalog_complete 1'
           echo "$metrics" | grep 'proxyharbor_builtin_catalog_audit_timestamp_seconds 1786320000'
-          echo "$metrics" | grep 'proxyharbor_builtin_sources_expected 81'
-          echo "$metrics" | grep 'proxyharbor_builtin_providers_expected 50'
+          echo "$metrics" | grep 'proxyharbor_builtin_sources_expected 98'
+          echo "$metrics" | grep 'proxyharbor_builtin_providers_expected 56'
           echo "$metrics" | grep 'proxyharbor_sources_truncated 0'
           echo "$metrics" | grep 'proxyharbor_last_collection_candidate_limit_reached 0'
           echo "$metrics" | grep 'proxyharbor_validation_attempts_last_5m 0'
@@ -497,7 +497,7 @@ jobs:
           docker compose --profile tools run --rm restore \
             --input "/app/backups/$backup_file" --replace-existing-data
           test "$(docker compose exec -T postgres psql --username proxyharbor --dbname proxyharbor \
-            --tuples-only --no-align --command 'SELECT COUNT(*) FROM "Sources";')" -eq 81
+            --tuples-only --no-align --command 'SELECT COUNT(*) FROM "Sources";')" -eq 98
           docker compose up --detach api web
           for attempt in {1..60}; do
             if curl --fail --silent http://127.0.0.1:8080/health/ready; then break; fi
@@ -769,11 +769,11 @@ jobs:
             .components.schemas.BackupTriggerResponse.properties.created.type == "string" and
             .components.schemas.BackupTriggerResponse.properties.sentToTelegram.type == "boolean"'
           metrics=$(curl --fail --silent http://127.0.0.1:5080/metrics)
-          echo "$metrics" | grep 'proxyharbor_sources_enabled 81'
+          echo "$metrics" | grep 'proxyharbor_sources_enabled 98'
           echo "$metrics" | grep 'proxyharbor_source_catalog_complete 1'
           echo "$metrics" | grep 'proxyharbor_builtin_catalog_audit_timestamp_seconds 1786320000'
-          echo "$metrics" | grep 'proxyharbor_builtin_sources_present 81'
-          echo "$metrics" | grep 'proxyharbor_builtin_providers_present 50'
+          echo "$metrics" | grep 'proxyharbor_builtin_sources_present 98'
+          echo "$metrics" | grep 'proxyharbor_builtin_providers_present 56'
           echo "$metrics" | grep 'proxyharbor_sources_truncated 0'
           echo "$metrics" | grep 'proxyharbor_last_collection_candidate_limit_reached 0'
           echo "$metrics" | grep 'proxyharbor_validation_attempts_last_5m 0'
@@ -785,9 +785,9 @@ jobs:
           echo "$metrics" | grep 'proxyharbor_validation_estimated_drain_seconds 0'
           echo "$metrics" | grep 'proxyharbor_advisory_lock_cleanup_failures_total 0'
           sources=$(curl --fail --silent -H 'X-Admin-Key: integration-admin-key-at-least-24-chars' http://127.0.0.1:5080/api/v1/admin/sources)
-          test "$(echo "$sources" | jq length)" -eq 81
-          test "$(echo "$sources" | jq '[.[] | select(.isBuiltIn)] | length')" -eq 81
-          test "$(echo "$sources" | jq '[.[].provider] | unique | length')" -eq 50
+          test "$(echo "$sources" | jq length)" -eq 98
+          test "$(echo "$sources" | jq '[.[] | select(.isBuiltIn)] | length')" -eq 98
+          test "$(echo "$sources" | jq '[.[].provider] | unique | length')" -eq 56
           invalid_status=$(curl --silent --output /dev/null --write-out '%{http_code}' \
             -X POST -H 'Content-Type: application/json' -H 'X-Admin-Key: integration-admin-key-at-least-24-chars' \
             --data '{"name":"x","url":"http://127.0.0.1/list.txt","protocol":"Http"}' \
@@ -858,8 +858,8 @@ jobs:
             http://127.0.0.1:5080/api/v1/admin/diagnostics)
           echo "$backup_diagnostics" | jq --exit-status \
             '.sourceCatalog.isComplete == true and
-             .sourceCatalog.expectedSources == 81 and
-             .sourceCatalog.expectedProviders == 50 and
+             .sourceCatalog.expectedSources == 98 and
+             .sourceCatalog.expectedProviders == 56 and
              .recentBackups[0].status == "completed" and
              .recentBackups[0].sizeBytes > 0 and
              .recentBackups[0].telegramConfigured == false and
@@ -925,7 +925,7 @@ jobs:
             sleep 1
           done
           restored_sources=$(curl --fail --silent -H 'X-Admin-Key: integration-admin-key-at-least-24-chars' http://127.0.0.1:5080/api/v1/admin/sources)
-          test "$(echo "$restored_sources" | jq length)" -eq 81
+          test "$(echo "$restored_sources" | jq length)" -eq 98
           restored_proxy=$(PGPASSWORD=integration-password psql -tA -F '|' \
             -h 127.0.0.1 -U proxyharbor -d proxyharbor \
             -c "SELECT \"Host\", \"Port\", \"Protocol\", \"Status\", \"LatencyMs\", \"ExitIp\", \"CountryCode\", \"IsAnonymous\", \"SuccessfulChecks\", \"FailedChecks\", \"ConsecutiveFailedChecks\", \"LastError\" FROM \"Proxies\" WHERE \"Id\" = '20000000-0000-0000-0000-000000000001';")
