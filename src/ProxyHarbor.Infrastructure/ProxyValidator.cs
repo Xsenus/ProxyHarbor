@@ -357,10 +357,22 @@ public sealed class ProxyValidator(
                     "NextCheckAt" = incoming.next_check_at,
                     "CheckLeaseUntil" = NULL,
                     "CheckLeaseId" = NULL,
-                    "FirstAliveAt" = CASE WHEN incoming.outcome = 1 THEN COALESCE(proxy."FirstAliveAt", incoming.checked_at) ELSE proxy."FirstAliveAt" END,
-                    "LastAliveAt" = CASE WHEN incoming.outcome = 1 THEN incoming.checked_at ELSE proxy."LastAliveAt" END,
+                    "FirstAliveAt" = CASE
+                        WHEN incoming.outcome = 1 THEN COALESCE(proxy."FirstAliveAt", GREATEST(proxy."FirstSeenAt", incoming.checked_at))
+                        ELSE proxy."FirstAliveAt"
+                    END,
+                    "LastAliveAt" = CASE
+                        WHEN incoming.outcome = 1 THEN GREATEST(
+                            COALESCE(proxy."LastAliveAt", proxy."FirstSeenAt"),
+                            proxy."FirstSeenAt",
+                            incoming.checked_at)
+                        ELSE proxy."LastAliveAt"
+                    END,
                     "CurrentAliveSince" = CASE
-                        WHEN incoming.outcome = 1 THEN CASE WHEN proxy."Status" = 1 AND proxy."CurrentAliveSince" IS NOT NULL THEN proxy."CurrentAliveSince" ELSE incoming.checked_at END
+                        WHEN incoming.outcome = 1 THEN CASE
+                            WHEN proxy."Status" = 1 AND proxy."CurrentAliveSince" IS NOT NULL THEN proxy."CurrentAliveSince"
+                            ELSE GREATEST(proxy."FirstSeenAt", incoming.checked_at)
+                        END
                         WHEN incoming.outcome = 0 THEN NULL
                         ELSE proxy."CurrentAliveSince"
                     END,

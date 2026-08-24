@@ -96,26 +96,23 @@ public sealed class DatabaseInvariantIntegrationTests
             await migrator.MigrateAsync("20260810022141_AddSourceContentRefresh");
 
             var nextCheckAt = DateTimeOffset.UtcNow.AddHours(1);
+            var seenAt = DateTimeOffset.UtcNow;
             var aliveId = Guid.NewGuid();
             var deadId = Guid.NewGuid();
-            db.Proxies.AddRange(
-                new ProxyEndpoint
-                {
-                    Id = aliveId,
-                    Host = "8.8.8.8",
-                    Port = 8080,
-                    Status = ProxyStatus.Alive,
-                    NextCheckAt = nextCheckAt
-                },
-                new ProxyEndpoint
-                {
-                    Id = deadId,
-                    Host = "1.1.1.1",
-                    Port = 8080,
-                    Status = ProxyStatus.Dead,
-                    NextCheckAt = nextCheckAt
-                });
-            await db.SaveChangesAsync();
+            // Здесь база намеренно остановлена на старой миграции. Новая EF-модель уже
+            // знает о колонках истории доступности, поэтому legacy-строки добавляем SQL,
+            // совместимым именно со старой схемой, которую и должен чинить следующий шаг.
+            await db.Database.ExecuteSqlInterpolatedAsync($"""
+                INSERT INTO "Proxies"
+                    ("Id", "Host", "Port", "Protocol", "Status", "FirstSeenAt", "LastSeenAt",
+                     "NextCheckAt", "SuccessfulChecks", "FailedChecks", "ConsecutiveFailedChecks",
+                     "LastValidationDeferred")
+                VALUES
+                    ({aliveId}, '8.8.8.8', 8080, 0, 1, {seenAt}, {seenAt},
+                     {nextCheckAt}, 0, 0, 0, FALSE),
+                    ({deadId}, '1.1.1.1', 8080, 0, 2, {seenAt}, {seenAt},
+                     {nextCheckAt}, 0, 0, 0, FALSE)
+                """);
 
             await migrator.MigrateAsync();
             db.ChangeTracker.Clear();
