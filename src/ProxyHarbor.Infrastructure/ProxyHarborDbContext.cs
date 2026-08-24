@@ -60,6 +60,7 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
         {
             table.HasCheckConstraint("CK_Proxies_Identity", "\"Port\" BETWEEN 1 AND 65535 AND \"Protocol\" BETWEEN 0 AND 3 AND \"Status\" BETWEEN 0 AND 2");
             table.HasCheckConstraint("CK_Proxies_Timeline", "\"LastSeenAt\" >= \"FirstSeenAt\"");
+            table.HasCheckConstraint("CK_Proxies_AliveTimeline", "(\"FirstAliveAt\" IS NULL) = (\"LastAliveAt\" IS NULL) AND (\"FirstAliveAt\" IS NULL OR (\"FirstAliveAt\" >= \"FirstSeenAt\" AND \"LastAliveAt\" >= \"FirstAliveAt\")) AND (\"CurrentAliveSince\" IS NULL OR (\"Status\" = 1 AND \"FirstAliveAt\" IS NOT NULL AND \"CurrentAliveSince\" >= \"FirstAliveAt\" AND \"LastAliveAt\" >= \"CurrentAliveSince\"))");
             table.HasCheckConstraint("CK_Proxies_Latency", "\"LatencyMs\" IS NULL OR \"LatencyMs\" >= 0");
             table.HasCheckConstraint("CK_Proxies_CheckCounters", "\"SuccessfulChecks\" >= 0 AND \"FailedChecks\" >= 0 AND \"ConsecutiveFailedChecks\" >= 0 AND \"ConsecutiveFailedChecks\" <= \"FailedChecks\" AND \"SuccessfulChecks\"::bigint + \"FailedChecks\"::bigint <= 2147483647");
             // Alive/Dead публикуются и учитываются только после доказанной проверки.

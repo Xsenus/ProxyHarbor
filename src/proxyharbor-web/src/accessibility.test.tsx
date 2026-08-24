@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, render, screen } from '@testing-library/react'
 import axe, { type Result } from 'axe-core'
 import { afterEach, beforeEach, describe, it, vi } from 'vitest'
 import App from './App'
@@ -7,17 +7,6 @@ const stats = {
   alive: 0, staleAlive: 0, pending: 1, dead: 0, dueForCheck: 1,
   checksInProgress: 0, scheduledChecks: 0, averageLatencyMs: null,
   sources: 81, failingSources: 0, repeatedlyFailingSources: 0, byProtocol: [],
-}
-
-const sources = {
-  lastAuditedOn: '2026-08-10', feedCount: 81, providerCount: 50,
-  providers: [{
-    rank: 1, name: 'ProxyScrape', protocols: ['Http'],
-    feeds: [{
-      rank: 1, name: 'ProxyScrape HTTP',
-      url: 'https://api.proxyscrape.com/v4/free-proxy-list/http', protocol: 'Http',
-    }],
-  }],
 }
 
 const axeOptions = {
@@ -29,12 +18,12 @@ const axeOptions = {
 describe('ProxyHarbor accessibility', () => {
   beforeEach(() => {
     sessionStorage.clear()
+    window.history.replaceState({}, '', '/')
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
       if (url.includes('/api/v1/stats')) return jsonResponse(stats)
-      if (url.includes('/api/v1/sources')) return jsonResponse(sources)
       if (url.includes('/api/v1/proxies')) {
-        return jsonResponse({ items: [], pageSize: 100, hasMore: false, nextCursor: null })
+        return jsonResponse({ items: [], page: 1, pageSize: 25, total: 0 })
       }
       return jsonResponse({ title: 'Unexpected request' }, 500)
     }))
@@ -57,14 +46,13 @@ describe('ProxyHarbor accessibility', () => {
     vi.mocked(fetch).mockImplementation(async input => {
       const url = String(input)
       if (url.includes('/api/v1/stats')) return jsonResponse({ ...stats, alive: 1 })
-      if (url.includes('/api/v1/sources')) return jsonResponse(sources)
       if (url.includes('/api/v1/proxies')) {
         return jsonResponse({
           items: [{
             host: '1.1.1.1', port: 8080, protocol: 'Http', url: 'http://1.1.1.1:8080',
             latencyMs: 120, successRate: 100, exitIp: '1.1.1.1', lastCheckedAt: new Date().toISOString(),
           }],
-          pageSize: 100, hasMore: false, nextCursor: null,
+          page: 1, pageSize: 25, total: 1,
         })
       }
       return jsonResponse({ title: 'Unexpected request' }, 500)
@@ -76,11 +64,10 @@ describe('ProxyHarbor accessibility', () => {
     assertNoViolations(await axe.run(document.body, axeOptions))
   })
 
-  it('has no automated WCAG violations while the modal owns interaction', async () => {
+  it('has no automated WCAG violations on the dedicated login page', async () => {
+    window.history.replaceState({}, '', '/admin/login')
     render(<App />)
-    await screen.findByText('система активна')
-    fireEvent.click(screen.getByRole('button', { name: /^Управление$/ }))
-    await screen.findByRole('dialog')
+    await screen.findByRole('heading', { name: 'Вход в управление' })
 
     assertNoViolations(await axe.run(document.body, axeOptions))
   })

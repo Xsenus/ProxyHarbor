@@ -4,18 +4,18 @@ using ProxyHarbor.Infrastructure;
 
 namespace ProxyHarbor.Tests;
 
-/// <summary>Не позволяет случайно сузить каталог из 50 независимых провайдеров.</summary>
+/// <summary>Не позволяет случайно сузить каталог из 56 независимых провайдеров.</summary>
 public sealed class BuiltInSourceCatalogTests
 {
     [Fact]
-    public void CatalogContainsEightyOneUniqueFeedsFromFiftyProviders()
+    public void CatalogContainsNinetyEightUniqueFeedsFromFiftySixProviders()
     {
-        Assert.Equal(81, BuiltInSourceCatalog.Sources.Count);
-        Assert.Equal(81, BuiltInSourceCatalog.Sources.Select(x => x.Url).Distinct(StringComparer.OrdinalIgnoreCase).Count());
-        Assert.Equal(50, BuiltInSourceCatalog.Sources.Select(x => x.Provider).Distinct(StringComparer.OrdinalIgnoreCase).Count());
-        Assert.Equal(50, BuiltInSourceCatalog.Sources.Select(x => x.ProviderIdentity).Distinct(StringComparer.Ordinal).Count());
-        Assert.Equal(50, BuiltInSourceCatalog.ProviderCount);
-        Assert.Equal(Enumerable.Range(1, 81), BuiltInSourceCatalog.Sources.Select(x => x.Rank));
+        Assert.Equal(98, BuiltInSourceCatalog.Sources.Count);
+        Assert.Equal(98, BuiltInSourceCatalog.Sources.Select(x => x.Url).Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        Assert.Equal(56, BuiltInSourceCatalog.Sources.Select(x => x.Provider).Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        Assert.Equal(56, BuiltInSourceCatalog.Sources.Select(x => x.ProviderIdentity).Distinct(StringComparer.Ordinal).Count());
+        Assert.Equal(56, BuiltInSourceCatalog.ProviderCount);
+        Assert.Equal(Enumerable.Range(1, 98), BuiltInSourceCatalog.Sources.Select(x => x.Rank));
     }
 
     [Fact]

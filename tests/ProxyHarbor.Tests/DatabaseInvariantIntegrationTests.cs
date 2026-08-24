@@ -17,6 +17,7 @@ public sealed class DatabaseInvariantIntegrationTests
     [
         "CK_BackupRuns_Result",
         "CK_BackupRuns_State",
+        "CK_Proxies_AliveTimeline",
         "CK_Proxies_CheckCounters",
         "CK_Proxies_DeferredAttempt",
         "CK_Proxies_Identity",
@@ -57,9 +58,10 @@ public sealed class DatabaseInvariantIntegrationTests
         var operations = new EnforceDataInvariants().UpOperations.OfType<SqlOperation>()
             .Concat(new AddSourceContentRefresh().UpOperations.OfType<SqlOperation>())
             .Concat(new EnforcePublishedProxyEvidence().UpOperations.OfType<SqlOperation>())
+            .Concat(new TrackProxyAvailabilityHistory().UpOperations.OfType<SqlOperation>())
             .ToArray();
 
-        Assert.Equal(ExpectedConstraints.Length * 2 + 1, operations.Length);
+        Assert.Equal(ExpectedConstraints.Length * 2 + 2, operations.Length);
         Assert.All(operations, operation => Assert.True(operation.SuppressTransaction));
         Assert.Equal(ExpectedConstraints.Length, operations.Count(operation => operation.Sql.Contains("NOT VALID")));
         Assert.Equal(
@@ -67,6 +69,7 @@ public sealed class DatabaseInvariantIntegrationTests
             operations.Count(operation => operation.Sql.Contains("VALIDATE CONSTRAINT")));
         Assert.All(ExpectedConstraints, name => Assert.Equal(2, operations.Count(operation => operation.Sql.Contains(name))));
         Assert.Single(operations, operation => operation.Sql.Contains("SET \"Status\" = 0"));
+        Assert.Single(operations, operation => operation.Sql.Contains("SET \"FirstAliveAt\""));
         Assert.Contains("IF NOT EXISTS", Assert.Single(operations, operation =>
             operation.Sql.Contains("CK_Proxies_StatusEvidence") && operation.Sql.Contains("NOT VALID")).Sql);
     }
@@ -93,26 +96,23 @@ public sealed class DatabaseInvariantIntegrationTests
             await migrator.MigrateAsync("20260810022141_AddSourceContentRefresh");
 
             var nextCheckAt = DateTimeOffset.UtcNow.AddHours(1);
+            var seenAt = DateTimeOffset.UtcNow;
             var aliveId = Guid.NewGuid();
             var deadId = Guid.NewGuid();
-            db.Proxies.AddRange(
-                new ProxyEndpoint
-                {
-                    Id = aliveId,
-                    Host = "8.8.8.8",
-                    Port = 8080,
-                    Status = ProxyStatus.Alive,
-                    NextCheckAt = nextCheckAt
-                },
-                new ProxyEndpoint
-                {
-                    Id = deadId,
-                    Host = "1.1.1.1",
-                    Port = 8080,
-                    Status = ProxyStatus.Dead,
-                    NextCheckAt = nextCheckAt
-                });
-            await db.SaveChangesAsync();
+            // Здесь база намеренно остановлена на старой миграции. Новая EF-модель уже
+            // знает о колонках истории доступности, поэтому legacy-строки добавляем SQL,
+            // совместимым именно со старой схемой, которую и должен чинить следующий шаг.
+            await db.Database.ExecuteSqlInterpolatedAsync($"""
+                INSERT INTO "Proxies"
+                    ("Id", "Host", "Port", "Protocol", "Status", "IsAnonymous", "FirstSeenAt", "LastSeenAt",
+                     "NextCheckAt", "SuccessfulChecks", "FailedChecks", "ConsecutiveFailedChecks",
+                     "LastValidationDeferred")
+                VALUES
+                    ({aliveId}, '8.8.8.8', 8080, 0, 1, FALSE, {seenAt}, {seenAt},
+                     {nextCheckAt}, 0, 0, 0, FALSE),
+                    ({deadId}, '1.1.1.1', 8080, 0, 2, FALSE, {seenAt}, {seenAt},
+                     {nextCheckAt}, 0, 0, 0, FALSE)
+                """);
 
             await migrator.MigrateAsync();
             db.ChangeTracker.Clear();

@@ -6,13 +6,13 @@
 
 | Область | Реализовано |
 |---|---|
-| Источники | 81 встроенный HTTPS feed от 50 независимых providers, seed/synchronization и admin CRUD пользовательских feed |
+| Источники | 98 встроенных HTTPS feed от 56 независимых providers, seed/synchronization и admin CRUD пользовательских feed |
 | Сбор | Bounded parallel downloads, retry/backoff, conditional HTTP, лимиты размера/полноты, parser и глобальная дедупликация |
 | Хранение | PostgreSQL, EF Core migrations, constraints, индексы, COPY-ingestion и audit runs |
 | Проверка | HTTP CONNECT, SOCKS4a и SOCKS5 tunnel, TLS validation, exit IP, latency, success rate и Alive/Dead/Deferred evidence |
 | Масштабирование | Distributed validation leases, `SKIP LOCKED`, cluster operation locks, orphan recovery и API lifetime lease |
 | Публикация | REST list/seek/stats/sources, streaming JSON/XML/TXT/CSV, OpenAPI, rate limits и bounded cache |
-| Интерфейс | React/TypeScript dashboard, provider/feed catalog, фильтры, экспорт и admin mode |
+| Интерфейс | React/TypeScript dashboard, серверная пагинация, фильтры и экспорт; отдельные страницы admin login/console |
 | Операции | Liveness/readiness, Prometheus, Alertmanager, Telegram alerts, diagnostics и maintenance |
 | Backup | Repeatable-read snapshot пяти таблиц и безопасных настроек, diskless PHB3, Telegram multipart delivery и audit |
 | Restore | Offline settings inspection, archive/semantic validation, migrations, transactional replacement и rollback |
@@ -21,7 +21,7 @@
 
 ## Текущие проверенные свидетельства
 
-- Каталог: 81/81 feed endpoint и 50/50 providers.
+- Каталог release: 98 feed endpoint и 56 providers; 17 новых endpoint проверены live 24.08.2026, полный сетевой CI-аудит обязателен перед production.
 - Collection audit: 888 116 разобранных строк и 290 217 уникальных кандидатов за 4,965 секунды.
 - Validation sample: 1 600/1 600 объективных результатов без `Deferred`; Alive-множество совпало во всех export formats.
 - Backend: 598 tests; зафиксированный gate прошёл при 89,21% строк и 80,21% ветвей.

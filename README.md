@@ -2,14 +2,14 @@
 
 Высокопроизводительный сервис на ASP.NET Core 10, React 19 и PostgreSQL для сбора, объективной проверки и публикации бесплатных публичных HTTP(S), SOCKS4 и SOCKS5 прокси.
 
-ProxyHarbor загружает 81 HTTPS-feed от 50 независимых провайдеров, нормализует и дедуплицирует адреса, проверяет их через настоящий proxy-туннель до доверенного TLS endpoint, измеряет задержку и отдаёт только свежие подтверждённые прокси через API и экспорты JSON, XML, TXT и CSV.
+ProxyHarbor загружает 98 HTTPS-feed от 56 независимых провайдеров, нормализует и дедуплицирует адреса, проверяет их через настоящий proxy-туннель до доверенного TLS endpoint, измеряет задержку и отдаёт только свежие подтверждённые прокси через API и экспорты JSON, XML, TXT и CSV.
 
 > Публичные прокси принадлежат третьим лицам и могут читать или изменять незашифрованный трафик. Не передавайте через них пароли, cookies, платёжные данные и другие секреты. Используйте сервис законно и соблюдайте условия источников и целевых ресурсов.
 
 ## Состояние проекта
 
-- 81 встроенный feed от 50 провайдеров; полный каталог: [docs/SOURCE_CATALOG.md](docs/SOURCE_CATALOG.md).
-- Последний независимый live-аудит feed endpoint: 81/81 успешно, 0 ошибок.
+- 98 встроенных feed от 56 провайдеров; операторский каталог: [docs/SOURCE_CATALOG.md](docs/SOURCE_CATALOG.md).
+- 17 новых endpoint шести провайдеров прошли URL/live-аудит 24 августа 2026 года; полный 98-feed end-to-end аудит выполняется CI и перед production-релизом.
 - Последний полный production-цикл: 888 116 разобранных строк, 290 217 уникальных кандидатов за 4,965 секунды.
 - Проверочная партия: 1 600/1 600 результатов, без `Deferred`; одинаковый набор Alive во всех четырёх форматах.
 - Backend: 598 автоматических тестов; meaningful coverage — 89,21% строк и 80,21% ветвей.
@@ -28,7 +28,7 @@ ProxyHarbor загружает 81 HTTPS-feed от 50 независимых пр
 - измерение полной latency, exit IP, анонимности, success rate и адаптивное расписание повторных проверок;
 - горизонтально масштабируемая очередь через lease token и `FOR UPDATE SKIP LOCKED`;
 - публичная keyset pagination и потоковый экспорт до 50 000 строк за запрос;
-- React-панель со статистикой, каталогом провайдеров и защищённым административным режимом;
+- React-панель с серверной пагинацией, отдельными `/admin/login` и `/admin`; сведения об источниках доступны только оператору;
 - OpenAPI, Prometheus-метрики, готовые alerts и operator diagnostics;
 - PHB3 backup БД и безопасных настроек: diskless ZIP → AES-256-GCM → self-verification → atomic publish → Telegram;
 - транзакционный restore всех пяти таблиц с проверкой архива, semantic invariants и полным rollback при ошибке;
@@ -39,7 +39,7 @@ ProxyHarbor загружает 81 HTTPS-feed от 50 независимых пр
 
 ```mermaid
 flowchart LR
-    A["81 HTTPS feeds / 50 providers"] --> B["Bounded collector"]
+    A["98 HTTPS feeds / 56 providers"] --> B["Bounded collector"]
     B --> C["Normalize + deduplicate"]
     C --> D["PostgreSQL candidate queue"]
     D --> E["HTTP/SOCKS validation workers"]
@@ -313,7 +313,7 @@ docs/                            архитектура и operator runbooks
 - [мониторинг и incident runbook](docs/MONITORING.md);
 - [производительность](docs/PERFORMANCE.md);
 - [источники и live audit](docs/SOURCES.md);
-- [топ-50 провайдеров](docs/SOURCE_CATALOG.md);
+- [каталог 56 провайдеров](docs/SOURCE_CATALOG.md);
 - [выпуск версии](docs/RELEASING.md);
 - [первая публикация на GitHub](docs/GITHUB_SETUP.md);
 - [политика безопасности](SECURITY.md);

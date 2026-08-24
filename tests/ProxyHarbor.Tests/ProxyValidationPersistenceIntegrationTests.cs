@@ -269,6 +269,8 @@ public sealed class ProxyValidationPersistenceIntegrationTests
                     Id = ownedId,
                     Host = $"14.36.{ownedId.ToByteArray()[0]}.{ownedId.ToByteArray()[1]}",
                     Port = 30_000 + ownedId.ToByteArray()[2],
+                    FirstSeenAt = checkedAt.AddMinutes(-1),
+                    LastSeenAt = checkedAt.AddMinutes(-1),
                     CheckLeaseId = expectedLease,
                     CheckLeaseUntil = checkedAt.AddMinutes(5)
                 },
@@ -277,6 +279,8 @@ public sealed class ProxyValidationPersistenceIntegrationTests
                     Id = foreignId,
                     Host = $"15.37.{foreignId.ToByteArray()[0]}.{foreignId.ToByteArray()[1]}",
                     Port = 30_000 + foreignId.ToByteArray()[2],
+                    FirstSeenAt = checkedAt.AddMinutes(-1),
+                    LastSeenAt = checkedAt.AddMinutes(-1),
                     CheckLeaseId = foreignLease,
                     CheckLeaseUntil = checkedAt.AddMinutes(5)
                 });
@@ -353,6 +357,8 @@ public sealed class ProxyValidationPersistenceIntegrationTests
             LatencyMs = 123,
             ExitIp = "8.8.8.8",
             IsAnonymous = true,
+            FirstSeenAt = checkedAt.AddDays(-1),
+            LastSeenAt = checkedAt,
             LastCheckedAt = checkedAt,
             NextCheckAt = checkedAt,
             CheckLeaseId = leaseId,
@@ -426,6 +432,9 @@ public sealed class ProxyValidationPersistenceIntegrationTests
             Assert.False(completed.LastValidationDeferred);
             Assert.Equal(ProxyStatus.Alive, completed.Status);
             Assert.Equal(88, completed.LatencyMs);
+            Assert.Equal(checkedAt.AddMinutes(2), completed.FirstAliveAt);
+            Assert.Equal(checkedAt.AddMinutes(2), completed.LastAliveAt);
+            Assert.Equal(checkedAt.AddMinutes(2), completed.CurrentAliveSince);
         }
         finally
         {

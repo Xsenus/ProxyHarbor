@@ -18,6 +18,9 @@ public sealed class DatabaseReadinessProbe(IDbContextFactory<ProxyHarborDbContex
             await db.Database.ExecuteSqlRawAsync("""
                 SELECT
                     proxy."LastValidationDeferred",
+                    proxy."FirstAliveAt",
+                    proxy."LastAliveAt",
+                    proxy."CurrentAliveSince",
                     source."LastContentFetchedAt",
                     run."CandidateLimitReached",
                     validation."LeaseId",

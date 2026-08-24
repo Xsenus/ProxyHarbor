@@ -497,7 +497,19 @@ public sealed class ProxiesController(
 }
 
 /// <summary>Стабильный публичный контракт без внутренних полей и ошибок.</summary>
-public sealed record ProxyDto(string Host, int Port, ProxyProtocol Protocol, string Url, int? LatencyMs, decimal SuccessRate, string? ExitIp, DateTimeOffset? LastCheckedAt)
+public sealed record ProxyDto(
+    string Host,
+    int Port,
+    ProxyProtocol Protocol,
+    string Url,
+    int? LatencyMs,
+    decimal SuccessRate,
+    string? ExitIp,
+    DateTimeOffset? LastCheckedAt,
+    DateTimeOffset? FirstAliveAt,
+    DateTimeOffset? LastAliveAt,
+    DateTimeOffset? ActiveSince,
+    long? ActiveForSeconds)
 {
     /// <summary>Проецирует внутреннюю entity в безопасный публичный контракт и канонический URL.</summary>
     public static ProxyDto From(ProxyEndpoint x)
@@ -507,8 +519,12 @@ public sealed record ProxyDto(string Host, int Port, ProxyProtocol Protocol, str
             ? "http"
             : x.Protocol.ToString().ToLowerInvariant();
         var host = x.Host.Contains(':') ? $"[{x.Host}]" : x.Host;
+        long? activeForSeconds = x.CurrentAliveSince is { } activeSince
+            ? Math.Max(0, (long)(DateTimeOffset.UtcNow - activeSince).TotalSeconds)
+            : null;
         return new ProxyDto(x.Host, x.Port, x.Protocol, $"{transportScheme}://{host}:{x.Port}",
-            x.LatencyMs, x.SuccessRate, x.ExitIp, x.LastCheckedAt);
+            x.LatencyMs, x.SuccessRate, x.ExitIp, x.LastCheckedAt,
+            x.FirstAliveAt, x.LastAliveAt, x.CurrentAliveSince, activeForSeconds);
     }
 }
 

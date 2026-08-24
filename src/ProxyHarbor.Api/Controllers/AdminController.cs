@@ -178,6 +178,9 @@ public sealed class AdminController(
         var queue = await db.Proxies.AsNoTracking().GroupBy(_ => 1).Select(x => new
         {
             total = x.Count(),
+            everAlive = x.Count(proxy => proxy.FirstAliveAt != null || proxy.SuccessfulChecks > 0),
+            historicalDead = x.Count(proxy => proxy.Status == ProxyStatus.Dead &&
+                (proxy.FirstAliveAt != null || proxy.SuccessfulChecks > 0)),
             leased = x.Count(proxy => proxy.CheckLeaseUntil >= now),
             neverChecked = x.Count(proxy => proxy.LastCheckedAt == null),
             neverAttempted = x.Count(proxy => proxy.LastValidationAttemptAt == null),
@@ -198,6 +201,8 @@ public sealed class AdminController(
             validationRuns, validationWindowStart, queue?.due ?? 0);
         var validationQueue = queue is null ? null : new ValidationQueueResponse(
             queue.total,
+            queue.everAlive,
+            queue.historicalDead,
             queue.leased,
             queue.neverChecked,
             queue.neverAttempted,
@@ -291,6 +296,8 @@ public sealed record BackupTriggerResponse(string Created, bool SentToTelegram);
 /// <summary>Текущий backlog без уже арендованных строк и rolling validation telemetry.</summary>
 public sealed record ValidationQueueResponse(
     int Total,
+    int EverAlive,
+    int HistoricalDead,
     int Leased,
     int NeverChecked,
     int NeverAttempted,

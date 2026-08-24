@@ -21,3 +21,22 @@ header>.brand{min-height:44px}.provider-feeds summary,.provider-grid a{display:f
 .close,.diagnostics-heading button{width:44px;height:44px;padding:0;display:grid;place-items:center}.key-input input,.key-input button,.admin-actions button,.source-form input,.source-form select,.source-form button,.source-controls button{min-height:44px}.source-controls button{min-width:44px}
 @media(max-width:900px){.mobile-admin{width:44px;height:44px}.provider-feeds summary,.provider-grid a{min-height:44px}.tabs button{min-width:44px;min-height:44px}.filters input{height:44px}}
 @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;animation:none!important;transition:none!important}}
+
+/* Таблица использует настоящую серверную пагинацию и показывает длительность
+   текущей непрерывной Alive-серии отдельной колонкой. */
+.table-row{grid-template-columns:1.8fr .8fr 1fr .9fr 1fr 1fr}
+.pagination{display:grid;grid-template-columns:1fr auto auto;gap:16px;align-items:center;margin-top:18px;padding:15px 16px;border:1px solid var(--line);border-radius:12px;background:#091411;color:#718b82;font-size:11px}
+.pagination button{min-width:34px;height:34px;padding:0 9px;border:1px solid #29483f;border-radius:7px;background:#0d1d19;color:#9bb2aa;cursor:pointer}
+.pagination button:hover:not(:disabled),.pagination button.active{border-color:var(--mint);color:#082219;background:var(--mint)}
+.pagination button:disabled{opacity:.35;cursor:not-allowed}.page-sizes,.page-controls,.page-jump{display:flex;align-items:center;gap:6px}.page-controls{justify-content:center}.page-jump input{width:62px;height:34px;padding:0 8px;border:1px solid #29483f;border-radius:7px;background:#07110f;color:#dce9e5}.pagination p{grid-column:1/-1;margin:0;text-align:center;color:#607a71}
+
+/* Группы метрик и протокольных фильтров центрируются как единые блоки. */
+.metric{justify-content:center}.tabs{justify-content:center;flex:1}.filters label{flex:0 0 auto}
+
+/* Вход и рабочая консоль — независимые страницы, без публичного контента под ними. */
+.login-page{min-height:100vh;max-width:none;display:grid;place-items:center;padding:90px 20px;position:relative}.login-page>.brand{position:absolute;top:24px;left:clamp(20px,5vw,72px)}
+.login-card{width:min(470px,100%);padding:38px;border:1px solid #315247;border-radius:20px;background:#0b1915;box-shadow:0 40px 120px #0008}.login-card h1{margin:13px 0 14px;font-size:38px;line-height:1.05;letter-spacing:-.04em}.login-card>p{color:#718a82;font-size:13px;line-height:1.6}.login-card label{display:block;color:#91a8a0;font-size:11px}.login-card .key-input{margin:8px 0 24px}.login-card .admin-notice{margin:0 0 18px}.back-link{color:#7ca497;font-size:11px}.back-link:hover{color:var(--mint)}
+.admin-page{max-width:none;min-height:100vh;padding:0 24px 70px}.admin-page-header{max-width:1060px}.admin-page-header>button{padding:9px 15px;border:1px solid #315247;border-radius:8px;background:#0c1a17;color:#9db5ae;cursor:pointer}.admin-page-panel{width:min(1060px,100%);max-height:none;margin:38px auto 0;overflow:visible}.admin-page-panel .source-list{max-height:520px;overflow:auto}
+
+@media(max-width:900px){.table-row{grid-template-columns:1.7fr .9fr 1fr 1fr}.table-row>*:nth-child(4),.table-row>*:nth-child(5){display:none}.pagination{grid-template-columns:1fr}.pagination>*,.pagination p{grid-column:1;justify-content:center}.page-sizes{order:2}.page-jump{order:3}.pagination p{order:4}}
+@media(max-width:600px){.login-card{padding:28px 20px}.login-card h1{font-size:31px}.pagination{padding:12px 8px}.page-controls{gap:3px}.pagination button{min-width:31px;padding:0 6px}.admin-page{padding-left:12px;padding-right:12px}.admin-page-header{padding-left:4px;padding-right:4px}.admin-page-panel{margin-top:20px}}

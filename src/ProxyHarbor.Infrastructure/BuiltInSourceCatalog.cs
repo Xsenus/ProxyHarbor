@@ -2,11 +2,11 @@ using ProxyHarbor.Domain;
 
 namespace ProxyHarbor.Infrastructure;
 
-/// <summary>Версионируемый каталог публичных proxy-feed endpoint'ов от 50 независимых провайдеров.</summary>
+/// <summary>Версионируемый каталог публичных proxy-feed endpoint'ов от 56 независимых провайдеров.</summary>
 public static class BuiltInSourceCatalog
 {
     /// <summary>Дата последнего полного production-аудита всех канонических feed'ов.</summary>
-    public static DateOnly LastAuditedOn => new(2026, 8, 10);
+    public static DateOnly LastAuditedOn => new(2026, 8, 24);
 
     /// <summary>Источники ранжированы по свежести, объёму, стабильности ответа и разнообразию провайдеров.</summary>
     public static IReadOnlyList<BuiltInSource> Sources { get; } =
@@ -99,6 +99,26 @@ public static class BuiltInSourceCatalog
         Feed(79, "TheRituRajPS HTTP", "TheRituRajPS", "https://raw.githubusercontent.com/theriturajps/proxy-list/main/proxies.txt", ProxyProtocol.Http),
         Feed(80, "Stormsia HTTP", "Stormsia", "https://raw.githubusercontent.com/stormsia/proxy-list/main/http.txt", ProxyProtocol.Http),
         Feed(81, "MrMarble Mixed", "MrMarble", "https://raw.githubusercontent.com/MrMarble/proxy-list/main/all.txt", ProxyProtocol.Http),
+
+        // Свежие независимые каталоги, проверенные 2026-08-24: каждый URL отдал
+        // непустой текстовый список и принадлежит отдельному GitHub owner.
+        Feed(82, "RelayGlass HTTP", "RelayGlass", "https://raw.githubusercontent.com/relayglass/free-proxy-list/main/protocol/http/http.txt", ProxyProtocol.Http),
+        Feed(83, "RelayGlass HTTPS", "RelayGlass", "https://raw.githubusercontent.com/relayglass/free-proxy-list/main/protocol/https/https.txt", ProxyProtocol.Https),
+        Feed(84, "RelayGlass SOCKS4", "RelayGlass", "https://raw.githubusercontent.com/relayglass/free-proxy-list/main/protocol/socks4/socks4.txt", ProxyProtocol.Socks4),
+        Feed(85, "RelayGlass SOCKS5", "RelayGlass", "https://raw.githubusercontent.com/relayglass/free-proxy-list/main/protocol/socks5/socks5.txt", ProxyProtocol.Socks5),
+        Feed(86, "ProxyMan HTTP", "ProxyMan", "https://raw.githubusercontent.com/Akshay7273/ProxyMan-free-proxy-list/main/protocols/http.txt", ProxyProtocol.Http),
+        Feed(87, "ProxyMan SOCKS4", "ProxyMan", "https://raw.githubusercontent.com/Akshay7273/ProxyMan-free-proxy-list/main/protocols/socks4.txt", ProxyProtocol.Socks4),
+        Feed(88, "ProxyMan SOCKS5", "ProxyMan", "https://raw.githubusercontent.com/Akshay7273/ProxyMan-free-proxy-list/main/protocols/socks5.txt", ProxyProtocol.Socks5),
+        Feed(89, "Dinoz HTTP", "Dinoz", "https://raw.githubusercontent.com/dinoz0rg/proxy-list/main/checked_proxies/http.txt", ProxyProtocol.Http),
+        Feed(90, "Dinoz SOCKS4", "Dinoz", "https://raw.githubusercontent.com/dinoz0rg/proxy-list/main/checked_proxies/socks4.txt", ProxyProtocol.Socks4),
+        Feed(91, "Dinoz SOCKS5", "Dinoz", "https://raw.githubusercontent.com/dinoz0rg/proxy-list/main/checked_proxies/socks5.txt", ProxyProtocol.Socks5),
+        Feed(92, "Mzyui HTTP", "Mzyui", "https://raw.githubusercontent.com/mzyui/proxy-list/main/http.txt", ProxyProtocol.Http),
+        Feed(93, "Mzyui SOCKS4", "Mzyui", "https://raw.githubusercontent.com/mzyui/proxy-list/main/socks4.txt", ProxyProtocol.Socks4),
+        Feed(94, "Mzyui SOCKS5", "Mzyui", "https://raw.githubusercontent.com/mzyui/proxy-list/main/socks5.txt", ProxyProtocol.Socks5),
+        Feed(95, "Naravid HTTP", "Naravid", "https://raw.githubusercontent.com/naravid19/checked-proxies/main/proxies/http.txt", ProxyProtocol.Http),
+        Feed(96, "Naravid SOCKS4", "Naravid", "https://raw.githubusercontent.com/naravid19/checked-proxies/main/proxies/socks4.txt", ProxyProtocol.Socks4),
+        Feed(97, "Naravid SOCKS5", "Naravid", "https://raw.githubusercontent.com/naravid19/checked-proxies/main/proxies/socks5.txt", ProxyProtocol.Socks5),
+        Feed(98, "aQuiner HTTP", "aQuiner", "https://raw.githubusercontent.com/aQuiner/free-proxy-list/main/http.txt", ProxyProtocol.Http),
     ];
 
     private static readonly Dictionary<string, BuiltInSource> SourcesByUrl =
