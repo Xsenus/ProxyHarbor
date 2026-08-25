@@ -20,3 +20,17 @@ secrets:
     file: ./.tmp-ci-secrets/telegram_bot_token
   telegram_chat_id: !override
     file: ./.tmp-ci-secrets/telegram_chat_id
+  yookassa_secret: !override
+    file: ./.tmp-ci-secrets/yookassa_secret
+  cloudpayments_secret: !override
+    file: ./.tmp-ci-secrets/cloudpayments_secret
+  robokassa_password1: !override
+    file: ./.tmp-ci-secrets/robokassa_password1
+  robokassa_password2: !override
+    file: ./.tmp-ci-secrets/robokassa_password2
+  tbank_password: !override
+    file: ./.tmp-ci-secrets/tbank_password
+  stripe_secret: !override
+    file: ./.tmp-ci-secrets/stripe_secret
+  stripe_webhook_secret: !override
+    file: ./.tmp-ci-secrets/stripe_webhook_secret

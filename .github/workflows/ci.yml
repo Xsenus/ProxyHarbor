@@ -290,6 +290,15 @@ jobs:
           printf '%s' "$BACKUP_ENCRYPTION_KEY" > .tmp-ci-secrets/backup_encryption_key
           printf '%s' "$TELEGRAM_BOT_TOKEN" > .tmp-ci-secrets/telegram_bot_token
           printf '%s' "$TELEGRAM_CHAT_ID" > .tmp-ci-secrets/telegram_chat_id
+          # Платёжные провайдеры выключены в smoke-профиле, но file-backed
+          # secrets всё равно должны существовать для совместимости Compose v5.
+          touch .tmp-ci-secrets/yookassa_secret \
+            .tmp-ci-secrets/cloudpayments_secret \
+            .tmp-ci-secrets/robokassa_password1 \
+            .tmp-ci-secrets/robokassa_password2 \
+            .tmp-ci-secrets/tbank_password \
+            .tmp-ci-secrets/stripe_secret \
+            .tmp-ci-secrets/stripe_webhook_secret
           # Bind-mounted Compose secrets сохраняют host mode. Контейнеры работают
           # не от root, поэтому чтение даёт 0444, а каталог 0700 закрывает значения
           # от остальных host-пользователей runner-а.
@@ -332,7 +341,7 @@ jobs:
           assert_secret_values_absent "$postgres_id"
           assert_secret_values_absent "$restore_id"
           docker inspect --format '{{json .Mounts}}' "$api_id" | jq --exit-status \
-            '[.[] | select(.Destination | startswith("/run/secrets/"))] | length == 6'
+            '[.[] | select(.Destination | startswith("/run/secrets/"))] | length == 13'
           docker inspect --format '{{json .Mounts}}' "$postgres_id" | jq --exit-status \
             '[.[] | select(.Destination == "/run/secrets/postgres_password")] | length == 1'
           docker inspect --format '{{json .Mounts}}' "$restore_id" | jq --exit-status \
