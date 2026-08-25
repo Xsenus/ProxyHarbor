@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Activity, ArrowDownToLine, ArrowRight, Ban, Bell, Bot, CalendarClock, Check, Clock3, CreditCard, Database, Eye, EyeOff, Gauge, HardDriveDownload, LayoutDashboard, LockKeyhole, LogOut, Mail, MessageCircle, Network, Pencil, Play, Plus, Radio, Receipt, RefreshCw, Send, Server, Settings2, ShieldCheck, ShieldOff, Star, Trash2, User, Users, Wifi, Workflow, X } from 'lucide-react'
+import { Activity, ArrowDownToLine, ArrowRight, Ban, Bell, Bot, CalendarClock, Check, ChevronDown, Clock3, CreditCard, Database, Eye, EyeOff, Gauge, HardDriveDownload, LayoutDashboard, LockKeyhole, LogOut, Mail, MessageCircle, Network, Pencil, Play, Plus, Radio, Receipt, RefreshCw, Send, Server, Settings2, ShieldCheck, ShieldOff, Star, Trash2, User, Users, Wifi, Workflow, X } from 'lucide-react'
 
 type Protocol = 'Http' | 'Https' | 'Socks4' | 'Socks5'
 type Proxy = { host: string; port: number; protocol: Protocol; url: string; latencyMs: number; successRate: number; exitIp?: string; lastCheckedAt: string; firstAliveAt?: string; lastAliveAt?: string; activeSince?: string; activeForSeconds?: number }
@@ -870,7 +870,27 @@ function needsSecondarySecret(code:string){return code==='robokassa'||code==='st
 
 /** Доступный переключатель вместо платформенно-зависимого checkbox. */
 function Toggle({checked,onChange,label,danger=false}:{checked:boolean;onChange:(value:boolean)=>void;label:string;danger?:boolean}){return <button type="button" role="switch" aria-checked={checked} className={`ui-switch ${checked?'on':''} ${danger?'danger':''}`} onClick={()=>onChange(!checked)}><i><span/></i><b>{label}</b></button>}
-function StyledSelect({value,onChange,options}:{value:string;onChange:(value:string)=>void;options:[string,string][]}){return <span className="styled-select"><select value={value} onChange={event=>onChange(event.target.value)}>{options.map(([key,label])=><option key={key} value={key}>{label}</option>)}</select><ArrowDownToLine/></span>}
+
+/** Собственный список не наследует синие системные меню Chrome и остаётся доступным с клавиатуры. */
+function StyledSelect({value,onChange,options,ariaLabel='Выбор значения'}:{value:string;onChange:(value:string)=>void;options:[string,string][];ariaLabel?:string}){
+  const [open,setOpen]=useState(false)
+  const root=useRef<HTMLSpanElement>(null)
+  const trigger=useRef<HTMLButtonElement>(null)
+  const selected=options.find(([key])=>key===value)??options[0]
+  useEffect(()=>{
+    if(!open)return
+    const closeOnOutsideClick=(event:MouseEvent)=>{if(!root.current?.contains(event.target as Node))setOpen(false)}
+    const closeOnEscape=(event:KeyboardEvent)=>{if(event.key==='Escape'){setOpen(false);trigger.current?.focus()}}
+    document.addEventListener('mousedown',closeOnOutsideClick)
+    document.addEventListener('keydown',closeOnEscape)
+    return()=>{document.removeEventListener('mousedown',closeOnOutsideClick);document.removeEventListener('keydown',closeOnEscape)}
+  },[open])
+  const choose=(next:string)=>{onChange(next);setOpen(false);window.setTimeout(()=>trigger.current?.focus(),0)}
+  return <span className={`styled-select ${open?'open':''}`} ref={root}>
+    <button ref={trigger} type="button" className="styled-select-trigger" aria-label={ariaLabel} aria-haspopup="listbox" aria-expanded={open} onClick={()=>setOpen(current=>!current)}><span>{selected?.[1]??value}</span><ChevronDown/></button>
+    {open&&<span className="styled-select-menu" role="listbox" aria-label={ariaLabel}>{options.map(([key,label])=><button key={key} type="button" role="option" aria-selected={key===value} onClick={()=>choose(key)}><span>{label}</span>{key===value&&<Check/>}</button>)}</span>}
+  </span>
+}
 function AdminTabs({value,onChange,items}:{value:string;onChange:(value:string)=>void;items:[string,string][]}){return <nav className="admin-tabs" aria-label="Разделы страницы">{items.map(([key,label])=><button key={key} className={value===key?'active':''} onClick={()=>onChange(key)}>{label}</button>)}</nav>}
 
 function ProviderCards({providers,onOpen}:{providers:AdminPaymentProviderDraft[];onOpen:(code:string)=>void}){return <section className="provider-card-grid">{providers.map(provider=><article className="admin-card provider-card" key={provider.code}><div className="provider-card-icon"><CreditCard/></div><div><strong>{provider.name}</strong><small>{provider.ready?'Реквизиты заполнены':'Требуется настройка'}</small></div><span className={`state-pill ${provider.enabled&&provider.ready?'active':''}`}>{provider.enabled?'Включён':'Выключен'}</span><button onClick={()=>onOpen(provider.code)}><Settings2/>Открыть настройки</button></article>)}</section>}

@@ -287,7 +287,18 @@ describe('ProxyHarbor UI', () => {
   it('exposes Telegram configuration as a dedicated admin section', async () => {
     window.history.replaceState({}, '', '/admin/telegram')
     vi.mocked(fetch).mockImplementation(async input => {const url=String(input);if(url.includes('/api/v1/admin/sources'))return jsonResponse({items:[],page:1,pageSize:10,total:0});if(url.includes('/api/v1/admin/diagnostics'))return jsonResponse({serverTime:new Date().toISOString(),databaseBytes:0,validationQueue:{total:0,due:0},recentRuns:[],recentValidationRuns:[],recentBackups:[]});if(url.endsWith('/api/v1/admin/telegram'))return jsonResponse({enabled:false,updateMode:'webhook',name:'ProxyHarbor',description:'Проверенные прокси и управление подпиской.',shortDescription:'Прокси и подписка',supportText:'Сообщение передано оператору.',proxyFileMaxItems:1000,webhookMaxConnections:20,productStars:{'pro-30':250},tokenConfigured:false,webhookUrl:'https://proxy.example/api/v1/telegram/webhook/bot',stats:{users:0,activeUsers30d:0,notificationsEnabled:0,blocked:0,paidOrders:0,starsRevenue:0,queued:0,failed:0}});if(url.endsWith('/api/v1/admin/payments'))return jsonResponse({enabled:true,products:[{code:'pro-30',enabled:true,name:'Pro',plan:'pro',durationDays:30,amountMinor:49900,currency:'RUB',description:'Pro'}],providers:[]});return jsonResponse({title:'Unexpected'},500)})
-    render(<App/>);expect(await screen.findByRole('heading',{name:'Telegram-бот'})).toBeInTheDocument();expect(screen.getByRole('link',{name:'Telegram-бот'})).toHaveAttribute('aria-current','page');fireEvent.click(screen.getByRole('button',{name:'Настройки'}));expect(await screen.findByPlaceholderText('123456:ABC…')).toHaveAttribute('autocomplete','new-password');expect(screen.getByDisplayValue('250')).toBeInTheDocument()
+    render(<App/>)
+    expect(await screen.findByRole('heading',{name:'Telegram-бот'})).toBeInTheDocument()
+    expect(screen.getByRole('link',{name:'Telegram-бот'})).toHaveAttribute('aria-current','page')
+    fireEvent.click(screen.getByRole('button',{name:'Настройки'}))
+    expect(await screen.findByPlaceholderText('123456:ABC…')).toHaveAttribute('autocomplete','new-password')
+    expect(screen.getByDisplayValue('250')).toBeInTheDocument()
+    const deliveryMode=screen.getByRole('button',{name:'Выбор значения'})
+    fireEvent.click(deliveryMode)
+    expect(screen.getByRole('listbox',{name:'Выбор значения'})).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('option',{name:'Long polling'}))
+    expect(deliveryMode).toHaveTextContent('Long polling')
+    expect(deliveryMode).toHaveAttribute('aria-expanded','false')
   })
 
   it('shows subscriptions and opens auditable manual extension', async () => {
