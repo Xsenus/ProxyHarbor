@@ -57,6 +57,22 @@ public sealed class PaymentGatewayTests
     }
 
     [Theory]
+    [InlineData("yookassa")]
+    [InlineData("cloudpayments")]
+    [InlineData("robokassa")]
+    [InlineData("tbank")]
+    [InlineData("stripe")]
+    public void ProviderAcceptsItsCompleteCredentialSet(string code)
+    {
+        var complete = new PaymentProviderOptions
+        {
+            Enabled = true, MerchantId = "merchant", PublicId = "public",
+            SecretKey = "secret", SecondarySecret = "secondary"
+        };
+        Assert.True(PaymentProviderConfiguration.IsReady(code, complete));
+    }
+
+    [Theory]
     [InlineData("yookassa", "https://pay.example/yoo")]
     [InlineData("cloudpayments", "https://pay.example/cloud")]
     [InlineData("robokassa", "https://auth.robokassa.ru/")]
