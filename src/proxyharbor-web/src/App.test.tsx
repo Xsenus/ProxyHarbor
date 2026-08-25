@@ -227,11 +227,14 @@ describe('ProxyHarbor UI', () => {
     await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([input]) =>
       String(input).includes('page=1&pageSize=10&search=proxyscrape'))).toBe(true))
 
+    const callsBeforeClear = vi.mocked(fetch).mock.calls.length
     fireEvent.click(screen.getByRole('button', { name: 'Очистить поиск' }))
-    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([input]) => {
-      const url = new URL(String(input), 'https://example.test')
-      return url.pathname.endsWith('/api/v1/admin/sources') && !url.searchParams.has('search')
-    })).toBe(true))
+    await waitFor(() => {
+      const newSourceCalls = vi.mocked(fetch).mock.calls.slice(callsBeforeClear).filter(([input]) =>
+        new URL(String(input), 'https://example.test').pathname.endsWith('/api/v1/admin/sources'))
+      expect(newSourceCalls.length).toBeGreaterThan(0)
+      expect(new URL(String(newSourceCalls.at(-1)?.[0]), 'https://example.test').searchParams.has('search')).toBe(false)
+    })
   })
 
   it('shows proxy lifetime statistics and pages the protected inventory on the server', async () => {
@@ -251,7 +254,7 @@ describe('ProxyHarbor UI', () => {
 
     render(<App />)
     expect(await screen.findByRole('heading', { name:'Прокси', level:1 })).toBeInTheDocument()
-    expect(screen.getByText('203.0.113.10:8080')).toBeInTheDocument()
+    expect(await screen.findByText('203.0.113.10:8080')).toBeInTheDocument()
     expect(screen.getAllByText('1 д 2 ч').length).toBeGreaterThan(0)
     expect(screen.getByText('Страница 1 из 3 · Найдено: 21')).toBeInTheDocument()
     expect(screen.getByRole('link', { name:/^Прокси/ })).toHaveAttribute('aria-current','page')
