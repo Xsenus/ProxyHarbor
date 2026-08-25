@@ -32,11 +32,14 @@ docker compose up -d --build
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | Обязательная пара для включённого backup |
 | `BACKEND_SUBNET` | Единственная доверенная container-сеть reverse proxy |
 | `PUBLIC_HOST`, `ACME_EMAIL` | Публичное DNS-имя и контакт ACME для production Caddy |
+| `PUBLIC_BASE_URL` | Публичный HTTPS origin для email, платёжных webhook и commerce-бота; Compose передаёт его как `TelegramBot__PublicBaseUrl` |
 | `*_MEMORY_LIMIT`, `*_CPU_LIMIT` | Ограничения ресурсов контейнеров |
 | `PROMETHEUS_*`, `ALERTMANAGER_*` | Loopback-порты и bounded retention monitoring profile |
 | `PROXYHARBOR_IMAGE_PREFIX`, `PROXYHARBOR_IMAGE_TAG` | GHCR namespace и версия для release overlay |
 
 ## Платежи и подписки
+
+Telegram Stars и commerce-бот настраиваются в `/admin/telegram`; token хранится в БД только как Data Protection ciphertext и не использует `TELEGRAM_BOT_TOKEN`, зарезервированный для доставки backup. Полный runbook: [TELEGRAM_BOT.md](TELEGRAM_BOT.md).
 
 Биллинг по умолчанию выключен (`PAYMENTS_ENABLED=false`). Сначала заключите договор с провайдером,
 получите merchant-реквизиты и проверьте тестовый платёж. ProxyHarbor использует hosted checkout:

@@ -19,6 +19,7 @@
 | [CONFIGURATION.md](CONFIGURATION.md) | Полный справочник environment/options/secrets |
 | [DEPLOYMENT.md](DEPLOYMENT.md) | Production HTTPS, запуск, обновление и откат |
 | [BACKUP_RESTORE.md](BACKUP_RESTORE.md) | PHB3, Telegram, inspection и disaster recovery |
+| [TELEGRAM_BOT.md](TELEGRAM_BOT.md) | Commerce-бот, Stars, CRM, webhook/polling и эксплуатация |
 | [MONITORING.md](MONITORING.md) | Метрики, alarms и incident response |
 | [PERFORMANCE.md](PERFORMANCE.md) | Нагрузочная модель, измерения и tuning |
 

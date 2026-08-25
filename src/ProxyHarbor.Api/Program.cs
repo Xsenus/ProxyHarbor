@@ -109,6 +109,19 @@ builder.Services.AddOptions<PaymentOptions>().Bind(builder.Configuration.GetSect
 builder.Services.AddHttpClient();
 builder.Services.AddScoped<IPaymentConfigurationStore, PaymentConfigurationStore>();
 builder.Services.AddScoped<PaymentGatewayClient>();
+builder.Services.AddOptions<TelegramBotHostOptions>()
+    .Bind(builder.Configuration.GetSection(TelegramBotHostOptions.Section))
+    .Validate(x => Uri.TryCreate(x.PublicBaseUrl, UriKind.Absolute, out var uri) &&
+        uri.Scheme == Uri.UriSchemeHttps && string.IsNullOrEmpty(uri.UserInfo),
+        "TelegramBot:PublicBaseUrl должен быть абсолютным HTTPS URL")
+    .ValidateOnStart();
+builder.Services.AddScoped<ITelegramBotConfigurationStore, TelegramBotConfigurationStore>();
+builder.Services.AddScoped<TelegramBotApiClient>();
+builder.Services.AddScoped<TelegramDispatchService>();
+builder.Services.AddScoped<TelegramUpdateProcessor>();
+builder.Services.AddHostedService<TelegramOutboundWorker>();
+builder.Services.AddHostedService<TelegramPollingWorker>();
+builder.Services.AddHostedService<TelegramSubscriptionReminderWorker>();
 builder.Services.AddSingleton<ProxyAccessMonitor>();
 builder.Services.AddHostedService(services => services.GetRequiredService<ProxyAccessMonitor>());
 builder.Services.AddControllers().AddJsonOptions(x =>
@@ -251,6 +264,16 @@ builder.Services.AddRateLimiter(x =>
     x.AddPolicy("payment-webhook", context => RateLimitPartition.GetFixedWindowLimiter(
         context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
         _ => new FixedWindowRateLimiterOptions { PermitLimit = 300, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
+    x.AddPolicy("telegram-webhook", context => RateLimitPartition.GetTokenBucketLimiter(
+        context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        _ => new TokenBucketRateLimiterOptions
+        {
+            TokenLimit = 300,
+            TokensPerPeriod = 100,
+            ReplenishmentPeriod = TimeSpan.FromSeconds(10),
+            AutoReplenishment = true,
+            QueueLimit = 0
+        }));
     x.AddPolicy("export", context => RateLimitPartition.GetTokenBucketLimiter(
         context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
         _ => new TokenBucketRateLimiterOptions
