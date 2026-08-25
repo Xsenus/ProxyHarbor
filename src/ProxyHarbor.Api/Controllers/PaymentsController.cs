@@ -1,5 +1,8 @@
 using System.ComponentModel.DataAnnotations;
 using System.Data;
+using System.Net;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
@@ -109,6 +112,43 @@ public sealed class PaymentsController(
             .ToArrayAsync(token));
     }
 
+    /// <summary>Создаёт короткоживущую самопередающую форму для официального hosted checkout ЮMoney.</summary>
+    [AllowAnonymous, HttpGet("hosted/yoomoney/{orderId:guid}/{checkoutToken}"), EnableRateLimiting("account")]
+    public async Task<IActionResult> YooMoneyHosted(Guid orderId, string checkoutToken, CancellationToken token)
+    {
+        var notBefore = DateTimeOffset.UtcNow.AddHours(-1);
+        var order = await db.PaymentOrders.AsNoTracking().SingleOrDefaultAsync(x =>
+            x.Id == orderId && x.Provider == "yoomoney" && x.Status == PaymentStatuses.Pending &&
+            x.CreatedAt >= notBefore, token);
+        if (order is null || !FixedTokenEquals(order.IdempotencyKey, checkoutToken)) return NotFound();
+
+        var options = await configurations.GetAsync(token);
+        if (!options.Providers.TryGetValue("yoomoney", out var provider) ||
+            !PaymentProviderConfiguration.IsReady("yoomoney", provider)) return NotFound();
+
+        var fields = new Dictionary<string, string>
+        {
+            ["receiver"] = provider.MerchantId,
+            ["quickpay-form"] = "button",
+            ["paymentType"] = "PC",
+            ["sum"] = (order.AmountMinor / 100m).ToString("0.00", System.Globalization.CultureInfo.InvariantCulture),
+            ["label"] = order.Id.ToString("D"),
+            ["successURL"] = $"{options.PublicBaseUrl.TrimEnd('/')}/account?payment={order.Id:D}"
+        };
+        var inputs = string.Concat(fields.Select(item =>
+            $"<input type=\"hidden\" name=\"{WebUtility.HtmlEncode(item.Key)}\" value=\"{WebUtility.HtmlEncode(item.Value)}\">"));
+        var html = $"""
+            <!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="referrer" content="no-referrer">
+            <meta name="viewport" content="width=device-width,initial-scale=1"><title>Переход в ЮMoney</title></head>
+            <body><form id="payment" method="post" action="https://yoomoney.ru/quickpay/confirm">{inputs}
+            <noscript><button type="submit">Перейти к оплате в ЮMoney</button></noscript></form>
+            <script>document.getElementById('payment').submit()</script></body></html>
+            """;
+        Response.Headers.ContentSecurityPolicy =
+            "default-src 'none'; script-src 'unsafe-inline'; form-action https://yoomoney.ru; base-uri 'none'; frame-ancestors 'none'";
+        return Content(html, "text/html", Encoding.UTF8);
+    }
+
     /// <summary>Публичная точка уведомлений; доверие основано на подписи/повторной проверке шлюза.</summary>
     [AllowAnonymous, AcceptVerbs("GET", "POST", Route = "webhooks/{providerCode}"), IgnoreAntiforgeryToken, EnableRateLimiting("payment-webhook")]
     public async Task<IActionResult> Webhook(string providerCode, CancellationToken token)
@@ -183,9 +223,17 @@ public sealed class PaymentsController(
 
     private static string ProviderName(string code) => code switch
     {
-        "yookassa" => "ЮKassa", "cloudpayments" => "CloudPayments", "robokassa" => "Robokassa",
-        "tbank" => "Т-Банк", "stripe" => "Stripe", _ => code
+        "yookassa" => "ЮKassa", "yoomoney" => "ЮMoney", "cloudpayments" => "CloudPayments",
+        "robokassa" => "Robokassa", "tbank" => "Т-Банк", "stripe" => "Stripe",
+        "cryptomus" => "Cryptomus", "nowpayments" => "NOWPayments", _ => code
     };
+
+    private static bool FixedTokenEquals(string expected, string actual)
+    {
+        var left = Encoding.UTF8.GetBytes(expected);
+        var right = Encoding.UTF8.GetBytes(actual);
+        return left.Length == right.Length && CryptographicOperations.FixedTimeEquals(left, right);
+    }
 
 }
 

@@ -39,12 +39,16 @@ public static class RuntimeSecretConfiguration
         AddSecretOverride(configuration, overrides, "SecretFiles:TelegramBotToken", "Backup:TelegramBotToken");
         AddSecretOverride(configuration, overrides, "SecretFiles:TelegramChatId", "Backup:TelegramChatId");
         AddSecretOverride(configuration, overrides, "SecretFiles:YooKassaSecret", "Payments:Providers:yookassa:SecretKey");
+        AddSecretOverride(configuration, overrides, "SecretFiles:YooMoneyNotificationSecret", "Payments:Providers:yoomoney:SecretKey");
         AddSecretOverride(configuration, overrides, "SecretFiles:CloudPaymentsSecret", "Payments:Providers:cloudpayments:SecretKey");
         AddSecretOverride(configuration, overrides, "SecretFiles:RobokassaPassword1", "Payments:Providers:robokassa:SecretKey");
         AddSecretOverride(configuration, overrides, "SecretFiles:RobokassaPassword2", "Payments:Providers:robokassa:SecondarySecret");
         AddSecretOverride(configuration, overrides, "SecretFiles:TBankPassword", "Payments:Providers:tbank:SecretKey");
         AddSecretOverride(configuration, overrides, "SecretFiles:StripeSecret", "Payments:Providers:stripe:SecretKey");
         AddSecretOverride(configuration, overrides, "SecretFiles:StripeWebhookSecret", "Payments:Providers:stripe:SecondarySecret");
+        AddSecretOverride(configuration, overrides, "SecretFiles:CryptomusPaymentKey", "Payments:Providers:cryptomus:SecretKey");
+        AddSecretOverride(configuration, overrides, "SecretFiles:NowPaymentsApiKey", "Payments:Providers:nowpayments:SecretKey");
+        AddSecretOverride(configuration, overrides, "SecretFiles:NowPaymentsIpnSecret", "Payments:Providers:nowpayments:SecondarySecret");
 
         if (overrides.Count > 0)
             configuration.AddInMemoryCollection(overrides);

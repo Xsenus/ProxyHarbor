@@ -46,15 +46,18 @@ Telegram Stars и commerce-бот настраиваются в `/admin/telegram
 номер карты и CVC не поступают в API и не сохраняются в PostgreSQL. В БД остаются только заказ,
 сумма, валюта, провайдер, внешний идентификатор и статус.
 
-Поддержаны пять шлюзов:
+Поддержаны восемь шлюзов:
 
 | Провайдер | Переменные | URL уведомления |
 |---|---|---|
 | ЮKassa | `YOOKASSA_ENABLED`, `YOOKASSA_SHOP_ID`, `YOOKASSA_SECRET_KEY` | `/api/v1/payments/webhooks/yookassa` |
+| ЮMoney | `YOOMONEY_ENABLED`, `YOOMONEY_WALLET`, `YOOMONEY_NOTIFICATION_SECRET` | `/api/v1/payments/webhooks/yoomoney`; в кабинете ЮMoney включите HTTP-уведомления и скопируйте секрет |
 | CloudPayments | `CLOUDPAYMENTS_ENABLED`, `CLOUDPAYMENTS_PUBLIC_ID`, `CLOUDPAYMENTS_API_SECRET` | `/api/v1/payments/webhooks/cloudpayments` (Pay, POST) |
 | Robokassa | `ROBOKASSA_ENABLED`, `ROBOKASSA_MERCHANT_LOGIN`, `ROBOKASSA_PASSWORD1`, `ROBOKASSA_PASSWORD2`, `ROBOKASSA_TEST_MODE` | `/api/v1/payments/webhooks/robokassa` (ResultURL; SHA-256) |
 | Т-Банк | `TBANK_ENABLED`, `TBANK_TERMINAL_KEY`, `TBANK_PASSWORD` | URL передаётся в `Init` автоматически |
 | Stripe | `STRIPE_ENABLED`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | `/api/v1/payments/webhooks/stripe` (`checkout.session.completed`) |
+| Cryptomus | `CRYPTOMUS_ENABLED`, `CRYPTOMUS_MERCHANT_ID`, `CRYPTOMUS_PAYMENT_KEY` | `/api/v1/payments/webhooks/cryptomus`; callback передаётся при создании счёта |
+| NOWPayments | `NOWPAYMENTS_ENABLED`, `NOWPAYMENTS_API_KEY`, `NOWPAYMENTS_IPN_SECRET` | `/api/v1/payments/webhooks/nowpayments`; тот же URL задайте как IPN callback |
 
 Переменные и read-only Docker secrets задают безопасный начальный снимок. После первого запуска
 администратор может открыть `/admin/payments`: изменить тарифы, идентификаторы, режимы и заменить
@@ -65,6 +68,13 @@ Telegram Stars и commerce-бот настраиваются в `/admin/telegram
 
 Включайте приём платежей только после настройки хотя бы одного шлюза. Stripe применим только к
 merchant, зарегистрированному в поддерживаемой Stripe стране.
+
+Для ЮMoney сумма заказа передаётся в официальную форму Quickpay, а подписка включается только после
+подписанного HTTP-уведомления. Для Cryptomus запросы и callbacks подписываются по протоколу merchant
+API. Для NOWPayments API key используется только при создании invoice, а отдельный IPN secret — для
+HMAC-проверки уведомления. Криптовалюту и сеть выбирает пользователь на hosted-странице провайдера;
+ProxyHarbor сверяет исходную фиатную сумму, валюту, заказ и финальный статус. Учитывайте волатильность,
+комиссии, AML/KYC и требования вашей юрисдикции до включения криптоплатежей.
 
 Каталог цен находится в `Payments:Products` (`appsettings.json`). Значения `499 ₽` и `999 ₽` —
 предварительные defaults, а не утверждённая публичная оферта; перед включением оплаты задайте итоговые

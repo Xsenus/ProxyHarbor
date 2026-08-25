@@ -46,10 +46,13 @@ public sealed class PaymentGatewayTests
 
     [Theory]
     [InlineData("yookassa")]
+    [InlineData("yoomoney")]
     [InlineData("cloudpayments")]
     [InlineData("robokassa")]
     [InlineData("tbank")]
     [InlineData("stripe")]
+    [InlineData("cryptomus")]
+    [InlineData("nowpayments")]
     public void ProviderRequiresItsCompleteCredentialSet(string code)
     {
         var incomplete = new PaymentProviderOptions { Enabled = true, SecretKey = "secret" };
@@ -58,10 +61,13 @@ public sealed class PaymentGatewayTests
 
     [Theory]
     [InlineData("yookassa")]
+    [InlineData("yoomoney")]
     [InlineData("cloudpayments")]
     [InlineData("robokassa")]
     [InlineData("tbank")]
     [InlineData("stripe")]
+    [InlineData("cryptomus")]
+    [InlineData("nowpayments")]
     public void ProviderAcceptsItsCompleteCredentialSet(string code)
     {
         var complete = new PaymentProviderOptions
@@ -74,10 +80,13 @@ public sealed class PaymentGatewayTests
 
     [Theory]
     [InlineData("yookassa", "https://pay.example/yoo")]
+    [InlineData("yoomoney", "https://proxy.example.com/api/v1/payments/hosted/yoomoney/")]
     [InlineData("cloudpayments", "https://pay.example/cloud")]
     [InlineData("robokassa", "https://auth.robokassa.ru/")]
     [InlineData("tbank", "https://pay.example/tbank")]
     [InlineData("stripe", "https://pay.example/stripe")]
+    [InlineData("cryptomus", "https://pay.example/cryptomus")]
+    [InlineData("nowpayments", "https://pay.example/nowpayments")]
     public async Task EveryProviderCreatesHostedCheckoutWithoutCardData(string provider, string expectedUrl)
     {
         var order = Order(provider);
@@ -87,6 +96,8 @@ public sealed class PaymentGatewayTests
             "api.cloudpayments.ru" => JsonResponse("""{"Model":{"Id":"cloud-1","Url":"https://pay.example/cloud"}}"""),
             "securepay.tinkoff.ru" => JsonResponse("""{"Success":true,"PaymentId":"tbank-1","PaymentURL":"https://pay.example/tbank"}"""),
             "api.stripe.com" => JsonResponse("""{"id":"stripe-1","url":"https://pay.example/stripe"}"""),
+            "api.cryptomus.com" => JsonResponse("""{"state":0,"result":{"uuid":"crypto-1","url":"https://pay.example/cryptomus"}}"""),
+            "api.nowpayments.io" => JsonResponse("""{"id":"now-1","invoice_url":"https://pay.example/nowpayments"}"""),
             _ => throw new InvalidOperationException("Unexpected host")
         });
 
@@ -230,6 +241,74 @@ public sealed class PaymentGatewayTests
         Assert.Equal(PaymentStatuses.Pending, result.Status);
     }
 
+    [Fact]
+    public async Task YooMoneyNotificationRequiresSignatureAndUsesGrossAmount()
+    {
+        var order = Guid.NewGuid();
+        var fields = new SortedDictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["amount"] = "485.03", ["currency"] = "643", ["datetime"] = "2026-08-26T10:00:00Z",
+            ["label"] = order.ToString("D"), ["operation_id"] = "ym-42", ["sender"] = "41001",
+            ["sha1_hash"] = "legacy", ["test_notification"] = "false", ["unaccepted"] = "false",
+            ["withdraw_amount"] = "499.00"
+        };
+        using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes("yoomoney-notification"));
+        var canonical = string.Join('&', fields.Select(item =>
+            $"{Uri.EscapeDataString(item.Key)}={Uri.EscapeDataString(item.Value)}"));
+        fields["sign"] = Convert.ToHexString(hmac.ComputeHash(Encoding.UTF8.GetBytes(canonical))).ToLowerInvariant();
+        var body = string.Join('&', fields.Select(item =>
+            $"{Uri.EscapeDataString(item.Key)}={Uri.EscapeDataString(item.Value)}"));
+
+        var result = await FullClient().ReadNotificationAsync("yoomoney", Request("POST", body).Request, default);
+
+        Assert.Equal(order, result.OrderId);
+        Assert.Equal(49_900, result.AmountMinor);
+        Assert.Equal(PaymentStatuses.Paid, result.Status);
+    }
+
+    [Fact]
+    public async Task CryptomusNotificationRequiresMandatedSignature()
+    {
+        var order = Guid.NewGuid();
+        var unsigned = JsonSerializer.Serialize(new
+        {
+            order_id = order.ToString("D"), uuid = "crypto-42", status = "paid",
+            amount = "499.00", currency = "RUB"
+        });
+#pragma warning disable CA5351 // Cryptomus mandates MD5 for this protocol signature.
+        var sign = Convert.ToHexString(MD5.HashData(Encoding.UTF8.GetBytes(
+            Convert.ToBase64String(Encoding.UTF8.GetBytes(unsigned)) + "cryptomus-key"))).ToLowerInvariant();
+#pragma warning restore CA5351
+        var body = unsigned[..^1] + $",\"sign\":\"{sign}\"}}";
+
+        var result = await FullClient().ReadNotificationAsync("cryptomus", Request("POST", body).Request, default);
+
+        Assert.Equal(order, result.OrderId);
+        Assert.Equal(49_900, result.AmountMinor);
+        Assert.Equal(PaymentStatuses.Paid, result.Status);
+    }
+
+    [Fact]
+    public async Task NowPaymentsNotificationRequiresIpnHmac()
+    {
+        var order = Guid.NewGuid();
+        var body = JsonSerializer.Serialize(new
+        {
+            order_id = order.ToString("D"), payment_id = 4242, payment_status = "finished",
+            price_amount = 499.00m, price_currency = "rub"
+        });
+        using var hmac = new HMACSHA512(Encoding.UTF8.GetBytes("now-ipn"));
+        var context = Request("POST", body);
+        context.Request.Headers["x-nowpayments-sig"] = Convert.ToHexString(
+            hmac.ComputeHash(Encoding.UTF8.GetBytes(body))).ToLowerInvariant();
+
+        var result = await FullClient().ReadNotificationAsync("nowpayments", context.Request, default);
+
+        Assert.Equal(order, result.OrderId);
+        Assert.Equal(49_900, result.AmountMinor);
+        Assert.Equal(PaymentStatuses.Paid, result.Status);
+    }
+
     private static PaymentGatewayClient Client(string secret)
     {
         var options = new PaymentOptions
@@ -251,10 +330,13 @@ public sealed class PaymentGatewayTests
             Providers = new Dictionary<string, PaymentProviderOptions>(StringComparer.OrdinalIgnoreCase)
             {
                 ["yookassa"] = new() { Enabled = true, MerchantId = "shop", SecretKey = "yoo-secret" },
+                ["yoomoney"] = new() { Enabled = true, MerchantId = "410011234567", SecretKey = "yoomoney-notification" },
                 ["cloudpayments"] = new() { Enabled = true, PublicId = "public", SecretKey = "cloud-secret" },
                 ["robokassa"] = new() { Enabled = true, MerchantId = "merchant", SecretKey = "robo-password-1", SecondarySecret = "robo-password-2" },
                 ["tbank"] = new() { Enabled = true, MerchantId = "terminal", SecretKey = "tbank-password" },
-                ["stripe"] = new() { Enabled = true, SecretKey = "stripe-secret", SecondarySecret = "stripe-webhook" }
+                ["stripe"] = new() { Enabled = true, SecretKey = "stripe-secret", SecondarySecret = "stripe-webhook" },
+                ["cryptomus"] = new() { Enabled = true, MerchantId = "merchant-uuid", SecretKey = "cryptomus-key" },
+                ["nowpayments"] = new() { Enabled = true, SecretKey = "now-api", SecondarySecret = "now-ipn" }
             }
         };
         return new PaymentGatewayClient(
