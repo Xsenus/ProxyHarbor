@@ -91,6 +91,8 @@ public sealed class ProxiesController(
             var total = await query.CountAsync(token);
             return new PagedResult<ProxyDto>(entities.Select(ProxyDto.From).ToList(), page, pageSize, total);
         }, cancellationToken);
+        if (ControllerContext.HttpContext is not null)
+            HttpContext.Items["ProxyHarbor.ProxyItems"] = result.Items.Count;
         return Ok(result);
     }
 
@@ -128,8 +130,10 @@ public sealed class ProxiesController(
         var hasMore = entities.Count > pageSize;
         if (hasMore) entities.RemoveAt(pageSize);
         var nextCursor = hasMore ? EncodePosition(entities[^1], fingerprint) : null;
-        return Ok(new CursorPagedResult<ProxyDto>(
-            entities.Select(ProxyDto.From).ToList(), pageSize, hasMore, nextCursor));
+        var items = entities.Select(ProxyDto.From).ToList();
+        if (ControllerContext.HttpContext is not null)
+            HttpContext.Items["ProxyHarbor.ProxyItems"] = items.Count;
+        return Ok(new CursorPagedResult<ProxyDto>(items, pageSize, hasMore, nextCursor));
     }
 
     /// <summary>Потоково экспортирует страницу живых записей в json, xml, txt или csv.</summary>
@@ -263,6 +267,8 @@ public sealed class ProxiesController(
             }
             var proxies = pageQuery.Take(limit)
                 .AsAsyncEnumerable().Select(ProxyDto.From);
+            if (ControllerContext.HttpContext is not null)
+                HttpContext.Items["ProxyHarbor.ProxyItems"] = limit;
             var suffix = protocol?.ToString().ToLowerInvariant() ?? "all";
             Response.ContentType = contentType;
             var pageSuffix = seekMode ? "-seek" : legacyOffset == 0 ? string.Empty : $"-offset-{legacyOffset}";

@@ -270,6 +270,31 @@ describe('ProxyHarbor UI', () => {
     expect(await screen.findByRole('heading', { name: heading, level: 1 })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: new RegExp(`^${heading}`) })).toHaveAttribute('aria-current', 'page')
   })
+
+  it('groups payment settings and opens each provider in its own dialog', async () => {
+    window.history.replaceState({}, '', '/admin/payments')
+    vi.mocked(fetch).mockImplementation(async input => {
+      const url=String(input)
+      if(url.includes('/api/v1/admin/sources'))return jsonResponse({items:[],page:1,pageSize:10,total:0})
+      if(url.includes('/api/v1/admin/diagnostics'))return jsonResponse({serverTime:new Date().toISOString(),databaseBytes:0,validationQueue:{total:0,due:0},recentRuns:[],recentValidationRuns:[],recentBackups:[]})
+      if(url.endsWith('/api/v1/admin/payments'))return jsonResponse({enabled:false,products:[{code:'pro-30',enabled:true,name:'Pro',plan:'pro',durationDays:30,amountMinor:49900,currency:'RUB',description:'Pro'}],providers:[{code:'yookassa',name:'ЮKassa',enabled:false,merchantId:'',publicId:'',testMode:false,secretConfigured:false,secondarySecretConfigured:false,ready:false,webhookUrl:'https://example.test/webhook'},{code:'cloudpayments',name:'CloudPayments',enabled:false,merchantId:'',publicId:'',testMode:false,secretConfigured:false,secondarySecretConfigured:false,ready:false,webhookUrl:'https://example.test/webhook'},{code:'robokassa',name:'Robokassa',enabled:false,merchantId:'',publicId:'',testMode:false,secretConfigured:false,secondarySecretConfigured:false,ready:false,webhookUrl:'https://example.test/webhook'},{code:'tbank',name:'Т-Банк',enabled:false,merchantId:'',publicId:'',testMode:false,secretConfigured:false,secondarySecretConfigured:false,ready:false,webhookUrl:'https://example.test/webhook'},{code:'stripe',name:'Stripe',enabled:false,merchantId:'',publicId:'',testMode:false,secretConfigured:false,secondarySecretConfigured:false,ready:false,webhookUrl:'https://example.test/webhook'}]})
+      if(url.includes('/api/v1/admin/payments/orders'))return jsonResponse({items:[],page:1,pageSize:10,total:0,summary:[]})
+      return jsonResponse({title:'Unexpected request'},500)
+    })
+    render(<App/>);expect(await screen.findByRole('heading',{name:'Оплата'})).toBeInTheDocument();fireEvent.click(await screen.findByRole('button',{name:'Провайдеры'}));fireEvent.click((await screen.findAllByRole('button',{name:'Открыть настройки'}))[0]);expect(screen.getByRole('dialog',{name:'Настройки ЮKassa'})).toBeInTheDocument()
+  })
+
+  it('shows subscriptions and opens auditable manual extension', async () => {
+    window.history.replaceState({}, '', '/admin/subscriptions')
+    vi.mocked(fetch).mockImplementation(async input => {const url=String(input);if(url.includes('/api/v1/admin/sources'))return jsonResponse({items:[],page:1,pageSize:10,total:0});if(url.includes('/api/v1/admin/diagnostics'))return jsonResponse({serverTime:new Date().toISOString(),databaseBytes:0,validationQueue:{total:0,due:0},recentRuns:[],recentValidationRuns:[],recentBackups:[]});if(url.includes('/api/v1/admin/subscriptions'))return jsonResponse({items:[{id:'subscription-1',userId:'user-1',userName:'client',email:'client@example.test',plan:'pro',status:'active',startedAt:new Date().toISOString(),expiresAt:new Date().toISOString(),updatedAt:new Date().toISOString()}],page:1,pageSize:10,total:1,summary:{active:1,trialing:0,suspended:0,expiringSoon:1}});return jsonResponse({title:'Unexpected'},500)})
+    render(<App/>);expect(await screen.findByRole('heading',{name:'Подписки'})).toBeInTheDocument();fireEvent.click(await screen.findByRole('button',{name:'Управлять'}));expect(screen.getByText(/Каждое изменение сохраняется/)).toBeInTheDocument();expect(screen.getByRole('button',{name:'+30 дней'})).toBeInTheDocument()
+  })
+
+  it('shows aggregated IP traffic and creates block rules in a modal', async () => {
+    window.history.replaceState({}, '', '/admin/access')
+    vi.mocked(fetch).mockImplementation(async input => {const url=String(input);if(url.includes('/api/v1/admin/sources'))return jsonResponse({items:[],page:1,pageSize:10,total:0});if(url.includes('/api/v1/admin/diagnostics'))return jsonResponse({serverTime:new Date().toISOString(),databaseBytes:0,validationQueue:{total:0,due:0},recentRuns:[],recentValidationRuns:[],recentBackups:[]});if(url.includes('/api/v1/admin/access'))return jsonResponse({items:[{ipAddress:'203.0.113.10',requests:123,blockedRequests:0,proxyItems:1200,bytesSent:2048,lastSeenAt:new Date().toISOString()}],page:1,pageSize:10,total:1,rules:[],summary:{requests:123,proxyItems:1200,uniqueIps:1,activeRules:0}});return jsonResponse({title:'Unexpected'},500)})
+    render(<App/>);expect(await screen.findByRole('heading',{name:'Доступ и IP'})).toBeInTheDocument();expect(await screen.findByText('203.0.113.10')).toBeInTheDocument();fireEvent.click(screen.getByRole('button',{name:'Добавить блокировку'}));expect(screen.getByRole('heading',{name:'Новая блокировка'})).toBeInTheDocument()
+  })
 })
 
 function jsonResponse(body: unknown, status = 200) {

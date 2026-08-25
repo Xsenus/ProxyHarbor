@@ -9,6 +9,7 @@ Manifest v5 содержит согласованный repeatable-read snapshot
 - `Proxies`, `Sources`, collection runs, validation runs и завершённые предыдущие backup runs;
 - настройки Collector и Backup;
 - безопасные runtime-настройки CORS, trusted networks, hosts и logging;
+- счета, подписки, аудит ручных продлений, агрегаты выдачи по IP и правила блокировки;
 - UTC-время, версии manifest/settings schema и `secretsIncluded=false`.
 
 В архив никогда не входят PostgreSQL connection string/password, admin password, admin API key, Telegram credentials, data-protection keys или encryption key. Эти секреты необходимо независимо хранить во внешнем secret manager.

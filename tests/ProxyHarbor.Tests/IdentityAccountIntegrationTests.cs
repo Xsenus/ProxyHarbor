@@ -270,6 +270,63 @@ public sealed class IdentityAccountIntegrationTests
         }
     }
 
+    [Fact]
+    public async Task SubscriptionAdminExtendsSuspendsAuditsAndSynchronizesSubscriberRole()
+    {
+        await using var fixture = new IdentityFixture();
+        await fixture.CreateRolesAsync();
+        var users = fixture.Get<UserManager<ApplicationUser>>();
+        var admin = new ApplicationUser { UserName = "billing-admin", Email = "billing-admin@example.test", EmailConfirmed = true };
+        var client = new ApplicationUser { UserName = "paid-client", Email = "paid-client@example.test", EmailConfirmed = true };
+        Assert.True((await users.CreateAsync(admin, "Admin-password-123!")).Succeeded);
+        Assert.True((await users.CreateAsync(client, "Client-password-123!")).Succeeded);
+        Assert.True((await users.AddToRolesAsync(admin, [UserRoles.User, UserRoles.Administrator])).Succeeded);
+        Assert.True((await users.AddToRolesAsync(client, [UserRoles.User, UserRoles.Subscriber])).Succeeded);
+        var db = fixture.Get<ProxyHarborDbContext>();
+        var subscription = new UserSubscription
+        {
+            UserId = client.Id, Plan = SubscriptionPlans.Pro, Status = SubscriptionStatuses.Active,
+            ExpiresAt = DateTimeOffset.UtcNow.AddDays(10)
+        };
+        db.Subscriptions.Add(subscription);
+        await db.SaveChangesAsync();
+        await fixture.SetPrincipalAsync(admin);
+
+        var result = await fixture.AdminSubscriptionsController().Update(subscription.Id, new UpdateSubscriptionRequest
+        {
+            Plan = SubscriptionPlans.Pro,
+            Status = SubscriptionStatuses.Suspended,
+            ExtensionDays = 30,
+            Reason = "Ручная проверка злоупотребления"
+        }, CancellationToken.None);
+
+        Assert.IsType<NoContentResult>(result);
+        var saved = await db.Subscriptions.AsNoTracking().SingleAsync(x => x.Id == subscription.Id);
+        Assert.Equal(SubscriptionStatuses.Suspended, saved.Status);
+        Assert.True(saved.ExpiresAt > DateTimeOffset.UtcNow.AddDays(39));
+        var audit = await db.SubscriptionAdminActions.AsNoTracking().SingleAsync();
+        Assert.Equal("extend", audit.Action);
+        Assert.Equal(admin.Id, audit.AdministratorId);
+        Assert.False(await users.IsInRoleAsync(client, UserRoles.Subscriber));
+
+        var listResult = Assert.IsType<OkObjectResult>(await fixture.AdminSubscriptionsController().List(
+            page: 1, pageSize: 10, status: SubscriptionStatuses.Suspended,
+            plan: SubscriptionPlans.Pro, query: "paid-client", token: CancellationToken.None));
+        Assert.Contains("paid-client", System.Text.Json.JsonSerializer.Serialize(listResult.Value));
+        Assert.IsType<BadRequestObjectResult>(await fixture.AdminSubscriptionsController().Update(
+            subscription.Id, new UpdateSubscriptionRequest { Plan = "unknown", Status = "unknown" },
+            CancellationToken.None));
+        Assert.IsType<NotFoundResult>(await fixture.AdminSubscriptionsController().Update(
+            Guid.NewGuid(), new UpdateSubscriptionRequest
+            { Plan = SubscriptionPlans.Free, Status = SubscriptionStatuses.Active }, CancellationToken.None));
+        Assert.IsType<BadRequestObjectResult>(await fixture.AdminSubscriptionsController().Update(
+            subscription.Id, new UpdateSubscriptionRequest
+            {
+                Plan = SubscriptionPlans.Pro, Status = SubscriptionStatuses.Active,
+                ExpiresAt = subscription.StartedAt.AddDays(-1)
+            }, CancellationToken.None));
+    }
+
     private sealed class IdentityFixture : IAsyncDisposable
     {
         private readonly ServiceProvider _provider;
@@ -335,6 +392,9 @@ public sealed class IdentityAccountIntegrationTests
 
         public AdminUsersController AdminUsersController() => WithContext(new AdminUsersController(
             Get<UserManager<ApplicationUser>>(), Get<ProxyHarborDbContext>()));
+
+        public AdminSubscriptionsController AdminSubscriptionsController() => WithContext(new AdminSubscriptionsController(
+            Get<ProxyHarborDbContext>(), Get<UserManager<ApplicationUser>>()));
 
         private T WithContext<T>(T controller) where T : ControllerBase
         {

@@ -25,6 +25,12 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
     public DbSet<PaymentOrder> PaymentOrders => Set<PaymentOrder>();
     /// <summary>Singleton runtime-настройка платежей с защищёнными секретами.</summary>
     public DbSet<PaymentConfiguration> PaymentConfigurations => Set<PaymentConfiguration>();
+    /// <summary>Аудит ручных изменений подписок.</summary>
+    public DbSet<SubscriptionAdminAction> SubscriptionAdminActions => Set<SubscriptionAdminAction>();
+    /// <summary>Агрегированная статистика выдачи адресов.</summary>
+    public DbSet<ProxyAccessBucket> ProxyAccessBuckets => Set<ProxyAccessBucket>();
+    /// <summary>Правила блокировки клиентов выдачи.</summary>
+    public DbSet<AccessBlockRule> AccessBlockRules => Set<AccessBlockRule>();
 
     /// <inheritdoc />
     protected override void OnModelCreating(ModelBuilder builder)
@@ -50,7 +56,7 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
         subscription.ToTable(table =>
         {
             table.HasCheckConstraint("CK_Subscriptions_Plan", "\"Plan\" IN ('free', 'pro', 'unlimited')");
-            table.HasCheckConstraint("CK_Subscriptions_Status", "\"Status\" IN ('active', 'trialing', 'past_due', 'canceled', 'expired')");
+            table.HasCheckConstraint("CK_Subscriptions_Status", "\"Status\" IN ('active', 'trialing', 'past_due', 'canceled', 'expired', 'suspended')");
             table.HasCheckConstraint("CK_Subscriptions_Timeline", "\"ExpiresAt\" IS NULL OR \"ExpiresAt\" >= \"StartedAt\"");
         });
 
@@ -82,6 +88,44 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
         paymentConfiguration.Property(x => x.ProtectedSecrets).HasMaxLength(65_536);
         paymentConfiguration.ToTable(table =>
             table.HasCheckConstraint("CK_PaymentConfigurations_Singleton", "\"Id\" = 1"));
+
+        var subscriptionAction = builder.Entity<SubscriptionAdminAction>();
+        subscriptionAction.HasIndex(x => new { x.SubscriptionId, x.CreatedAt });
+        subscriptionAction.Property(x => x.Action).HasMaxLength(32);
+        subscriptionAction.Property(x => x.PreviousPlan).HasMaxLength(32);
+        subscriptionAction.Property(x => x.PreviousStatus).HasMaxLength(32);
+        subscriptionAction.Property(x => x.NewPlan).HasMaxLength(32);
+        subscriptionAction.Property(x => x.NewStatus).HasMaxLength(32);
+        subscriptionAction.Property(x => x.Reason).HasMaxLength(500);
+        subscriptionAction.HasOne(x => x.Subscription).WithMany().HasForeignKey(x => x.SubscriptionId)
+            .OnDelete(DeleteBehavior.Cascade);
+        subscriptionAction.HasOne(x => x.Administrator).WithMany().HasForeignKey(x => x.AdministratorId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        var accessBucket = builder.Entity<ProxyAccessBucket>();
+        accessBucket.HasIndex(x => new { x.BucketStartedAt, x.IpAddress, x.UserId, x.Endpoint })
+            .IsUnique().AreNullsDistinct(false);
+        accessBucket.HasIndex(x => new { x.LastSeenAt, x.Requests });
+        accessBucket.Property(x => x.IpAddress).HasMaxLength(45);
+        accessBucket.Property(x => x.Endpoint).HasMaxLength(32);
+        accessBucket.HasOne(x => x.User).WithMany().HasForeignKey(x => x.UserId)
+            .OnDelete(DeleteBehavior.SetNull);
+        accessBucket.ToTable(table => table.HasCheckConstraint(
+            "CK_ProxyAccessBuckets_Counters",
+            "\"Requests\" >= 0 AND \"BlockedRequests\" >= 0 AND \"ProxyItems\" >= 0 AND \"BytesSent\" >= 0"));
+
+        var blockRule = builder.Entity<AccessBlockRule>();
+        blockRule.HasIndex(x => new { x.Enabled, x.ExpiresAt });
+        blockRule.HasIndex(x => new { x.Kind, x.Value });
+        blockRule.Property(x => x.Kind).HasMaxLength(16);
+        blockRule.Property(x => x.Value).HasMaxLength(128);
+        blockRule.Property(x => x.Reason).HasMaxLength(500);
+        blockRule.HasOne(x => x.User).WithMany().HasForeignKey(x => x.UserId)
+            .OnDelete(DeleteBehavior.Cascade);
+        blockRule.HasOne(x => x.Administrator).WithMany().HasForeignKey(x => x.AdministratorId)
+            .OnDelete(DeleteBehavior.Restrict);
+        blockRule.ToTable(table => table.HasCheckConstraint(
+            "CK_AccessBlockRules_Kind", "\"Kind\" IN ('ip', 'cidr', 'user')"));
 
         var proxy = builder.Entity<ProxyEndpoint>();
         proxy.HasIndex(x => new { x.Host, x.Port, x.Protocol }).IsUnique();
