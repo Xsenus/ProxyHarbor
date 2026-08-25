@@ -21,6 +21,7 @@
   "latencyMs": 321,
   "successRate": 87.5,
   "exitIp": "198.51.100.25",
+  "countryCode": "DE",
   "lastCheckedAt": "2026-08-24T10:00:00Z",
   "firstAliveAt": "2026-08-23T08:00:00Z",
   "lastAliveAt": "2026-08-24T10:00:00Z",
@@ -40,6 +41,7 @@
 | `protocol` | enum | `Http`, `Https`, `Socks4`, `Socks5` |
 | `maxLatencyMs` | integer ≥ 1 | Верхняя граница измеренной latency |
 | `minSuccessRate` | decimal 0..100 | Минимальная доля успешных объективных проверок |
+| `country` | повторяемый ISO alpha-2 | Одна или несколько стран: `country=DE&country=NL`; также принимается `DE,NL` |
 
 Filter fingerprint включён в cursor. Cursor нельзя использовать с другим набором фильтров.
 
@@ -70,6 +72,19 @@ curl 'https://proxy.example.com/api/v1/proxies?protocol=Http&page=1&pageSize=100
 ```
 
 `items` и `total` принадлежат одному PostgreSQL repeatable-read snapshot.
+
+## GET `/api/v1/proxies/countries`
+
+Возвращает доступные страны среди свежих Alive-прокси и количество адресов в каждой стране. Список отсортирован по убыванию количества, затем по ISO-коду.
+
+```json
+[
+  { "code": "DE", "count": 142 },
+  { "code": "NL", "count": 87 }
+]
+```
+
+Страна определяется локально по подтверждённому `exitIp`; неизвестные адреса остаются с `countryCode: null` и показываются только при отсутствии country-фильтра.
 
 ## GET `/api/v1/proxies/seek`
 
@@ -141,7 +156,7 @@ curl -OJ 'https://proxy.example.com/api/v1/export/txt?protocol=Socks5&limit=1000
 
 Boundary metadata и тело одного export читаются из одного PostgreSQL `REPEATABLE READ` snapshot. Один процесс одновременно формирует не более двух экспортов. Полная lifetime одного export — не более пяти минут; медленный клиент не может бесконечно удерживать DB snapshot и slot.
 
-CSV нейтрализует spreadsheet formula injection. JSON/XML/TXT/CSV используют одинаковый порядок и множество строк для одинаковых фильтров/snapshot.
+CSV нейтрализует spreadsheet formula injection и содержит `countryCode`. JSON/XML/TXT/CSV используют одинаковый порядок и множество строк для одинаковых фильтров/snapshot.
 
 ## GET `/api/v1/sources`
 

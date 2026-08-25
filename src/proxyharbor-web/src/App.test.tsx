@@ -12,7 +12,7 @@ const stats = {
 const proxies = Array.from({ length: 10 }, (_, index) => ({
   host: `203.0.113.${index + 1}`, port: 8000 + index, protocol: 'Http',
   url: `http://203.0.113.${index + 1}:${8000 + index}`, latencyMs: 100 + index,
-  successRate: 99.5, lastCheckedAt: new Date().toISOString(),
+  successRate: 99.5, countryCode: 'US', lastCheckedAt: new Date().toISOString(),
   activeSince: new Date(Date.now() - 7_200_000).toISOString(), activeForSeconds: 7200,
 }))
 
@@ -23,6 +23,7 @@ describe('ProxyHarbor UI', () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
       if (url.includes('/api/v1/stats')) return jsonResponse(stats)
+      if (url.includes('/api/v1/proxies/countries')) return jsonResponse([{ code: 'US', count: 70 }, { code: 'DE', count: 7 }])
       if (url.includes('/api/v1/proxies')) return jsonResponse({ items: proxies, page: 1, pageSize: 10, total: 77 })
       return jsonResponse({ title: 'Unexpected request' }, 500)
     }))
@@ -50,6 +51,19 @@ describe('ProxyHarbor UI', () => {
     expect(screen.getByRole('button', { name: 'Следующая страница' })).toBeEnabled()
     expect(screen.getByRole('button', { name: '10' })).toHaveAttribute('aria-pressed', 'true')
     expect(screen.getByRole('spinbutton', { name: 'Номер страницы' })).toBeInTheDocument()
+  })
+
+  it('filters the catalog by countries through the styled multi-select', async () => {
+    render(<App />)
+    const trigger = await screen.findByRole('button', { name: 'Страны' })
+    fireEvent.click(trigger)
+    expect(screen.getByRole('dialog', { name: 'Фильтр по странам' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('checkbox', { name: /Германия/ }))
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([input]) => {
+      const url = String(input)
+      return url.includes('/api/v1/proxies?') && url.includes('country=DE')
+    })).toBe(true))
+    expect(screen.getByRole('button', { name: /Страны · 1/ })).toHaveAttribute('aria-expanded', 'true')
   })
 
   it('requests the selected page and page size from the server', async () => {

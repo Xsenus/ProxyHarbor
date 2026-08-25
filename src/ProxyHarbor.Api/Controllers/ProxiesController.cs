@@ -64,10 +64,12 @@ public sealed class ProxiesController(
         [FromQuery, EnumDataType(typeof(ProxyProtocol))] ProxyProtocol? protocol,
         [FromQuery, Range(1, int.MaxValue)] int? maxLatencyMs,
         [FromQuery, Range(typeof(decimal), "0", "100")] decimal? minSuccessRate,
+        [FromQuery] string[]? country,
         [FromQuery] int page = 1,
         [FromQuery] int pageSize = 100,
         CancellationToken cancellationToken = default)
     {
+        if (!TryNormalizeCountries(country, out var countries)) return InvalidCountries();
         page = Math.Max(1, page);
         pageSize = Math.Clamp(pageSize, 1, 1000);
         var requestedOffset = (long)(page - 1) * pageSize;
@@ -85,7 +87,7 @@ public sealed class ProxiesController(
         {
             var query = ApplyFilters(db.Proxies.AsNoTracking().Where(x =>
                 x.Status == ProxyStatus.Alive && x.LastCheckedAt >= freshAfter),
-                protocol, maxLatencyMs, minSuccessRate);
+                protocol, maxLatencyMs, minSuccessRate, countries);
             var entities = await OrderForPublication(query)
                 .Skip(skip).Take(pageSize).ToListAsync(token);
             var total = await query.CountAsync(token);
@@ -95,6 +97,16 @@ public sealed class ProxiesController(
             HttpContext.Items["ProxyHarbor.ProxyItems"] = result.Items.Count;
         return Ok(result);
     }
+
+    /// <summary>Совместимый вызов для provider-agnostic unit-тестов без country-фильтра.</summary>
+    internal Task<ActionResult<PagedResult<ProxyDto>>> Get(
+        ProxyProtocol? protocol,
+        int? maxLatencyMs,
+        decimal? minSuccessRate,
+        int page = 1,
+        int pageSize = 100,
+        CancellationToken cancellationToken = default) =>
+        Get(protocol, maxLatencyMs, minSuccessRate, null, page, pageSize, cancellationToken);
 
     /// <summary>
     /// Возвращает keyset-страницу без растущего OFFSET и дорогостоящего точного COUNT.
@@ -106,12 +118,14 @@ public sealed class ProxiesController(
         [FromQuery, EnumDataType(typeof(ProxyProtocol))] ProxyProtocol? protocol,
         [FromQuery, Range(1, int.MaxValue)] int? maxLatencyMs,
         [FromQuery, Range(typeof(decimal), "0", "100")] decimal? minSuccessRate,
+        [FromQuery] string[]? country,
         [FromQuery, StringLength(PublicationCursor.EncodedLength)] string? after,
         [FromQuery] int pageSize = 100,
         CancellationToken cancellationToken = default)
     {
+        if (!TryNormalizeCountries(country, out var countries)) return InvalidCountries();
         pageSize = Math.Clamp(pageSize, 1, 1000);
-        var fingerprint = PublicationCursor.FilterFingerprint(protocol, maxLatencyMs, minSuccessRate);
+        var fingerprint = PublicationCursor.FilterFingerprint(protocol, maxLatencyMs, minSuccessRate, countries);
         PublicationPosition? position = null;
         if (after is not null)
         {
@@ -124,7 +138,7 @@ public sealed class ProxiesController(
         var freshAfter = DateTimeOffset.UtcNow.AddMinutes(-collectorOptions.Value.PublicFreshnessMinutes);
         var query = ApplyFilters(db.Proxies.AsNoTracking().Where(x =>
             x.Status == ProxyStatus.Alive && x.LastCheckedAt >= freshAfter && x.LatencyMs != null),
-            protocol, maxLatencyMs, minSuccessRate);
+            protocol, maxLatencyMs, minSuccessRate, countries);
         if (position.HasValue) query = ApplyAfter(query, position.Value);
         var entities = await OrderForPublication(query).Take(pageSize + 1).ToListAsync(cancellationToken);
         var hasMore = entities.Count > pageSize;
@@ -134,6 +148,35 @@ public sealed class ProxiesController(
         if (ControllerContext.HttpContext is not null)
             HttpContext.Items["ProxyHarbor.ProxyItems"] = items.Count;
         return Ok(new CursorPagedResult<ProxyDto>(items, pageSize, hasMore, nextCursor));
+    }
+
+    /// <summary>Совместимый вызов keyset-страницы без country-фильтра.</summary>
+    internal Task<ActionResult<CursorPagedResult<ProxyDto>>> Seek(
+        ProxyProtocol? protocol,
+        int? maxLatencyMs,
+        decimal? minSuccessRate,
+        string? after,
+        int pageSize = 100,
+        CancellationToken cancellationToken = default) =>
+        Seek(protocol, maxLatencyMs, minSuccessRate, null, after, pageSize, cancellationToken);
+
+    /// <summary>Возвращает страны, доступные среди свежих живых прокси.</summary>
+    [HttpGet("proxies/countries")]
+    [OutputCache(PolicyName = "public-list")]
+    public async Task<ActionResult<IReadOnlyList<ProxyCountryDto>>> Countries(CancellationToken cancellationToken)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+        var freshAfter = DateTimeOffset.UtcNow.AddMinutes(-collectorOptions.Value.PublicFreshnessMinutes);
+        var countryRows = await db.Proxies.AsNoTracking()
+            .Where(proxy => proxy.Status == ProxyStatus.Alive && proxy.LastCheckedAt >= freshAfter &&
+                proxy.CountryCode != null)
+            .GroupBy(proxy => proxy.CountryCode!)
+            .Select(group => new ProxyCountryDto(group.Key, group.Count()))
+            .ToListAsync(cancellationToken);
+        var countries = countryRows.OrderByDescending(countryItem => countryItem.Count)
+            .ThenBy(countryItem => countryItem.Code, StringComparer.Ordinal)
+            .ToList();
+        return Ok(countries);
     }
 
     /// <summary>Потоково экспортирует страницу живых записей в json, xml, txt или csv.</summary>
@@ -149,10 +192,12 @@ public sealed class ProxiesController(
         [FromQuery, EnumDataType(typeof(ProxyProtocol))] ProxyProtocol? protocol,
         [FromQuery, Range(1, int.MaxValue)] int? maxLatencyMs,
         [FromQuery, Range(typeof(decimal), "0", "100")] decimal? minSuccessRate,
+        [FromQuery] string[]? country,
         CancellationToken cancellationToken,
         [FromQuery, Range(1, MaxExportPageSize)] int limit = MaxExportPageSize,
         [FromQuery, Range(0, MaxLegacyOffset)] int offset = 0)
     {
+        if (!TryNormalizeCountries(country, out var countries)) return InvalidCountries();
         if (offset > MaxLegacyOffset)
             return BadRequest(new ProblemDetails
             {
@@ -161,8 +206,19 @@ public sealed class ProxiesController(
                 Status = StatusCodes.Status400BadRequest
             });
         return await ExportCore(
-            format, protocol, maxLatencyMs, minSuccessRate, limit, offset, after: null, cancellationToken);
+            format, protocol, maxLatencyMs, minSuccessRate, countries, limit, offset, after: null, cancellationToken);
     }
+
+    /// <summary>Совместимый вызов legacy-экспорта без country-фильтра.</summary>
+    internal Task<IActionResult> Export(
+        string format,
+        ProxyProtocol? protocol,
+        int? maxLatencyMs,
+        decimal? minSuccessRate,
+        CancellationToken cancellationToken,
+        int limit = MaxExportPageSize,
+        int offset = 0) =>
+        Export(format, protocol, maxLatencyMs, minSuccessRate, null, cancellationToken, limit, offset);
 
     /// <summary>Потоково экспортирует keyset-страницу с постоянной стоимостью продолжения.</summary>
     [HttpGet("export/{format}/seek")]
@@ -177,17 +233,33 @@ public sealed class ProxiesController(
         [FromQuery, EnumDataType(typeof(ProxyProtocol))] ProxyProtocol? protocol,
         [FromQuery, Range(1, int.MaxValue)] int? maxLatencyMs,
         [FromQuery, Range(typeof(decimal), "0", "100")] decimal? minSuccessRate,
+        [FromQuery] string[]? country,
         CancellationToken cancellationToken,
         [FromQuery, Range(1, MaxExportPageSize)] int limit = MaxExportPageSize,
         [FromQuery, StringLength(PublicationCursor.EncodedLength)] string? after = null)
-        => await ExportCore(
-            format, protocol, maxLatencyMs, minSuccessRate, limit, offset: null, after, cancellationToken);
+    {
+        if (!TryNormalizeCountries(country, out var countries)) return InvalidCountries();
+        return await ExportCore(
+            format, protocol, maxLatencyMs, minSuccessRate, countries, limit, offset: null, after, cancellationToken);
+    }
+
+    /// <summary>Совместимый вызов keyset-экспорта без country-фильтра.</summary>
+    internal Task<IActionResult> ExportSeek(
+        string format,
+        ProxyProtocol? protocol,
+        int? maxLatencyMs,
+        decimal? minSuccessRate,
+        CancellationToken cancellationToken,
+        int limit = MaxExportPageSize,
+        string? after = null) =>
+        ExportSeek(format, protocol, maxLatencyMs, minSuccessRate, null, cancellationToken, limit, after);
 
     private async Task<IActionResult> ExportCore(
         string format,
         ProxyProtocol? protocol,
         int? maxLatencyMs,
         decimal? minSuccessRate,
+        string[] countries,
         int limit,
         int? offset,
         string? after,
@@ -205,7 +277,7 @@ public sealed class ProxiesController(
         if (contentType is null)
             return Problem("Поддерживаются форматы json, xml, txt и csv.", statusCode: 400);
         var seekMode = !offset.HasValue;
-        var fingerprint = PublicationCursor.FilterFingerprint(protocol, maxLatencyMs, minSuccessRate);
+        var fingerprint = PublicationCursor.FilterFingerprint(protocol, maxLatencyMs, minSuccessRate, countries);
         PublicationPosition? position = null;
         if (seekMode && after is not null)
         {
@@ -237,7 +309,7 @@ public sealed class ProxiesController(
                 : null;
             var freshAfter = DateTimeOffset.UtcNow.AddMinutes(-collectorOptions.Value.PublicFreshnessMinutes);
             var query = ApplyFilters(db.Proxies.AsNoTracking().Where(x =>
-                x.Status == ProxyStatus.Alive && x.LastCheckedAt >= freshAfter), protocol, maxLatencyMs, minSuccessRate);
+                x.Status == ProxyStatus.Alive && x.LastCheckedAt >= freshAfter), protocol, maxLatencyMs, minSuccessRate, countries);
             if (seekMode)
             {
                 query = query.Where(x => x.LatencyMs != null);
@@ -341,7 +413,7 @@ public sealed class ProxiesController(
     {
         using var cancellationBoundOutput = new CancellationBoundOutputStream(output, token);
         await using var writer = new StreamWriter(cancellationBoundOutput, Utf8NoBom, 64 * 1024, leaveOpen: true);
-        await writer.WriteLineAsync("protocol,host,port,latencyMs,successRate,lastCheckedAt,url,exitIp".AsMemory(), token);
+        await writer.WriteLineAsync("protocol,host,port,countryCode,latencyMs,successRate,lastCheckedAt,url,exitIp".AsMemory(), token);
         await foreach (var proxy in proxies.WithCancellation(token))
         {
             var row = string.Join(',', new[]
@@ -349,6 +421,7 @@ public sealed class ProxiesController(
                 CsvField(proxy.Protocol.ToString()),
                 CsvField(proxy.Host),
                 proxy.Port.ToString(CultureInfo.InvariantCulture),
+                CsvField(proxy.CountryCode ?? string.Empty),
                 proxy.LatencyMs?.ToString(CultureInfo.InvariantCulture) ?? string.Empty,
                 proxy.SuccessRate.ToString(CultureInfo.InvariantCulture),
                 CsvField(proxy.LastCheckedAt?.ToString("O", CultureInfo.InvariantCulture) ?? string.Empty),
@@ -384,6 +457,7 @@ public sealed class ProxiesController(
             await writer.WriteElementStringAsync(null, "protocol", null, proxy.Protocol.ToString());
             await writer.WriteElementStringAsync(null, "host", null, proxy.Host);
             await writer.WriteElementStringAsync(null, "port", null, proxy.Port.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            await writer.WriteElementStringAsync(null, "countryCode", null, proxy.CountryCode ?? string.Empty);
             await writer.WriteElementStringAsync(null, "latencyMs", null,
                 proxy.LatencyMs?.ToString(CultureInfo.InvariantCulture) ?? string.Empty);
             await writer.WriteElementStringAsync(null, "successRate", null, proxy.SuccessRate.ToString(CultureInfo.InvariantCulture));
@@ -403,10 +477,12 @@ public sealed class ProxiesController(
         IQueryable<ProxyEndpoint> query,
         ProxyProtocol? protocol,
         int? maxLatencyMs,
-        decimal? minSuccessRate)
+        decimal? minSuccessRate,
+        string[] countries)
     {
         if (protocol.HasValue) query = query.Where(x => x.Protocol == protocol);
         if (maxLatencyMs.HasValue) query = query.Where(x => x.LatencyMs <= maxLatencyMs);
+        if (countries.Length > 0) query = query.Where(x => x.CountryCode != null && countries.Contains(x.CountryCode));
         if (minSuccessRate.HasValue)
         {
             var threshold = minSuccessRate.Value;
@@ -415,6 +491,26 @@ public sealed class ProxiesController(
         }
         return query;
     }
+
+    /// <summary>Принимает повторяющиеся и comma-separated ISO-коды, возвращая стабильный набор.</summary>
+    internal static bool TryNormalizeCountries(string[]? values, out string[] countries)
+    {
+        countries = (values ?? [])
+            .SelectMany(value => value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            .Select(value => value.ToUpperInvariant())
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        return countries.Length <= 250 && countries.All(code =>
+            code.Length == 2 && code.All(character => character is >= 'A' and <= 'Z'));
+    }
+
+    private BadRequestObjectResult InvalidCountries() => BadRequest(new ProblemDetails
+    {
+        Title = "Некорректный фильтр стран",
+        Detail = "Используйте двухбуквенные ISO 3166-1 alpha-2 коды, например country=RU&country=DE.",
+        Status = StatusCodes.Status400BadRequest
+    });
 
     /// <summary>
     /// Задаёт единый полный порядок для списка и каждого export-формата.
@@ -511,6 +607,7 @@ public sealed record ProxyDto(
     int? LatencyMs,
     decimal SuccessRate,
     string? ExitIp,
+    string? CountryCode,
     DateTimeOffset? LastCheckedAt,
     DateTimeOffset? FirstAliveAt,
     DateTimeOffset? LastAliveAt,
@@ -529,10 +626,13 @@ public sealed record ProxyDto(
             ? Math.Max(0, (long)(DateTimeOffset.UtcNow - activeSince).TotalSeconds)
             : null;
         return new ProxyDto(x.Host, x.Port, x.Protocol, $"{transportScheme}://{host}:{x.Port}",
-            x.LatencyMs, x.SuccessRate, x.ExitIp, x.LastCheckedAt,
+            x.LatencyMs, x.SuccessRate, x.ExitIp, x.CountryCode, x.LastCheckedAt,
             x.FirstAliveAt, x.LastAliveAt, x.CurrentAliveSince, activeForSeconds);
     }
 }
+
+/// <summary>Доступная страна и число свежих Alive-прокси в ней.</summary>
+public sealed record ProxyCountryDto(string Code, int Count);
 
 /// <summary>Bounded keyset-страница без линейного offset и полного count.</summary>
 public sealed record CursorPagedResult<T>(IReadOnlyList<T> Items, int PageSize, bool HasMore, string? NextCursor);

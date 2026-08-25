@@ -67,6 +67,11 @@ public static class ServiceCollectionExtensions
                 BackupOptions.IsTelegramChatIdValid(x.TelegramChatId),
                 "TelegramChatId должен быть ненулевым signed 64-bit числом")
             .ValidateOnStart();
+        services.AddOptions<GeoIpOptions>().Bind(configuration.GetSection(GeoIpOptions.Section))
+            .Validate(x => x.RefreshHours is >= 1 and <= 720, "RefreshHours: 1..720")
+            .Validate(x => x.BackfillBatchSize is >= 1 and <= 100_000, "BackfillBatchSize: 1..100000")
+            .Validate(x => Path.IsPathFullyQualified(x.DatabasePath), "DatabasePath должен быть абсолютным")
+            .ValidateOnStart();
         services.AddPooledDbContextFactory<ProxyHarborDbContext>(x => x.UseNpgsql(connection, npgsql =>
             npgsql.EnableRetryOnFailure(3, TimeSpan.FromSeconds(2), null)));
         // Короткие API/worker-команды выигрывают от retry, но streaming export нельзя
@@ -99,6 +104,11 @@ public static class ServiceCollectionExtensions
                 MaxConnectionsPerServer = 2,
                 PooledConnectionLifetime = TimeSpan.FromMinutes(5)
             }));
+        services.AddHttpClient("geoip", client =>
+        {
+            client.DefaultRequestHeaders.UserAgent.ParseAdd("ProxyHarbor/1.0");
+            client.Timeout = TimeSpan.FromMinutes(3);
+        });
         services.AddSingleton<ProxyCollector>();
         services.AddSingleton<ISourceCatalogMutationCoordinator, SourceCatalogMutationCoordinator>();
         services.AddSingleton<ProxyProbeService>();
@@ -109,10 +119,12 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<BackupService>();
         services.AddSingleton<DatabaseReadinessProbe>();
         services.AddSingleton<OperationalMaintenanceService>();
+        services.AddSingleton<ProxyCountryResolver>();
         services.AddHostedService<CollectorWorker>();
         services.AddHostedService<ValidatorWorker>();
         services.AddHostedService<BackupWorker>();
         services.AddHostedService<OperationalMaintenanceWorker>();
+        services.AddHostedService<ProxyCountryWorker>();
         return services;
     }
 }

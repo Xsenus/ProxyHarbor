@@ -124,6 +124,19 @@ Defaults ниже соответствуют `src/ProxyHarbor.Api/appsettings.js
 
 Увеличение `ValidationConcurrency` требует проверки лимитов файловых дескрипторов, NAT, CPU, PostgreSQL и внешнего probe endpoint. Рекомендуемый процесс измерения описан в [PERFORMANCE.md](PERFORMANCE.md).
 
+## Геолокация прокси
+
+ProxyHarbor загружает ежемесячный DB-IP Country Lite в постоянный volume `geo-data`, открывает MMDB локально в memory-mapped режиме и раз в пять минут заполняет страну свежих Alive-прокси по подтверждённому `ExitIp`. Публичный запрос к стороннему GeoIP API для каждого адреса не выполняется.
+
+| Ключ `GeoIp:*` | Default | Допустимо | Назначение |
+|---|---:|---:|---|
+| `Enabled` | `true` | bool | Загрузка справочника и обогащение |
+| `DatabasePath` | `<app>/geo-data/dbip-country-lite.mmdb` | абсолютный путь | Рабочий MMDB; Compose задаёт `/app/geo-data/...` |
+| `RefreshHours` | `168` | 1..720 | Минимальный интервал загрузки новой версии |
+| `BackfillBatchSize` | `10000` | 1..100000 | Максимум Alive-прокси за один проход |
+
+DB-IP Lite имеет пониженную относительно коммерческой базы точность и распространяется по [CC BY 4.0](https://db-ip.com/db/lite.php); атрибуция отображается на публичной странице.
+
 ## Backup
 
 | Ключ `Backup:*` | Default | Допустимо |
