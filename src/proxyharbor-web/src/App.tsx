@@ -120,6 +120,8 @@ export default function App() {
   const publicAbortRef = useRef<AbortController | null>(null)
   const adminRequestIdRef = useRef(0)
   const adminAbortRef = useRef<AbortController | null>(null)
+  const backupRequestIdRef = useRef(0)
+  const backupAbortRef = useRef<AbortController | null>(null)
   const adminSessionIdRef = useRef(0)
   const adminMutationAbortRefs = useRef(new Set<AbortController>())
   const recordedVisitRef = useRef('')
@@ -291,19 +293,28 @@ export default function App() {
     requestedPage = backupPage,
     requestedPageSize = backupPageSize,
   ) => {
+    const requestId = ++backupRequestIdRef.current
+    backupAbortRef.current?.abort()
+    const controller = new AbortController()
+    backupAbortRef.current = controller
     try {
       const query = new URLSearchParams({ page: String(requestedPage), pageSize: String(requestedPageSize) })
-      const response = await fetch(`${API}/api/v1/admin/backups?${query}`, { credentials: 'include' })
+      const response = await fetch(`${API}/api/v1/admin/backups?${query}`, { credentials: 'include', signal: controller.signal })
+      if (requestId !== backupRequestIdRef.current) return
       if (response.status === 401) { setAdminAuthenticated(false); window.location.replace('/login'); return }
       if (response.status === 403) { window.location.replace('/account'); return }
       if (!response.ok) throw new Error(await responseMessage(response, 'История резервных копий недоступна'))
       const snapshot = await response.json() as PagedResult<BackupFile>
+      if (requestId !== backupRequestIdRef.current) return
       setBackups(snapshot.items)
       setBackupTotal(snapshot.total)
       const availablePages = Math.max(1, Math.ceil(snapshot.total / requestedPageSize))
       if (requestedPage > availablePages) setBackupPage(availablePages)
     } catch (reason) {
-      setAdminError(reason instanceof Error ? reason.message : 'Не удалось загрузить резервные копии')
+      if (!isAbortError(reason) && requestId === backupRequestIdRef.current)
+        setAdminError(reason instanceof Error ? reason.message : 'Не удалось загрузить резервные копии')
+    } finally {
+      if (requestId === backupRequestIdRef.current) backupAbortRef.current = null
     }
   }, [backupPage, backupPageSize])
 
@@ -346,6 +357,8 @@ export default function App() {
     adminSessionIdRef.current++
     adminRequestIdRef.current++
     adminAbortRef.current?.abort()
+    backupRequestIdRef.current++
+    backupAbortRef.current?.abort()
     adminMutationAbortRefs.current.forEach(controller => controller.abort())
     adminMutationAbortRefs.current.clear()
   }, [])
@@ -665,7 +678,7 @@ export default function App() {
           {adminSection === 'backups' && <section className="admin-section" aria-labelledby="admin-backups-title">
             <div className="admin-section-heading"><div><span className="kicker">ЗАЩИТА ДАННЫХ</span><h1 id="admin-backups-title">Резервные копии</h1><p>Создавайте зашифрованные снимки базы данных и контролируйте доставку в Telegram.</p></div><button className="primary-admin-button" onClick={() => runAdminAction('backup')} disabled={!adminAuthenticated || adminMutationBusy}><Database/>{action === 'backup' ? 'Создаём…' : 'Создать backup'}</button></div>
             <div className="backup-summary"><article><span><Database/></span><div><small>Размер базы</small><strong>{formatBytes(diagnostics?.databaseBytes)}</strong></div></article><article><span><HardDriveDownload/></span><div><small>Последняя копия</small><strong>{latestBackup ? formatBytes(latestBackup.sizeBytes) : '—'}</strong></div></article><article><span><ShieldCheck/></span><div><small>Доставка</small><strong>{latestBackup ? backupDelivery(latestBackup) : 'Нет данных'}</strong></div></article></div>
-            <section className="admin-card backup-registry"><div className="card-heading"><div><span className="kicker">ИСТОРИЯ</span><h2>Резервные копии <em>{backupTotal}</em></h2></div><button className="icon-button" aria-label="Обновить резервные копии" onClick={() => void loadBackups()} disabled={!!backupBusy}><RefreshCw/></button></div><div className="backup-list">{backups.length === 0 ? <p className="empty-state">Резервные копии ещё не создавались.</p> : backups.map(run => <article key={run.id}><i className={statusClass(run.status)}/><div><b>{run.fileName ?? 'Резервная копия'}</b><small>{formatBytes(run.sizeBytes)} · {backupDelivery(run)}{run.fileName && !run.available ? ' · локальный файл уже удалён политикой хранения' : ''}</small></div><time>{timeAgo(run.startedAt)}</time><div className="backup-actions">{run.available ? <a className="backup-download" href={`${API}/api/v1/admin/backups/${run.id}/download`} download={run.fileName}><ArrowDownToLine/>Скачать</a> : <span className="backup-unavailable">Недоступна</span>}<button className="backup-delete" aria-label={`Удалить ${run.fileName ?? 'резервную копию'}`} disabled={run.status === 'running' || !!backupBusy} onClick={() => setBackupDeleteTarget(run)}><Trash2/>Удалить</button></div></article>)}</div>{backupTotal > 0 && <ProxyPagination page={backupPage} pageSize={backupPageSize} total={backupTotal} totalPages={backupTotalPages} onPageChange={next => { setBackupPage(next); void loadBackups(next, backupPageSize); document.getElementById('admin-backups-title')?.scrollIntoView?.({behavior:'smooth'}) }} onPageSizeChange={size => { setBackupPageSize(size); setBackupPage(1); void loadBackups(1, size) }}/>}</section>
+            <section className="admin-card backup-registry"><div className="card-heading"><div><span className="kicker">ИСТОРИЯ</span><h2>Резервные копии <em>{backupTotal}</em></h2></div><button className="icon-button" aria-label="Обновить резервные копии" onClick={() => void loadBackups()} disabled={!!backupBusy}><RefreshCw/></button></div><div className="backup-list">{backups.length === 0 ? <p className="empty-state">Резервные копии ещё не создавались.</p> : backups.map(run => <article key={run.id}><i className={statusClass(run.status)}/><div><b>{run.fileName ?? 'Резервная копия'}</b><small>{formatBytes(run.sizeBytes)} · {backupDelivery(run)}{run.fileName && !run.available ? ' · локальный файл уже удалён политикой хранения' : ''}</small></div><time>{timeAgo(run.startedAt)}</time><div className="backup-actions">{run.available ? <a className="backup-download" href={`${API}/api/v1/admin/backups/${run.id}/download`} download={run.fileName}><ArrowDownToLine/>Скачать</a> : <span className="backup-unavailable">Недоступна</span>}<button className="backup-delete" aria-label={`Удалить ${run.fileName ?? 'резервную копию'}`} disabled={run.status === 'running' || !!backupBusy} onClick={() => setBackupDeleteTarget(run)}><Trash2/>Удалить</button></div></article>)}</div>{backupTotal > 0 && <ProxyPagination page={backupPage} pageSize={backupPageSize} total={backupTotal} totalPages={backupTotalPages} onPageChange={next => { setBackupPage(next); document.getElementById('admin-backups-title')?.scrollIntoView?.({behavior:'smooth'}) }} onPageSizeChange={size => { setBackupPageSize(size); setBackupPage(1) }}/>}</section>
           </section>}
           {adminSection === 'users' && <AdminUsersPage/>}
           {adminSection === 'proxies' && <AdminProxiesPage/>}
