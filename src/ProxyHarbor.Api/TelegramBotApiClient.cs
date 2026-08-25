@@ -15,9 +15,10 @@ public sealed class TelegramBotApiClient(IHttpClientFactory clients)
     public async Task<TelegramBotIdentity> GetMeAsync(string botToken, CancellationToken token)
     {
         var result = await CallAsync(botToken, "getMe", new { }, token);
-        return new TelegramBotIdentity(
-            result.GetProperty("id").GetInt64(),
-            result.GetProperty("username").GetString() ?? throw new TelegramBotApiException(502, "Telegram не вернул username."));
+        if (!result.TryGetProperty("id", out var id) || !id.TryGetInt64(out var botId) ||
+            !result.TryGetProperty("username", out var username) || string.IsNullOrWhiteSpace(username.GetString()))
+            throw new TelegramBotApiException(502, "Telegram вернул неполную identity бота.");
+        return new TelegramBotIdentity(botId, username.GetString()!);
     }
 
     /// <summary>Атомарно приводит профиль, команды, menu button и транспорт к настройкам ProxyHarbor.</summary>

@@ -50,6 +50,22 @@ public sealed class TelegramBotPersistenceTests
         Assert.Equal("Плановые работы", audit.Text);
     }
 
+    [Fact]
+    public async Task DirectQueueIsIdempotentAndHonorsScheduledAvailability()
+    {
+        await using var db = Database();
+        var chat = Chat(400, true, false);
+        db.TelegramChats.Add(chat);
+        await db.SaveChangesAsync();
+        var dispatch = new TelegramDispatchService(db);
+        var available = DateTimeOffset.UtcNow.AddMinutes(5);
+        var first = await dispatch.EnqueueTextAsync(chat, "Позже", "same-key", availableAt: available);
+        var second = await dispatch.EnqueueTextAsync(chat, "Дубликат", "same-key");
+        Assert.Equal(first, second);
+        Assert.Equal(available, (await db.TelegramOutboundMessages.SingleAsync()).AvailableAt);
+        Assert.Single(db.TelegramConversationMessages);
+    }
+
     private static ProxyHarborDbContext Database() => new(new DbContextOptionsBuilder<ProxyHarborDbContext>()
         .UseInMemoryDatabase(Guid.NewGuid().ToString("N")).Options);
 

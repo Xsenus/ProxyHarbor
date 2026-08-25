@@ -44,6 +44,14 @@ public sealed class TelegramWorkflowTests
 
         await processor.ProcessAsync(Message(1, "/start"), TelegramUpdateModes.Webhook, CancellationToken.None);
         Assert.Equal(commands.Length, await fixture.Db.TelegramUpdateReceipts.CountAsync());
+
+        var subscription = await fixture.Db.Subscriptions.SingleAsync();
+        subscription.ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(-1);
+        await fixture.Db.SaveChangesAsync();
+        await processor.ProcessAsync(Message(50, "/proxies"), TelegramUpdateModes.Webhook, CancellationToken.None);
+        await processor.ProcessAsync(Message(51, "/account"), TelegramUpdateModes.Webhook, CancellationToken.None);
+        Assert.Contains(await fixture.Db.TelegramConversationMessages.ToArrayAsync(), x =>
+            x.Direction == "bot" && x.Text.Contains("нужна активная подписка", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -61,6 +69,28 @@ public sealed class TelegramWorkflowTests
     }
 
     [Fact]
+    public async Task MalformedAndMinimalUpdatesAreHandledWithoutInventingData()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var processor = fixture.Processor();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => processor.ProcessAsync(
+            Json("""{"message":{"text":"missing update id"}}"""), TelegramUpdateModes.Webhook, CancellationToken.None));
+        await processor.ProcessAsync(Json("""{"update_id":60,"message":{"from":{"id":1},"text":"missing chat"}}"""), TelegramUpdateModes.Webhook, CancellationToken.None);
+        await processor.ProcessAsync(Json("""{"update_id":61,"message":{"chat":{"id":1,"type":"private"},"text":"missing from"}}"""), TelegramUpdateModes.Webhook, CancellationToken.None);
+        await processor.ProcessAsync(Json("""{"update_id":62,"message":{"chat":{"id":8002,"type":"private"},"from":{"id":9002},"text":"   "}}"""), TelegramUpdateModes.Webhook, CancellationToken.None);
+        await processor.ProcessAsync(Json("""{"update_id":63,"message":{"chat":{"id":8002,"type":"private"},"from":{"id":9002}}}"""), TelegramUpdateModes.Webhook, CancellationToken.None);
+        await processor.ProcessAsync(Json("""{"update_id":64,"my_chat_member":{"new_chat_member":{"status":"member"}}}"""), TelegramUpdateModes.Webhook, CancellationToken.None);
+
+        Assert.Single(fixture.Db.TelegramChats);
+        var chat = await fixture.Db.TelegramChats.SingleAsync();
+        Assert.Equal("Telegram 9002", chat.DisplayName);
+        Assert.Null(chat.Username);
+        Assert.Null(chat.LanguageCode);
+        Assert.Equal(5, await fixture.Db.TelegramUpdateReceipts.CountAsync());
+        Assert.Equal(new string('x', 12), TelegramDispatchService.Limit(new string('x', 20), 12));
+    }
+
+    [Fact]
     public async Task CallbackCheckoutAndSuccessfulStarsPaymentActivateSubscriptionExactlyOnce()
     {
         await using var fixture = await Fixture.CreateAsync();
@@ -75,6 +105,8 @@ public sealed class TelegramWorkflowTests
         Assert.Equal(PaymentStatuses.Pending, order.Status);
 
         await processor.ProcessAsync(PreCheckout(30, "invalid", "BAD", 1), TelegramUpdateModes.Webhook, CancellationToken.None);
+        await processor.ProcessAsync(PreCheckout(32, "invalid", "XTR", order.AmountMinor), TelegramUpdateModes.Webhook, CancellationToken.None);
+        await processor.ProcessAsync(PreCheckout(33, order.Id.ToString("N"), "XTR", order.AmountMinor + 1), TelegramUpdateModes.Webhook, CancellationToken.None);
         await processor.ProcessAsync(PreCheckout(31, order.Id.ToString("N"), "XTR", order.AmountMinor), TelegramUpdateModes.Webhook, CancellationToken.None);
         await processor.ProcessAsync(SuccessfulPayment(40, order.Id, order.AmountMinor, "charge-1"), TelegramUpdateModes.Webhook, CancellationToken.None);
         await processor.ProcessAsync(SuccessfulPayment(41, order.Id, order.AmountMinor, "charge-1"), TelegramUpdateModes.Webhook, CancellationToken.None);
@@ -88,6 +120,7 @@ public sealed class TelegramWorkflowTests
         Assert.True(await fixture.Users.IsInRoleAsync(account, UserRoles.Subscriber));
         Assert.Contains("answerPreCheckoutQuery", fixture.Telegram.Methods);
         Assert.Contains("answerCallbackQuery", fixture.Telegram.Methods);
+        await processor.ProcessAsync(Message(42, "/account"), TelegramUpdateModes.Webhook, CancellationToken.None);
     }
 
     [Fact]
@@ -127,7 +160,8 @@ public sealed class TelegramWorkflowTests
     {
         await using var fixture = await Fixture.CreateAsync();
         var controller = fixture.AdminController();
-        Assert.IsType<OkObjectResult>(await controller.Provision(CancellationToken.None));
+        await fixture.BotStore.SaveAsync(new TelegramBotOptions { PublicBaseUrl = "https://proxy.example.test" });
+        Assert.IsType<BadRequestObjectResult>(await controller.Provision(CancellationToken.None));
         Assert.IsType<BadRequestObjectResult>(await controller.Update(new UpdateTelegramBotRequest
         { Description = "слишком коротко", ShortDescription = "short", SupportText = "support", BotToken = "invalid token" }, CancellationToken.None));
         Assert.IsType<BadRequestObjectResult>(await controller.Update(new UpdateTelegramBotRequest

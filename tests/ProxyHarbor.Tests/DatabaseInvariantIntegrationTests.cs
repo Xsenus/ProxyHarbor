@@ -47,7 +47,13 @@ public sealed class DatabaseInvariantIntegrationTests
         "CK_ProxyAccessBuckets_Counters",
         "CK_Subscriptions_Plan",
         "CK_Subscriptions_Status",
-        "CK_Subscriptions_Timeline"
+        "CK_Subscriptions_Timeline",
+        "CK_TelegramBotConfigurations_Singleton",
+        "CK_TelegramConversationMessages_Direction",
+        "CK_TelegramOutboundMessages_Attempts",
+        "CK_TelegramOutboundMessages_Kind",
+        "CK_TelegramOutboundMessages_Status",
+        "CK_TelegramUpdateReceipts_Transport"
     ];
 
     [Fact]
