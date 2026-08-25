@@ -318,6 +318,70 @@ public sealed class AdminController(
             !string.IsNullOrWhiteSpace(backupOptions.Value.TelegramChatId);
         return Ok(new BackupTriggerResponse(Path.GetFileName(path), sent));
     }
+
+    /// <summary>Возвращает страницу истории и актуальную доступность локальных encrypted-файлов.</summary>
+    [HttpGet("backups")]
+    [ProducesResponseType<PagedResult<BackupFileResponse>>(StatusCodes.Status200OK)]
+    public async Task<ActionResult<PagedResult<BackupFileResponse>>> Backups(
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 10,
+        CancellationToken token = default)
+    {
+        page = Math.Clamp(page, 1, 100_000);
+        pageSize = Math.Clamp(pageSize, 10, 100);
+        await using var db = await dbFactory.CreateDbContextAsync(token);
+        var total = await db.BackupRuns.CountAsync(token);
+        var runs = await db.BackupRuns.AsNoTracking()
+            .OrderByDescending(run => run.StartedAt).ThenByDescending(run => run.Id)
+            .Skip((page - 1) * pageSize).Take(pageSize).ToListAsync(token);
+        var items = runs.Select(run => BackupFileResponse.From(
+            run, TryGetBackupPath(run, out var path) && System.IO.File.Exists(path))).ToArray();
+        return Ok(new PagedResult<BackupFileResponse>(items, page, pageSize, total));
+    }
+
+    /// <summary>Скачивает зашифрованный PHB3-файл; расшифровка на сервере не выполняется.</summary>
+    [HttpGet("backups/{id:guid}/download")]
+    [ProducesResponseType<FileStreamResult>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> DownloadBackup(Guid id, CancellationToken token)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(token);
+        var run = await db.BackupRuns.AsNoTracking().SingleOrDefaultAsync(item => item.Id == id, token);
+        if (run is null || !TryGetBackupPath(run, out var path) || !System.IO.File.Exists(path)) return NotFound();
+
+        // Асинхронный поток не загружает многомегабайтный архив в память API и поддерживает range-запросы.
+        var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete,
+            bufferSize: 64 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
+        return File(stream, "application/octet-stream", run.FileName!, enableRangeProcessing: true);
+    }
+
+    /// <summary>Удаляет выбранный локальный файл и соответствующую строку истории.</summary>
+    [HttpDelete("backups/{id:guid}")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> DeleteBackup(Guid id, CancellationToken token)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(token);
+        var run = await db.BackupRuns.SingleOrDefaultAsync(item => item.Id == id, token);
+        if (run is null) return NotFound();
+        if (string.Equals(run.Status, "running", StringComparison.OrdinalIgnoreCase))
+            return Conflict(new ProblemDetails { Title = "Нельзя удалить выполняющуюся резервную копию", Status = 409 });
+        if (!string.IsNullOrWhiteSpace(run.FileName) && !TryGetBackupPath(run, out _))
+            return Conflict(new ProblemDetails { Title = "Имя файла резервной копии не прошло проверку безопасности", Status = 409 });
+
+        if (TryGetBackupPath(run, out var path) && System.IO.File.Exists(path)) System.IO.File.Delete(path);
+        db.BackupRuns.Remove(run);
+        await db.SaveChangesAsync(token);
+        return NoContent();
+    }
+
+    private bool TryGetBackupPath(BackupRun run, out string path)
+    {
+        path = string.Empty;
+        return !string.Equals(run.Status, "running", StringComparison.OrdinalIgnoreCase) &&
+            BackupService.TryResolvePublishedBackupPath(backupOptions.Value.Directory, run.FileName, out path);
+    }
 }
 
 /// <summary>Результат одного ручного validation batch.</summary>
@@ -325,6 +389,25 @@ public sealed record ValidationTriggerResponse(int Checked, int Alive, int Defer
 
 /// <summary>Результат ручного создания и опциональной Telegram-доставки backup.</summary>
 public sealed record BackupTriggerResponse(string Created, bool SentToTelegram);
+
+/// <summary>Запись истории backup с вычисленной доступностью файла в локальном volume.</summary>
+public sealed record BackupFileResponse(
+    Guid Id,
+    DateTimeOffset StartedAt,
+    DateTimeOffset? FinishedAt,
+    string Status,
+    string? FileName,
+    long SizeBytes,
+    bool TelegramConfigured,
+    bool SentToTelegram,
+    string? Error,
+    bool Available)
+{
+    /// <summary>Проецирует audit-запись без раскрытия server-side пути к файлу.</summary>
+    public static BackupFileResponse From(BackupRun run, bool available) => new(
+        run.Id, run.StartedAt, run.FinishedAt, run.Status, run.FileName, run.SizeBytes,
+        run.TelegramConfigured, run.SentToTelegram, run.Error, available);
+}
 
 /// <summary>Текущий backlog без уже арендованных строк и rolling validation telemetry.</summary>
 public sealed record ValidationQueueResponse(
