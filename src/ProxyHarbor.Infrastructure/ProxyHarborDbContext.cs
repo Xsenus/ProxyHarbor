@@ -31,6 +31,16 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
     public DbSet<ProxyAccessBucket> ProxyAccessBuckets => Set<ProxyAccessBucket>();
     /// <summary>Правила блокировки клиентов выдачи.</summary>
     public DbSet<AccessBlockRule> AccessBlockRules => Set<AccessBlockRule>();
+    /// <summary>Singleton runtime-настройка торгового Telegram-бота.</summary>
+    public DbSet<TelegramBotConfiguration> TelegramBotConfigurations => Set<TelegramBotConfiguration>();
+    /// <summary>Telegram-диалоги и связанные аккаунты.</summary>
+    public DbSet<TelegramChat> TelegramChats => Set<TelegramChat>();
+    /// <summary>Идемпотентный журнал входящих update.</summary>
+    public DbSet<TelegramUpdateReceipt> TelegramUpdateReceipts => Set<TelegramUpdateReceipt>();
+    /// <summary>Надёжная очередь исходящих сообщений.</summary>
+    public DbSet<TelegramOutboundMessage> TelegramOutboundMessages => Set<TelegramOutboundMessage>();
+    /// <summary>История CRM-диалогов.</summary>
+    public DbSet<TelegramConversationMessage> TelegramConversationMessages => Set<TelegramConversationMessage>();
 
     /// <inheritdoc />
     protected override void OnModelCreating(ModelBuilder builder)
@@ -126,6 +136,63 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
             .OnDelete(DeleteBehavior.Restrict);
         blockRule.ToTable(table => table.HasCheckConstraint(
             "CK_AccessBlockRules_Kind", "\"Kind\" IN ('ip', 'cidr', 'user')"));
+
+        var telegramConfiguration = builder.Entity<TelegramBotConfiguration>();
+        telegramConfiguration.Property(x => x.SettingsJson).HasColumnType("jsonb");
+        telegramConfiguration.Property(x => x.ProtectedSecrets).HasMaxLength(65_536);
+        telegramConfiguration.Property(x => x.BotUsername).HasMaxLength(64);
+        telegramConfiguration.ToTable(table => table.HasCheckConstraint(
+            "CK_TelegramBotConfigurations_Singleton", "\"Id\" = 1"));
+
+        var telegramChat = builder.Entity<TelegramChat>();
+        telegramChat.HasIndex(x => x.ChatId).IsUnique();
+        telegramChat.HasIndex(x => x.TelegramUserId).IsUnique();
+        telegramChat.HasIndex(x => x.UserId).IsUnique();
+        telegramChat.HasIndex(x => new { x.NotificationsEnabled, x.IsBlocked, x.LastInteractionAt });
+        telegramChat.Property(x => x.Username).HasMaxLength(64);
+        telegramChat.Property(x => x.DisplayName).HasMaxLength(160);
+        telegramChat.Property(x => x.LanguageCode).HasMaxLength(16);
+        telegramChat.HasOne(x => x.User).WithOne(x => x.TelegramChat)
+            .HasForeignKey<TelegramChat>(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
+
+        var telegramUpdate = builder.Entity<TelegramUpdateReceipt>();
+        telegramUpdate.HasKey(x => x.UpdateId);
+        telegramUpdate.HasIndex(x => x.ReceivedAt);
+        telegramUpdate.Property(x => x.Transport).HasMaxLength(16);
+        telegramUpdate.Property(x => x.Error).HasMaxLength(1000);
+        telegramUpdate.ToTable(table => table.HasCheckConstraint(
+            "CK_TelegramUpdateReceipts_Transport", "\"Transport\" IN ('webhook', 'polling')"));
+
+        var telegramOutbound = builder.Entity<TelegramOutboundMessage>();
+        telegramOutbound.HasIndex(x => x.IdempotencyKey).IsUnique();
+        telegramOutbound.HasIndex(x => new { x.Status, x.AvailableAt, x.LeaseUntil });
+        telegramOutbound.HasIndex(x => new { x.TelegramChatId, x.CreatedAt });
+        telegramOutbound.Property(x => x.Kind).HasMaxLength(24);
+        telegramOutbound.Property(x => x.Status).HasMaxLength(16);
+        telegramOutbound.Property(x => x.IdempotencyKey).HasMaxLength(160);
+        telegramOutbound.Property(x => x.PayloadJson).HasColumnType("jsonb");
+        telegramOutbound.Property(x => x.LastError).HasMaxLength(1000);
+        telegramOutbound.HasOne(x => x.TelegramChat).WithMany().HasForeignKey(x => x.TelegramChatId)
+            .OnDelete(DeleteBehavior.Cascade);
+        telegramOutbound.ToTable(table =>
+        {
+            table.HasCheckConstraint("CK_TelegramOutboundMessages_Kind", "\"Kind\" IN ('text', 'invoice', 'proxy_file')");
+            table.HasCheckConstraint("CK_TelegramOutboundMessages_Status", "\"Status\" IN ('pending', 'processing', 'sent', 'failed', 'canceled')");
+            table.HasCheckConstraint("CK_TelegramOutboundMessages_Attempts", "\"Attempts\" BETWEEN 0 AND 20");
+        });
+
+        var telegramConversation = builder.Entity<TelegramConversationMessage>();
+        telegramConversation.HasIndex(x => new { x.TelegramChatId, x.CreatedAt });
+        telegramConversation.Property(x => x.Direction).HasMaxLength(16);
+        telegramConversation.Property(x => x.Text).HasMaxLength(4096);
+        telegramConversation.HasOne(x => x.TelegramChat).WithMany().HasForeignKey(x => x.TelegramChatId)
+            .OnDelete(DeleteBehavior.Cascade);
+        telegramConversation.HasOne(x => x.Administrator).WithMany().HasForeignKey(x => x.AdministratorId)
+            .OnDelete(DeleteBehavior.SetNull);
+        telegramConversation.HasOne<TelegramOutboundMessage>().WithMany().HasForeignKey(x => x.OutboundMessageId)
+            .OnDelete(DeleteBehavior.SetNull);
+        telegramConversation.ToTable(table => table.HasCheckConstraint(
+            "CK_TelegramConversationMessages_Direction", "\"Direction\" IN ('inbound', 'bot', 'admin')"));
 
         var proxy = builder.Entity<ProxyEndpoint>();
         proxy.HasIndex(x => new { x.Host, x.Port, x.Protocol }).IsUnique();

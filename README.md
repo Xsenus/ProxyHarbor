@@ -12,7 +12,7 @@ ProxyHarbor загружает 98 HTTPS-feed от 56 независимых пр
 - 17 новых endpoint шести провайдеров прошли URL/live-аудит 24 августа 2026 года; полный 98-feed end-to-end аудит выполняется CI и перед production-релизом.
 - Последний полный production-цикл: 888 116 разобранных строк, 290 217 уникальных кандидатов за 4,965 секунды.
 - Проверочная партия: 1 600/1 600 результатов, без `Deferred`; одинаковый набор Alive во всех четырёх форматах.
-- Backend: 598 автоматических тестов; meaningful coverage — 89,21% строк и 80,21% ветвей.
+- Backend: 660 автоматических тестов; frontend: 28 component/accessibility tests.
 - Frontend: Vitest, ESLint, TypeScript production build и axe-core accessibility gate.
 - Release build компилируется с warnings-as-errors и обязательной XML-документацией публичного production API.
 - CI проверяет PostgreSQL migrations, backup/restore, OpenAPI, Docker Compose, security contracts, зависимости и Git-историю.
@@ -30,6 +30,7 @@ ProxyHarbor загружает 98 HTTPS-feed от 56 независимых пр
 - публичная keyset pagination и потоковый экспорт до 50 000 строк за запрос;
 - React-панель с серверной пагинацией, единым входом по логину или email на `/login`, личным кабинетом `/account` и отдельным адаптивным кабинетом `/admin`: обзор, пользователи, операции, источники, резервные копии, биллинг, подписки и контроль IP;
 - биллинг через hosted checkout ЮKassa, CloudPayments, Robokassa, Т-Банка и Stripe: отдельный диалог каждого шлюза, общий фильтруемый реестр счетов, runtime-тарифы, зашифрованные merchant-секреты, проверяемые webhooks и идемпотентная активация без хранения карточных данных;
+- полноценный Telegram commerce-бот: автоматическая настройка профиля/иконки/команд, Stars invoices, личный кабинет и статистика, TXT-файлы прокси, уведомления о подписке, FAQ, CRM-диалоги и безопасная массовая рассылка через персистентную очередь; webhook и long polling поддерживаются одним runtime;
 - реестр подписок со сроками, статусом `suspended`, ручным продлением и неизменяемым аудитом; агрегированная статистика выдачи по IP/аккаунту и мгновенные блокировки точного IP, CIDR или пользователя;
 - OpenAPI, Prometheus-метрики, готовые alerts и operator diagnostics;
 - PHB3 backup БД и безопасных настроек: diskless ZIP → AES-256-GCM → self-verification → atomic publish → Telegram;
@@ -56,7 +57,7 @@ flowchart LR
 
 Collector отвечает только за обнаружение адресов. Proxy не публикуется как Alive, пока validator не построит реальный туннель, не завершит TLS-проверку доверенного сертификата и не получит канонический внешний IP. Недоступность контрольного endpoint даёт нейтральный `Deferred`, а не ложный Dead.
 
-Подробности: [архитектура](docs/ARCHITECTURE.md), [источники](docs/SOURCES.md), [производительность](docs/PERFORMANCE.md).
+Подробности: [архитектура](docs/ARCHITECTURE.md), [источники](docs/SOURCES.md), [производительность](docs/PERFORMANCE.md), [Telegram-бот](docs/TELEGRAM_BOT.md).
 
 ## Быстрый запуск через Docker
 
@@ -198,10 +199,11 @@ Backup содержит:
 - встроенные и пользовательские источники;
 - collection, validation и backup audit;
 - пользователей, роли и подписки без исходных паролей и reset token;
+- Telegram CRM, обработанные update, транспортную очередь и зашифрованную runtime-конфигурацию commerce-бота;
 - полные безопасные `Collector`/`Backup`/runtime-настройки;
 - manifest версии 6 с явным `secretsIncluded=false`.
 
-В архив никогда не входят admin password/API key, data-protection keys, PostgreSQL connection string/password, Telegram token/chat ID и encryption key. Их нужно хранить отдельно в secret manager.
+В архив никогда не входят admin password/API key, data-protection keys, PostgreSQL connection string/password, credentials Telegram-доставки backup и encryption key. Token commerce-бота входит только в уже защищённом Data Protection виде; без независимо сохранённых Data Protection keys расшифровать его после переноса невозможно.
 
 Ручной backup:
 

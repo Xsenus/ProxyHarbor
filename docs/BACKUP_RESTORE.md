@@ -4,15 +4,16 @@ Backup ProxyHarbor — это переносимый зашифрованный 
 
 ## Что входит в архив
 
-Manifest v5 содержит согласованный repeatable-read snapshot:
+Manifest v6 содержит согласованный repeatable-read snapshot:
 
 - `Proxies`, `Sources`, collection runs, validation runs и завершённые предыдущие backup runs;
 - настройки Collector и Backup;
 - безопасные runtime-настройки CORS, trusted networks, hosts и logging;
 - счета, подписки, аудит ручных продлений, агрегаты выдачи по IP и правила блокировки;
+- конфигурацию commerce-бота, Telegram CRM, очередь доставки и обработанные update;
 - UTC-время, версии manifest/settings schema и `secretsIncluded=false`.
 
-В архив никогда не входят PostgreSQL connection string/password, admin password, admin API key, Telegram credentials, data-protection keys или encryption key. Эти секреты необходимо независимо хранить во внешнем secret manager.
+В архив никогда не входят PostgreSQL connection string/password, admin password, admin API key, credentials бота доставки backup, data-protection keys или encryption key. Token commerce-бота сохраняется только как Data Protection ciphertext. Без независимо сохранённого volume ключей он после переноса не расшифруется, поэтому ключи и исходный token необходимо хранить во внешнем secret manager.
 
 ## Создание и доставка
 

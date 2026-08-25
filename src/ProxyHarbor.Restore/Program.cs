@@ -252,6 +252,18 @@ internal static class RestoreApplication
             await db.Sources.ExecuteDeleteAsync(token);
             var hasIdentitySnapshot = archive.GetEntry("database/users.json") is not null;
             var hasPaymentConfiguration = archive.GetEntry("database/payment-configuration.json") is not null;
+            var hasTelegramSnapshot = archive.GetEntry("database/telegram-chats.json") is not null;
+            if (hasIdentitySnapshot)
+            {
+                await db.TelegramConversationMessages.ExecuteDeleteAsync(token);
+                await db.TelegramOutboundMessages.ExecuteDeleteAsync(token);
+                await db.TelegramUpdateReceipts.ExecuteDeleteAsync(token);
+                await db.TelegramChats.ExecuteDeleteAsync(token);
+            }
+            if (hasTelegramSnapshot)
+            {
+                await db.TelegramBotConfigurations.ExecuteDeleteAsync(token);
+            }
             if (hasPaymentConfiguration)
                 await db.PaymentConfigurations.ExecuteDeleteAsync(token);
             if (hasIdentitySnapshot)
@@ -339,6 +351,14 @@ internal static class RestoreApplication
                     _ = await ImportIdentityAsync<ProxyAccessBucket>(archive, "database/proxy-access-buckets.json", db, token);
                 if (archive.GetEntry("database/access-block-rules.json") is not null)
                     _ = await ImportIdentityAsync<AccessBlockRule>(archive, "database/access-block-rules.json", db, token);
+                if (hasTelegramSnapshot)
+                {
+                    _ = await ImportIdentityAsync<TelegramBotConfiguration>(archive, "database/telegram-bot-configuration.json", db, token);
+                    _ = await ImportIdentityAsync<TelegramChat>(archive, "database/telegram-chats.json", db, token);
+                    _ = await ImportIdentityAsync<TelegramUpdateReceipt>(archive, "database/telegram-update-receipts.json", db, token);
+                    _ = await ImportIdentityAsync<TelegramOutboundMessage>(archive, "database/telegram-outbound-messages.json", db, token);
+                    _ = await ImportIdentityAsync<TelegramConversationMessage>(archive, "database/telegram-conversation-messages.json", db, token);
+                }
             }
             if (hasPaymentConfiguration)
                 _ = await ImportIdentityAsync<PaymentConfiguration>(

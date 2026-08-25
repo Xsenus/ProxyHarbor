@@ -69,6 +69,7 @@ services:
       Backup__HistoryRetentionDays: ${BACKUP_HISTORY_RETENTION_DAYS:-365}
       Payments__Enabled: ${PAYMENTS_ENABLED:-false}
       Payments__PublicBaseUrl: ${PUBLIC_BASE_URL:-https://proxy.blagodaty.ru}
+      TelegramBot__PublicBaseUrl: ${PUBLIC_BASE_URL:-https://proxy.blagodaty.ru}
       Payments__Providers__yookassa__Enabled: ${YOOKASSA_ENABLED:-false}
       Payments__Providers__yookassa__MerchantId: ${YOOKASSA_SHOP_ID:-}
       Payments__Providers__cloudpayments__Enabled: ${CLOUDPAYMENTS_ENABLED:-false}

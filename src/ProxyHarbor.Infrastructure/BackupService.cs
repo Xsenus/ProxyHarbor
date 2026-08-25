@@ -294,6 +294,19 @@ public sealed class BackupService(
                 // .phbackup дополнительно шифрует весь архив как единое целое.
                 await WriteJsonAsync(archive, "database/payment-configuration.json",
                     db.PaymentConfigurations.AsNoTracking().AsAsyncEnumerable(), token);
+                // Telegram token и webhook secret уже защищены Data Protection. Сохраняем
+                // также CRM, дедупликацию update и очередь, чтобы восстановление не вызвало
+                // повторных оплат, рассылок или потери истории переписки.
+                await WriteJsonAsync(archive, "database/telegram-bot-configuration.json",
+                    db.TelegramBotConfigurations.AsNoTracking().AsAsyncEnumerable(), token);
+                await WriteJsonAsync(archive, "database/telegram-chats.json",
+                    db.TelegramChats.AsNoTracking().AsAsyncEnumerable(), token);
+                await WriteJsonAsync(archive, "database/telegram-update-receipts.json",
+                    db.TelegramUpdateReceipts.AsNoTracking().AsAsyncEnumerable(), token);
+                await WriteJsonAsync(archive, "database/telegram-outbound-messages.json",
+                    db.TelegramOutboundMessages.AsNoTracking().AsAsyncEnumerable(), token);
+                await WriteJsonAsync(archive, "database/telegram-conversation-messages.json",
+                    db.TelegramConversationMessages.AsNoTracking().AsAsyncEnumerable(), token);
                 await WriteJsonAsync(archive, "settings/collector.json", collectorOptions.Value, token);
                 await WriteJsonAsync(archive, "settings/backup.json",
                     BackupSettingsSnapshot.FromOptions(options, telegramConfigured), token);

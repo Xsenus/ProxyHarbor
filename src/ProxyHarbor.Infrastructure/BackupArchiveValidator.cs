@@ -43,6 +43,11 @@ public static class BackupArchiveValidator
             .Append("database/subscription-admin-actions.json")
             .Append("database/proxy-access-buckets.json")
             .Append("database/access-block-rules.json")
+            .Append("database/telegram-bot-configuration.json")
+            .Append("database/telegram-chats.json")
+            .Append("database/telegram-update-receipts.json")
+            .Append("database/telegram-outbound-messages.json")
+            .Append("database/telegram-conversation-messages.json")
             .Append("manifest.json"),
         StringComparer.Ordinal);
 
