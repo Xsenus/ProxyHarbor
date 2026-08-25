@@ -65,3 +65,25 @@ header>.brand{min-height:44px}.provider-feeds summary,.provider-grid a{display:f
 .users-card{padding-top:8px;padding-bottom:8px}.user-list>article{display:grid;grid-template-columns:minmax(220px,1fr) minmax(520px,1.8fr);align-items:center;gap:22px;min-height:82px;padding:13px 0;border-bottom:1px solid #193028}.user-list>article:last-child{border:0}.user-identity{display:flex;align-items:center;gap:11px;min-width:0}.user-identity>span{display:grid;place-items:center;flex:0 0 38px;height:38px;border-radius:10px;background:#112a22;color:var(--mint)}.user-identity svg{width:16px}.user-identity b,.user-identity small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.user-identity b{font-size:11px}.user-identity small{margin-top:3px;color:#577169;font-size:8px}.user-access-controls{display:flex;align-items:center;justify-content:flex-end;gap:7px}.user-access-controls label{display:flex;align-items:center;gap:4px;color:#6c887f;font-size:8px;white-space:nowrap}.user-access-controls input{accent-color:var(--mint)}.user-access-controls select,.user-access-controls button{min-height:34px;padding:0 8px;border:1px solid #29483f;border-radius:7px;background:#0b1915;color:#9bb2aa;font-size:8px}.user-access-controls button{color:var(--mint);cursor:pointer}.user-access-controls button:disabled{opacity:.45}
 @media(max-width:1050px){.user-list>article{grid-template-columns:1fr}.user-access-controls{justify-content:flex-start;flex-wrap:wrap}}
 @media(max-width:700px){.registration-form{grid-template-columns:1fr}.registration-form label:first-child,.registration-form .login-field:first-of-type{grid-column:auto}.account-page{padding-left:14px;padding-right:14px}.account-page>header{padding-left:0;padding-right:0}.account-page>header>div>a{display:none}.account-profile-grid,.account-forms{grid-template-columns:1fr}.account-container{padding-top:34px}.user-access-controls select{flex:1 1 120px}}
+
+/* Читаемая типографическая шкала: служебный текст больше не опускается до
+   8–9 px, а основные подписи и элементы управления комфортны без zoom. */
+body{font-size:14px;line-height:1.5}
+.eyebrow,.kicker{font-size:12px}.live-pill{font-size:12px}
+.metric span,.metric small,.protocol-strip span{font-size:12px}
+.provider-grid article>div span{font-size:11px}.provider-grid strong{font-size:13px}.provider-grid small,.provider-feeds summary,.provider-grid a{font-size:10px}
+.section-heading>p,.filters label{font-size:14px}.tabs button{font-size:13px}
+.table-row,.table-row code{font-size:14px}.table-head,.badge{font-size:11px}
+.pagination{font-size:13px}.endpoint span{font-size:12px}.endpoint code,footer{font-size:13px}
+.login-card>p{font-size:15px}.login-card label,.back-link{font-size:13px}.forgot-link,.account-auth-footer,.account-success{font-size:12px}
+.admin-nav-group>span{font-size:11px}.admin-nav-group a,.admin-sidebar-foot a,.admin-sidebar-foot button{font-size:14px}.admin-nav-group a b{font-size:10px}
+.admin-content-header .kicker{font-size:10px}.admin-content-header strong{font-size:15px}.admin-session b{font-size:12px}.admin-session small{font-size:10px}
+.admin-section-heading p,.admin-initial-loading{font-size:14px}.card-heading .kicker{font-size:10px}.card-heading>a{font-size:11px}
+.admin-summary-grid small,.admin-summary-grid p{font-size:11px}.activity-list b{font-size:13px}.activity-list small{font-size:11px}.activity-state{font-size:10px}
+.health-orbit span{font-size:10px}.catalog-health>p{font-size:11px}.operation-actions b{font-size:14px}.operation-actions small{font-size:11px}
+.queue-metrics span{font-size:10px}.queue-metrics b{font-size:16px}.run-history b{font-size:12px}.run-history small,.run-history time{font-size:10px}.empty-state{font-size:12px}
+.source-list b{font-size:13px}.source-list small{font-size:11px}.source-ok,.source-error{font-size:11px}.source-form input,.source-form select{font-size:13px}.source-form button,.source-controls button{font-size:12px}.source-kind{font-size:10px}.primary-admin-button{font-size:13px}
+.backup-summary small{font-size:10px}.backup-summary strong{font-size:15px}
+.admin-notice,.admin-actions button,.admin-modal>p{font-size:13px}.diagnostic-grid span,.diagnostic-grid small,.diagnostic-history article span,.diagnostic-history p{font-size:11px}.diagnostic-history article small{font-size:10px}.diagnostic-history h4{font-size:12px}
+.account-page>header>div,.profile-card>p,.subscription-card>p{font-size:12px}.role-badges span,.account-forms label{font-size:11px}
+.user-identity b{font-size:14px}.user-identity small,.user-access-controls label,.user-access-controls select,.user-access-controls button{font-size:11px}
