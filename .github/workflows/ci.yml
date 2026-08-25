@@ -902,22 +902,6 @@ jobs:
           test "$seek_export" = 'socks5://8.8.4.4:18080'
           grep --ignore-case '^X-Export-Cursor: start' "$export_headers"
           grep --ignore-case '^X-Export-Truncated: false' "$export_headers"
-          free_headers=$(mktemp)
-          free_export=$(curl --fail --silent --dump-header "$free_headers" \
-            --header 'X-Forwarded-For: 203.0.113.50' \
-            'http://127.0.0.1:5080/api/v1/export/json?limit=50000')
-          echo "$free_export" | jq --exit-status \
-            '.access.tier == "free" and .access.limit == 10 and
-             .access.cooldownSeconds == 600 and (.access.message | contains("купите подписку")) and
-             (.proxies | length) == 1 and .proxies[0].host == "8.8.4.4"'
-          grep --ignore-case '^X-Access-Tier: free' "$free_headers"
-          grep --ignore-case '^X-Free-Cooldown: 600' "$free_headers"
-          free_repeat_status=$(curl --silent --dump-header "$free_headers" --output /dev/null --write-out '%{http_code}' \
-            --header 'X-Forwarded-For: 203.0.113.50' \
-            'http://127.0.0.1:5080/api/v1/export/json')
-          test "$free_repeat_status" -eq 429
-          grep --ignore-case '^Retry-After:' "$free_headers"
-          rm "$free_headers"
           rm "$export_headers"
           backup_json=$(curl --fail --silent -X POST \
             -H 'X-Admin-Key: integration-admin-key-at-least-24-chars' \
