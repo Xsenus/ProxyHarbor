@@ -12,7 +12,7 @@
 | Проверка | HTTP CONNECT, SOCKS4a и SOCKS5 tunnel, TLS validation, exit IP, latency, success rate и Alive/Dead/Deferred evidence |
 | Масштабирование | Distributed validation leases, `SKIP LOCKED`, cluster operation locks, orphan recovery и API lifetime lease |
 | Публикация | REST list/seek/stats/sources, streaming JSON/XML/TXT/CSV, OpenAPI, rate limits и bounded cache |
-| Интерфейс | React/TypeScript dashboard, серверная пагинация, фильтры и экспорт; отдельные страницы admin login/console |
+| Интерфейс | React/TypeScript dashboard, серверная пагинация, фильтры и экспорт; отдельный admin login и адаптивный кабинет с разделами обзора, операций, источников и backup |
 | Операции | Liveness/readiness, Prometheus, Alertmanager, Telegram alerts, diagnostics и maintenance |
 | Backup | Repeatable-read snapshot пяти таблиц и безопасных настроек, diskless PHB3, Telegram multipart delivery и audit |
 | Restore | Offline settings inspection, archive/semantic validation, migrations, transactional replacement и rollback |

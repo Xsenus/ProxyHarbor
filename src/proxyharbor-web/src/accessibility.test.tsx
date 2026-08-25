@@ -71,6 +71,24 @@ describe('ProxyHarbor accessibility', () => {
 
     assertNoViolations(await axe.run(document.body, axeOptions))
   })
+
+  it('has no automated WCAG violations in the sectioned admin workspace', async () => {
+    window.history.replaceState({}, '', '/admin')
+    vi.mocked(fetch).mockImplementation(async input => {
+      const url = String(input)
+      if (url.includes('/api/v1/admin/sources')) return jsonResponse([])
+      if (url.includes('/api/v1/admin/diagnostics')) return jsonResponse({
+        serverTime: new Date().toISOString(), databaseBytes: 0,
+        validationQueue: { total: 0, due: 0 }, sourceCatalog: undefined,
+        recentRuns: [], recentValidationRuns: [], recentBackups: [],
+      })
+      return jsonResponse({ title: 'Unexpected request' }, 500)
+    })
+    render(<App />)
+    await screen.findByRole('heading', { name: 'Обзор', level: 1 })
+
+    assertNoViolations(await axe.run(document.body, axeOptions))
+  })
 })
 
 function assertNoViolations(results: { violations: Result[] }) {

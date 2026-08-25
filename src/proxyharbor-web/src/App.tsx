@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Activity, ArrowDownToLine, ArrowRight, Check, Clock3, Database, Gauge, LockKeyhole, Network, Play, RefreshCw, Server, ShieldCheck, User, Wifi, X } from 'lucide-react'
+import { Activity, ArrowDownToLine, ArrowRight, Check, Clock3, Database, Gauge, HardDriveDownload, LayoutDashboard, LockKeyhole, LogOut, Network, Play, RefreshCw, Server, ShieldCheck, User, Wifi, Workflow, X } from 'lucide-react'
 
 type Protocol = 'Http' | 'Https' | 'Socks4' | 'Socks5'
 type Proxy = { host: string; port: number; protocol: Protocol; url: string; latencyMs: number; successRate: number; exitIp?: string; lastCheckedAt: string; firstAliveAt?: string; lastAliveAt?: string; activeSince?: string; activeForSeconds?: number }
@@ -23,6 +23,7 @@ type Diagnostics = {
 const API = import.meta.env.VITE_API_URL ?? ''
 const APP_VERSION = import.meta.env.VITE_APP_VERSION ?? '0.0.0-local'
 const protocols: Protocol[] = ['Http', 'Https', 'Socks4', 'Socks5']
+type AdminSection = 'overview' | 'operations' | 'sources' | 'backups'
 
 function isAbortError(reason: unknown) {
   return reason instanceof Error && reason.name === 'AbortError'
@@ -41,7 +42,10 @@ export default function App() {
   const [apiError, setApiError] = useState('')
   const currentPath = window.location.pathname.replace(/\/+$/, '') || '/'
   const loginPage = currentPath === '/admin/login'
-  const adminOpen = currentPath === '/admin'
+  const adminOpen = currentPath === '/admin' || currentPath.startsWith('/admin/') && !loginPage
+  const adminSection: AdminSection = currentPath === '/admin/sources' ? 'sources'
+    : currentPath === '/admin/operations' ? 'operations'
+      : currentPath === '/admin/backups' ? 'backups' : 'overview'
   const [adminAuthenticated, setAdminAuthenticated] = useState(false)
   const [adminError, setAdminError] = useState('')
   const [sources, setSources] = useState<Source[]>([])
@@ -348,6 +352,7 @@ export default function App() {
   }, [protocol, maxLatency])
   const freshness = stats?.lastRun?.startedAt ? timeAgo(stats.lastRun.startedAt) : 'ожидается'
   const latestCollection = diagnostics?.recentRuns[0]
+  const latestValidation = diagnostics?.recentValidationRuns?.[0]
   const latestBackup = diagnostics?.recentBackups[0]
   const adminMutationBusy = !!action || !!sourceBusy
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
@@ -404,47 +409,90 @@ export default function App() {
 
     <footer><div className="brand"><span className="brand-mark"><Network size={18}/></span><span>Proxy<span>Harbor</span></span></div><p>Используйте публичные прокси ответственно и в рамках закона.</p><span>v{APP_VERSION} · © {new Date().getFullYear()}</span></footer></>}
 
-    {adminOpen && <main className="admin-page">
-      <header className="admin-page-header"><a className="brand" href="/"><span className="brand-mark"><Network size={20}/></span><span>Proxy<span>Harbor</span></span></a><button onClick={logoutAdmin}>Выйти</button></header>
-      <section className="admin-modal admin-page-panel" aria-labelledby="admin-title">
-        <span className="kicker">ADMIN CONSOLE</span><h2 id="admin-title">Управление сбором</h2><p>Вы вошли в защищённую административную сессию.</p>
-        {adminError && <div className="admin-notice" role="alert"><X size={16}/>{adminError}</div>}
-        <div className="admin-actions">
-          <button ref={firstAdminActionRef} onClick={() => runAdminAction('collect')} disabled={!adminAuthenticated || adminMutationBusy}><Play/> {action === 'collect' ? 'Собираем…' : 'Запустить сбор'}</button>
-          <button onClick={() => runAdminAction('validate')} disabled={!adminAuthenticated || adminMutationBusy}><Check/> {action === 'validate' ? 'Проверяем…' : 'Проверить пакет'}</button>
-          <button onClick={() => runAdminAction('backup')} disabled={!adminAuthenticated || adminMutationBusy}><Database/> {action === 'backup' ? 'Копируем…' : 'Создать backup'}</button>
-        </div>
-        {adminAuthenticated && <section className="admin-diagnostics" aria-label="Диагностика сервиса">
-          <div className="diagnostics-heading"><h3>Диагностика</h3><button aria-label="Обновить диагностику" onClick={() => void loadAdminData()} disabled={adminLoading}><RefreshCw className={adminLoading ? 'spin' : ''}/></button></div>
-          <div className="diagnostic-grid">
-            <article title={`Параллельность ${formatNumber(diagnostics?.validationQueue?.concurrencyLimit)}, партия ${formatNumber(diagnostics?.validationQueue?.batchSize)}`}><span>Очередь проверки</span><strong>{formatNumber(diagnostics?.validationQueue?.due)}</strong><small>{formatNumber(diagnostics?.validationQueue?.attemptsLastFiveMinutes)} попыток за 5 мин · {formatRate(diagnostics?.validationQueue?.checksPerSecond)} · лимит {formatNumber(diagnostics?.validationQueue?.concurrencyLimit)} × {formatNumber(diagnostics?.validationQueue?.batchSize)} · ETA {formatDuration(diagnostics?.validationQueue?.estimatedDrainSeconds)} · {formatNumber(diagnostics?.validationQueue?.aliveLastFiveMinutes)} живых · {formatNumber(diagnostics?.validationQueue?.deferredLastFiveMinutes)} отложено</small></article>
-            <article><span>Последний сбор</span><strong className={latestCollection?.candidateLimitReached || latestCollection?.sourcesTruncated ? 'status-running' : statusClass(latestCollection?.status)}>{latestCollection?.candidateLimitReached || latestCollection?.sourcesTruncated ? 'достигнут лимит' : statusLabel(latestCollection?.status)}</strong><small>{latestCollection ? `${formatNumber(latestCollection.candidatesFound)} кандидатов · ${timeAgo(latestCollection.startedAt)}` : 'Циклов пока нет'}</small></article>
-            <article><span>Последний backup</span><strong className={statusClass(latestBackup?.status)}>{statusLabel(latestBackup?.status)}</strong><small>{latestBackup ? `${formatBytes(latestBackup.sizeBytes)} · ${backupDelivery(latestBackup)}` : 'Backup ещё не создавался'}</small></article>
-            <article><span>История PostgreSQL</span><strong>{formatNumber(diagnostics?.validationQueue?.everAlive)}</strong><small>{formatNumber(diagnostics?.validationQueue?.total)} известных всего · {formatNumber(diagnostics?.validationQueue?.historicalDead)} ранее работали, сейчас Dead · {formatBytes(diagnostics?.databaseBytes)}</small></article>
-            <article aria-label="Состояние встроенного каталога"><span>Встроенный каталог</span><strong className={catalogStatusClass(diagnostics?.sourceCatalog)}>{diagnostics?.sourceCatalog ? `${diagnostics.sourceCatalog.enabledSources}/${diagnostics.sourceCatalog.expectedSources}` : '—'}</strong><small>{diagnostics?.sourceCatalog ? `${diagnostics.sourceCatalog.enabledProviders}/${diagnostics.sourceCatalog.expectedProviders} провайдеров · ${diagnostics.sourceCatalog.healthySources} полных и свежих · release-аудит ${diagnostics.sourceCatalog.lastAuditedOn}${diagnostics.sourceCatalog.truncatedSources ? ` · ${diagnostics.sourceCatalog.truncatedSources} усечено` : ''}${diagnostics.sourceCatalog.staleSources ? ` · ${diagnostics.sourceCatalog.staleSources} устарело` : ''}` : 'Снимок недоступен'}</small></article>
-          </div>
-          <div className="diagnostic-history">
-            <div><h4>Последние сборы</h4>{diagnostics?.recentRuns.slice(0, 4).map(run => <article key={run.id} title={run.error}><span><i className={run.candidateLimitReached || run.sourcesTruncated ? 'status-running' : statusClass(run.status)}/>{timeAgo(run.startedAt)}</span><small>{formatNumber(run.sourcesSucceeded)}/{formatNumber(run.sourcesProcessed)} источников · +{formatNumber(run.newProxies)}{run.sourcesTruncated ? ` · усечено: ${run.sourcesTruncated}` : ''}{run.candidateLimitReached ? ' · общий лимит' : ''}</small></article>)}{diagnostics?.recentRuns.length === 0 && <p>Истории пока нет.</p>}</div>
-            <div><h4>Последние проверки</h4>{(diagnostics?.recentValidationRuns ?? []).slice(0, 4).map(run => <article key={run.id} title={run.error}><span><i className={statusClass(run.status)}/>{timeAgo(run.startedAt)}</span><small>{formatNumber(run.checked + run.deferred)}/{formatNumber(run.claimed)} попыток · {formatNumber(run.alive)} живых · {run.finishedAt ? formatDuration((new Date(run.finishedAt).getTime() - new Date(run.startedAt).getTime()) / 1000) : 'выполняется'}</small></article>)}{(diagnostics?.recentValidationRuns ?? []).length === 0 && <p>Истории пока нет.</p>}</div>
-            <div><h4>История backup</h4>{diagnostics?.recentBackups.slice(0, 4).map(run => <article key={run.id} title={run.error}><span><i className={statusClass(run.status)}/>{run.fileName ?? timeAgo(run.startedAt)}</span><small>{formatBytes(run.sizeBytes)} · {backupDelivery(run)}</small></article>)}{diagnostics?.recentBackups.length === 0 && <p>Истории пока нет.</p>}</div>
-          </div>
-        </section>}
-        <h3>Добавить источник</h3>
-        <form className="source-form" onSubmit={saveSource}>
-          <input required minLength={2} maxLength={120} aria-label="Название источника" placeholder="Название" value={sourceDraft.name} onChange={e => setSourceDraft({...sourceDraft, name: e.target.value})}/>
-          <input required type="url" maxLength={2048} pattern="https://.*" aria-label="HTTPS URL источника" placeholder="https://example.org/proxies.txt" value={sourceDraft.url} onChange={e => setSourceDraft({...sourceDraft, url: e.target.value})}/>
-          <select aria-label="Протокол источника" value={sourceDraft.protocol} onChange={e => setSourceDraft({...sourceDraft, protocol: e.target.value as Protocol})}>{protocols.map(item => <option key={item} value={item}>{label(item)}</option>)}</select>
-          <input type="number" min={-10000} max={10000} aria-label="Приоритет источника" value={sourceDraft.priority} onChange={e => setSourceDraft({...sourceDraft, priority: Number(e.target.value)})}/>
-          <button type="submit" disabled={!adminAuthenticated || adminMutationBusy}>{sourceBusy === 'new' ? 'Добавляем…' : 'Добавить'}</button>
-        </form>
-        <h3>Источники <span>{sources.length}</span></h3>
-        <div className="source-list">{sources.map(source => <article key={source.id}>
-          <div><b>{source.name}</b><small>{source.defaultProtocol} · {source.lastItemCount.toLocaleString('ru-RU')} адресов{source.lastContentFetchedAt ? ` · полный feed ${new Date(source.lastContentFetchedAt).toLocaleString('ru-RU')}` : ' · полный feed ещё не получен'}{source.lastResultTruncated ? ' · результат усечён' : ''}{source.consecutiveFailures > 0 ? ` · сбоев подряд: ${source.consecutiveFailures}` : ''}{source.nextFetchAt ? ` · повтор ${timeUntil(source.nextFetchAt)}` : ''}</small></div>
-          <div className="source-controls"><span title={source.isBuiltIn ? `Встроенный источник · ${source.provider} · ${source.providerIdentity} · ранг ${source.catalogRank}` : 'Пользовательский источник'} className="source-kind">{source.isBuiltIn ? source.provider : 'свой'}</span><span title={source.lastError} className={source.lastError ? 'source-error' : 'source-ok'}>{source.lastError ? 'ошибка' : source.enabled ? 'активен' : 'пауза'}</span><button disabled={adminMutationBusy} onClick={() => toggleSource(source)}>{source.enabled ? 'Пауза' : 'Включить'}</button>{!source.isBuiltIn && <button className="danger" disabled={adminMutationBusy} onClick={() => removeSource(source)}>Удалить</button>}</div>
-        </article>)}</div>
+    {adminOpen && <main className="admin-workspace">
+      <aside className="admin-sidebar" aria-label="Навигация по панели управления">
+        <a className="brand admin-brand" href="/"><span className="brand-mark"><Network size={20}/></span><span>Proxy<span>Harbor</span></span></a>
+        <nav className="admin-nav-group" aria-label="Разделы админ-панели"><span>Управление</span>
+          <a className={adminSection === 'overview' ? 'active' : ''} aria-current={adminSection === 'overview' ? 'page' : undefined} href="/admin"><LayoutDashboard/>Обзор</a>
+          <a className={adminSection === 'operations' ? 'active' : ''} aria-current={adminSection === 'operations' ? 'page' : undefined} href="/admin/operations"><Workflow/>Операции</a>
+          <a className={adminSection === 'sources' ? 'active' : ''} aria-current={adminSection === 'sources' ? 'page' : undefined} href="/admin/sources"><Server/>Источники <b>{sources.length || '—'}</b></a>
+          <a className={adminSection === 'backups' ? 'active' : ''} aria-current={adminSection === 'backups' ? 'page' : undefined} href="/admin/backups"><HardDriveDownload/>Резервные копии</a>
+        </nav>
+        <div className="admin-sidebar-foot"><a href="/"><ArrowRight/>На главную</a><button onClick={logoutAdmin}><LogOut/>Выйти</button></div>
+      </aside>
+
+      <section className="admin-content">
+        <header className="admin-content-header"><div><span className="kicker">ADMIN CONSOLE</span><strong>Панель управления</strong></div><div className="admin-session"><span/><div><b>Администратор</b><small>Защищённая сессия</small></div></div></header>
+        {adminError && <div className="admin-notice admin-page-notice" role="alert"><X size={16}/>{adminError}</div>}
+        {adminLoading && !adminAuthenticated ? <div className="admin-initial-loading"><RefreshCw className="spin"/><span>Загружаем панель…</span></div> : <>
+          {adminSection === 'overview' && <section className="admin-section" aria-labelledby="admin-overview-title">
+            <div className="admin-section-heading"><div><span className="kicker">СОСТОЯНИЕ СИСТЕМЫ</span><h1 id="admin-overview-title">Обзор</h1><p>Ключевые показатели ProxyHarbor в одном месте.</p></div><button className="icon-button" aria-label="Обновить диагностику" onClick={() => void loadAdminData()} disabled={adminLoading}><RefreshCw className={adminLoading ? 'spin' : ''}/></button></div>
+            <div className="admin-summary-grid">
+              <article><span className="summary-icon"><Activity/></span><div><small>Очередь проверки</small><strong>{formatNumber(diagnostics?.validationQueue?.due)}</strong><p>{formatRate(diagnostics?.validationQueue?.checksPerSecond)} · ETA {formatDuration(diagnostics?.validationQueue?.estimatedDrainSeconds)}</p></div></article>
+              <article><span className="summary-icon"><Server/></span><div><small>Активные источники</small><strong>{formatNumber(diagnostics?.sourceCatalog?.enabledSources)}</strong><p>{formatNumber(diagnostics?.sourceCatalog?.healthySources)} полных и свежих</p></div></article>
+              <article><span className="summary-icon"><Database/></span><div><small>Известно прокси</small><strong>{formatNumber(diagnostics?.validationQueue?.total)}</strong><p>{formatNumber(diagnostics?.validationQueue?.everAlive)} работали хотя бы раз</p></div></article>
+              <article><span className="summary-icon"><HardDriveDownload/></span><div><small>База PostgreSQL</small><strong>{formatBytes(diagnostics?.databaseBytes)}</strong><p>{latestBackup ? `Backup ${timeAgo(latestBackup.startedAt)}` : 'Backup ещё не создавался'}</p></div></article>
+            </div>
+            <div className="admin-panel-grid">
+              <section className="admin-card"><div className="card-heading"><div><span className="kicker">ПОСЛЕДНИЕ ЦИКЛЫ</span><h2>Активность</h2></div><a href="/admin/operations">Все операции <ArrowRight/></a></div><div className="activity-list">
+                <AdminActivity icon={<Play/>} title="Сбор прокси" status={latestCollection?.candidateLimitReached || latestCollection?.sourcesTruncated ? 'attention' : latestCollection?.status} detail={latestCollection ? `${formatNumber(latestCollection.candidatesFound)} кандидатов · +${formatNumber(latestCollection.newProxies)} новых` : 'Запусков пока нет'} time={latestCollection?.startedAt}/>
+                <AdminActivity icon={<Check/>} title="Проверка прокси" status={latestValidation?.status} detail={latestValidation ? `${formatNumber(latestValidation.checked)} проверено · ${formatNumber(latestValidation.alive)} живых` : 'Запусков пока нет'} time={latestValidation?.startedAt}/>
+                <AdminActivity icon={<Database/>} title="Резервная копия" status={latestBackup?.status} detail={latestBackup ? `${formatBytes(latestBackup.sizeBytes)} · ${backupDelivery(latestBackup)}` : 'Копий пока нет'} time={latestBackup?.startedAt}/>
+              </div></section>
+              <section className="admin-card catalog-health" aria-label="Состояние встроенного каталога"><div className="card-heading"><div><span className="kicker">КАТАЛОГ</span><h2>Источники</h2></div><a href="/admin/sources">Управление <ArrowRight/></a></div><div className={`health-orbit ${catalogStatusClass(diagnostics?.sourceCatalog)}`}><strong>{diagnostics?.sourceCatalog ? `${diagnostics.sourceCatalog.enabledProviders}/${diagnostics.sourceCatalog.expectedProviders}` : '—'}</strong><span>провайдеров</span></div><p>{diagnostics?.sourceCatalog ? `${diagnostics.sourceCatalog.healthySources} источников полны и свежи. Последний аудит: ${diagnostics.sourceCatalog.lastAuditedOn}.` : 'Снимок каталога пока недоступен.'}</p></section>
+            </div>
+          </section>}
+
+          {adminSection === 'operations' && <section className="admin-section" aria-labelledby="admin-operations-title">
+            <div className="admin-section-heading"><div><span className="kicker">РУЧНОЕ УПРАВЛЕНИЕ</span><h1 id="admin-operations-title">Операции</h1><p>Запускайте сбор и проверку, следите за очередью и последними циклами.</p></div><button className="icon-button" aria-label="Обновить диагностику" onClick={() => void loadAdminData()} disabled={adminLoading}><RefreshCw className={adminLoading ? 'spin' : ''}/></button></div>
+            <div className="operation-actions">
+              <button ref={firstAdminActionRef} onClick={() => runAdminAction('collect')} disabled={!adminAuthenticated || adminMutationBusy}><span><Play/></span><div><b>{action === 'collect' ? 'Собираем…' : 'Запустить сбор'}</b><small>Получить свежие адреса из всех активных источников</small></div><ArrowRight/></button>
+              <button onClick={() => runAdminAction('validate')} disabled={!adminAuthenticated || adminMutationBusy}><span><Check/></span><div><b>{action === 'validate' ? 'Проверяем…' : 'Проверить пакет'}</b><small>Немедленно запустить очередную порцию проверок</small></div><ArrowRight/></button>
+            </div>
+            <section className="admin-card queue-card"><div className="card-heading"><div><span className="kicker">ВАЛИДАТОР</span><h2>Очередь проверки</h2></div><strong>{formatNumber(diagnostics?.validationQueue?.due)}</strong></div><div className="queue-metrics"><div><span>Скорость</span><b>{formatRate(diagnostics?.validationQueue?.checksPerSecond)}</b></div><div><span>Попыток за 5 минут</span><b>{formatNumber(diagnostics?.validationQueue?.attemptsLastFiveMinutes)}</b></div><div><span>Живых за 5 минут</span><b>{formatNumber(diagnostics?.validationQueue?.aliveLastFiveMinutes)}</b></div><div><span>Оценка завершения</span><b>{formatDuration(diagnostics?.validationQueue?.estimatedDrainSeconds)}</b></div></div></section>
+            <div className="history-columns"><AdminRunHistory title="Последние сборы" empty="Сборы ещё не запускались.">{diagnostics?.recentRuns.slice(0, 8).map(run => <HistoryRow key={run.id} status={run.candidateLimitReached || run.sourcesTruncated ? 'attention' : run.status} title={`${formatNumber(run.sourcesSucceeded)}/${formatNumber(run.sourcesProcessed)} источников`} detail={`${formatNumber(run.candidatesFound)} кандидатов · +${formatNumber(run.newProxies)} новых`} time={run.startedAt}/>)}</AdminRunHistory><AdminRunHistory title="Последние проверки" empty="Проверки ещё не запускались.">{(diagnostics?.recentValidationRuns ?? []).slice(0, 8).map(run => <HistoryRow key={run.id} status={run.status} title={`${formatNumber(run.checked + run.deferred)}/${formatNumber(run.claimed)} попыток`} detail={`${formatNumber(run.alive)} живых · ${run.finishedAt ? formatDuration((new Date(run.finishedAt).getTime() - new Date(run.startedAt).getTime()) / 1000) : 'выполняется'}`} time={run.startedAt}/>)}</AdminRunHistory></div>
+          </section>}
+
+          {adminSection === 'sources' && <section className="admin-section" aria-labelledby="admin-sources-title">
+            <div className="admin-section-heading"><div><span className="kicker">КАТАЛОГ СБОРА</span><h1 id="admin-sources-title">Источники</h1><p>Подключайте собственные HTTPS-feed и управляйте активностью существующих источников.</p></div><span className="section-count">{sources.length}</span></div>
+            <section className="admin-card source-create"><div className="card-heading"><div><span className="kicker">НОВЫЙ FEED</span><h2>Добавить источник</h2></div></div><form className="source-form" onSubmit={saveSource}>
+              <input required minLength={2} maxLength={120} aria-label="Название источника" placeholder="Название" value={sourceDraft.name} onChange={e => setSourceDraft({...sourceDraft, name: e.target.value})}/>
+              <input required type="url" maxLength={2048} pattern="https://.*" aria-label="HTTPS URL источника" placeholder="https://example.org/proxies.txt" value={sourceDraft.url} onChange={e => setSourceDraft({...sourceDraft, url: e.target.value})}/>
+              <select aria-label="Протокол источника" value={sourceDraft.protocol} onChange={e => setSourceDraft({...sourceDraft, protocol: e.target.value as Protocol})}>{protocols.map(item => <option key={item} value={item}>{label(item)}</option>)}</select>
+              <input type="number" min={-10000} max={10000} aria-label="Приоритет источника" value={sourceDraft.priority} onChange={e => setSourceDraft({...sourceDraft, priority: Number(e.target.value)})}/>
+              <button type="submit" disabled={!adminAuthenticated || adminMutationBusy}>{sourceBusy === 'new' ? 'Добавляем…' : 'Добавить источник'}</button>
+            </form></section>
+            <section className="admin-card source-catalog-card"><div className="card-heading"><div><span className="kicker">ВСЕ ИСТОЧНИКИ</span><h2>Каталог <em>{sources.length}</em></h2></div><button className="icon-button" aria-label="Обновить источники" onClick={() => void loadAdminData()} disabled={adminLoading}><RefreshCw className={adminLoading ? 'spin' : ''}/></button></div><div className="source-list">{sources.map(source => <article key={source.id}>
+              <div><b>{source.name}</b><small>{source.defaultProtocol} · {source.lastItemCount.toLocaleString('ru-RU')} адресов{source.lastContentFetchedAt ? ` · полный feed ${new Date(source.lastContentFetchedAt).toLocaleString('ru-RU')}` : ' · полный feed ещё не получен'}{source.lastResultTruncated ? ' · результат усечён' : ''}{source.consecutiveFailures > 0 ? ` · сбоев подряд: ${source.consecutiveFailures}` : ''}{source.nextFetchAt ? ` · повтор ${timeUntil(source.nextFetchAt)}` : ''}</small></div>
+              <div className="source-controls"><span title={source.isBuiltIn ? `Встроенный источник · ${source.provider} · ${source.providerIdentity} · ранг ${source.catalogRank}` : 'Пользовательский источник'} className="source-kind">{source.isBuiltIn ? source.provider : 'свой'}</span><span title={source.lastError} className={source.lastError ? 'source-error' : 'source-ok'}>{source.lastError ? 'ошибка' : source.enabled ? 'активен' : 'пауза'}</span><button disabled={adminMutationBusy} onClick={() => toggleSource(source)}>{source.enabled ? 'Пауза' : 'Включить'}</button>{!source.isBuiltIn && <button className="danger" disabled={adminMutationBusy} onClick={() => removeSource(source)}>Удалить</button>}</div>
+            </article>)}</div></section>
+          </section>}
+
+          {adminSection === 'backups' && <section className="admin-section" aria-labelledby="admin-backups-title">
+            <div className="admin-section-heading"><div><span className="kicker">ЗАЩИТА ДАННЫХ</span><h1 id="admin-backups-title">Резервные копии</h1><p>Создавайте зашифрованные снимки базы данных и контролируйте доставку в Telegram.</p></div><button className="primary-admin-button" onClick={() => runAdminAction('backup')} disabled={!adminAuthenticated || adminMutationBusy}><Database/>{action === 'backup' ? 'Создаём…' : 'Создать backup'}</button></div>
+            <div className="backup-summary"><article><span><Database/></span><div><small>Размер базы</small><strong>{formatBytes(diagnostics?.databaseBytes)}</strong></div></article><article><span><HardDriveDownload/></span><div><small>Последняя копия</small><strong>{latestBackup ? formatBytes(latestBackup.sizeBytes) : '—'}</strong></div></article><article><span><ShieldCheck/></span><div><small>Доставка</small><strong>{latestBackup ? backupDelivery(latestBackup) : 'Нет данных'}</strong></div></article></div>
+            <AdminRunHistory title="История резервного копирования" empty="Резервные копии ещё не создавались.">{diagnostics?.recentBackups.map(run => <HistoryRow key={run.id} status={run.status} title={run.fileName ?? 'Резервная копия'} detail={`${formatBytes(run.sizeBytes)} · ${backupDelivery(run)}`} time={run.startedAt}/>)}</AdminRunHistory>
+          </section>}
+        </>}
       </section>
     </main>}
   </div>
+}
+
+/** Компактная строка последней административной активности. */
+function AdminActivity({icon, title, status, detail, time}: {icon: React.ReactNode; title: string; status?: string; detail: string; time?: string}) {
+  return <article><span className="activity-icon">{icon}</span><div><b>{title}</b><small>{detail}</small></div><div className="activity-state"><i className={statusClass(status)}/><span>{status === 'attention' ? 'внимание' : statusLabel(status)}</span><time>{time ? timeAgo(time) : '—'}</time></div></article>
+}
+
+/** Унифицированный контейнер истории запуска для разделов операций и backup. */
+function AdminRunHistory({title, empty, children}: {title: string; empty: string; children?: React.ReactNode}) {
+  const hasChildren = Array.isArray(children) ? children.length > 0 : Boolean(children)
+  return <section className="admin-card run-history"><div className="card-heading"><div><span className="kicker">ИСТОРИЯ</span><h2>{title}</h2></div></div><div>{hasChildren ? children : <p className="empty-state">{empty}</p>}</div></section>
+}
+
+/** Одинаковое представление результата фонового запуска во всех разделах. */
+function HistoryRow({status, title, detail, time}: {status?: string; title: string; detail: string; time: string}) {
+  return <article><i className={statusClass(status)}/><div><b>{title}</b><small>{detail}</small></div><time>{timeAgo(time)}</time></article>
 }
 
 /** Изолированная страница входа: на ней нет публичного каталога и элементов админ-панели. */
