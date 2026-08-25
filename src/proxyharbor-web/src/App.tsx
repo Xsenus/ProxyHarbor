@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Activity, ArrowDownToLine, Check, Clock3, Database, Gauge, KeyRound, Network, Play, RefreshCw, Server, ShieldCheck, Wifi, X } from 'lucide-react'
+import { Activity, ArrowDownToLine, ArrowRight, Check, Clock3, Database, Gauge, KeyRound, Network, Play, RefreshCw, Server, ShieldCheck, Wifi, X } from 'lucide-react'
 
 type Protocol = 'Http' | 'Https' | 'Socks4' | 'Socks5'
 type Proxy = { host: string; port: number; protocol: Protocol; url: string; latencyMs: number; successRate: number; exitIp?: string; lastCheckedAt: string; firstAliveAt?: string; lastAliveAt?: string; activeSince?: string; activeForSeconds?: number }
@@ -520,10 +520,11 @@ function ProxyPagination({page, pageSize, total, totalPages, onPageChange, onPag
   const [jump, setJump] = useState('')
   const pages = paginationWindow(page, totalPages)
   const go = (next: number) => onPageChange(Math.min(totalPages, Math.max(1, next)))
-  return <nav className="pagination" aria-label="Пагинация каталога">
+  const showQuickJump = totalPages > 7
+  return <nav className={`pagination${showQuickJump ? '' : ' pagination-compact'}`} aria-label="Пагинация каталога">
     <div className="page-sizes"><span>Показывать:</span>{[25, 50, 100].map(size => <button key={size} className={pageSize === size ? 'active' : ''} aria-pressed={pageSize === size} onClick={() => onPageSizeChange(size)}>{size}</button>)}</div>
     <div className="page-controls"><button aria-label="Предыдущая страница" disabled={page === 1} onClick={() => go(page - 1)}>←</button>{pages.map((item, index) => item === '…' ? <span key={`ellipsis-${index}`}>…</span> : <button key={item} className={item === page ? 'active' : ''} aria-current={item === page ? 'page' : undefined} onClick={() => go(item)}>{item}</button>)}<button aria-label="Следующая страница" disabled={page === totalPages} onClick={() => go(page + 1)}>→</button></div>
-    <form className="page-jump" onSubmit={event => { event.preventDefault(); const value = Number(jump); if (Number.isInteger(value) && value > 0) { go(value); setJump('') } }}><label htmlFor="page-jump">Перейти:</label><input id="page-jump" inputMode="numeric" min={1} max={totalPages} type="number" value={jump} onChange={event => setJump(event.target.value)}/><button type="submit">ОК</button></form>
+    {showQuickJump && <form className="page-jump" aria-label="Быстрый переход по страницам" onSubmit={event => { event.preventDefault(); const value = Number(jump); if (Number.isInteger(value) && value > 0) { go(value); setJump('') } }}><input aria-label="Номер страницы" inputMode="numeric" min={1} max={totalPages} type="number" placeholder="Стр." value={jump} onChange={event => setJump(event.target.value)}/><span aria-hidden="true">/ {totalPages}</span><button type="submit" aria-label="Перейти на страницу"><ArrowRight size={14}/></button></form>}
     <p>Страница {page} из {totalPages} · Найдено: {formatNumber(total)}</p>
   </nav>
 }
