@@ -11,6 +11,8 @@ namespace ProxyHarbor.Tests;
 /// <summary>Проверяет fail-closed границу платёжных уведомлений без обращения к внешней сети.</summary>
 public sealed class PaymentGatewayTests
 {
+    private static readonly string[] NestedItems = ["proxy/month"];
+
     [Fact]
     public async Task CloudPaymentsAcceptsOnlyCorrectHmacAndPreservesTrustedAmount()
     {
@@ -76,6 +78,22 @@ public sealed class PaymentGatewayTests
             SecretKey = "secret", SecondarySecret = "secondary"
         };
         Assert.True(PaymentProviderConfiguration.IsReady(code, complete));
+    }
+
+    [Theory]
+    [InlineData("yoomoney", "merchant")]
+    [InlineData("cryptomus", "merchant")]
+    [InlineData("nowpayments", "secondary")]
+    public void NewProviderRejectsEveryMissingRequiredCredential(string code, string missing)
+    {
+        var provider = new PaymentProviderOptions
+        {
+            Enabled = true, MerchantId = "merchant", SecretKey = "secret", SecondarySecret = "secondary"
+        };
+        if (missing == "merchant") provider.MerchantId = string.Empty;
+        else provider.SecondarySecret = string.Empty;
+
+        Assert.False(PaymentProviderConfiguration.IsReady(code, provider));
     }
 
     [Theory]
@@ -307,6 +325,78 @@ public sealed class PaymentGatewayTests
         Assert.Equal(order, result.OrderId);
         Assert.Equal(49_900, result.AmountMinor);
         Assert.Equal(PaymentStatuses.Paid, result.Status);
+    }
+
+    [Theory]
+    [InlineData("paid_over", PaymentStatuses.Paid)]
+    [InlineData("refund_paid", PaymentStatuses.Refunded)]
+    [InlineData("cancel", PaymentStatuses.Canceled)]
+    [InlineData("fail", PaymentStatuses.Failed)]
+    [InlineData("wrong_amount", PaymentStatuses.Failed)]
+    [InlineData("system_fail", PaymentStatuses.Failed)]
+    [InlineData("refund_fail", PaymentStatuses.Failed)]
+    [InlineData("confirm_check", PaymentStatuses.Pending)]
+    public async Task CryptomusMapsEveryRelevantStatus(string providerStatus, string expected)
+    {
+        var order = Guid.NewGuid();
+        var unsigned = JsonSerializer.Serialize(new
+        {
+            order_id = order.ToString("N"), uuid = "crypto-state", status = providerStatus,
+            amount = "499.00", currency = "RUB"
+        });
+#pragma warning disable CA5351
+        var sign = Convert.ToHexString(MD5.HashData(Encoding.UTF8.GetBytes(
+            Convert.ToBase64String(Encoding.UTF8.GetBytes(unsigned)) + "cryptomus-key"))).ToLowerInvariant();
+#pragma warning restore CA5351
+        var body = unsigned[..^1] + $",\"sign\":\"{sign}\"}}";
+
+        var result = await FullClient().ReadNotificationAsync("cryptomus", Request("POST", body).Request, default);
+
+        Assert.Equal(expected, result.Status);
+    }
+
+    [Theory]
+    [InlineData("refunded", PaymentStatuses.Refunded)]
+    [InlineData("expired", PaymentStatuses.Canceled)]
+    [InlineData("failed", PaymentStatuses.Failed)]
+    [InlineData("confirmed", PaymentStatuses.Pending)]
+    public async Task NowPaymentsMapsEveryRelevantStatus(string providerStatus, string expected)
+    {
+        var body = JsonSerializer.Serialize(new
+        {
+            invoice_id = "invoice-state", metadata = new { items = NestedItems },
+            order_id = Guid.NewGuid().ToString("D"), payment_status = providerStatus,
+            price_amount = "499.00", price_currency = "RUB"
+        });
+        using var hmac = new HMACSHA512(Encoding.UTF8.GetBytes("now-ipn"));
+        var context = Request("POST", body);
+        context.Request.Headers["x-nowpayments-sig"] = Convert.ToHexString(
+            hmac.ComputeHash(Encoding.UTF8.GetBytes(body))).ToLowerInvariant();
+
+        var result = await FullClient().ReadNotificationAsync("nowpayments", context.Request, default);
+
+        Assert.Equal(expected, result.Status);
+    }
+
+    [Theory]
+    [InlineData("test_notification", "true")]
+    [InlineData("unaccepted", "true")]
+    [InlineData("currency", "840")]
+    public async Task YooMoneyRejectsNonProductionNotifications(string changedKey, string changedValue)
+    {
+        var values = new SortedDictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["amount"] = "499.00", ["currency"] = "643", ["label"] = Guid.NewGuid().ToString("D"),
+            ["operation_id"] = "ym-rejected", ["test_notification"] = "false", ["unaccepted"] = "false"
+        };
+        values[changedKey] = changedValue;
+        using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes("yoomoney-notification"));
+        var canonical = string.Join('&', values.Select(item => $"{item.Key}={Uri.EscapeDataString(item.Value)}"));
+        values["sign"] = Convert.ToHexString(hmac.ComputeHash(Encoding.UTF8.GetBytes(canonical))).ToLowerInvariant();
+        var body = string.Join('&', values.Select(item => $"{item.Key}={Uri.EscapeDataString(item.Value)}"));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            FullClient().ReadNotificationAsync("yoomoney", Request("POST", body).Request, default));
     }
 
     private static PaymentGatewayClient Client(string secret)

@@ -102,6 +102,52 @@ public sealed class PaymentControllerTests
         { ProductCode = "pro-monthly", Provider = "cloudpayments" }, CancellationToken.None));
     }
 
+    [Fact]
+    public async Task YooMoneyHostedBuildsProtectedOfficialFormForFreshOrder()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var options = OptionsFor("yoomoney");
+        var order = new PaymentOrder
+        {
+            UserId = fixture.User.Id, ProductCode = "pro-monthly", Plan = SubscriptionPlans.Pro,
+            Provider = "yoomoney", AmountMinor = 49_900, Currency = "RUB", DurationDays = 30
+        };
+        fixture.Db.PaymentOrders.Add(order);
+        await fixture.Db.SaveChangesAsync();
+        var controller = fixture.Controller(options);
+
+        var result = Assert.IsType<ContentResult>(await controller.YooMoneyHosted(
+            order.Id, order.IdempotencyKey, CancellationToken.None));
+
+        Assert.Contains("https://yoomoney.ru/quickpay/confirm", result.Content, StringComparison.Ordinal);
+        Assert.Contains("499.00", result.Content, StringComparison.Ordinal);
+        Assert.Contains(order.Id.ToString("D"), result.Content, StringComparison.Ordinal);
+        Assert.Contains("form-action https://yoomoney.ru", controller.Response.Headers.ContentSecurityPolicy.ToString(), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task YooMoneyHostedRejectsWrongTokenExpiredOrUnavailableProvider(bool expired, bool disableProvider)
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var options = OptionsFor("yoomoney");
+        options.Providers["yoomoney"].Enabled = !disableProvider;
+        var order = new PaymentOrder
+        {
+            UserId = fixture.User.Id, ProductCode = "pro-monthly", Plan = SubscriptionPlans.Pro,
+            Provider = "yoomoney", AmountMinor = 49_900, Currency = "RUB", DurationDays = 30,
+            CreatedAt = expired ? DateTimeOffset.UtcNow.AddHours(-2) : DateTimeOffset.UtcNow
+        };
+        fixture.Db.PaymentOrders.Add(order);
+        await fixture.Db.SaveChangesAsync();
+        var controller = fixture.Controller(options);
+
+        var token = !expired && !disableProvider ? "wrong-token" : order.IdempotencyKey;
+        Assert.IsType<NotFoundResult>(await controller.YooMoneyHosted(order.Id, token, default));
+    }
+
     private static PaymentOptions OptionsFor(string provider) => new()
     {
         Enabled = true,
@@ -113,7 +159,8 @@ public sealed class PaymentControllerTests
         Providers = new Dictionary<string, PaymentProviderOptions>(StringComparer.OrdinalIgnoreCase)
         {
             ["cloudpayments"] = new() { Enabled = provider == "cloudpayments", DisplayName = "CloudPayments", PublicId = "cloud-public", SecretKey = "cloud-secret" },
-            ["tbank"] = new() { Enabled = provider == "tbank", DisplayName = "Т-Банк", MerchantId = "terminal", SecretKey = "tbank-password" }
+            ["tbank"] = new() { Enabled = provider == "tbank", DisplayName = "Т-Банк", MerchantId = "terminal", SecretKey = "tbank-password" },
+            ["yoomoney"] = new() { Enabled = provider == "yoomoney", DisplayName = "ЮMoney", MerchantId = "410011234567", SecretKey = "notification-secret" }
         }
     };
 
