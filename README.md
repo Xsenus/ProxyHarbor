@@ -12,7 +12,7 @@ ProxyHarbor загружает 98 HTTPS-feed от 56 независимых пр
 - 17 новых endpoint шести провайдеров прошли URL/live-аудит 24 августа 2026 года; полный 98-feed end-to-end аудит выполняется CI и перед production-релизом.
 - Последний полный production-цикл: 888 116 разобранных строк, 290 217 уникальных кандидатов за 4,965 секунды.
 - Проверочная партия: 1 600/1 600 результатов, без `Deferred`; одинаковый набор Alive во всех четырёх форматах.
-- Backend: 698 автоматических тестов; frontend: 28 component/accessibility tests.
+- Backend: 703 автоматических теста; frontend: 29 component/accessibility tests.
 - Frontend: Vitest, ESLint, TypeScript production build и axe-core accessibility gate.
 - Release build компилируется с warnings-as-errors и обязательной XML-документацией публичного production API.
 - CI проверяет PostgreSQL migrations, backup/restore, OpenAPI, Docker Compose, security contracts, зависимости и Git-историю.
@@ -28,6 +28,7 @@ ProxyHarbor загружает 98 HTTPS-feed от 56 независимых пр
 - измерение полной latency, exit IP, анонимности, success rate и адаптивное расписание повторных проверок;
 - горизонтально масштабируемая очередь через lease token и `FOR UPDATE SKIP LOCKED`;
 - публичная keyset pagination и потоковый экспорт до 50 000 строк за запрос;
+- локальное определение страны выхода по DB-IP Lite, колонка страны и стилизованный мультифильтр без сетевого GeoIP-запроса на каждую выдачу;
 - React-панель с серверной пагинацией, единым входом по логину или email на `/login`, личным кабинетом `/account` и отдельным адаптивным кабинетом `/admin`: обзор, пользователи, операции, источники, резервные копии, биллинг, подписки, контроль IP и first-party статистика посещений;
 - биллинг через hosted checkout ЮKassa, CloudPayments, Robokassa, Т-Банка и Stripe: отдельный диалог каждого шлюза, общий фильтруемый реестр счетов, runtime-тарифы, зашифрованные merchant-секреты, проверяемые webhooks и идемпотентная активация без хранения карточных данных;
 - полноценный Telegram commerce-бот: автоматическая настройка профиля/иконки/команд, Stars invoices, личный кабинет и статистика, TXT-файлы прокси, уведомления о подписке, FAQ, CRM-диалоги и безопасная массовая рассылка через персистентную очередь; webhook и long polling поддерживаются одним runtime;
@@ -137,6 +138,7 @@ Production overlay:
 ```text
 GET /api/v1/proxies
 GET /api/v1/proxies/seek
+GET /api/v1/proxies/countries
 GET /api/v1/export/{json|xml|txt|csv}
 GET /api/v1/export/{json|xml|txt|csv}/seek
 GET /api/v1/sources
@@ -150,7 +152,7 @@ GET /openapi/v1.json
 Примеры:
 
 ```bash
-curl 'http://localhost:8080/api/v1/proxies?protocol=Socks5&maxLatencyMs=1000&pageSize=100'
+curl 'http://localhost:8080/api/v1/proxies?protocol=Socks5&maxLatencyMs=1000&country=DE&country=NL&pageSize=100'
 curl 'http://localhost:8080/api/v1/proxies/seek?minSuccessRate=80&pageSize=500'
 curl -OJ 'http://localhost:8080/api/v1/export/csv?maxLatencyMs=1500&limit=50000'
 curl 'http://localhost:8080/api/v1/sources'
@@ -356,4 +358,4 @@ Runtime-примеры с `proxy.example.com` являются шаблонам�
 
 ## Лицензия
 
-Код ProxyHarbor распространяется по лицензии [MIT](LICENSE). Внешние proxy-feed и возвращаемые ими данные принадлежат соответствующим владельцам; списки прокси не включаются в Git-репозиторий и загружаются только во время работы сервиса.
+Код ProxyHarbor распространяется по лицензии [MIT](LICENSE). Внешние proxy-feed и возвращаемые ими данные принадлежат соответствующим владельцам; списки прокси не включаются в Git-репозиторий и загружаются только во время работы сервиса. Определение страны использует бесплатную базу [DB-IP Lite](https://db-ip.com), распространяемую по CC BY 4.0.

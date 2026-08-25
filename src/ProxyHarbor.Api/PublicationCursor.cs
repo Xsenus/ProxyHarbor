@@ -23,10 +23,14 @@ internal static class PublicationCursor
     internal static ulong FilterFingerprint(
         ProxyProtocol? protocol,
         int? maxLatencyMs,
-        decimal? minSuccessRate)
+        decimal? minSuccessRate,
+        IReadOnlyCollection<string>? countries = null)
     {
+        var normalizedCountries = countries is { Count: > 0 }
+            ? string.Join(',', countries.Order(StringComparer.Ordinal))
+            : "*";
         var canonical = string.Create(CultureInfo.InvariantCulture,
-            $"v1|p={protocol?.ToString() ?? "*"}|l={maxLatencyMs?.ToString(CultureInfo.InvariantCulture) ?? "*"}|s={minSuccessRate?.ToString("G29", CultureInfo.InvariantCulture) ?? "*"}");
+            $"v2|p={protocol?.ToString() ?? "*"}|l={maxLatencyMs?.ToString(CultureInfo.InvariantCulture) ?? "*"}|s={minSuccessRate?.ToString("G29", CultureInfo.InvariantCulture) ?? "*"}|c={normalizedCountries}");
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(canonical));
         try { return BinaryPrimitives.ReadUInt64BigEndian(hash); }
         finally { CryptographicOperations.ZeroMemory(hash); }

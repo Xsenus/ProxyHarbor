@@ -34,6 +34,17 @@ public sealed class PublicationCursorTests
     }
 
     [Fact]
+    public void FingerprintBindsCursorToTheSelectedCountrySet()
+    {
+        var first = PublicationCursor.FilterFingerprint(ProxyProtocol.Http, 500, 80m, ["DE", "US"]);
+        var reordered = PublicationCursor.FilterFingerprint(ProxyProtocol.Http, 500, 80m, ["US", "DE"]);
+        var changed = PublicationCursor.FilterFingerprint(ProxyProtocol.Http, 500, 80m, ["FR"]);
+
+        Assert.Equal(first, reordered);
+        Assert.NotEqual(first, changed);
+    }
+
+    [Fact]
     public void CursorCannotContinueWithDifferentFilters()
     {
         var original = PublicationCursor.FilterFingerprint(ProxyProtocol.Http, 500, 80m);

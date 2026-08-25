@@ -17,6 +17,22 @@ namespace ProxyHarbor.Tests;
 public sealed class ProxyPublicationTests
 {
     [Fact]
+    public void CountryFilterNormalizationSupportsEmptyRepeatedAndCommaSeparatedValues()
+    {
+        Assert.True(ProxiesController.TryNormalizeCountries(null, out var empty));
+        Assert.Empty(empty);
+
+        Assert.True(ProxiesController.TryNormalizeCountries([" us,DE ", "de", "RU"], out var normalized));
+        Assert.Equal(["DE", "RU", "US"], normalized);
+
+        Assert.False(ProxiesController.TryNormalizeCountries(["R1"], out _));
+        Assert.False(ProxiesController.TryNormalizeCountries(["USA"], out _));
+        Assert.False(ProxiesController.TryNormalizeCountries(
+            Enumerable.Range(0, 251).Select(index => $"{(char)('A' + index / 26)}{(char)('A' + index % 26)}").ToArray(),
+            out _));
+    }
+
+    [Fact]
     public void HttpsCategoryUsesHttpConnectTransportUri()
     {
         var endpoint = Endpoint("8.8.4.4", ProxyStatus.Alive, DateTimeOffset.UtcNow);
@@ -26,6 +42,38 @@ public sealed class ProxyPublicationTests
 
         Assert.Equal(ProxyProtocol.Https, dto.Protocol);
         Assert.Equal("http://8.8.4.4:8080", dto.Url);
+    }
+
+    [Fact]
+    public async Task CountryCatalogNormalizesFiltersAndReturnsOnlyMatchingAliveProxies()
+    {
+        var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+            .UseInMemoryDatabase($"country-publication-{Guid.NewGuid():N}")
+            .Options;
+        var us = Endpoint("8.8.8.8", ProxyStatus.Alive, DateTimeOffset.UtcNow);
+        us.CountryCode = "US";
+        var de = Endpoint("9.9.9.9", ProxyStatus.Alive, DateTimeOffset.UtcNow);
+        de.CountryCode = "DE";
+        await using (var seed = new ProxyHarborDbContext(options))
+        {
+            seed.Proxies.AddRange(us, de);
+            await seed.SaveChangesAsync();
+        }
+        var controller = new ProxiesController(
+            new TestDbFactory(options),
+            Options.Create(new CollectorOptions { PublicFreshnessMinutes = 15 }));
+
+        var listAction = await controller.Get(null, null, null, ["us"], 1, 100, CancellationToken.None);
+        var page = Assert.IsType<PagedResult<ProxyDto>>(Assert.IsType<OkObjectResult>(listAction.Result).Value);
+        Assert.Equal("US", Assert.Single(page.Items).CountryCode);
+
+        var countriesAction = await controller.Countries(CancellationToken.None);
+        var countries = Assert.IsAssignableFrom<IReadOnlyList<ProxyCountryDto>>(
+            Assert.IsType<OkObjectResult>(countriesAction.Result).Value);
+        Assert.Equal(["DE", "US"], countries.Select(country => country.Code).Order().ToArray());
+
+        var invalid = await controller.Get(null, null, null, ["USA"], 1, 100, CancellationToken.None);
+        Assert.IsType<BadRequestObjectResult>(invalid.Result);
     }
 
     [Fact]
@@ -108,6 +156,7 @@ public sealed class ProxyPublicationTests
         endpoint.SuccessfulChecks = 4;
         endpoint.FailedChecks = 1;
         endpoint.ExitIp = "8.8.8.8";
+        endpoint.CountryCode = "US";
         await using (var seed = new ProxyHarborDbContext(options))
         {
             seed.Proxies.Add(endpoint);
@@ -122,6 +171,7 @@ public sealed class ProxyPublicationTests
         Assert.Equal("Socks5", proxy.Element("protocol")?.Value);
         Assert.Equal("2001:4860:4860::8888", proxy.Element("host")?.Value);
         Assert.Equal("8080", proxy.Element("port")?.Value);
+        Assert.Equal("US", proxy.Element("countryCode")?.Value);
         Assert.Equal("321", proxy.Element("latencyMs")?.Value);
         Assert.Equal("80", proxy.Element("successRate")?.Value);
         Assert.Equal(checkedAt.ToString("O"), proxy.Element("lastCheckedAt")?.Value);
@@ -132,9 +182,9 @@ public sealed class ProxyPublicationTests
         Assert.IsType<EmptyResult>(await csvController.Export(
             "csv", ProxyProtocol.Socks5, 500, 80, CancellationToken.None));
         var csvLines = Encoding.UTF8.GetString(csvOutput.ToArray()).Split('\n', StringSplitOptions.RemoveEmptyEntries);
-        Assert.Equal("protocol,host,port,latencyMs,successRate,lastCheckedAt,url,exitIp", csvLines[0].TrimEnd('\r'));
+        Assert.Equal("protocol,host,port,countryCode,latencyMs,successRate,lastCheckedAt,url,exitIp", csvLines[0].TrimEnd('\r'));
         Assert.Equal(
-            $"\"Socks5\",\"2001:4860:4860::8888\",8080,321,80,\"{checkedAt:O}\",\"socks5://[2001:4860:4860::8888]:8080\",\"8.8.8.8\"",
+            $"\"Socks5\",\"2001:4860:4860::8888\",8080,\"US\",321,80,\"{checkedAt:O}\",\"socks5://[2001:4860:4860::8888]:8080\",\"8.8.8.8\"",
             csvLines[1].TrimEnd('\r'));
     }
 

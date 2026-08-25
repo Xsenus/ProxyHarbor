@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Activity, ArrowDownToLine, ArrowRight, Ban, Bell, Bot, CalendarClock, Check, ChevronDown, Clock3, CreditCard, Database, Eye, EyeOff, Gauge, Globe2, HardDriveDownload, LayoutDashboard, LockKeyhole, LogOut, Mail, MessageCircle, MousePointerClick, Network, Pencil, Play, Plus, Radio, Receipt, RefreshCw, Send, Server, Settings2, ShieldCheck, ShieldOff, Star, Trash2, User, Users, Wifi, Workflow, X } from 'lucide-react'
 
 type Protocol = 'Http' | 'Https' | 'Socks4' | 'Socks5'
-type Proxy = { host: string; port: number; protocol: Protocol; url: string; latencyMs: number; successRate: number; exitIp?: string; lastCheckedAt: string; firstAliveAt?: string; lastAliveAt?: string; activeSince?: string; activeForSeconds?: number }
+type Proxy = { host: string; port: number; protocol: Protocol; url: string; latencyMs: number; successRate: number; exitIp?: string; countryCode?: string; lastCheckedAt: string; firstAliveAt?: string; lastAliveAt?: string; activeSince?: string; activeForSeconds?: number }
+type ProxyCountry = { code: string; count: number }
 type PagedResult<T> = { items: T[]; page: number; pageSize: number; total: number }
 type Stats = { alive: number; staleAlive: number; pending: number; dead: number; dueForCheck: number; checksInProgress: number; scheduledChecks: number; averageLatencyMs: number | null; sources: number; failingSources: number; repeatedlyFailingSources: number; truncatedSources: number; byProtocol: { protocol: Protocol; count: number }[]; lastRun?: { startedAt: string; candidatesFound: number; newProxies: number; sourcesTruncated: number; candidateLimitReached: boolean; status: string } }
 type Source = { id: string; name: string; url: string; defaultProtocol: Protocol; enabled: boolean; priority: number; lastItemCount: number; lastResultTruncated: boolean; lastFetchedAt?: string; lastSucceededAt?: string; lastContentFetchedAt?: string; nextFetchAt?: string; consecutiveFailures: number; lastError?: string; isBuiltIn: boolean; provider?: string; providerIdentity?: string; catalogRank?: number }
@@ -62,6 +63,8 @@ export default function App() {
   const [proxies, setProxies] = useState<Proxy[]>([])
   const [protocol, setProtocol] = useState<Protocol | 'All'>('All')
   const [maxLatency, setMaxLatency] = useState(2000)
+  const [countries, setCountries] = useState<ProxyCountry[]>([])
+  const [selectedCountries, setSelectedCountries] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(10)
@@ -133,11 +136,13 @@ export default function App() {
     try {
       const query = new URLSearchParams({ page: String(page), pageSize: String(pageSize), maxLatencyMs: String(maxLatency) })
       if (protocol !== 'All') query.set('protocol', protocol)
-      const [statsResponse, proxyResponse] = await Promise.all([
+      selectedCountries.forEach(country => query.append('country', country))
+      const [statsResponse, proxyResponse, countriesResponse] = await Promise.all([
         fetch(`${API}/api/v1/stats`, { signal: controller.signal }),
         includeCatalog ? fetch(`${API}/api/v1/proxies?${query}`, { signal: controller.signal }) : Promise.resolve(null),
+        includeCatalog ? fetch(`${API}/api/v1/proxies/countries`, { signal: controller.signal }) : Promise.resolve(null),
       ])
-      if (!statsResponse.ok || (proxyResponse && !proxyResponse.ok)) throw new Error('API пока недоступен')
+      if (!statsResponse.ok || (proxyResponse && !proxyResponse.ok) || (countriesResponse && !countriesResponse.ok)) throw new Error('API пока недоступен')
       const statsSnapshot = await statsResponse.json()
       if (requestId !== publicRequestIdRef.current) return
       setStats(statsSnapshot)
@@ -147,6 +152,10 @@ export default function App() {
         setTotal(snapshot.total)
         const availablePages = Math.max(1, Math.ceil(snapshot.total / pageSize))
         if (page > availablePages) setPage(availablePages)
+      }
+      if (countriesResponse && catalogRequestId === catalogRequestIdRef.current) {
+        const countrySnapshot = await countriesResponse.json() as unknown
+        setCountries(Array.isArray(countrySnapshot) ? countrySnapshot as ProxyCountry[] : [])
       }
       setApiError('')
     } catch (reason) {
@@ -160,7 +169,7 @@ export default function App() {
         setLoading(false)
       }
     }
-  }, [protocol, maxLatency, page, pageSize])
+  }, [protocol, maxLatency, page, pageSize, selectedCountries])
 
   useEffect(() => {
     // Смена фильтра начинает новый обход; старые ответы больше не могут заменить его результаты.
@@ -194,6 +203,13 @@ export default function App() {
     setLoading(true)
     setPage(1)
     setMaxLatency(value)
+  }
+
+  const changeCountries = (values: string[]) => {
+    catalogRequestIdRef.current++
+    setLoading(true)
+    setPage(1)
+    setSelectedCountries(values)
   }
 
   const loadAdminData = useCallback(async (
@@ -451,8 +467,9 @@ export default function App() {
   const exportQuery = useMemo(() => {
     const query = new URLSearchParams({ maxLatencyMs: String(maxLatency) })
     if (protocol !== 'All') query.set('protocol', protocol)
+    selectedCountries.forEach(country => query.append('country', country))
     return query.toString()
-  }, [protocol, maxLatency])
+  }, [protocol, maxLatency, selectedCountries])
   const freshness = stats?.lastRun?.startedAt ? timeAgo(stats.lastRun.startedAt) : 'ожидается'
   const latestCollection = diagnostics?.recentRuns[0]
   const latestValidation = diagnostics?.recentValidationRuns?.[0]
@@ -497,12 +514,12 @@ export default function App() {
 
       <section id="catalog" className="catalog">
         <div className="section-heading"><div><span className="kicker">LIVE CATALOG</span><h2>Лучшие прямо сейчас</h2></div><p>Серверная выборка · {formatNumber(total)} найдено</p></div>
-        <div className="filters"><div className="tabs" aria-label="Фильтр по протоколу"><button aria-pressed={protocol === 'All'} className={protocol === 'All' ? 'active' : ''} onClick={() => changeProtocol('All')}>Все</button>{protocols.map(x => <button key={x} aria-pressed={protocol === x} className={protocol === x ? 'active' : ''} onClick={() => changeProtocol(x)}>{label(x)}</button>)}</div><label>до <b>{maxLatency} мс</b><input type="range" min="200" max="5000" step="100" value={maxLatency} onChange={e => changeMaxLatency(Number(e.target.value))}/></label></div>
+        <div className="filters"><div className="tabs" aria-label="Фильтр по протоколу"><button aria-pressed={protocol === 'All'} className={protocol === 'All' ? 'active' : ''} onClick={() => changeProtocol('All')}>Все</button>{protocols.map(x => <button key={x} aria-pressed={protocol === x} className={protocol === x ? 'active' : ''} onClick={() => changeProtocol(x)}>{label(x)}</button>)}</div><div className="filter-tools"><CountryFilter countries={countries} selected={selectedCountries} onChange={changeCountries}/><label>до <b>{maxLatency} мс</b><input type="range" min="200" max="5000" step="100" value={maxLatency} onChange={e => changeMaxLatency(Number(e.target.value))}/></label></div></div>
         {apiError && <div className="error-banner" role="alert"><X size={17}/>{apiError}<button onClick={() => { setApiError(''); setLoading(true); void load() }}>повторить</button></div>}
         <div className="proxy-table" role="table" aria-label="Проверенные прокси" aria-busy={loading}>
-          <div role="rowgroup"><div className="table-row table-head" role="row"><span role="columnheader">Адрес</span><span role="columnheader">Протокол</span><span role="columnheader">Задержка</span><span role="columnheader">Надёжность</span><span role="columnheader">Активен</span><span role="columnheader">Проверен</span></div></div>
+          <div role="rowgroup"><div className="table-row table-head" role="row"><span role="columnheader">Адрес</span><span role="columnheader">Страна</span><span role="columnheader">Протокол</span><span role="columnheader">Задержка</span><span role="columnheader">Надёжность</span><span role="columnheader">Активен</span><span role="columnheader">Проверен</span></div></div>
           <div role="rowgroup">
-            {loading ? <div role="row"><div className="empty" role="cell" aria-live="polite" aria-label="Состояние каталога прокси"><RefreshCw className="spin"/> Загружаем свежий каталог…</div></div> : proxies.length === 0 ? <div role="row"><div className="empty" role="cell" aria-live="polite" aria-label="Состояние каталога прокси"><Server/> Живые прокси появятся после первого цикла проверки.</div></div> : proxies.map(proxy => <div className="table-row" role="row" key={proxy.url}><code role="cell">{proxy.host}<i>:</i>{proxy.port}</code><span role="cell" className={`badge ${proxy.protocol.toLowerCase()}`}>{label(proxy.protocol)}</span><span role="cell" className="latency"><i className={proxy.latencyMs < 800 ? 'fast' : proxy.latencyMs < 1800 ? 'medium' : 'slow'}/>{proxy.latencyMs} мс</span><span role="cell">{proxy.successRate}%</span><span role="cell" title={proxy.activeSince ? `С ${new Date(proxy.activeSince).toLocaleString('ru-RU')}` : undefined}>{formatActiveDuration(proxy.activeForSeconds)}</span><span role="cell">{timeAgo(proxy.lastCheckedAt)}</span></div>)}
+            {loading ? <div role="row"><div className="empty" role="cell" aria-live="polite" aria-label="Состояние каталога прокси"><RefreshCw className="spin"/> Загружаем свежий каталог…</div></div> : proxies.length === 0 ? <div role="row"><div className="empty" role="cell" aria-live="polite" aria-label="Состояние каталога прокси"><Server/> По выбранным фильтрам живых прокси пока нет.</div></div> : proxies.map(proxy => <div className="table-row" role="row" key={proxy.url}><code role="cell">{proxy.host}<i>:</i>{proxy.port}</code><span role="cell" className="country-cell" title={proxy.countryCode ? countryName(proxy.countryCode) : 'Страна пока определяется'}>{proxy.countryCode ? <><i>{countryFlag(proxy.countryCode)}</i><b>{countryName(proxy.countryCode)}</b></> : <em>—</em>}</span><span role="cell" className={`badge ${proxy.protocol.toLowerCase()}`}>{label(proxy.protocol)}</span><span role="cell" className="latency"><i className={proxy.latencyMs < 800 ? 'fast' : proxy.latencyMs < 1800 ? 'medium' : 'slow'}/>{proxy.latencyMs} мс</span><span role="cell">{proxy.successRate}%</span><span role="cell" title={proxy.activeSince ? `С ${new Date(proxy.activeSince).toLocaleString('ru-RU')}` : undefined}>{formatActiveDuration(proxy.activeForSeconds)}</span><span role="cell">{timeAgo(proxy.lastCheckedAt)}</span></div>)}
           </div>
         </div>
         {!loading && total > 0 && <ProxyPagination
@@ -512,7 +529,7 @@ export default function App() {
         }
       </section>
 
-      <section id="api" className="api-panel"><div><span className="kicker">ONE-CLICK EXPORT</span><h2>Забирайте как удобно</h2><p>Фильтруйте через API или скачивайте готовый список. Экспорт содержит только свежие Alive-прокси; большие наборы обходятся последовательными cursor-страницами без замедляющего OFFSET.</p></div><div className="export-grid">{['json','xml','txt','csv'].map(format => <a key={format} href={`${API}/api/v1/export/${format}?${exportQuery}`}><span>.{format}</span><ArrowDownToLine size={18}/></a>)}</div><div className="endpoint"><span>GET</span><code>/api/v1/proxies/seek?protocol=Socks5&amp;maxLatencyMs=1000</code></div></section>
+      <section id="api" className="api-panel"><div><span className="kicker">ONE-CLICK EXPORT</span><h2>Забирайте как удобно</h2><p>Фильтруйте через API или скачивайте готовый список. Экспорт содержит только свежие Alive-прокси; большие наборы обходятся последовательными cursor-страницами без замедляющего OFFSET.</p><small className="geo-attribution">Геолокация IP: <a href="https://db-ip.com" target="_blank" rel="noreferrer">DB-IP</a></small></div><div className="export-grid">{['json','xml','txt','csv'].map(format => <a key={format} href={`${API}/api/v1/export/${format}?${exportQuery}`}><span>.{format}</span><ArrowDownToLine size={18}/></a>)}</div><div className="endpoint"><span>GET</span><code>/api/v1/proxies/seek?protocol=Socks5&amp;maxLatencyMs=1000&amp;country=DE</code></div></section>
     </main>
 
     <footer><div className="brand"><span className="brand-mark"><Network size={18}/></span><span>Proxy<span>Harbor</span></span></div><p>Используйте публичные прокси ответственно и в рамках закона.</p><span>v{APP_VERSION} · © {new Date().getFullYear()}</span></footer></>}
@@ -883,6 +900,35 @@ function needsSecondarySecret(code:string){return code==='robokassa'||code==='st
 /** Доступный переключатель вместо платформенно-зависимого checkbox. */
 function Toggle({checked,onChange,label,danger=false}:{checked:boolean;onChange:(value:boolean)=>void;label:string;danger?:boolean}){return <button type="button" role="switch" aria-checked={checked} className={`ui-switch ${checked?'on':''} ${danger?'danger':''}`} onClick={()=>onChange(!checked)}><i><span/></i><b>{label}</b></button>}
 
+/** Фирменный мультивыбор стран с поиском, клавиатурным закрытием и нативными чекбоксами. */
+function CountryFilter({countries,selected,onChange}:{countries:ProxyCountry[];selected:string[];onChange:(values:string[])=>void}){
+  const [open,setOpen]=useState(false)
+  const [search,setSearch]=useState('')
+  const rootRef=useRef<HTMLDivElement>(null)
+  useEffect(()=>{
+    if(!open)return
+    const close=(event:MouseEvent)=>{if(!rootRef.current?.contains(event.target as Node))setOpen(false)}
+    const escape=(event:KeyboardEvent)=>{if(event.key==='Escape')setOpen(false)}
+    document.addEventListener('mousedown',close)
+    window.addEventListener('keydown',escape)
+    return()=>{document.removeEventListener('mousedown',close);window.removeEventListener('keydown',escape)}
+  },[open])
+  const visible=countries.filter(country=>{
+    const needle=search.trim().toLocaleLowerCase('ru-RU')
+    return !needle||country.code.toLowerCase().includes(needle)||countryName(country.code).toLocaleLowerCase('ru-RU').includes(needle)
+  })
+  const toggle=(code:string)=>onChange(selected.includes(code)?selected.filter(item=>item!==code):[...selected,code].sort())
+  return <div className={`country-filter ${open?'open':''}`} ref={rootRef}>
+    <button type="button" className="country-filter-trigger" aria-haspopup="dialog" aria-expanded={open} onClick={()=>setOpen(value=>!value)}><Globe2/>{selected.length===0?'Страны':`Страны · ${selected.length}`}<ChevronDown/></button>
+    {open&&<div className="country-filter-menu" role="dialog" aria-label="Фильтр по странам">
+      <div className="country-filter-head"><div><span className="kicker">ГЕОГРАФИЯ</span><b>Выберите страны</b></div>{selected.length>0&&<button type="button" onClick={()=>onChange([])}>Сбросить</button>}</div>
+      <label className="country-search"><Globe2/><input autoFocus value={search} onChange={event=>setSearch(event.target.value)} placeholder="Поиск страны…" aria-label="Поиск страны"/>{search&&<button type="button" aria-label="Очистить поиск" onClick={()=>setSearch('')}><X/></button>}</label>
+      <div className="country-options">{visible.length===0?<p>Страны появятся после определения IP.</p>:visible.map(country=><label key={country.code}><input type="checkbox" checked={selected.includes(country.code)} onChange={()=>toggle(country.code)}/><span className="country-check"><Check/></span><i>{countryFlag(country.code)}</i><b>{countryName(country.code)}</b><em>{formatNumber(country.count)}</em></label>)}</div>
+      <footer><span>{selected.length===0?'Показаны все страны':`Выбрано: ${selected.length}`}</span><button type="button" onClick={()=>setOpen(false)}>Готово</button></footer>
+    </div>}
+  </div>
+}
+
 /** Собственный список не наследует синие системные меню Chrome и остаётся доступным с клавиатуры. */
 function StyledSelect({value,onChange,options,ariaLabel='Выбор значения'}:{value:string;onChange:(value:string)=>void;options:[string,string][];ariaLabel?:string}){
   const [open,setOpen]=useState(false)
@@ -1010,6 +1056,9 @@ function providerLabel(provider:string){return ({yookassa:'ЮKassa',cloudpayment
 function paymentStatusLabel(status:string){return ({pending:'Ожидает оплаты',paid:'Оплачен',failed:'Ошибка',canceled:'Отменён',refunded:'Возвращён'} as Record<string,string>)[status]??status}
 function subscriptionStatusLabel(status:string){return ({active:'Активна',trialing:'Пробная',past_due:'Просрочена',canceled:'Отменена',expired:'Истекла',suspended:'Приостановлена'} as Record<string,string>)[status]??status}
 function label(protocol: Protocol) { return ({Http: 'HTTP', Https: 'HTTPS', Socks4: 'SOCKS4', Socks5: 'SOCKS5'})[protocol] }
+const regionNames = new Intl.DisplayNames(['ru'], { type: 'region' })
+function countryName(code:string){return regionNames.of(code.toUpperCase())??code.toUpperCase()}
+function countryFlag(code:string){return String.fromCodePoint(...code.toUpperCase().split('').map(character=>127397+character.charCodeAt(0)))}
 function timeAgo(value: string) { const sec = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 1000)); if (sec < 10) return 'только что'; if (sec < 60) return `${sec} сек назад`; if (sec < 3600) return `${Math.floor(sec / 60)} мин назад`; return `${Math.floor(sec / 3600)} ч назад` }
 function timeUntil(value: string) { const sec = Math.max(0, Math.ceil((new Date(value).getTime() - Date.now()) / 1000)); if (sec < 60) return `через ${sec} сек`; if (sec < 3600) return `через ${Math.ceil(sec / 60)} мин`; return `через ${Math.ceil(sec / 3600)} ч` }
 
