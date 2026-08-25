@@ -116,6 +116,7 @@ public sealed class BackupPipelineTests
             Assert.Equal(
                 [
                     "database/backup-runs.json",
+                    "database/payment-configuration.json",
                     "database/payment-orders.json",
                     "database/proxies.json",
                     "database/roles.json",

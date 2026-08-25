@@ -23,6 +23,8 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
     public DbSet<UserSubscription> Subscriptions => Set<UserSubscription>();
     /// <summary>Аудируемые заказы на оплату без платёжных реквизитов.</summary>
     public DbSet<PaymentOrder> PaymentOrders => Set<PaymentOrder>();
+    /// <summary>Singleton runtime-настройка платежей с защищёнными секретами.</summary>
+    public DbSet<PaymentConfiguration> PaymentConfigurations => Set<PaymentConfiguration>();
 
     /// <inheritdoc />
     protected override void OnModelCreating(ModelBuilder builder)
@@ -74,6 +76,12 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
             table.HasCheckConstraint("CK_PaymentOrders_Currency", "char_length(\"Currency\") = 3 AND \"Currency\" = upper(\"Currency\")");
             table.HasCheckConstraint("CK_PaymentOrders_Timeline", "\"PaidAt\" IS NULL OR (\"PaidAt\" >= \"CreatedAt\" AND \"Status\" IN ('paid', 'refunded'))");
         });
+
+        var paymentConfiguration = builder.Entity<PaymentConfiguration>();
+        paymentConfiguration.Property(x => x.SettingsJson).HasColumnType("jsonb");
+        paymentConfiguration.Property(x => x.ProtectedSecrets).HasMaxLength(65_536);
+        paymentConfiguration.ToTable(table =>
+            table.HasCheckConstraint("CK_PaymentConfigurations_Singleton", "\"Id\" = 1"));
 
         var proxy = builder.Entity<ProxyEndpoint>();
         proxy.HasIndex(x => new { x.Host, x.Port, x.Protocol }).IsUnique();

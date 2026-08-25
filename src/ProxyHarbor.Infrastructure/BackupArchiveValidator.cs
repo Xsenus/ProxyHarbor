@@ -39,6 +39,7 @@ public static class BackupArchiveValidator
             .Concat(CurrentSettingsEntries)
             .Concat(IdentityEntries)
             .Append("database/payment-orders.json")
+            .Append("database/payment-configuration.json")
             .Append("manifest.json"),
         StringComparer.Ordinal);
 

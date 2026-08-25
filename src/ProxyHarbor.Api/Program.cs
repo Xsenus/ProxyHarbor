@@ -107,6 +107,7 @@ builder.Services.AddOptions<PaymentOptions>().Bind(builder.Configuration.GetSect
         "Активные Payments:Products должны иметь положительную цену, платный тариф, ISO currency и срок 1..3660 дней")
     .ValidateOnStart();
 builder.Services.AddHttpClient();
+builder.Services.AddScoped<IPaymentConfigurationStore, PaymentConfigurationStore>();
 builder.Services.AddScoped<PaymentGatewayClient>();
 builder.Services.AddControllers().AddJsonOptions(x =>
     x.JsonSerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter()));

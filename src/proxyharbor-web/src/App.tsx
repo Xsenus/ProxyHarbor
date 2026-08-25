@@ -23,12 +23,16 @@ type Diagnostics = {
 const API = import.meta.env.VITE_API_URL ?? ''
 const APP_VERSION = import.meta.env.VITE_APP_VERSION ?? '0.0.0-local'
 const protocols: Protocol[] = ['Http', 'Https', 'Socks4', 'Socks5']
-type AdminSection = 'overview' | 'operations' | 'sources' | 'backups' | 'users'
+type AdminSection = 'overview' | 'operations' | 'sources' | 'backups' | 'users' | 'payments'
 type AccountProfile = { id: string; userName: string; email: string; displayName?: string; createdAt: string; lastLoginAt?: string; roles: string[]; subscription?: { plan: string; status: string; startedAt: string; expiresAt?: string } }
 type PaymentCatalog = { enabled: boolean; products: PaymentProduct[]; providers: PaymentProvider[] }
 type PaymentProduct = { code: string; name: string; plan: string; durationDays: number; amountMinor: number; currency: string; description: string }
 type PaymentProvider = { code: string; name: string; available: boolean }
 type PaymentOrder = { id: string; productCode: string; plan: string; provider: string; amountMinor: number; currency: string; status: string; createdAt: string; paidAt?: string }
+type AdminPaymentProduct = PaymentProduct & { enabled: boolean }
+type AdminPaymentProvider = { code: string; name: string; enabled: boolean; merchantId: string; publicId: string; testMode: boolean; secretConfigured: boolean; secondarySecretConfigured: boolean; ready: boolean; webhookUrl: string }
+type AdminPaymentSettings = { enabled: boolean; products: AdminPaymentProduct[]; providers: AdminPaymentProvider[] }
+type AdminPaymentProviderDraft = AdminPaymentProvider & { secretKey: string; secondarySecret: string; clearSecretKey: boolean; clearSecondarySecret: boolean }
 type AdminUser = AccountProfile & { isActive: boolean }
 type UserAccessDraft = { isActive: boolean; administrator: boolean; subscriber: boolean; plan: string; status: string }
 type SourceDraft = { name: string; url: string; protocol: Protocol; priority: number; enabled: boolean }
@@ -60,7 +64,8 @@ export default function App() {
   const adminSection: AdminSection = currentPath === '/admin/sources' ? 'sources'
     : currentPath === '/admin/operations' ? 'operations'
       : currentPath === '/admin/backups' ? 'backups'
-        : currentPath === '/admin/users' ? 'users' : 'overview'
+        : currentPath === '/admin/users' ? 'users'
+          : currentPath === '/admin/payments' ? 'payments' : 'overview'
   const [adminAuthenticated, setAdminAuthenticated] = useState(false)
   const [adminError, setAdminError] = useState('')
   const [sources, setSources] = useState<Source[]>([])
@@ -495,6 +500,7 @@ export default function App() {
           <a className={adminSection === 'sources' ? 'active' : ''} aria-current={adminSection === 'sources' ? 'page' : undefined} href="/admin/sources"><Server/>Источники <b>{sourceTotal || '—'}</b></a>
           <a className={adminSection === 'backups' ? 'active' : ''} aria-current={adminSection === 'backups' ? 'page' : undefined} href="/admin/backups"><HardDriveDownload/>Резервные копии</a>
           <a className={adminSection === 'users' ? 'active' : ''} aria-current={adminSection === 'users' ? 'page' : undefined} href="/admin/users"><Users/>Пользователи</a>
+          <a className={adminSection === 'payments' ? 'active' : ''} aria-current={adminSection === 'payments' ? 'page' : undefined} href="/admin/payments"><CreditCard/>Оплата</a>
         </nav>
         <div className="admin-sidebar-foot"><a href="/account"><User/>Профиль</a><a href="/"><ArrowRight/>На главную</a><button onClick={logoutAdmin}><LogOut/>Выйти</button></div>
       </aside>
@@ -545,6 +551,7 @@ export default function App() {
             <AdminRunHistory title="История резервного копирования" empty="Резервные копии ещё не создавались.">{diagnostics?.recentBackups.map(run => <HistoryRow key={run.id} status={run.status} title={run.fileName ?? 'Резервная копия'} detail={`${formatBytes(run.sizeBytes)} · ${backupDelivery(run)}`} time={run.startedAt}/>)}</AdminRunHistory>
           </section>}
           {adminSection === 'users' && <AdminUsersPage/>}
+          {adminSection === 'payments' && <AdminPaymentsPage/>}
         </>}
       </section>
     </main>}
@@ -754,6 +761,48 @@ function AdminUsersPage() {
   const update=(id:string,patch:Partial<UserAccessDraft>)=>setDrafts(current=>({...current,[id]:{...current[id],...patch}}))
   return <section className="admin-section" aria-labelledby="admin-users-title"><div className="admin-section-heading"><div><span className="kicker">ACCESS CONTROL</span><h1 id="admin-users-title">Пользователи</h1><p>Роли отвечают за доступ к функциям, а тариф — за будущие лимиты выдачи прокси.</p></div><span className="section-count">{items.length}</span></div>{error&&<div className="admin-notice"><X/>{error}</div>}<section className="admin-card users-card"><div className="user-list">{items.map(user=>{const draft=drafts[user.id];return <article key={user.id}><div className="user-identity"><span><User/></span><div><b>{user.displayName||user.userName}</b><small>{user.email} · создан {new Date(user.createdAt).toLocaleDateString('ru-RU')}</small></div></div>{draft&&<div className="user-access-controls"><label><input type="checkbox" checked={draft.isActive} onChange={e=>update(user.id,{isActive:e.target.checked})}/> Активен</label><label><input type="checkbox" checked={draft.subscriber} onChange={e=>update(user.id,{subscriber:e.target.checked})}/> Subscriber</label><label><input type="checkbox" checked={draft.administrator} onChange={e=>update(user.id,{administrator:e.target.checked})}/> Admin</label><select aria-label={`Тариф ${user.userName}`} value={draft.plan} onChange={e=>update(user.id,{plan:e.target.value})}><option value="free">Free</option><option value="pro">Pro</option><option value="unlimited">Unlimited</option></select><select aria-label={`Статус ${user.userName}`} value={draft.status} onChange={e=>update(user.id,{status:e.target.value})}><option value="active">Active</option><option value="trialing">Trial</option><option value="past_due">Past due</option><option value="canceled">Canceled</option><option value="expired">Expired</option></select><button disabled={!!busy} onClick={()=>void save(user)}>{busy===user.id?'Сохраняем…':'Сохранить'}</button></div>}</article>})}</div></section></section>
 }
+
+/** Runtime-настройка тарифов и шлюзов; сохранённые секреты никогда не загружаются в браузер. */
+function AdminPaymentsPage() {
+  const [settings, setSettings] = useState<AdminPaymentSettings | null>(null)
+  const [providers, setProviders] = useState<AdminPaymentProviderDraft[]>([])
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+  const [busy, setBusy] = useState(false)
+  const loadSettings = useCallback(async () => {
+    const response = await fetch(`${API}/api/v1/admin/payments`, {credentials:'include'})
+    if (!response.ok) { setError(await responseMessage(response,'Настройки оплаты недоступны')); return }
+    const value = await response.json() as AdminPaymentSettings
+    setSettings(value)
+    setProviders(value.providers.map(provider=>({...provider,secretKey:'',secondarySecret:'',clearSecretKey:false,clearSecondarySecret:false})))
+    setError('')
+  },[])
+  useEffect(()=>{const initial=window.setTimeout(()=>void loadSettings(),0);return()=>window.clearTimeout(initial)},[loadSettings])
+  const updateProduct=(code:string,patch:Partial<AdminPaymentProduct>)=>setSettings(current=>current?{...current,products:current.products.map(product=>product.code===code?{...product,...patch}:product)}:current)
+  const updateProvider=(code:string,patch:Partial<AdminPaymentProviderDraft>)=>setProviders(current=>current.map(provider=>provider.code===code?{...provider,...patch}:provider))
+  const save = async () => {
+    if (!settings) return
+    setBusy(true);setError('');setNotice('')
+    const response=await fetch(`${API}/api/v1/admin/payments`,{method:'PUT',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:settings.enabled,products:settings.products,providers:providers.map(provider=>({code:provider.code,enabled:provider.enabled,merchantId:provider.merchantId,publicId:provider.publicId,testMode:provider.testMode,secretKey:provider.secretKey||null,secondarySecret:provider.secondarySecret||null,clearSecretKey:provider.clearSecretKey,clearSecondarySecret:provider.clearSecondarySecret}))})})
+    if(!response.ok){setError(await responseMessage(response,'Не удалось сохранить настройки'));setBusy(false);return}
+    const value=await response.json() as AdminPaymentSettings
+    setSettings(value);setProviders(value.providers.map(provider=>({...provider,secretKey:'',secondarySecret:'',clearSecretKey:false,clearSecondarySecret:false})));setNotice('Настройки применены без перезапуска сервиса.');setBusy(false)
+  }
+  return <section className="admin-section payment-settings" aria-labelledby="admin-payments-title">
+    <div className="admin-section-heading"><div><span className="kicker">BILLING CONTROL</span><h1 id="admin-payments-title">Оплата</h1><p>Тарифы, доступность шлюзов и защищённые merchant-реквизиты.</p></div><button className="primary-admin-button" disabled={!settings||busy} onClick={()=>void save()}><ShieldCheck/>{busy?'Сохраняем…':'Сохранить настройки'}</button></div>
+    {error&&<div className="admin-notice"><X/>{error}</div>}{notice&&<div className="account-success"><Check/>{notice}</div>}
+    {!settings?<div className="admin-card payment-settings-loading"><RefreshCw className="spin"/>Загружаем настройки…</div>:<>
+      <section className="admin-card billing-master-switch"><div><span className="kicker">ГЛОБАЛЬНЫЙ СТАТУС</span><h2>Приём платежей</h2><p>Включайте только после настройки хотя бы одного шлюза и проверки юридических данных.</p></div><label><input type="checkbox" checked={settings.enabled} onChange={event=>setSettings({...settings,enabled:event.target.checked})}/><span>{settings.enabled?'Включён':'Выключен'}</span></label></section>
+      <section className="admin-card payment-products-settings"><div className="card-heading"><div><span className="kicker">ТАРИФЫ</span><h2>Продукты подписки</h2></div></div><div>{settings.products.map(product=><article key={product.code}><label className="payment-enable"><input type="checkbox" checked={product.enabled} onChange={event=>updateProduct(product.code,{enabled:event.target.checked})}/><span>Доступен</span></label><label>Название<input maxLength={120} value={product.name} onChange={event=>updateProduct(product.code,{name:event.target.value})}/></label><label>План<select value={product.plan} onChange={event=>updateProduct(product.code,{plan:event.target.value})}><option value="pro">Pro</option><option value="unlimited">Unlimited</option></select></label><label>Цена, ₽<input type="number" min="0.01" max="10000000" step="0.01" value={(product.amountMinor/100).toString()} onChange={event=>updateProduct(product.code,{amountMinor:Math.round(Number(event.target.value)*100)})}/></label><label>Срок, дней<input type="number" min="1" max="3660" value={product.durationDays} onChange={event=>updateProduct(product.code,{durationDays:Number(event.target.value)})}/></label><label className="payment-description">Описание<input maxLength={300} value={product.description} onChange={event=>updateProduct(product.code,{description:event.target.value})}/></label></article>)}</div></section>
+      <section className="payment-provider-settings"><div className="card-heading"><div><span className="kicker">ПРОВАЙДЕРЫ</span><h2>Платёжные шлюзы</h2></div></div>{providers.map(provider=><article className="admin-card" key={provider.code}><header><div><CreditCard/><span><b>{provider.name}</b><small>{provider.ready?'Готов к работе':provider.secretConfigured?'Нужны дополнительные реквизиты':'Не настроен'}</small></span></div><label className="payment-enable"><input type="checkbox" checked={provider.enabled} onChange={event=>updateProvider(provider.code,{enabled:event.target.checked})}/><span>Включить</span></label></header><div className="provider-fields">{provider.code!=='stripe'&&provider.code!=='cloudpayments'&&<label>{merchantFieldLabel(provider.code)}<input autoComplete="off" maxLength={256} value={provider.merchantId} onChange={event=>updateProvider(provider.code,{merchantId:event.target.value})}/></label>}{provider.code==='cloudpayments'&&<label>Public ID<input autoComplete="off" maxLength={256} value={provider.publicId} onChange={event=>updateProvider(provider.code,{publicId:event.target.value})}/></label>}<label>{primarySecretLabel(provider.code)}<input type="password" autoComplete="new-password" maxLength={4096} placeholder={provider.secretConfigured?'Сохранён · введите для замены':'Введите секрет'} value={provider.secretKey} onChange={event=>updateProvider(provider.code,{secretKey:event.target.value,clearSecretKey:false})}/><small>{provider.secretConfigured?'Секрет настроен и скрыт':'Секрет ещё не задан'}</small></label>{needsSecondarySecret(provider.code)&&<label>{secondarySecretLabel(provider.code)}<input type="password" autoComplete="new-password" maxLength={4096} placeholder={provider.secondarySecretConfigured?'Сохранён · введите для замены':'Введите второй секрет'} value={provider.secondarySecret} onChange={event=>updateProvider(provider.code,{secondarySecret:event.target.value,clearSecondarySecret:false})}/><small>{provider.secondarySecretConfigured?'Второй секрет настроен и скрыт':'Второй секрет ещё не задан'}</small></label>}</div><footer><code>{provider.webhookUrl}</code><div>{provider.secretConfigured&&<label className="clear-secret"><input type="checkbox" checked={provider.clearSecretKey} onChange={event=>updateProvider(provider.code,{clearSecretKey:event.target.checked,secretKey:''})}/>Удалить основной секрет</label>}{provider.secondarySecretConfigured&&<label className="clear-secret"><input type="checkbox" checked={provider.clearSecondarySecret} onChange={event=>updateProvider(provider.code,{clearSecondarySecret:event.target.checked,secondarySecret:''})}/>Удалить второй секрет</label>}{provider.code==='robokassa'&&<label className="payment-enable"><input type="checkbox" checked={provider.testMode} onChange={event=>updateProvider(provider.code,{testMode:event.target.checked})}/><span>Тестовый режим</span></label>}</div></footer></article>)}</section>
+    </>}
+  </section>
+}
+
+function merchantFieldLabel(code:string){return code==='yookassa'?'Shop ID':code==='robokassa'?'Merchant Login':code==='tbank'?'Terminal Key':'Merchant ID'}
+function primarySecretLabel(code:string){return code==='yookassa'?'Secret Key':code==='cloudpayments'?'API Secret':code==='robokassa'?'Пароль №1':code==='tbank'?'Пароль терминала':'Secret Key'}
+function secondarySecretLabel(code:string){return code==='robokassa'?'Пароль №2':'Webhook Secret'}
+function needsSecondarySecret(code:string){return code==='robokassa'||code==='stripe'}
 
 /** Пагинация повторяет серверный UX RMS: размер, страницы, быстрый переход и итог. */
 function ProxyPagination({page, pageSize, total, totalPages, onPageChange, onPageSizeChange}: {page: number; pageSize: number; total: number; totalPages: number; onPageChange: (page: number) => void; onPageSizeChange: (size: number) => void}) {

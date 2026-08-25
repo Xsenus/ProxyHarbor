@@ -53,9 +53,15 @@ docker compose up -d --build
 | Т-Банк | `TBANK_ENABLED`, `TBANK_TERMINAL_KEY`, `TBANK_PASSWORD` | URL передаётся в `Init` автоматически |
 | Stripe | `STRIPE_ENABLED`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | `/api/v1/payments/webhooks/stripe` (`checkout.session.completed`) |
 
-Секреты Compose монтирует read-only файлами; в environment контейнера находятся только публичные
-merchant ID и переключатели. Включайте общий `PAYMENTS_ENABLED=true` только после настройки хотя бы
-одного шлюза. Stripe применим только к merchant, зарегистрированному в поддерживаемой Stripe стране.
+Переменные и read-only Docker secrets задают безопасный начальный снимок. После первого запуска
+администратор может открыть `/admin/payments`: изменить тарифы, идентификаторы, режимы и заменить
+секреты без перезапуска контейнера. Runtime-снимок из PostgreSQL имеет приоритет над bootstrap-
+переменными. Секретные поля API никогда не возвращает: интерфейс видит только признаки
+«настроен / не настроен». В БД секреты защищены ASP.NET Core Data Protection, поэтому для аварийного
+восстановления вместе с `.phbackup` сохраните key-ring volume `data-protection` во внешнем secret store.
+
+Включайте приём платежей только после настройки хотя бы одного шлюза. Stripe применим только к
+merchant, зарегистрированному в поддерживаемой Stripe стране.
 
 Каталог цен находится в `Payments:Products` (`appsettings.json`). Значения `499 ₽` и `999 ₽` —
 предварительные defaults, а не утверждённая публичная оферта; перед включением оплаты задайте итоговые
@@ -65,7 +71,8 @@ merchant ID и переключатели. Включайте общий `PAYMEN
 Успешный подписанный webhook переводит заказ в `paid`, продлевает доступ от более поздней даты
 (`сейчас` или текущее окончание подписки) и добавляет роль `Subscriber`. Повторная доставка одного
 уведомления идемпотентна и не продлевает тариф второй раз. История последних 50 платежей доступна
-в личном кабинете и включается в зашифрованный backup.
+в личном кабинете. Заказы и зашифрованный runtime-снимок настроек включаются в `.phbackup`;
+открытых merchant-секретов в архиве нет.
 
 `POSTGRES_PASSWORD`, `ADMIN_PASSWORD`, `ADMIN_API_KEY`, backup key и Telegram credentials Compose монтирует как bounded secret files. SMTP-пароль подключается отдельным `SecretFiles__SmtpPassword`, когда почтовый relay настроен. Приложение собирает строку PostgreSQL после чтения password file, поэтому пароль не появляется в process environment как часть connection string.
 
