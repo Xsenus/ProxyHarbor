@@ -120,14 +120,49 @@ public sealed class AdminBillingAccessTests
         Assert.Contains("\"authenticatedVisitors\":1", visitorJson);
         Assert.Contains("\"Pages\":2", visitorJson);
         Assert.Contains("visitor@example.test", visitorJson);
+        var filtered = Assert.IsType<OkObjectResult>(await controller.Visitors(
+            query: "198.51.100.10", token: CancellationToken.None));
+        Assert.Contains("\"total\":1", System.Text.Json.JsonSerializer.Serialize(filtered.Value));
     }
 
     [Theory]
+    [InlineData(null, "home")]
+    [InlineData("", "home")]
     [InlineData("/?utm_source=ignored", "home")]
+    [InlineData("/login", "login")]
+    [InlineData("/admin/login", "login")]
+    [InlineData("/register", "register")]
+    [InlineData("/forgot-password", "forgot-password")]
+    [InlineData("/reset-password", "reset-password")]
+    [InlineData("/account", "account")]
+    [InlineData("/account/profile", "account")]
+    [InlineData("/admin", "admin-overview")]
+    [InlineData("/admin/operations", "admin-operations")]
+    [InlineData("/admin/sources", "admin-sources")]
+    [InlineData("/admin/backups", "admin-backups")]
+    [InlineData("/admin/users", "admin-users")]
+    [InlineData("/admin/payments", "admin-payments")]
+    [InlineData("/admin/telegram", "admin-telegram")]
+    [InlineData("/admin/subscriptions", "admin-subscriptions")]
     [InlineData("/ADMIN/ACCESS/", "admin-access")]
     [InlineData("/unknown/private-value?token=secret", "other")]
-    public void SiteVisitPathsAreReducedToStablePrivacySafeCodes(string path, string expected) =>
+    public void SiteVisitPathsAreReducedToStablePrivacySafeCodes(string? path, string expected) =>
         Assert.Equal(expected, SiteTelemetryController.NormalizePage(path));
+
+    [Fact]
+    public async Task SiteTelemetryHonorsGlobalPrivacyControlAndAcceptsAnonymousVisit()
+    {
+        await using var fixture = new Fixture();
+        var monitor = new ProxyAccessMonitor(fixture.Factory, NullLogger<ProxyAccessMonitor>.Instance);
+        var controller = new SiteTelemetryController(monitor)
+        {
+            ControllerContext = new ControllerContext { HttpContext = Context("/api/v1/telemetry/visit", "192.0.2.20") }
+        };
+        controller.Request.Headers["Sec-GPC"] = "1";
+        Assert.IsType<NoContentResult>(controller.Visit(new SiteVisitRequest { Path = "/account?secret=ignored" }));
+        controller.Request.Headers.Remove("Sec-GPC");
+        Assert.IsType<NoContentResult>(controller.Visit(new SiteVisitRequest { Path = "/account?secret=ignored" }));
+    }
 
     [Fact]
     public async Task AccessMiddlewareSkipsOtherPathsRecordsAllowedAndRejectsBlockedClients()
