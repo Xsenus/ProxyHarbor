@@ -65,14 +65,14 @@
 | 55 | Naravid | 3 | HTTP, SOCKS4, SOCKS5 | [GitHub](https://github.com/naravid19/checked-proxies) |
 | 56 | aQuiner | 1 | HTTP | [GitHub](https://github.com/aQuiner/free-proxy-list) |
 | 57 | Sevenworks | 4 | HTTP, HTTPS, SOCKS4, SOCKS5 | [GitHub](https://github.com/SevenworksDev/proxy-list) |
-| 58 | HideIP | 4 | HTTP, HTTPS, SOCKS4, SOCKS5 | [GitHub](https://github.com/zloi-user/hideip.me) |
+| 58 | Zevtyardt | 4 | Mixed, HTTP, SOCKS4, SOCKS5 | [GitHub](https://github.com/zevtyardt/proxy-list) |
 | 59 | Tsprnay | 4 | HTTP, HTTPS, SOCKS4, SOCKS5 | [GitHub](https://github.com/Tsprnay/Proxy-lists) |
 | 60 | ALIILAPRO | 3 | HTTP, SOCKS4, SOCKS5 | [GitHub](https://github.com/ALIILAPRO/Proxy) |
 | 61 | NikolaiT | 4 | HTTP, HTTPS, SOCKS4, SOCKS5 | [GitHub](https://github.com/NikolaiT/free-proxy-list) |
 | 62 | VannDev | 21 | HTTP, HTTPS, SOCKS4, SOCKS5, site-tested | [GitHub](https://github.com/Vann-Dev/proxy-list) |
 | 63 | SoliSpirit | 4 | HTTP, HTTPS, SOCKS4, SOCKS5 | [GitHub](https://github.com/SoliSpirit/proxy-list) |
 | 64 | Elliottophellia | 6 | HTTP, SOCKS4, SOCKS5 | [GitHub](https://github.com/elliottophellia/proxylist) |
-| 65 | CB-X2 | 1 | Mixed | [GitHub](https://github.com/CB-X2-Jun/proxy-lists) |
+| 65 | TheMiralay | 1 | Mixed | [GitHub](https://github.com/themiralay/Proxy-List-World) |
 | 66 | HendrikBGR | 1 | Mixed | [GitHub](https://github.com/hendrikbgr/Free-Proxy-Repo) |
 | 67 | NoArche | 5 | Mixed, HTTP, HTTPS, SOCKS4, SOCKS5 | [GitHub](https://github.com/noarche/proxylist-socks5-sock4-exported-updates) |
 | 68 | ProxyGenerator | 19 | Mixed, HTTP, HTTPS, SOCKS4, SOCKS5, service-tested | [GitHub](https://github.com/proxygenerator1/ProxyGenerator) |
