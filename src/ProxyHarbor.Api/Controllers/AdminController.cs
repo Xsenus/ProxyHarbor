@@ -29,12 +29,34 @@ public sealed class AdminController(
     public async Task<ActionResult<PagedResult<SourceResponse>>> Sources(
         [FromQuery] int page = 1,
         [FromQuery] int pageSize = 10,
+        [FromQuery] string? search = null,
         CancellationToken token = default)
     {
         page = Math.Clamp(page, 1, 100_000);
         pageSize = Math.Clamp(pageSize, 10, 100);
         await using var db = await dbFactory.CreateDbContextAsync(token);
         var query = db.Sources.AsNoTracking();
+
+        // Фильтрация выполняется до Count/Skip/Take, поэтому поиск охватывает весь
+        // каталог, а не только уже загруженную страницу. Провайдер хранится в
+        // версионируемом built-in каталоге, поэтому его совпадения переводятся в URL.
+        var normalizedSearch = search?.Trim().ToLowerInvariant();
+        if (!string.IsNullOrEmpty(normalizedSearch))
+        {
+            normalizedSearch = normalizedSearch[..Math.Min(normalizedSearch.Length, 200)];
+            var providerUrls = BuiltInSourceCatalog.Sources
+                .Where(source => source.Provider.Contains(normalizedSearch, StringComparison.OrdinalIgnoreCase) ||
+                    source.ProviderIdentity.Contains(normalizedSearch, StringComparison.OrdinalIgnoreCase))
+                .Select(source => source.Url)
+                .ToArray();
+            // Именно эти overload'ы переводятся EF Core в SQL lower/LIKE и одинаково
+            // работают в тестовом InMemory provider; StringComparison-перегрузка SQL не переводится.
+#pragma warning disable CA1304, CA1311, CA1862
+            query = query.Where(source => source.Name.ToLower().Contains(normalizedSearch) ||
+                source.Url.ToLower().Contains(normalizedSearch) || providerUrls.Contains(source.Url));
+#pragma warning restore CA1304, CA1311, CA1862
+        }
+
         var total = await query.CountAsync(token);
         var sources = await query.OrderBy(x => x.Priority).ThenBy(x => x.Name).ThenBy(x => x.Id)
             .Skip((page - 1) * pageSize).Take(pageSize).ToListAsync(token);

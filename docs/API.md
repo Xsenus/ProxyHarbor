@@ -280,7 +280,8 @@ Invoke-RestMethod https://proxy.example.com/api/v1/admin/diagnostics -Headers $a
 
 ### GET `/api/v1/admin/sources`
 
-Параметры: `page` (от 1) и `pageSize` (`10..100`, по умолчанию `10`). Возвращает
+Параметры: `page` (от 1), `pageSize` (`10..100`, по умолчанию `10`) и необязательный
+`search` (до 200 символов, поиск без учёта регистра по названию, URL и провайдеру). Возвращает
 `PagedResult<SourceResponse>` с полями `items`, `page`, `pageSize`, `total`.
 Строки стабильно упорядочены по priority, имени и идентификатору; каждая содержит
 runtime state, conditional validators evidence, errors, completeness flags и built-in metadata.

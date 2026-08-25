@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Activity, ArrowDownToLine, ArrowRight, Ban, Bell, Bot, CalendarClock, Check, ChevronDown, Clock3, CreditCard, Database, Eye, EyeOff, Gauge, Globe2, HardDriveDownload, LayoutDashboard, LockKeyhole, LogOut, Mail, MessageCircle, MousePointerClick, Network, Pencil, Play, Plus, Radio, Receipt, RefreshCw, Send, Server, Settings2, ShieldCheck, ShieldOff, Star, Trash2, User, Users, Wifi, Workflow, X } from 'lucide-react'
+import { Activity, ArrowDownToLine, ArrowRight, Ban, Bell, Bot, CalendarClock, Check, ChevronDown, Clock3, CreditCard, Database, Eye, EyeOff, Gauge, Globe2, HardDriveDownload, LayoutDashboard, LockKeyhole, LogOut, Mail, MessageCircle, MousePointerClick, Network, Pencil, Play, Plus, Radio, Receipt, RefreshCw, Search, Send, Server, Settings2, ShieldCheck, ShieldOff, Star, Trash2, User, Users, Wifi, Workflow, X } from 'lucide-react'
 
 type Protocol = 'Http' | 'Https' | 'Socks4' | 'Socks5'
 type Proxy = { host: string; port: number; protocol: Protocol; url: string; latencyMs: number; successRate: number; exitIp?: string; countryCode?: string; lastCheckedAt: string; firstAliveAt?: string; lastAliveAt?: string; activeSince?: string; activeForSeconds?: number }
@@ -95,6 +95,8 @@ export default function App() {
   const [sourcePage, setSourcePage] = useState(1)
   const [sourcePageSize, setSourcePageSize] = useState(10)
   const [sourceTotal, setSourceTotal] = useState(0)
+  const [sourceSearchDraft, setSourceSearchDraft] = useState('')
+  const [sourceSearch, setSourceSearch] = useState('')
   const [diagnostics, setDiagnostics] = useState<Diagnostics | null>(null)
   const [adminLoading, setAdminLoading] = useState(false)
   const [action, setAction] = useState('')
@@ -220,6 +222,7 @@ export default function App() {
     focusFirstAction = false,
     requestedSourcePage = sourcePage,
     requestedSourcePageSize = sourcePageSize,
+    requestedSourceSearch = sourceSearch,
   ) => {
     const requestId = ++adminRequestIdRef.current
     adminAbortRef.current?.abort()
@@ -229,6 +232,7 @@ export default function App() {
     try {
       const requestOptions = { credentials: 'include' as const, signal: controller.signal }
       const sourceQuery = new URLSearchParams({ page: String(requestedSourcePage), pageSize: String(requestedSourcePageSize) })
+      if (requestedSourceSearch) sourceQuery.set('search', requestedSourceSearch)
       const [sourcesResponse, diagnosticsResponse] = await Promise.all([
         fetch(`${API}/api/v1/admin/sources?${sourceQuery}`, requestOptions),
         fetch(`${API}/api/v1/admin/diagnostics`, requestOptions),
@@ -273,7 +277,7 @@ export default function App() {
         setAdminLoading(false)
       }
     }
-  }, [sourcePage, sourcePageSize])
+  }, [sourcePage, sourcePageSize, sourceSearch])
 
   useEffect(() => {
     if (!adminAuthenticated || !focusAdminActionAfterLoginRef.current) return
@@ -590,10 +594,10 @@ export default function App() {
 
           {adminSection === 'sources' && <section className="admin-section" aria-labelledby="admin-sources-title">
             <div className="admin-section-heading"><div><span className="kicker">КАТАЛОГ СБОРА</span><h1 id="admin-sources-title">Источники</h1><p>Подключайте собственные HTTPS-feed и управляйте активностью существующих источников.</p></div><div className="admin-heading-actions"><span className="section-count">{sourceTotal}</span><button className="primary-admin-button" onClick={openNewSource} disabled={!adminAuthenticated || adminMutationBusy}><Plus/>Добавить источник</button></div></div>
-            <section className="admin-card source-catalog-card"><div className="card-heading"><div><span className="kicker">ВСЕ ИСТОЧНИКИ</span><h2>Каталог <em>{sourceTotal}</em></h2></div><button className="icon-button" aria-label="Обновить источники" onClick={() => void loadAdminData()} disabled={adminLoading}><RefreshCw className={adminLoading ? 'spin' : ''}/></button></div><div className="source-list">{sources.map(source => <article key={source.id}>
+            <section className="admin-card source-catalog-card"><div className="card-heading"><div><span className="kicker">ВСЕ ИСТОЧНИКИ</span><h2>Каталог <em>{sourceTotal}</em></h2></div><button className="icon-button" aria-label="Обновить источники" onClick={() => void loadAdminData()} disabled={adminLoading}><RefreshCw className={adminLoading ? 'spin' : ''}/></button></div><form className="source-search" role="search" onSubmit={event => { event.preventDefault(); const nextSearch = sourceSearchDraft.trim(); setSourceSearch(nextSearch); setSourcePage(1); void loadAdminData(false, 1, sourcePageSize, nextSearch) }}><Search aria-hidden="true"/><input type="search" aria-label="Поиск источников" maxLength={200} placeholder="Название, провайдер или адрес feed" value={sourceSearchDraft} onChange={event => setSourceSearchDraft(event.target.value)}/>{sourceSearchDraft && <button type="button" className="source-search-clear" aria-label="Очистить поиск" onClick={() => { setSourceSearchDraft(''); setSourceSearch(''); setSourcePage(1); void loadAdminData(false, 1, sourcePageSize, '') }}><X/></button>}<button type="submit" className="source-search-submit" disabled={adminLoading}>Найти</button></form><div className="source-list">{sources.length === 0 ? <div className="source-search-empty"><Search/>По вашему запросу источники не найдены.</div> : sources.map(source => <article key={source.id}>
               <div><b>{source.name}</b><small>{source.defaultProtocol} · {source.lastItemCount.toLocaleString('ru-RU')} адресов{source.lastContentFetchedAt ? ` · полный feed ${new Date(source.lastContentFetchedAt).toLocaleString('ru-RU')}` : ' · полный feed ещё не получен'}{source.lastResultTruncated ? ' · результат усечён' : ''}{source.consecutiveFailures > 0 ? ` · сбоев подряд: ${source.consecutiveFailures}` : ''}{source.nextFetchAt ? ` · повтор ${timeUntil(source.nextFetchAt)}` : ''}</small></div>
               <div className="source-controls"><span title={source.isBuiltIn ? `Встроенный источник · ${source.provider} · ${source.providerIdentity} · ранг ${source.catalogRank}` : 'Пользовательский источник'} className="source-kind">{source.isBuiltIn ? source.provider : 'свой'}</span><span title={source.lastError} className={source.lastError ? 'source-error' : 'source-ok'}>{source.lastError ? 'ошибка' : source.enabled ? 'активен' : 'пауза'}</span><button className="source-edit-button" disabled={adminMutationBusy} onClick={() => openSourceEditor(source)}><Pencil/>Изменить</button></div>
-            </article>)}</div>{sourceTotal > 0 && <ProxyPagination page={sourcePage} pageSize={sourcePageSize} total={sourceTotal} totalPages={sourceTotalPages} onPageChange={next => { setSourcePage(next); void loadAdminData(false, next, sourcePageSize); document.getElementById('admin-sources-title')?.scrollIntoView?.({behavior:'smooth'}) }} onPageSizeChange={size => { setSourcePageSize(size); setSourcePage(1); void loadAdminData(false, 1, size) }}/>}</section>
+            </article>)}</div>{sourceTotal > 0 && <ProxyPagination page={sourcePage} pageSize={sourcePageSize} total={sourceTotal} totalPages={sourceTotalPages} onPageChange={next => { setSourcePage(next); void loadAdminData(false, next, sourcePageSize, sourceSearch); document.getElementById('admin-sources-title')?.scrollIntoView?.({behavior:'smooth'}) }} onPageSizeChange={size => { setSourcePageSize(size); setSourcePage(1); void loadAdminData(false, 1, size, sourceSearch) }}/>}</section>
           </section>}
 
           {adminSection === 'backups' && <section className="admin-section" aria-labelledby="admin-backups-title">
