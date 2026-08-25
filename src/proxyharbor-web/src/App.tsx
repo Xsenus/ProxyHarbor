@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Activity, ArrowDownToLine, ArrowRight, Check, Clock3, CreditCard, Database, Eye, EyeOff, Gauge, HardDriveDownload, LayoutDashboard, LockKeyhole, LogOut, Mail, Network, Play, RefreshCw, Server, ShieldCheck, User, Users, Wifi, Workflow, X } from 'lucide-react'
+import { Activity, ArrowDownToLine, ArrowRight, Check, Clock3, CreditCard, Database, Eye, EyeOff, Gauge, HardDriveDownload, LayoutDashboard, LockKeyhole, LogOut, Mail, Network, Pencil, Play, Plus, RefreshCw, Server, ShieldCheck, Trash2, User, Users, Wifi, Workflow, X } from 'lucide-react'
 
 type Protocol = 'Http' | 'Https' | 'Socks4' | 'Socks5'
 type Proxy = { host: string; port: number; protocol: Protocol; url: string; latencyMs: number; successRate: number; exitIp?: string; lastCheckedAt: string; firstAliveAt?: string; lastAliveAt?: string; activeSince?: string; activeForSeconds?: number }
@@ -27,6 +27,9 @@ type AdminSection = 'overview' | 'operations' | 'sources' | 'backups' | 'users'
 type AccountProfile = { id: string; userName: string; email: string; displayName?: string; createdAt: string; lastLoginAt?: string; roles: string[]; subscription?: { plan: string; status: string; startedAt: string; expiresAt?: string } }
 type AdminUser = AccountProfile & { isActive: boolean }
 type UserAccessDraft = { isActive: boolean; administrator: boolean; subscriber: boolean; plan: string; status: string }
+type SourceDraft = { name: string; url: string; protocol: Protocol; priority: number; enabled: boolean }
+
+const emptySourceDraft: SourceDraft = { name: '', url: '', protocol: 'Http', priority: 100, enabled: true }
 
 function isAbortError(reason: unknown) {
   return reason instanceof Error && reason.name === 'AbortError'
@@ -64,7 +67,10 @@ export default function App() {
   const [adminLoading, setAdminLoading] = useState(false)
   const [action, setAction] = useState('')
   const [sourceBusy, setSourceBusy] = useState('')
-  const [sourceDraft, setSourceDraft] = useState<{name: string; url: string; protocol: Protocol; priority: number}>({ name: '', url: '', protocol: 'Http', priority: 100 })
+  const [sourceDraft, setSourceDraft] = useState<SourceDraft>(emptySourceDraft)
+  const [sourceEditorOpen, setSourceEditorOpen] = useState(false)
+  const [editingSource, setEditingSource] = useState<Source | null>(null)
+  const [sourceDeleteConfirm, setSourceDeleteConfirm] = useState(false)
   const firstAdminActionRef = useRef<HTMLButtonElement>(null)
   const focusAdminActionAfterLoginRef = useRef(false)
   const autoLoginAttemptedRef = useRef(false)
@@ -262,6 +268,10 @@ export default function App() {
     setDiagnostics(null)
     setAction('')
     setSourceBusy('')
+    setSourceEditorOpen(false)
+    setEditingSource(null)
+    setSourceDeleteConfirm(false)
+    setSourceDraft(emptySourceDraft)
     try { await fetch(`${API}/api/v1/auth/logout`, { method: 'POST', credentials: 'include' }) }
     finally { window.location.replace('/login') }
   }, [invalidateAdminSession])
@@ -290,58 +300,64 @@ export default function App() {
     }
   }
 
+  const openNewSource = () => {
+    setEditingSource(null)
+    setSourceDraft(emptySourceDraft)
+    setSourceDeleteConfirm(false)
+    setAdminError('')
+    setSourceEditorOpen(true)
+  }
+
+  const openSourceEditor = (source: Source) => {
+    setEditingSource(source)
+    setSourceDraft({
+      name: source.name,
+      url: source.url,
+      protocol: source.defaultProtocol,
+      priority: source.priority,
+      enabled: source.enabled,
+    })
+    setSourceDeleteConfirm(false)
+    setAdminError('')
+    setSourceEditorOpen(true)
+  }
+
+  const closeSourceEditor = () => {
+    if (sourceBusy) return
+    setSourceEditorOpen(false)
+    setEditingSource(null)
+    setSourceDeleteConfirm(false)
+    setSourceDraft(emptySourceDraft)
+  }
+
   const saveSource = async (event: React.FormEvent) => {
     event.preventDefault()
     if (!adminAuthenticated || action || sourceBusy) return
     const sessionId = adminSessionIdRef.current
     const controller = new AbortController()
     adminMutationAbortRefs.current.add(controller)
-    setSourceBusy('new')
+    const source = editingSource
+    setSourceBusy(source?.id ?? 'new')
     setAdminError('')
     try {
-      const response = await fetch(`${API}/api/v1/admin/sources`, {
-        method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...sourceDraft, enabled: true }),
+      const response = await fetch(`${API}/api/v1/admin/sources${source ? `/${source.id}` : ''}`, {
+        method: source ? 'PUT' : 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(sourceDraft),
         signal: controller.signal,
       })
       if (sessionId !== adminSessionIdRef.current) return
       if (!response.ok) {
         if (response.status === 401) { setAdminAuthenticated(false); window.location.replace('/login') }
-        throw new Error(await responseMessage(response, 'Не удалось добавить источник'))
+        throw new Error(await responseMessage(response, source ? 'Не удалось изменить источник' : 'Не удалось добавить источник'))
       }
-      setSourceDraft({ name: '', url: '', protocol: 'Http', priority: 100 })
-      await loadAdminData()
+      setSourceEditorOpen(false)
+      setEditingSource(null)
+      setSourceDeleteConfirm(false)
+      setSourceDraft(emptySourceDraft)
+      await loadAdminData(false, sourcePage, sourcePageSize)
     } catch (reason) {
       if (!isAbortError(reason) && sessionId === adminSessionIdRef.current)
-        setAdminError(reason instanceof Error ? reason.message : 'Не удалось добавить источник')
-    } finally {
-      adminMutationAbortRefs.current.delete(controller)
-      if (sessionId === adminSessionIdRef.current) setSourceBusy('')
-    }
-  }
-
-  const toggleSource = async (source: Source) => {
-    if (!adminAuthenticated || action || sourceBusy) return
-    const sessionId = adminSessionIdRef.current
-    const controller = new AbortController()
-    adminMutationAbortRefs.current.add(controller)
-    setSourceBusy(source.id)
-    setAdminError('')
-    try {
-      const response = await fetch(`${API}/api/v1/admin/sources/${source.id}`, {
-        method: 'PUT', credentials: 'include', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: source.name, url: source.url, protocol: source.defaultProtocol, priority: source.priority, enabled: !source.enabled }),
-        signal: controller.signal,
-      })
-      if (sessionId !== adminSessionIdRef.current) return
-      if (!response.ok) {
-        if (response.status === 401) { setAdminAuthenticated(false); window.location.replace('/login') }
-        throw new Error(await responseMessage(response, 'Не удалось изменить состояние источника'))
-      }
-      await loadAdminData()
-    } catch (reason) {
-      if (!isAbortError(reason) && sessionId === adminSessionIdRef.current)
-        setAdminError(reason instanceof Error ? reason.message : 'Не удалось изменить состояние источника')
+        setAdminError(reason instanceof Error ? reason.message : source ? 'Не удалось изменить источник' : 'Не удалось добавить источник')
     } finally {
       adminMutationAbortRefs.current.delete(controller)
       if (sessionId === adminSessionIdRef.current) setSourceBusy('')
@@ -350,7 +366,6 @@ export default function App() {
 
   const removeSource = async (source: Source) => {
     if (!adminAuthenticated || action || sourceBusy) return
-    if (!window.confirm(`Удалить или отключить источник «${source.name}»?`)) return
     const sessionId = adminSessionIdRef.current
     const controller = new AbortController()
     adminMutationAbortRefs.current.add(controller)
@@ -362,7 +377,13 @@ export default function App() {
         if (response.status === 401) { setAdminAuthenticated(false); window.location.replace('/login') }
         throw new Error(await responseMessage(response, 'Не удалось удалить источник'))
       }
-      await loadAdminData()
+      setSourceEditorOpen(false)
+      setEditingSource(null)
+      setSourceDeleteConfirm(false)
+      setSourceDraft(emptySourceDraft)
+      const nextPage = !source.isBuiltIn && sources.length === 1 && sourcePage > 1 ? sourcePage - 1 : sourcePage
+      if (nextPage !== sourcePage) setSourcePage(nextPage)
+      await loadAdminData(false, nextPage, sourcePageSize)
     } catch (reason) {
       if (!isAbortError(reason) && sessionId === adminSessionIdRef.current)
         setAdminError(reason instanceof Error ? reason.message : 'Не удалось удалить источник')
@@ -371,6 +392,25 @@ export default function App() {
       if (sessionId === adminSessionIdRef.current) setSourceBusy('')
     }
   }
+
+  useEffect(() => {
+    if (!sourceEditorOpen) return
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !sourceBusy) {
+        setSourceEditorOpen(false)
+        setEditingSource(null)
+        setSourceDeleteConfirm(false)
+        setSourceDraft(emptySourceDraft)
+      }
+    }
+    window.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.body.style.overflow = previousOverflow
+      window.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [sourceEditorOpen, sourceBusy])
 
   const protocolCounts = useMemo(() => Object.fromEntries(stats?.byProtocol.map(x => [x.protocol, x.count]) ?? []), [stats])
   const exportQuery = useMemo(() => {
@@ -488,17 +528,10 @@ export default function App() {
           </section>}
 
           {adminSection === 'sources' && <section className="admin-section" aria-labelledby="admin-sources-title">
-            <div className="admin-section-heading"><div><span className="kicker">КАТАЛОГ СБОРА</span><h1 id="admin-sources-title">Источники</h1><p>Подключайте собственные HTTPS-feed и управляйте активностью существующих источников.</p></div><span className="section-count">{sourceTotal}</span></div>
-            <section className="admin-card source-create"><div className="card-heading"><div><span className="kicker">НОВЫЙ FEED</span><h2>Добавить источник</h2></div></div><form className="source-form" onSubmit={saveSource}>
-              <input required minLength={2} maxLength={120} aria-label="Название источника" placeholder="Название" value={sourceDraft.name} onChange={e => setSourceDraft({...sourceDraft, name: e.target.value})}/>
-              <input required type="url" maxLength={2048} pattern="https://.*" aria-label="HTTPS URL источника" placeholder="https://example.org/proxies.txt" value={sourceDraft.url} onChange={e => setSourceDraft({...sourceDraft, url: e.target.value})}/>
-              <select aria-label="Протокол источника" value={sourceDraft.protocol} onChange={e => setSourceDraft({...sourceDraft, protocol: e.target.value as Protocol})}>{protocols.map(item => <option key={item} value={item}>{label(item)}</option>)}</select>
-              <input type="number" min={-10000} max={10000} aria-label="Приоритет источника" value={sourceDraft.priority} onChange={e => setSourceDraft({...sourceDraft, priority: Number(e.target.value)})}/>
-              <button type="submit" disabled={!adminAuthenticated || adminMutationBusy}>{sourceBusy === 'new' ? 'Добавляем…' : 'Добавить источник'}</button>
-            </form></section>
+            <div className="admin-section-heading"><div><span className="kicker">КАТАЛОГ СБОРА</span><h1 id="admin-sources-title">Источники</h1><p>Подключайте собственные HTTPS-feed и управляйте активностью существующих источников.</p></div><div className="admin-heading-actions"><span className="section-count">{sourceTotal}</span><button className="primary-admin-button" onClick={openNewSource} disabled={!adminAuthenticated || adminMutationBusy}><Plus/>Добавить источник</button></div></div>
             <section className="admin-card source-catalog-card"><div className="card-heading"><div><span className="kicker">ВСЕ ИСТОЧНИКИ</span><h2>Каталог <em>{sourceTotal}</em></h2></div><button className="icon-button" aria-label="Обновить источники" onClick={() => void loadAdminData()} disabled={adminLoading}><RefreshCw className={adminLoading ? 'spin' : ''}/></button></div><div className="source-list">{sources.map(source => <article key={source.id}>
               <div><b>{source.name}</b><small>{source.defaultProtocol} · {source.lastItemCount.toLocaleString('ru-RU')} адресов{source.lastContentFetchedAt ? ` · полный feed ${new Date(source.lastContentFetchedAt).toLocaleString('ru-RU')}` : ' · полный feed ещё не получен'}{source.lastResultTruncated ? ' · результат усечён' : ''}{source.consecutiveFailures > 0 ? ` · сбоев подряд: ${source.consecutiveFailures}` : ''}{source.nextFetchAt ? ` · повтор ${timeUntil(source.nextFetchAt)}` : ''}</small></div>
-              <div className="source-controls"><span title={source.isBuiltIn ? `Встроенный источник · ${source.provider} · ${source.providerIdentity} · ранг ${source.catalogRank}` : 'Пользовательский источник'} className="source-kind">{source.isBuiltIn ? source.provider : 'свой'}</span><span title={source.lastError} className={source.lastError ? 'source-error' : 'source-ok'}>{source.lastError ? 'ошибка' : source.enabled ? 'активен' : 'пауза'}</span><button disabled={adminMutationBusy} onClick={() => toggleSource(source)}>{source.enabled ? 'Пауза' : 'Включить'}</button>{!source.isBuiltIn && <button className="danger" disabled={adminMutationBusy} onClick={() => removeSource(source)}>Удалить</button>}</div>
+              <div className="source-controls"><span title={source.isBuiltIn ? `Встроенный источник · ${source.provider} · ${source.providerIdentity} · ранг ${source.catalogRank}` : 'Пользовательский источник'} className="source-kind">{source.isBuiltIn ? source.provider : 'свой'}</span><span title={source.lastError} className={source.lastError ? 'source-error' : 'source-ok'}>{source.lastError ? 'ошибка' : source.enabled ? 'активен' : 'пауза'}</span><button className="source-edit-button" disabled={adminMutationBusy} onClick={() => openSourceEditor(source)}><Pencil/>Изменить</button></div>
             </article>)}</div>{sourceTotal > 0 && <ProxyPagination page={sourcePage} pageSize={sourcePageSize} total={sourceTotal} totalPages={sourceTotalPages} onPageChange={next => { setSourcePage(next); void loadAdminData(false, next, sourcePageSize); document.getElementById('admin-sources-title')?.scrollIntoView?.({behavior:'smooth'}) }} onPageSizeChange={size => { setSourcePageSize(size); setSourcePage(1); void loadAdminData(false, 1, size) }}/>}</section>
           </section>}
 
@@ -511,6 +544,21 @@ export default function App() {
         </>}
       </section>
     </main>}
+
+    {sourceEditorOpen && <div className="source-editor-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) closeSourceEditor() }}>
+      <section className="source-editor-modal" role="dialog" aria-modal="true" aria-labelledby="source-editor-title">
+        <div className="source-editor-heading"><div><span className="kicker">{editingSource ? 'НАСТРОЙКА FEED' : 'НОВЫЙ FEED'}</span><h2 id="source-editor-title">{editingSource ? 'Редактировать источник' : 'Добавить источник'}</h2><p>{editingSource?.isBuiltIn ? 'У встроенного источника можно изменить только активность.' : 'Укажите публичный HTTPS-адрес и параметры разбора списка прокси.'}</p></div><button type="button" className="icon-button" aria-label="Закрыть редактор источника" onClick={closeSourceEditor} disabled={!!sourceBusy}><X/></button></div>
+        {adminError && <div className="admin-notice source-editor-notice" role="alert"><X size={16}/>{adminError}</div>}
+        <form className="source-editor-form" onSubmit={saveSource}>
+          <label>Название<input autoFocus required minLength={2} maxLength={120} disabled={editingSource?.isBuiltIn} value={sourceDraft.name} onChange={event => setSourceDraft({...sourceDraft, name:event.target.value})}/></label>
+          <label>HTTPS URL<input required type="url" maxLength={2048} pattern="https://.*" disabled={editingSource?.isBuiltIn} placeholder="https://example.org/proxies.txt" value={sourceDraft.url} onChange={event => setSourceDraft({...sourceDraft, url:event.target.value})}/></label>
+          <div className="source-editor-grid"><label>Протокол<select disabled={editingSource?.isBuiltIn} value={sourceDraft.protocol} onChange={event => setSourceDraft({...sourceDraft, protocol:event.target.value as Protocol})}>{protocols.map(item => <option key={item} value={item}>{label(item)}</option>)}</select></label><label>Приоритет<input type="number" min={-10000} max={10000} disabled={editingSource?.isBuiltIn} value={sourceDraft.priority} onChange={event => setSourceDraft({...sourceDraft, priority:Number(event.target.value)})}/></label></div>
+          <label className="source-enabled"><input type="checkbox" checked={sourceDraft.enabled} onChange={event => setSourceDraft({...sourceDraft, enabled:event.target.checked})}/><span><b>Источник активен</b><small>Активные источники участвуют в очередном цикле сбора.</small></span></label>
+          {sourceDeleteConfirm && editingSource && <div className="source-delete-confirm" role="alert"><div><b>{editingSource.isBuiltIn ? 'Отключить встроенный источник?' : 'Удалить источник безвозвратно?'}</b><p>{editingSource.isBuiltIn ? 'Он останется в каталоге и его можно будет включить позже.' : 'Запись источника будет удалена. Уже собранные прокси сохранятся в базе.'}</p></div><button type="button" onClick={() => setSourceDeleteConfirm(false)} disabled={!!sourceBusy}>Отмена</button><button type="button" className="danger" onClick={() => void removeSource(editingSource)} disabled={!!sourceBusy}>{sourceBusy ? 'Выполняем…' : editingSource.isBuiltIn ? 'Отключить' : 'Удалить'}</button></div>}
+          <div className="source-editor-actions">{editingSource && !sourceDeleteConfirm && <button type="button" className="danger-link" onClick={() => setSourceDeleteConfirm(true)} disabled={!!sourceBusy}><Trash2/>{editingSource.isBuiltIn ? 'Отключить источник' : 'Удалить источник'}</button>}<span/><button type="button" className="secondary-admin-button" onClick={closeSourceEditor} disabled={!!sourceBusy}>Отмена</button><button type="submit" className="primary-admin-button" disabled={!adminAuthenticated || adminMutationBusy}>{sourceBusy ? 'Сохраняем…' : editingSource ? 'Сохранить изменения' : 'Добавить источник'}</button></div>
+        </form>
+      </section>
+    </div>}
   </div>
 }
 
