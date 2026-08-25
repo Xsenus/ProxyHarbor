@@ -345,7 +345,7 @@ jobs:
           assert_secret_values_absent "$postgres_id"
           assert_secret_values_absent "$restore_id"
           docker inspect --format '{{json .Mounts}}' "$api_id" | jq --exit-status \
-            '[.[] | select(.Destination | startswith("/run/secrets/"))] | length == 13'
+            '[.[] | select(.Destination | startswith("/run/secrets/"))] | length == 17'
           docker inspect --format '{{json .Mounts}}' "$postgres_id" | jq --exit-status \
             '[.[] | select(.Destination == "/run/secrets/postgres_password")] | length == 1'
           docker inspect --format '{{json .Mounts}}' "$restore_id" | jq --exit-status \
