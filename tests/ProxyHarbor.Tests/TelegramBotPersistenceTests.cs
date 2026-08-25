@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using ProxyHarbor.Api;
+using ProxyHarbor.Domain;
 using ProxyHarbor.Infrastructure;
 
 namespace ProxyHarbor.Tests;
@@ -66,6 +67,28 @@ public sealed class TelegramBotPersistenceTests
         Assert.Single(db.TelegramConversationMessages);
     }
 
+    [Fact]
+    public async Task ProxyFileContainsOnlyFreshAliveEndpointsInPublicOrder()
+    {
+        await using var db = Database();
+        var now = DateTimeOffset.UtcNow;
+        db.Proxies.AddRange(
+            Endpoint("192.0.2.10", 8080, ProxyStatus.Alive, now.AddMinutes(-2), 40, 3),
+            Endpoint("2001:db8::10", 1080, ProxyStatus.Alive, now.AddMinutes(-1), 20, 2, ProxyProtocol.Socks5),
+            Endpoint("192.0.2.11", 3128, ProxyStatus.Alive, now.AddMinutes(-40), 10, 20),
+            Endpoint("192.0.2.12", 8888, ProxyStatus.Dead, now, 5, 0));
+        await db.SaveChangesAsync();
+
+        var file = await TelegramOutboundWorker.BuildProxyFileAsync(
+            db, maximum: 10, freshAfter: now.AddMinutes(-15), CancellationToken.None);
+        var text = System.Text.Encoding.UTF8.GetString(file.Content);
+
+        Assert.Equal(2, file.Count);
+        Assert.Equal("socks5://[2001:db8::10]:1080\nhttp://192.0.2.10:8080\n", text);
+        Assert.DoesNotContain("192.0.2.11", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("192.0.2.12", text, StringComparison.Ordinal);
+    }
+
     private static ProxyHarborDbContext Database() => new(new DbContextOptionsBuilder<ProxyHarborDbContext>()
         .UseInMemoryDatabase(Guid.NewGuid().ToString("N")).Options);
 
@@ -73,5 +96,22 @@ public sealed class TelegramBotPersistenceTests
     {
         ChatId = id, TelegramUserId = id, UserId = Guid.NewGuid(), DisplayName = $"User {id}",
         NotificationsEnabled = notifications, IsBlocked = blocked
+    };
+
+    private static ProxyEndpoint Endpoint(
+        string host, int port, ProxyStatus status, DateTimeOffset checkedAt,
+        int latency, int successfulChecks, ProxyProtocol protocol = ProxyProtocol.Http) => new()
+    {
+        Host = host,
+        Port = port,
+        Protocol = protocol,
+        Status = status,
+        LatencyMs = latency,
+        LastCheckedAt = checkedAt,
+        SuccessfulChecks = successfulChecks,
+        FailedChecks = status == ProxyStatus.Dead ? 1 : 0,
+        FirstAliveAt = status == ProxyStatus.Alive ? checkedAt : null,
+        LastAliveAt = status == ProxyStatus.Alive ? checkedAt : null,
+        CurrentAliveSince = status == ProxyStatus.Alive ? checkedAt : null
     };
 }
