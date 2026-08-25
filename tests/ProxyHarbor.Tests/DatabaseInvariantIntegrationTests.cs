@@ -37,6 +37,11 @@ public sealed class DatabaseInvariantIntegrationTests
     private static readonly string[] IdentityConstraints =
     [
         "CK_AspNetUsers_ActiveTimeline",
+        "CK_PaymentOrders_Amount",
+        "CK_PaymentOrders_Currency",
+        "CK_PaymentOrders_Plan",
+        "CK_PaymentOrders_Status",
+        "CK_PaymentOrders_Timeline",
         "CK_Subscriptions_Plan",
         "CK_Subscriptions_Status",
         "CK_Subscriptions_Timeline"
