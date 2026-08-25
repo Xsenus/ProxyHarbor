@@ -123,6 +123,7 @@ builder.Services.AddHostedService<TelegramOutboundWorker>();
 builder.Services.AddHostedService<TelegramPollingWorker>();
 builder.Services.AddHostedService<TelegramSubscriptionReminderWorker>();
 builder.Services.AddSingleton<ProxyAccessMonitor>();
+builder.Services.AddScoped<IFreeExportAccessService, FreeExportAccessService>();
 builder.Services.AddHostedService(services => services.GetRequiredService<ProxyAccessMonitor>());
 builder.Services.AddControllers().AddJsonOptions(x =>
     x.JsonSerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter()));

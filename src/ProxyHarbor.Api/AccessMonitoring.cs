@@ -100,7 +100,10 @@ public sealed class ProxyAccessMonitor(
     private async Task PruneAsync(CancellationToken token)
     {
         await using var db = await dbFactory.CreateDbContextAsync(token);
-        await db.ProxyAccessBuckets.Where(x => x.LastSeenAt < DateTimeOffset.UtcNow.AddDays(-90))
+        var cutoff = DateTimeOffset.UtcNow.AddDays(-90);
+        await db.ProxyAccessBuckets.Where(x => x.LastSeenAt < cutoff)
+            .ExecuteDeleteAsync(token);
+        await db.FreeProxyExportGrants.Where(x => x.NextAllowedAt < cutoff)
             .ExecuteDeleteAsync(token);
     }
 

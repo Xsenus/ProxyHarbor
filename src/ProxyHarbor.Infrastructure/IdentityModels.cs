@@ -107,6 +107,20 @@ public sealed class ProxyAccessBucket
     public DateTimeOffset LastSeenAt { get; set; }
 }
 
+/// <summary>
+/// Постоянный маркер последней бесплатной выгрузки. Отдельная запись нужна, чтобы
+/// десятиминутный интервал нельзя было обойти перезапуском API или параллельными запросами.
+/// </summary>
+public sealed class FreeProxyExportGrant
+{
+    /// <summary>Стабильный ключ аккаунта, а для гостя — канонического IP-адреса.</summary>
+    public string ClientKey { get; set; } = string.Empty;
+    /// <summary>Момент последней разрешённой бесплатной выгрузки.</summary>
+    public DateTimeOffset LastGrantedAt { get; set; }
+    /// <summary>Первый момент, когда следующая бесплатная выгрузка снова разрешена.</summary>
+    public DateTimeOffset NextAllowedAt { get; set; }
+}
+
 /// <summary>Административное правило блокировки IP/CIDR или пользователя.</summary>
 public sealed class AccessBlockRule
 {

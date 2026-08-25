@@ -289,6 +289,7 @@ public sealed class BackupService(
                 await WriteJsonAsync(archive, "database/payment-orders.json", db.PaymentOrders.AsNoTracking().AsAsyncEnumerable(), token);
                 await WriteJsonAsync(archive, "database/subscription-admin-actions.json", db.SubscriptionAdminActions.AsNoTracking().AsAsyncEnumerable(), token);
                 await WriteJsonAsync(archive, "database/proxy-access-buckets.json", db.ProxyAccessBuckets.AsNoTracking().AsAsyncEnumerable(), token);
+                await WriteJsonAsync(archive, "database/free-proxy-export-grants.json", db.FreeProxyExportGrants.AsNoTracking().AsAsyncEnumerable(), token);
                 await WriteJsonAsync(archive, "database/access-block-rules.json", db.AccessBlockRules.AsNoTracking().AsAsyncEnumerable(), token);
                 // Реквизиты внутри записи уже зашифрованы Data Protection; внешний
                 // .phbackup дополнительно шифрует весь архив как единое целое.
