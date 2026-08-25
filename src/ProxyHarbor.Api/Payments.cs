@@ -2,13 +2,16 @@ using System.Globalization;
 using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Encodings.Web;
 using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Diagnostics.CodeAnalysis;
 using Microsoft.Extensions.Options;
 using ProxyHarbor.Infrastructure;
 
 namespace ProxyHarbor.Api;
 
-/// <summary>Настройки каталога и пяти изолированных hosted-checkout шлюзов.</summary>
+/// <summary>Настройки каталога и восьми изолированных hosted-checkout шлюзов.</summary>
 public sealed class PaymentOptions
 {
     /// <summary>Имя configuration section.</summary>
@@ -66,15 +69,19 @@ internal sealed record PaymentNotification(Guid OrderId, string ProviderPaymentI
 
 internal static class PaymentProviderConfiguration
 {
-    internal static readonly string[] Codes = ["yookassa", "cloudpayments", "robokassa", "tbank", "stripe"];
+    internal static readonly string[] Codes =
+        ["yookassa", "yoomoney", "cloudpayments", "robokassa", "tbank", "stripe", "cryptomus", "nowpayments"];
 
     internal static bool IsReady(string code, PaymentProviderOptions value) => value.Enabled && code switch
     {
         "yookassa" => Present(value.MerchantId) && Present(value.SecretKey),
+        "yoomoney" => Present(value.MerchantId) && Present(value.SecretKey),
         "cloudpayments" => Present(value.PublicId) && Present(value.SecretKey),
         "robokassa" => Present(value.MerchantId) && Present(value.SecretKey) && Present(value.SecondarySecret),
         "tbank" => Present(value.MerchantId) && Present(value.SecretKey),
         "stripe" => Present(value.SecretKey) && Present(value.SecondarySecret),
+        "cryptomus" => Present(value.MerchantId) && Present(value.SecretKey),
+        "nowpayments" => Present(value.SecretKey) && Present(value.SecondarySecret),
         _ => false
     };
 
@@ -100,10 +107,13 @@ public sealed class PaymentGatewayClient(IHttpClientFactory clients, IPaymentCon
         return order.Provider switch
         {
             "yookassa" => await CreateYooKassaAsync(order, provider, publicBaseUrl, token),
+            "yoomoney" => CreateYooMoney(order, publicBaseUrl),
             "cloudpayments" => await CreateCloudPaymentsAsync(order, user, provider, publicBaseUrl, token),
             "robokassa" => CreateRobokassa(order, user, provider),
             "tbank" => await CreateTBankAsync(order, user, provider, publicBaseUrl, token),
             "stripe" => await CreateStripeAsync(order, user, provider, publicBaseUrl, token),
+            "cryptomus" => await CreateCryptomusAsync(order, provider, publicBaseUrl, token),
+            "nowpayments" => await CreateNowPaymentsAsync(order, provider, publicBaseUrl, token),
             _ => throw new InvalidOperationException("Неизвестный платёжный провайдер.")
         };
     }
@@ -119,10 +129,13 @@ public sealed class PaymentGatewayClient(IHttpClientFactory clients, IPaymentCon
         return providerCode switch
         {
             "yookassa" => await ReadYooKassaAsync(body, provider, token),
+            "yoomoney" => ReadYooMoney(body, provider),
             "cloudpayments" => ReadCloudPayments(body, request, provider),
             "robokassa" => ReadRobokassa(body, request, provider),
             "tbank" => ReadTBank(body, provider),
             "stripe" => ReadStripe(body, request, provider),
+            "cryptomus" => ReadCryptomus(body, provider),
+            "nowpayments" => ReadNowPayments(body, request, provider),
             _ => throw new InvalidOperationException("Неизвестный платёжный провайдер.")
         };
     }
@@ -157,6 +170,9 @@ public sealed class PaymentGatewayClient(IHttpClientFactory clients, IPaymentCon
         return new(json.GetProperty("id").GetString()!,
             json.GetProperty("confirmation").GetProperty("confirmation_url").GetString()!);
     }
+
+    private static CheckoutResult CreateYooMoney(PaymentOrder order, string publicBaseUrl) =>
+        new(null, $"{publicBaseUrl.TrimEnd('/')}/api/v1/payments/hosted/yoomoney/{order.Id:D}/{order.IdempotencyKey}");
 
     private async Task<CheckoutResult> CreateCloudPaymentsAsync(
         PaymentOrder order, ApplicationUser user, PaymentProviderOptions provider, string publicBaseUrl, CancellationToken token)
@@ -240,6 +256,51 @@ public sealed class PaymentGatewayClient(IHttpClientFactory clients, IPaymentCon
         return new(json.GetProperty("id").GetString()!, json.GetProperty("url").GetString()!);
     }
 
+    private async Task<CheckoutResult> CreateCryptomusAsync(
+        PaymentOrder order, PaymentProviderOptions provider, string publicBaseUrl, CancellationToken token)
+    {
+        var payload = new Dictionary<string, object?>
+        {
+            ["amount"] = Major(order.AmountMinor), ["currency"] = order.Currency,
+            ["order_id"] = order.Id.ToString("N"), ["url_return"] = ReturnUrl(publicBaseUrl, order.Id),
+            ["url_success"] = ReturnUrl(publicBaseUrl, order.Id),
+            ["url_callback"] = $"{publicBaseUrl.TrimEnd('/')}/api/v1/payments/webhooks/cryptomus",
+            ["is_payment_multiple"] = true, ["lifetime"] = 3600
+        };
+        var body = JsonSerializer.Serialize(payload, Json);
+        using var request = new HttpRequestMessage(HttpMethod.Post, "https://api.cryptomus.com/v1/payment")
+        { Content = new StringContent(body, Encoding.UTF8, "application/json") };
+        request.Headers.Add("merchant", provider.MerchantId);
+        request.Headers.Add("sign", CryptomusSignature(body, provider.SecretKey));
+        using var response = await clients.CreateClient().SendAsync(request, token);
+        var json = await ReadSuccessJsonAsync(response, token);
+        var result = json.GetProperty("result");
+        return new(result.GetProperty("uuid").GetString()!, result.GetProperty("url").GetString()!);
+    }
+
+    private async Task<CheckoutResult> CreateNowPaymentsAsync(
+        PaymentOrder order, PaymentProviderOptions provider, string publicBaseUrl, CancellationToken token)
+    {
+        var payload = new
+        {
+            price_amount = order.AmountMinor / 100m,
+            price_currency = order.Currency.ToLowerInvariant(),
+            order_id = order.Id.ToString("D"),
+            order_description = $"ProxyHarbor {order.ProductCode}",
+            ipn_callback_url = $"{publicBaseUrl.TrimEnd('/')}/api/v1/payments/webhooks/nowpayments",
+            success_url = ReturnUrl(publicBaseUrl, order.Id), cancel_url = ReturnUrl(publicBaseUrl, order.Id),
+            is_fixed_rate = true
+        };
+        using var request = new HttpRequestMessage(HttpMethod.Post, "https://api.nowpayments.io/v1/invoice")
+        { Content = JsonContent.Create(payload) };
+        request.Headers.Add("x-api-key", provider.SecretKey);
+        using var response = await clients.CreateClient().SendAsync(request, token);
+        var json = await ReadSuccessJsonAsync(response, token);
+        // Invoice ID и payment ID у NOWPayments различаются. Канонический payment ID
+        // фиксируется из подписанного IPN, иначе первый callback был бы отклонён.
+        return new(null, json.GetProperty("invoice_url").GetString()!);
+    }
+
     private async Task<PaymentNotification> ReadYooKassaAsync(
         string body, PaymentProviderOptions provider, CancellationToken token)
     {
@@ -253,6 +314,25 @@ public sealed class PaymentGatewayClient(IHttpClientFactory clients, IPaymentCon
             paymentId, MapStatus(verified.GetProperty("status").GetString()),
             ParseMinor(verified.GetProperty("amount").GetProperty("value").GetString()!),
             verified.GetProperty("amount").GetProperty("currency").GetString()!);
+    }
+
+    private static PaymentNotification ReadYooMoney(string body, PaymentProviderOptions provider)
+    {
+        var form = ParseForm(body);
+        var supplied = form.GetValueOrDefault("sign") ?? throw new InvalidOperationException("Нет подписи ЮMoney.");
+        var canonical = FormString(form.Where(item => !item.Key.Equals("sign", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(item => item.Key, StringComparer.Ordinal)
+            .ToDictionary(item => item.Key, item => item.Value, StringComparer.Ordinal));
+        RequireFixedEquals(HmacHex(canonical, provider.SecretKey), supplied);
+        if (form.GetValueOrDefault("test_notification")?.Equals("true", StringComparison.OrdinalIgnoreCase) == true)
+            throw new InvalidOperationException("Тестовое уведомление ЮMoney не активирует подписку.");
+        if (form.GetValueOrDefault("unaccepted")?.Equals("true", StringComparison.OrdinalIgnoreCase) == true)
+            throw new InvalidOperationException("Перевод ЮMoney ещё не принят.");
+        if (!string.Equals(form.GetValueOrDefault("currency"), "643", StringComparison.Ordinal))
+            throw new InvalidOperationException("ЮMoney прислал неподдерживаемую валюту.");
+        var amount = form.GetValueOrDefault("withdraw_amount") ?? form["amount"];
+        return new(Guid.Parse(form["label"]), form["operation_id"], PaymentStatuses.Paid,
+            ParseMinor(amount), "RUB");
     }
 
     private static PaymentNotification ReadCloudPayments(
@@ -313,6 +393,47 @@ public sealed class PaymentGatewayClient(IHttpClientFactory clients, IPaymentCon
             session.GetProperty("amount_total").GetInt64(), session.GetProperty("currency").GetString()!.ToUpperInvariant());
     }
 
+    private static PaymentNotification ReadCryptomus(string body, PaymentProviderOptions provider)
+    {
+        var root = JsonNode.Parse(body)?.AsObject() ?? throw new InvalidOperationException("Пустой webhook Cryptomus.");
+        var supplied = root["sign"]?.GetValue<string>() ?? throw new InvalidOperationException("Нет подписи Cryptomus.");
+        root.Remove("sign");
+        // Cryptomus формирует webhook-подпись совместимым с PHP json_encode способом:
+        // Unicode остаётся открытым, а косые черты экранируются.
+        var canonical = root.ToJsonString(WebhookJson).Replace("/", "\\/", StringComparison.Ordinal);
+        RequireFixedEquals(CryptomusSignature(canonical, provider.SecretKey), supplied);
+        var status = NodeText(root["status"] ?? root["payment_status"]);
+        return new(Guid.Parse(NodeText(root["order_id"])), NodeText(root["uuid"]), status switch
+        {
+            "paid" or "paid_over" => PaymentStatuses.Paid,
+            "refund_paid" => PaymentStatuses.Refunded,
+            "cancel" => PaymentStatuses.Canceled,
+            "fail" or "wrong_amount" or "system_fail" or "refund_fail" => PaymentStatuses.Failed,
+            _ => PaymentStatuses.Pending
+        }, ParseMinor(NodeText(root["amount"])), NodeText(root["currency"]).ToUpperInvariant());
+    }
+
+    private static PaymentNotification ReadNowPayments(
+        string body, HttpRequest request, PaymentProviderOptions provider)
+    {
+        var root = JsonNode.Parse(body) ?? throw new InvalidOperationException("Пустой IPN NOWPayments.");
+        var canonical = SortJson(root).ToJsonString(WebhookJson);
+        var supplied = request.Headers["x-nowpayments-sig"].FirstOrDefault()
+            ?? throw new InvalidOperationException("Нет подписи NOWPayments.");
+        RequireFixedEquals(HmacSha512Hex(canonical, provider.SecondarySecret), supplied);
+        var objectRoot = root.AsObject();
+        var providerId = NodeText(objectRoot["payment_id"] ?? objectRoot["invoice_id"]);
+        var status = NodeText(objectRoot["payment_status"]);
+        return new(Guid.Parse(NodeText(objectRoot["order_id"])), providerId, status switch
+        {
+            "finished" => PaymentStatuses.Paid,
+            "refunded" => PaymentStatuses.Refunded,
+            "expired" => PaymentStatuses.Canceled,
+            "failed" => PaymentStatuses.Failed,
+            _ => PaymentStatuses.Pending
+        }, ParseMinor(NodeText(objectRoot["price_amount"])), NodeText(objectRoot["price_currency"]).ToUpperInvariant());
+    }
+
     private static string ReturnUrl(string publicBaseUrl, Guid id) =>
         $"{publicBaseUrl.TrimEnd('/')}/account?payment={id:D}";
     private static string Major(long minor) => (minor / 100m).ToString("0.00", CultureInfo.InvariantCulture);
@@ -321,6 +442,9 @@ public sealed class PaymentGatewayClient(IHttpClientFactory clients, IPaymentCon
     private static AuthenticationHeaderValue Basic(string user, string password) =>
         new("Basic", Convert.ToBase64String(Encoding.UTF8.GetBytes($"{user}:{password}")));
     private static string QueryString(IReadOnlyDictionary<string, string?> values) => string.Join('&', values.Select(x => $"{Uri.EscapeDataString(x.Key)}={Uri.EscapeDataString(x.Value ?? string.Empty)}"));
+    private static string FormString(IReadOnlyDictionary<string, string> values) => string.Join('&',
+        values.Select(item => $"{FormEncode(item.Key)}={FormEncode(item.Value)}"));
+    private static string FormEncode(string value) => Uri.EscapeDataString(value);
     private static Dictionary<string, string> ParseForm(string value) => value.Split('&', StringSplitOptions.RemoveEmptyEntries)
         .Select(x => x.Split('=', 2)).ToDictionary(
             x => Uri.UnescapeDataString(x[0].Replace('+', ' ')),
@@ -336,6 +460,23 @@ public sealed class PaymentGatewayClient(IHttpClientFactory clients, IPaymentCon
     private static string ElementText(JsonElement value) => value.ValueKind switch { JsonValueKind.True => "true", JsonValueKind.False => "false", JsonValueKind.String => value.GetString()!, _ => value.GetRawText() };
     private static string HashHex(string value) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
     private static string HmacHex(string value, string key) { using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(key)); return Convert.ToHexString(hmac.ComputeHash(Encoding.UTF8.GetBytes(value))).ToLowerInvariant(); }
+    private static string HmacSha512Hex(string value, string key) { using var hmac = new HMACSHA512(Encoding.UTF8.GetBytes(key)); return Convert.ToHexString(hmac.ComputeHash(Encoding.UTF8.GetBytes(value))).ToLowerInvariant(); }
+    [SuppressMessage("Security", "CA5351:Do Not Use Broken Cryptographic Algorithms", Justification = "Cryptomus protocol mandates MD5 for request and webhook signatures; TLS and exact-body validation are also enforced.")]
+    private static string CryptomusSignature(string body, string key) => Convert.ToHexString(MD5.HashData(
+        Encoding.UTF8.GetBytes(Convert.ToBase64String(Encoding.UTF8.GetBytes(body)) + key))).ToLowerInvariant();
+    private static string NodeText(JsonNode? node) => node switch
+    {
+        JsonValue value when value.TryGetValue<string>(out var text) => text,
+        JsonValue value => value.ToJsonString().Trim('"'),
+        _ => throw new InvalidOperationException("Webhook не содержит обязательного поля.")
+    };
+    private static JsonNode SortJson(JsonNode node) => node switch
+    {
+        JsonObject value => new JsonObject(value.OrderBy(item => item.Key, StringComparer.Ordinal)
+            .Select(item => KeyValuePair.Create(item.Key, item.Value is null ? null : SortJson(item.Value)))),
+        JsonArray value => new JsonArray(value.Select(item => item is null ? null : SortJson(item)).ToArray()),
+        _ => node.DeepClone()
+    };
     private static void VerifyHmacBase64(string value, string? supplied, string key) { using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(key)); RequireFixedEquals(Convert.ToBase64String(hmac.ComputeHash(Encoding.UTF8.GetBytes(value))), supplied ?? string.Empty); }
     private static void RequireFixedEquals(string expected, string actual) { if (!FixedEquals(expected, actual)) throw new InvalidOperationException("Некорректная подпись уведомления."); }
     private static bool FixedEquals(string left, string right) => CryptographicOperations.FixedTimeEquals(Encoding.ASCII.GetBytes(left.ToLowerInvariant()), Encoding.ASCII.GetBytes(right.ToLowerInvariant()));
@@ -346,4 +487,10 @@ public sealed class PaymentGatewayClient(IHttpClientFactory clients, IPaymentCon
         using var document = JsonDocument.Parse(body);
         return document.RootElement.Clone();
     }
+
+    private static readonly JsonSerializerOptions WebhookJson = new(JsonSerializerDefaults.Web)
+    {
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+        WriteIndented = false
+    };
 }

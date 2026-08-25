@@ -22,6 +22,8 @@ secrets:
     file: ./.tmp-ci-secrets/telegram_chat_id
   yookassa_secret: !override
     file: ./.tmp-ci-secrets/yookassa_secret
+  yoomoney_notification_secret: !override
+    file: ./.tmp-ci-secrets/yoomoney_notification_secret
   cloudpayments_secret: !override
     file: ./.tmp-ci-secrets/cloudpayments_secret
   robokassa_password1: !override
@@ -34,3 +36,9 @@ secrets:
     file: ./.tmp-ci-secrets/stripe_secret
   stripe_webhook_secret: !override
     file: ./.tmp-ci-secrets/stripe_webhook_secret
+  cryptomus_payment_key: !override
+    file: ./.tmp-ci-secrets/cryptomus_payment_key
+  nowpayments_api_key: !override
+    file: ./.tmp-ci-secrets/nowpayments_api_key
+  nowpayments_ipn_secret: !override
+    file: ./.tmp-ci-secrets/nowpayments_ipn_secret

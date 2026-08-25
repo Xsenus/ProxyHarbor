@@ -6,7 +6,7 @@ using ProxyHarbor.Infrastructure;
 
 namespace ProxyHarbor.Api.Controllers;
 
-/// <summary>Безопасное runtime-управление тарифами и пятью платёжными шлюзами.</summary>
+/// <summary>Безопасное runtime-управление тарифами и восемью платёжными шлюзами.</summary>
 [ApiController, Route("api/v1/admin/payments"), EnableRateLimiting("admin")]
 [Authorize(Roles = UserRoles.Administrator)]
 [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
@@ -126,8 +126,9 @@ public sealed class AdminPaymentsController(IPaymentConfigurationStore configura
     private static BadRequestObjectResult Invalid(string title) => new(new ProblemDetails { Title = title, Status = 400 });
     private static string ProviderName(string code) => code switch
     {
-        "yookassa" => "ЮKassa", "cloudpayments" => "CloudPayments", "robokassa" => "Robokassa",
-        "tbank" => "Т-Банк", "stripe" => "Stripe", _ => code
+        "yookassa" => "ЮKassa", "yoomoney" => "ЮMoney", "cloudpayments" => "CloudPayments",
+        "robokassa" => "Robokassa", "tbank" => "Т-Банк", "stripe" => "Stripe",
+        "cryptomus" => "Cryptomus", "nowpayments" => "NOWPayments", _ => code
     };
 }
 
@@ -138,8 +139,8 @@ public sealed class UpdatePaymentSettingsRequest
     public bool Enabled { get; set; }
     /// <summary>Полный каталог тарифов.</summary>
     [Required, MinLength(1), MaxLength(10)] public List<UpdatePaymentProductRequest> Products { get; set; } = [];
-    /// <summary>Настройки всех пяти шлюзов.</summary>
-    [Required, MinLength(5), MaxLength(5)] public List<UpdatePaymentProviderRequest> Providers { get; set; } = [];
+    /// <summary>Настройки всех восьми шлюзов.</summary>
+    [Required, MinLength(8), MaxLength(8)] public List<UpdatePaymentProviderRequest> Providers { get; set; } = [];
 }
 
 /// <summary>Редактируемый тариф в минимальных единицах валюты.</summary>
@@ -166,11 +167,11 @@ public sealed class UpdatePaymentProductRequest
 /// <summary>Несекретные реквизиты и команды замены/очистки секретов одного шлюза.</summary>
 public sealed class UpdatePaymentProviderRequest
 {
-    /// <summary>Один из пяти поддерживаемых кодов.</summary>
+    /// <summary>Один из восьми поддерживаемых кодов.</summary>
     [Required, StringLength(32)] public string Code { get; set; } = string.Empty;
     /// <summary>Разрешить создание платежей через шлюз.</summary>
     public bool Enabled { get; set; }
-    /// <summary>Shop ID, MerchantLogin или TerminalKey.</summary>
+    /// <summary>Shop ID, кошелёк, MerchantLogin, TerminalKey или Merchant UUID.</summary>
     [StringLength(256)] public string MerchantId { get; set; } = string.Empty;
     /// <summary>Публичный идентификатор CloudPayments.</summary>
     [StringLength(256)] public string PublicId { get; set; } = string.Empty;
