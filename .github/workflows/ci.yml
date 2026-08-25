@@ -884,8 +884,8 @@ jobs:
           grep --ignore-case '^Content-Type: text/plain; charset=utf-8' "$export_headers"
           csv_export=$(curl --fail --silent --dump-header "$export_headers" \
             'http://127.0.0.1:5080/api/v1/export/csv?limit=1')
-          echo "$csv_export" | grep '^protocol,host,port,latencyMs,successRate,lastCheckedAt,url,exitIp'
-          echo "$csv_export" | grep '"Socks5","8.8.4.4",18080,321'
+          echo "$csv_export" | grep '^protocol,host,port,countryCode,latencyMs,successRate,lastCheckedAt,url,exitIp'
+          echo "$csv_export" | grep '"Socks5","8.8.4.4",18080,"DE",321'
           grep --ignore-case '^Content-Type: text/csv; charset=utf-8' "$export_headers"
           seek_export=$(curl --fail --silent --dump-header "$export_headers" \
             'http://127.0.0.1:5080/api/v1/export/txt/seek?limit=1')
