@@ -9,7 +9,7 @@ const stats = {
   truncatedSources: 0, byProtocol: [{ protocol: 'Http', count: 77 }],
 }
 
-const proxies = Array.from({ length: 25 }, (_, index) => ({
+const proxies = Array.from({ length: 10 }, (_, index) => ({
   host: `203.0.113.${index + 1}`, port: 8000 + index, protocol: 'Http',
   url: `http://203.0.113.${index + 1}:${8000 + index}`, latencyMs: 100 + index,
   successRate: 99.5, lastCheckedAt: new Date().toISOString(),
@@ -23,7 +23,7 @@ describe('ProxyHarbor UI', () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
       if (url.includes('/api/v1/stats')) return jsonResponse(stats)
-      if (url.includes('/api/v1/proxies')) return jsonResponse({ items: proxies, page: 1, pageSize: 25, total: 77 })
+      if (url.includes('/api/v1/proxies')) return jsonResponse({ items: proxies, page: 1, pageSize: 10, total: 77 })
       return jsonResponse({ title: 'Unexpected request' }, 500)
     }))
   })
@@ -46,18 +46,19 @@ describe('ProxyHarbor UI', () => {
     render(<App />)
     expect(await screen.findByRole('cell', { name: /^203\.0\.113\.1:8000$/ })).toBeInTheDocument()
     expect(screen.getAllByText('2 ч 0 мин').length).toBeGreaterThan(0)
-    expect(screen.getByText('Страница 1 из 4 · Найдено: 77')).toBeInTheDocument()
+    expect(screen.getByText('Страница 1 из 8 · Найдено: 77')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Следующая страница' })).toBeEnabled()
-    expect(screen.queryByRole('spinbutton', { name: 'Номер страницы' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '10' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('spinbutton', { name: 'Номер страницы' })).toBeInTheDocument()
   })
 
   it('requests the selected page and page size from the server', async () => {
     render(<App />)
-    await screen.findByText('Страница 1 из 4 · Найдено: 77')
+    await screen.findByText('Страница 1 из 8 · Найдено: 77')
     fireEvent.click(screen.getByRole('button', { name: '2' }))
     await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([input]) => {
       const url = String(input)
-      return url.includes('/api/v1/proxies?') && url.includes('page=2') && url.includes('pageSize=25')
+      return url.includes('/api/v1/proxies?') && url.includes('page=2') && url.includes('pageSize=10')
     })).toBe(true))
   })
 
@@ -67,7 +68,7 @@ describe('ProxyHarbor UI', () => {
       if (url.includes('/api/v1/stats')) return jsonResponse(stats)
       if (url.includes('/api/v1/proxies')) {
         const requestedPage = Number(new URL(url, 'http://localhost').searchParams.get('page')) || 1
-        return jsonResponse({ items: proxies, page: requestedPage, pageSize: 25, total: 250 })
+        return jsonResponse({ items: proxies, page: requestedPage, pageSize: 10, total: 250 })
       }
       return jsonResponse({ title: 'Unexpected request' }, 500)
     })
@@ -83,7 +84,7 @@ describe('ProxyHarbor UI', () => {
 
   it('resets to page one when page size changes', async () => {
     render(<App />)
-    await screen.findByText('Страница 1 из 4 · Найдено: 77')
+    await screen.findByText('Страница 1 из 8 · Найдено: 77')
     fireEvent.click(screen.getByRole('button', { name: '50' }))
     await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([input]) => {
       const url = String(input)
