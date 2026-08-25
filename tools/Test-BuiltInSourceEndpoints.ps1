@@ -124,7 +124,9 @@ $results = @($feeds | ForEach-Object -Parallel {
             $body.Write($buffer, 0, $read)
         }
         $text = [Text.Encoding]::UTF8.GetString($body.GetBuffer(), 0, [int]$body.Length)
-        if (-not [regex]::IsMatch($text, '(?<!\d)(?:\d{1,3}\.){3}\d{1,3}:\d{1,5}(?!\d)')) {
+        # Границы совпадают с ProxyParser: IP:port внутри hostname, credential или
+        # дополнительных colon-полей не считается пригодным endpoint'ом.
+        if (-not [regex]::IsMatch($text, '(?<![A-Za-z0-9.:_@-])(?:\d{1,3}\.){3}\d{1,3}:\d{1,5}(?![A-Za-z0-9.:_@-])')) {
             throw "no IP:port in first $($body.Length) decoded bytes"
         }
 
