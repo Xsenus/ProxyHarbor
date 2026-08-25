@@ -164,6 +164,40 @@ public sealed class PaymentGatewayTests
         Assert.Equal(PaymentStatuses.Paid, result.Status);
     }
 
+    [Theory]
+    [InlineData("canceled", "canceled")]
+    [InlineData("pending", "pending")]
+    public async Task YooKassaMapsNonPaidStates(string providerStatus, string expectedStatus)
+    {
+        var order = Guid.NewGuid();
+        var context = Request("POST", """{"object":{"id":"yoo-state"}}""");
+        var verified = JsonSerializer.Serialize(new { id = "yoo-state", status = providerStatus, amount = new { value = "499.00", currency = "RUB" }, metadata = new { order_id = order.ToString("D") } });
+
+        var result = await FullClient(_ => JsonResponse(verified))
+            .ReadNotificationAsync("yookassa", context.Request, CancellationToken.None);
+
+        Assert.Equal(expectedStatus, result.Status);
+    }
+
+    [Theory]
+    [InlineData("REVERSED", "refunded")]
+    [InlineData("DECLINED", "failed")]
+    public async Task TBankMapsTerminalStates(string providerStatus, string expectedStatus)
+    {
+        var order = Guid.NewGuid();
+        var values = new SortedDictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["Amount"] = "49900", ["OrderId"] = order.ToString("D"), ["Password"] = "tbank-password",
+            ["PaymentId"] = "988", ["Status"] = providerStatus, ["Success"] = "true", ["TerminalKey"] = "terminal"
+        };
+        var token = Sha256Hex(string.Concat(values.Values));
+        var body = JsonSerializer.Serialize(new { TerminalKey = "terminal", OrderId = order.ToString("D"), Success = true, Status = providerStatus, PaymentId = 988, Amount = 49_900, Token = token });
+
+        var result = await FullClient().ReadNotificationAsync("tbank", Request("POST", body).Request, CancellationToken.None);
+
+        Assert.Equal(expectedStatus, result.Status);
+    }
+
     private static PaymentGatewayClient Client(string secret)
     {
         var options = new PaymentOptions
