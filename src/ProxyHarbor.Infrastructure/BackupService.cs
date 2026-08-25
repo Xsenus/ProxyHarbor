@@ -487,6 +487,29 @@ public sealed class BackupService(
                 out _);
     }
 
+    /// <summary>
+    /// Безопасно сопоставляет имя опубликованной копии с файлом внутри настроенного каталога.
+    /// Метод принимает только точный namespace файлов, создаваемых BackupService, поэтому
+    /// административные download/delete endpoint'ы не могут выйти за пределы backup volume.
+    /// </summary>
+    public static bool TryResolvePublishedBackupPath(string? directory, string? fileName, out string path)
+    {
+        path = string.Empty;
+        if (!BackupOptions.IsDirectoryValid(directory) || string.IsNullOrWhiteSpace(fileName) ||
+            !string.Equals(Path.GetFileName(fileName), fileName, StringComparison.Ordinal) ||
+            !IsPublishedBackupName(fileName))
+            return false;
+
+        var normalizedDirectory = Path.GetFullPath(directory!)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var candidate = Path.GetFullPath(Path.Combine(normalizedDirectory, fileName));
+        if (!string.Equals(Path.GetDirectoryName(candidate), normalizedDirectory, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        path = candidate;
+        return true;
+    }
+
     /// <summary>Удаляет только незавершённые служебные файлы, никогда не затрагивая готовый encrypted backup.</summary>
     internal static int DeleteOrphanArtifacts(string directory)
     {

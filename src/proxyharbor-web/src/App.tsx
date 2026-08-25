@@ -10,6 +10,7 @@ type Source = { id: string; name: string; url: string; defaultProtocol: Protocol
 type CollectionRun = { id: string; startedAt: string; finishedAt?: string; sourcesProcessed: number; sourcesSucceeded: number; sourcesFailed: number; sourcesSkipped: number; sourcesTruncated: number; candidatesFound: number; candidateLimitReached: boolean; newProxies: number; status: string; error?: string }
 type ValidationRun = { id: string; startedAt: string; finishedAt?: string; claimed: number; checked: number; alive: number; deferred: number; status: string; error?: string }
 type BackupRun = { id: string; startedAt: string; finishedAt?: string; status: string; fileName?: string; sizeBytes: number; telegramConfigured: boolean; sentToTelegram: boolean; error?: string }
+type BackupFile = BackupRun & { available: boolean }
 type SourceCatalogSnapshot = { lastAuditedOn: string; expectedSources: number; presentSources: number; enabledSources: number; healthySources: number; failingSources: number; neverAuditedSources: number; staleSources: number; truncatedSources: number; expectedProviders: number; presentProviders: number; enabledProviders: number; isComplete: boolean; isHealthy: boolean }
 type Diagnostics = {
   serverTime: string
@@ -98,6 +99,12 @@ export default function App() {
   const [sourceSearchDraft, setSourceSearchDraft] = useState('')
   const [sourceSearch, setSourceSearch] = useState('')
   const [diagnostics, setDiagnostics] = useState<Diagnostics | null>(null)
+  const [backups, setBackups] = useState<BackupFile[]>([])
+  const [backupPage, setBackupPage] = useState(1)
+  const [backupPageSize, setBackupPageSize] = useState(10)
+  const [backupTotal, setBackupTotal] = useState(0)
+  const [backupBusy, setBackupBusy] = useState('')
+  const [backupDeleteTarget, setBackupDeleteTarget] = useState<BackupFile | null>(null)
   const [adminLoading, setAdminLoading] = useState(false)
   const [action, setAction] = useState('')
   const [sourceBusy, setSourceBusy] = useState('')
@@ -279,6 +286,27 @@ export default function App() {
     }
   }, [sourcePage, sourcePageSize, sourceSearch])
 
+  /** Загружает отдельный реестр backup: audit-история может быть длиннее diagnostics-снимка. */
+  const loadBackups = useCallback(async (
+    requestedPage = backupPage,
+    requestedPageSize = backupPageSize,
+  ) => {
+    try {
+      const query = new URLSearchParams({ page: String(requestedPage), pageSize: String(requestedPageSize) })
+      const response = await fetch(`${API}/api/v1/admin/backups?${query}`, { credentials: 'include' })
+      if (response.status === 401) { setAdminAuthenticated(false); window.location.replace('/login'); return }
+      if (response.status === 403) { window.location.replace('/account'); return }
+      if (!response.ok) throw new Error(await responseMessage(response, 'История резервных копий недоступна'))
+      const snapshot = await response.json() as PagedResult<BackupFile>
+      setBackups(snapshot.items)
+      setBackupTotal(snapshot.total)
+      const availablePages = Math.max(1, Math.ceil(snapshot.total / requestedPageSize))
+      if (requestedPage > availablePages) setBackupPage(availablePages)
+    } catch (reason) {
+      setAdminError(reason instanceof Error ? reason.message : 'Не удалось загрузить резервные копии')
+    }
+  }, [backupPage, backupPageSize])
+
   useEffect(() => {
     if (!adminAuthenticated || !focusAdminActionAfterLoginRef.current) return
     focusAdminActionAfterLoginRef.current = false
@@ -309,6 +337,10 @@ export default function App() {
     }
   }, [adminOpen, adminAuthenticated, loadAdminData])
 
+  useEffect(() => {
+    if (adminSection === 'backups' && adminAuthenticated) void loadBackups()
+  }, [adminSection, adminAuthenticated, loadBackups])
+
   /** Отменяет все чтения и мутации, принадлежавшие предыдущей admin-сессии. */
   const invalidateAdminSession = useCallback(() => {
     adminSessionIdRef.current++
@@ -325,6 +357,10 @@ export default function App() {
     setSources([])
     setSourceTotal(0)
     setDiagnostics(null)
+    setBackups([])
+    setBackupTotal(0)
+    setBackupBusy('')
+    setBackupDeleteTarget(null)
     setAction('')
     setSourceBusy('')
     setSourceEditorOpen(false)
@@ -349,13 +385,38 @@ export default function App() {
         if (response.status === 401) { setAdminAuthenticated(false); window.location.replace('/login') }
         throw new Error(await responseMessage(response, 'Административная операция не выполнена'))
       }
-      await Promise.all([load(), loadAdminData()])
+      await Promise.all([load(), loadAdminData(), name === 'backup' ? loadBackups(1, backupPageSize) : Promise.resolve()])
+      if (name === 'backup') setBackupPage(1)
     } catch (reason) {
       if (!isAbortError(reason) && sessionId === adminSessionIdRef.current)
         setAdminError(reason instanceof Error ? reason.message : 'Административная операция не выполнена')
     } finally {
       adminMutationAbortRefs.current.delete(controller)
       if (sessionId === adminSessionIdRef.current) setAction('')
+    }
+  }
+
+  /** Удаляет файл и audit-запись только после подтверждения в фирменном диалоге. */
+  const deleteBackup = async () => {
+    if (!backupDeleteTarget || backupBusy) return
+    const target = backupDeleteTarget
+    setBackupBusy(target.id)
+    setAdminError('')
+    try {
+      const response = await fetch(`${API}/api/v1/admin/backups/${target.id}`, {
+        method: 'DELETE', credentials: 'include',
+      })
+      if (response.status === 401) { setAdminAuthenticated(false); window.location.replace('/login'); return }
+      if (!response.ok) throw new Error(await responseMessage(response, 'Не удалось удалить резервную копию'))
+      setBackupDeleteTarget(null)
+      const remainingTotal = Math.max(0, backupTotal - 1)
+      const nextPage = Math.min(backupPage, Math.max(1, Math.ceil(remainingTotal / backupPageSize)))
+      setBackupPage(nextPage)
+      await Promise.all([loadBackups(nextPage, backupPageSize), loadAdminData()])
+    } catch (reason) {
+      setAdminError(reason instanceof Error ? reason.message : 'Не удалось удалить резервную копию')
+    } finally {
+      setBackupBusy('')
     }
   }
 
@@ -482,9 +543,10 @@ export default function App() {
   const latestCollection = diagnostics?.recentRuns[0]
   const latestValidation = diagnostics?.recentValidationRuns?.[0]
   const latestBackup = diagnostics?.recentBackups[0]
-  const adminMutationBusy = !!action || !!sourceBusy
+  const adminMutationBusy = !!action || !!sourceBusy || !!backupBusy
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
   const sourceTotalPages = Math.max(1, Math.ceil(sourceTotal / sourcePageSize))
+  const backupTotalPages = Math.max(1, Math.ceil(backupTotal / backupPageSize))
 
   if (loginPage) return <AccountLoginPage/>
   if (registerPage) return <RegisterPage/>
@@ -603,7 +665,7 @@ export default function App() {
           {adminSection === 'backups' && <section className="admin-section" aria-labelledby="admin-backups-title">
             <div className="admin-section-heading"><div><span className="kicker">ЗАЩИТА ДАННЫХ</span><h1 id="admin-backups-title">Резервные копии</h1><p>Создавайте зашифрованные снимки базы данных и контролируйте доставку в Telegram.</p></div><button className="primary-admin-button" onClick={() => runAdminAction('backup')} disabled={!adminAuthenticated || adminMutationBusy}><Database/>{action === 'backup' ? 'Создаём…' : 'Создать backup'}</button></div>
             <div className="backup-summary"><article><span><Database/></span><div><small>Размер базы</small><strong>{formatBytes(diagnostics?.databaseBytes)}</strong></div></article><article><span><HardDriveDownload/></span><div><small>Последняя копия</small><strong>{latestBackup ? formatBytes(latestBackup.sizeBytes) : '—'}</strong></div></article><article><span><ShieldCheck/></span><div><small>Доставка</small><strong>{latestBackup ? backupDelivery(latestBackup) : 'Нет данных'}</strong></div></article></div>
-            <AdminRunHistory title="История резервного копирования" empty="Резервные копии ещё не создавались.">{diagnostics?.recentBackups.map(run => <HistoryRow key={run.id} status={run.status} title={run.fileName ?? 'Резервная копия'} detail={`${formatBytes(run.sizeBytes)} · ${backupDelivery(run)}`} time={run.startedAt}/>)}</AdminRunHistory>
+            <section className="admin-card backup-registry"><div className="card-heading"><div><span className="kicker">ИСТОРИЯ</span><h2>Резервные копии <em>{backupTotal}</em></h2></div><button className="icon-button" aria-label="Обновить резервные копии" onClick={() => void loadBackups()} disabled={!!backupBusy}><RefreshCw/></button></div><div className="backup-list">{backups.length === 0 ? <p className="empty-state">Резервные копии ещё не создавались.</p> : backups.map(run => <article key={run.id}><i className={statusClass(run.status)}/><div><b>{run.fileName ?? 'Резервная копия'}</b><small>{formatBytes(run.sizeBytes)} · {backupDelivery(run)}{run.fileName && !run.available ? ' · локальный файл уже удалён политикой хранения' : ''}</small></div><time>{timeAgo(run.startedAt)}</time><div className="backup-actions">{run.available ? <a className="backup-download" href={`${API}/api/v1/admin/backups/${run.id}/download`} download={run.fileName}><ArrowDownToLine/>Скачать</a> : <span className="backup-unavailable">Недоступна</span>}<button className="backup-delete" aria-label={`Удалить ${run.fileName ?? 'резервную копию'}`} disabled={run.status === 'running' || !!backupBusy} onClick={() => setBackupDeleteTarget(run)}><Trash2/>Удалить</button></div></article>)}</div>{backupTotal > 0 && <ProxyPagination page={backupPage} pageSize={backupPageSize} total={backupTotal} totalPages={backupTotalPages} onPageChange={next => { setBackupPage(next); void loadBackups(next, backupPageSize); document.getElementById('admin-backups-title')?.scrollIntoView?.({behavior:'smooth'}) }} onPageSizeChange={size => { setBackupPageSize(size); setBackupPage(1); void loadBackups(1, size) }}/>}</section>
           </section>}
           {adminSection === 'users' && <AdminUsersPage/>}
           {adminSection === 'proxies' && <AdminProxiesPage/>}
@@ -629,6 +691,7 @@ export default function App() {
         </form>
       </section>
     </div>}
+    {backupDeleteTarget && <div className="source-editor-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget && !backupBusy) setBackupDeleteTarget(null) }}><section className="source-editor-modal backup-delete-modal" role="dialog" aria-modal="true" aria-labelledby="backup-delete-title"><div className="source-editor-heading"><div><span className="kicker">ОПАСНОЕ ДЕЙСТВИЕ</span><h2 id="backup-delete-title">Удалить резервную копию?</h2><p>Файл <b>{backupDeleteTarget.fileName ?? 'без имени'}</b> и его запись в истории будут удалены без возможности восстановления.</p></div><button className="icon-button" aria-label="Отмена" onClick={() => setBackupDeleteTarget(null)} disabled={!!backupBusy}><X/></button></div><div className="source-editor-actions"><span/><button className="secondary-admin-button" onClick={() => setBackupDeleteTarget(null)} disabled={!!backupBusy}>Отмена</button><button className="danger-link" onClick={() => void deleteBackup()} disabled={!!backupBusy}><Trash2/>{backupBusy ? 'Удаляем…' : 'Удалить навсегда'}</button></div></section></div>}
   </div>
 }
 

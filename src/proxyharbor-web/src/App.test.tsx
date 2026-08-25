@@ -326,6 +326,30 @@ describe('ProxyHarbor UI', () => {
       String(input).endsWith('/source-edit') && options?.method === 'DELETE')).toBe(true))
   })
 
+  it('downloads and safely deletes a backup from the paged registry', async () => {
+    window.history.replaceState({}, '', '/admin/backups')
+    const backup = { id:'backup-1',startedAt:new Date().toISOString(),finishedAt:new Date().toISOString(),status:'completed',fileName:'proxyharbor-20260826-123456-1234.phbackup',sizeBytes:1024,telegramConfigured:true,sentToTelegram:true,available:true }
+    let deleted = false
+    vi.mocked(fetch).mockImplementation(async (input, options) => {
+      const url = String(input)
+      if (url.includes('/api/v1/admin/sources')) return jsonResponse({items:[],page:1,pageSize:10,total:0})
+      if (url.includes('/api/v1/admin/diagnostics')) return jsonResponse({serverTime:new Date().toISOString(),databaseBytes:2048,validationQueue:{total:0,due:0},recentRuns:[],recentValidationRuns:[],recentBackups:[backup]})
+      if (url.includes('/api/v1/admin/backups?')) return jsonResponse({items:deleted?[]:[backup],page:1,pageSize:10,total:deleted?0:1})
+      if (url.endsWith('/api/v1/admin/backups/backup-1') && options?.method === 'DELETE') { deleted = true; return new Response(null,{status:204}) }
+      return jsonResponse({title:'Unexpected request'},500)
+    })
+
+    render(<App/>)
+    const download = await screen.findByRole('link',{name:'Скачать'})
+    expect(download).toHaveAttribute('href','/api/v1/admin/backups/backup-1/download')
+    fireEvent.click(screen.getByRole('button',{name:/Удалить proxyharbor/}))
+    const dialog = screen.getByRole('dialog',{name:'Удалить резервную копию?'})
+    fireEvent.click(within(dialog).getByRole('button',{name:'Удалить навсегда'}))
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([input, options]) =>
+      String(input).endsWith('/api/v1/admin/backups/backup-1') && options?.method === 'DELETE')).toBe(true))
+    await waitFor(() => expect(screen.queryByRole('dialog',{name:'Удалить резервную копию?'})).not.toBeInTheDocument())
+  })
+
   it.each([
     ['/admin/operations', 'Операции'],
     ['/admin/sources', 'Источники'],
