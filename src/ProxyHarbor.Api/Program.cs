@@ -240,6 +240,11 @@ builder.Services.AddRateLimiter(x =>
             SegmentsPerWindow = 6,
             QueueLimit = 0
         }));
+    // Один браузер обычно отправляет один beacon на загрузку страницы. Отдельный
+    // limiter не позволяет подделанным событиям вытеснять публичный API-трафик.
+    x.AddPolicy("telemetry", context => RateLimitPartition.GetFixedWindowLimiter(
+        context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        _ => new FixedWindowRateLimiterOptions { PermitLimit = 30, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
     // Панель выполняет несколько параллельных чтений и обновляет диагностику в фоне.
     // Считаем лимит на конкретную защищённую учётную запись, а не на общий IP
     // офиса/NAT, и оставляем запас для переходов между административными разделами.

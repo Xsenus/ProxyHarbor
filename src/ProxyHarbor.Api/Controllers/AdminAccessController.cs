@@ -22,7 +22,8 @@ public sealed class AdminAccessController(ProxyHarborDbContext db, ProxyAccessMo
     {
         page = Math.Clamp(page, 1, 100_000); pageSize = Math.Clamp(pageSize, 10, 100);
         var since = DateTimeOffset.UtcNow.AddDays(-30);
-        var buckets = db.ProxyAccessBuckets.AsNoTracking().Where(x => x.LastSeenAt >= since);
+        var buckets = db.ProxyAccessBuckets.AsNoTracking().Where(x =>
+            x.LastSeenAt >= since && !x.Endpoint.StartsWith(ProxyAccessMonitor.SitePagePrefix));
         if (!string.IsNullOrWhiteSpace(query)) buckets = buckets.Where(x => x.IpAddress.Contains(query.Trim()));
         var grouped = buckets.GroupBy(x => new { x.IpAddress, x.UserId })
             .Select(x => new { x.Key.IpAddress, x.Key.UserId, requests = x.Sum(y => y.Requests),
@@ -39,6 +40,62 @@ public sealed class AdminAccessController(ProxyHarborDbContext db, ProxyAccessMo
             uniqueIps = await buckets.Select(x => x.IpAddress).Distinct().CountAsync(token),
             activeRules = rules.Count(x => x.Enabled && (x.ExpiresAt is null || x.ExpiresAt > DateTimeOffset.UtcNow)) };
         return Ok(new { items, page, pageSize, total, rules, summary });
+    }
+
+    /// <summary>Возвращает посетителей React-сайта и отдельную сводку за 30 дней.</summary>
+    [HttpGet("visitors")]
+    public async Task<IActionResult> Visitors([FromQuery] int page = 1, [FromQuery] int pageSize = 10,
+        [FromQuery] string? query = null, CancellationToken token = default)
+    {
+        page = Math.Clamp(page, 1, 100_000); pageSize = Math.Clamp(pageSize, 10, 100);
+        var now = DateTimeOffset.UtcNow;
+        var since = now.AddDays(-30);
+        var buckets = db.ProxyAccessBuckets.AsNoTracking().Where(x =>
+            x.LastSeenAt >= since && x.Endpoint.StartsWith(ProxyAccessMonitor.SitePagePrefix));
+        if (!string.IsNullOrWhiteSpace(query)) buckets = buckets.Where(x => x.IpAddress.Contains(query.Trim()));
+
+        var grouped = buckets.GroupBy(x => new { x.IpAddress, x.UserId })
+            .Select(x => new
+            {
+                x.Key.IpAddress,
+                x.Key.UserId,
+                PageViews = x.Sum(y => y.Requests),
+                Pages = x.Select(y => y.Endpoint).Distinct().Count(),
+                FirstSeenAt = x.Min(y => y.BucketStartedAt),
+                LastSeenAt = x.Max(y => y.LastSeenAt)
+            });
+        var total = await grouped.CountAsync(token);
+        var rows = await grouped.OrderByDescending(x => x.LastSeenAt).ThenBy(x => x.IpAddress)
+            .Skip((page - 1) * pageSize).Take(pageSize).ToListAsync(token);
+        var userIds = rows.Where(x => x.UserId.HasValue).Select(x => x.UserId!.Value).Distinct().ToArray();
+        var users = await db.Users.AsNoTracking().Where(x => userIds.Contains(x.Id))
+            .Select(x => new { x.Id, x.UserName, x.Email, x.DisplayName }).ToDictionaryAsync(x => x.Id, token);
+        var items = rows.Select(x =>
+        {
+            var account = x.UserId.HasValue && users.TryGetValue(x.UserId.Value, out var found) ? found : null;
+            return new
+            {
+                x.IpAddress,
+                x.UserId,
+                userName = account?.UserName,
+                email = account?.Email,
+                displayName = account?.DisplayName,
+                x.PageViews,
+                x.Pages,
+                x.FirstSeenAt,
+                x.LastSeenAt
+            };
+        }).ToArray();
+        var summary = new
+        {
+            pageViews = await buckets.SumAsync(x => (long?)x.Requests, token) ?? 0,
+            uniqueVisitors = await buckets.Select(x => x.IpAddress).Distinct().CountAsync(token),
+            authenticatedVisitors = await buckets.Where(x => x.UserId != null)
+                .Select(x => x.UserId).Distinct().CountAsync(token),
+            active24Hours = await buckets.Where(x => x.LastSeenAt >= now.AddHours(-24))
+                .Select(x => x.IpAddress).Distinct().CountAsync(token)
+        };
+        return Ok(new { items, page, pageSize, total, summary, retentionDays = 90 });
     }
 
     /// <summary>Создаёт блокировку точного IP, CIDR или пользователя.</summary>

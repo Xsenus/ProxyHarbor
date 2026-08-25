@@ -91,6 +91,80 @@ public sealed class AdminBillingAccessTests
     }
 
     [Fact]
+    public async Task VisitorRegistrySeparatesPageViewsFromProxyTraffic()
+    {
+        await using var fixture = new Fixture();
+        var user = new ApplicationUser
+        {
+            Id = Guid.NewGuid(), UserName = "visitor", Email = "visitor@example.test", DisplayName = "Посетитель"
+        };
+        fixture.Db.Users.Add(user);
+        fixture.Db.ProxyAccessBuckets.AddRange(
+            Bucket("198.51.100.9", 5, 50),
+            Bucket("198.51.100.9", 3, 0, "page:home", user.Id),
+            Bucket("198.51.100.9", 2, 0, "page:account", user.Id),
+            Bucket("198.51.100.10", 1, 0, "page:home"));
+        await fixture.Db.SaveChangesAsync();
+        var monitor = new ProxyAccessMonitor(fixture.Factory, NullLogger<ProxyAccessMonitor>.Instance);
+        var controller = WithPrincipal(new AdminAccessController(fixture.Db, monitor), user.Id);
+
+        var traffic = Assert.IsType<OkObjectResult>(await controller.List(token: CancellationToken.None));
+        var trafficJson = System.Text.Json.JsonSerializer.Serialize(traffic.Value);
+        Assert.Contains("\"requests\":5", trafficJson);
+        Assert.DoesNotContain("\"requests\":11", trafficJson);
+
+        var visitors = Assert.IsType<OkObjectResult>(await controller.Visitors(token: CancellationToken.None));
+        var visitorJson = System.Text.Json.JsonSerializer.Serialize(visitors.Value);
+        Assert.Contains("\"pageViews\":6", visitorJson);
+        Assert.Contains("\"uniqueVisitors\":2", visitorJson);
+        Assert.Contains("\"authenticatedVisitors\":1", visitorJson);
+        Assert.Contains("\"Pages\":2", visitorJson);
+        Assert.Contains("visitor@example.test", visitorJson);
+        var filtered = Assert.IsType<OkObjectResult>(await controller.Visitors(
+            query: "198.51.100.10", token: CancellationToken.None));
+        Assert.Contains("\"total\":1", System.Text.Json.JsonSerializer.Serialize(filtered.Value));
+    }
+
+    [Theory]
+    [InlineData(null, "home")]
+    [InlineData("", "home")]
+    [InlineData("/?utm_source=ignored", "home")]
+    [InlineData("/login", "login")]
+    [InlineData("/admin/login", "login")]
+    [InlineData("/register", "register")]
+    [InlineData("/forgot-password", "forgot-password")]
+    [InlineData("/reset-password", "reset-password")]
+    [InlineData("/account", "account")]
+    [InlineData("/account/profile", "account")]
+    [InlineData("/admin", "admin-overview")]
+    [InlineData("/admin/operations", "admin-operations")]
+    [InlineData("/admin/sources", "admin-sources")]
+    [InlineData("/admin/backups", "admin-backups")]
+    [InlineData("/admin/users", "admin-users")]
+    [InlineData("/admin/payments", "admin-payments")]
+    [InlineData("/admin/telegram", "admin-telegram")]
+    [InlineData("/admin/subscriptions", "admin-subscriptions")]
+    [InlineData("/ADMIN/ACCESS/", "admin-access")]
+    [InlineData("/unknown/private-value?token=secret", "other")]
+    public void SiteVisitPathsAreReducedToStablePrivacySafeCodes(string? path, string expected) =>
+        Assert.Equal(expected, SiteTelemetryController.NormalizePage(path));
+
+    [Fact]
+    public async Task SiteTelemetryHonorsGlobalPrivacyControlAndAcceptsAnonymousVisit()
+    {
+        await using var fixture = new Fixture();
+        var monitor = new ProxyAccessMonitor(fixture.Factory, NullLogger<ProxyAccessMonitor>.Instance);
+        var controller = new SiteTelemetryController(monitor)
+        {
+            ControllerContext = new ControllerContext { HttpContext = Context("/api/v1/telemetry/visit", "192.0.2.20") }
+        };
+        controller.Request.Headers["Sec-GPC"] = "1";
+        Assert.IsType<NoContentResult>(controller.Visit(new SiteVisitRequest { Path = "/account?secret=ignored" }));
+        controller.Request.Headers.Remove("Sec-GPC");
+        Assert.IsType<NoContentResult>(controller.Visit(new SiteVisitRequest { Path = "/account?secret=ignored" }));
+    }
+
+    [Fact]
     public async Task AccessMiddlewareSkipsOtherPathsRecordsAllowedAndRejectsBlockedClients()
     {
         await using var fixture = new Fixture();
@@ -128,10 +202,12 @@ public sealed class AdminBillingAccessTests
         Status = status, ProviderPaymentId = Guid.NewGuid().ToString("N")
     };
 
-    private static ProxyAccessBucket Bucket(string ip, int requests, long items) => new()
+    private static ProxyAccessBucket Bucket(string ip, int requests, long items,
+        string endpoint = "catalog", Guid? userId = null) => new()
     {
         BucketStartedAt = DateTimeOffset.UtcNow.AddMinutes(-5), IpAddress = ip,
-        Endpoint = "catalog", Requests = requests, ProxyItems = items, LastSeenAt = DateTimeOffset.UtcNow
+        UserId = userId, Endpoint = endpoint, Requests = requests, ProxyItems = items,
+        LastSeenAt = DateTimeOffset.UtcNow
     };
 
     private static DefaultHttpContext Context(string path, string ip)

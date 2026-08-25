@@ -27,7 +27,7 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
     public DbSet<PaymentConfiguration> PaymentConfigurations => Set<PaymentConfiguration>();
     /// <summary>Аудит ручных изменений подписок.</summary>
     public DbSet<SubscriptionAdminAction> SubscriptionAdminActions => Set<SubscriptionAdminAction>();
-    /// <summary>Агрегированная статистика выдачи адресов.</summary>
+    /// <summary>Агрегированная статистика выдачи адресов и посещений сайта.</summary>
     public DbSet<ProxyAccessBucket> ProxyAccessBuckets => Set<ProxyAccessBucket>();
     /// <summary>Правила блокировки клиентов выдачи.</summary>
     public DbSet<AccessBlockRule> AccessBlockRules => Set<AccessBlockRule>();

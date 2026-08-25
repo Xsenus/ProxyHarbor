@@ -78,8 +78,8 @@ public sealed class SubscriptionAdminAction
 }
 
 /// <summary>
-/// Пятиминутный агрегат выдачи прокси. Он сохраняет наблюдаемость без создания
-/// отдельной строки на каждый публичный запрос.
+/// Пятиминутный агрегат выдачи прокси и посещений сайта. Он сохраняет
+/// наблюдаемость без создания отдельной строки на каждый публичный запрос.
 /// </summary>
 public sealed class ProxyAccessBucket
 {
@@ -93,7 +93,7 @@ public sealed class ProxyAccessBucket
     public Guid? UserId { get; set; }
     /// <summary>Навигация к аккаунту.</summary>
     public ApplicationUser? User { get; set; }
-    /// <summary>Стабильная группа endpoint: catalog или export.</summary>
+    /// <summary>Стабильная группа endpoint: catalog, export либо нормализованная page:*.</summary>
     public string Endpoint { get; set; } = string.Empty;
     /// <summary>Всего запросов.</summary>
     public int Requests { get; set; }
