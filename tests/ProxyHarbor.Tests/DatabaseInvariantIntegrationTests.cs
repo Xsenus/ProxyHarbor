@@ -38,6 +38,7 @@ public sealed class DatabaseInvariantIntegrationTests
     [
         "CK_AccessBlockRules_Kind",
         "CK_AspNetUsers_ActiveTimeline",
+        "CK_FreeProxyExportGrants_Timeline",
         "CK_PaymentConfigurations_Singleton",
         "CK_PaymentOrders_Amount",
         "CK_PaymentOrders_Currency",
