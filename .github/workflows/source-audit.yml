@@ -41,6 +41,8 @@ jobs:
           ASPNETCORE_URLS: http://127.0.0.1:5080
           ConnectionStrings__Postgres: Host=127.0.0.1;Port=5432;Database=proxyharbor;Username=proxyharbor;Password=audit-password
           Security__AdminApiKey: source-audit-admin-key-at-least-24-chars
+          Security__AdminPassword: source-audit-admin-password-at-least-24-chars
+          Security__DataProtectionKeysDirectory: /tmp/proxyharbor-data-protection
           AllowedHosts: 127.0.0.1;localhost
           Collector__BackgroundWorkersEnabled: false
           Collector__SourceTimeoutSeconds: 30

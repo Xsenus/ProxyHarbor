@@ -33,6 +33,7 @@ public static class RuntimeSecretConfiguration
         }
 
         AddSecretOverride(configuration, overrides, "SecretFiles:AdminApiKey", "Security:AdminApiKey");
+        AddSecretOverride(configuration, overrides, "SecretFiles:AdminPassword", "Security:AdminPassword");
         AddSecretOverride(configuration, overrides, "SecretFiles:BackupEncryptionKey", "Backup:EncryptionKey");
         AddSecretOverride(configuration, overrides, "SecretFiles:TelegramBotToken", "Backup:TelegramBotToken");
         AddSecretOverride(configuration, overrides, "SecretFiles:TelegramChatId", "Backup:TelegramChatId");

@@ -12,6 +12,8 @@ secrets:
     file: ./.tmp-ci-secrets/postgres_password
   admin_api_key: !override
     file: ./.tmp-ci-secrets/admin_api_key
+  admin_password: !override
+    file: ./.tmp-ci-secrets/admin_password
   backup_encryption_key: !override
     file: ./.tmp-ci-secrets/backup_encryption_key
   telegram_bot_token: !override

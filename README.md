@@ -28,7 +28,7 @@ ProxyHarbor загружает 98 HTTPS-feed от 56 независимых пр
 - измерение полной latency, exit IP, анонимности, success rate и адаптивное расписание повторных проверок;
 - горизонтально масштабируемая очередь через lease token и `FOR UPDATE SKIP LOCKED`;
 - публичная keyset pagination и потоковый экспорт до 50 000 строк за запрос;
-- React-панель с серверной пагинацией, отдельными `/admin/login` и `/admin`; сведения об источниках доступны только оператору;
+- React-панель с серверной пагинацией, входом по логину и паролю на `/admin/login` и отдельной `/admin`; сведения об источниках доступны только оператору;
 - OpenAPI, Prometheus-метрики, готовые alerts и operator diagnostics;
 - PHB3 backup БД и безопасных настроек: diskless ZIP → AES-256-GCM → self-verification → atomic publish → Telegram;
 - транзакционный restore всех пяти таблиц с проверкой архива, semantic invariants и полным rollback при ошибке;
@@ -75,6 +75,8 @@ cp .env.example .env
 
 ```dotenv
 POSTGRES_PASSWORD=REPLACE_ME
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=REPLACE_WITH_A_DIFFERENT_SECRET
 ADMIN_API_KEY=REPLACE_ME
 BACKUP_ENCRYPTION_KEY=REPLACE_ME
 TELEGRAM_BOT_TOKEN=REPLACE_ME
@@ -157,7 +159,7 @@ curl 'http://localhost:8080/api/v1/stats'
 
 ## Административный API
 
-Все маршруты требуют заголовок `X-Admin-Key`:
+Браузер входит через `POST /api/v1/auth/login` по `ADMIN_USERNAME` и отдельному `ADMIN_PASSWORD`. Сервер выдаёт временную `HttpOnly`, `Secure`, `SameSite=Strict` cookie; пароль не сохраняется в React, `sessionStorage` или `localStorage`. CLI и automation независимо используют `ADMIN_API_KEY` в заголовке `X-Admin-Key`:
 
 ```text
 GET    /api/v1/admin/sources
@@ -177,7 +179,7 @@ Invoke-RestMethod http://localhost:8080/api/v1/admin/diagnostics -Headers $admin
 Invoke-RestMethod http://localhost:8080/api/v1/admin/collect -Method Post -Headers $adminHeaders
 ```
 
-Передавайте ключ только через HTTPS. Ответы admin API получают `Cache-Control: no-store`; middleware ограничивает размер и число header values и сравнивает SHA-256 в constant time.
+Передавайте credentials только через HTTPS. Ответы auth/admin API получают `Cache-Control: no-store`; вход ограничен пятью попытками за пять минут на IP, а логин, пароль и API key сравниваются по SHA-256 в constant time. Cookie-сессия живёт до восьми часов и подписывается ключами из отдельного постоянного Docker volume.
 
 ## Backup и восстановление
 
@@ -189,7 +191,7 @@ Backup содержит:
 - полные безопасные `Collector`/`Backup`/runtime-настройки;
 - manifest версии 5 с явным `secretsIncluded=false`.
 
-В архив никогда не входят admin key, PostgreSQL connection string/password, Telegram token/chat ID и encryption key. Их нужно хранить отдельно в secret manager.
+В архив никогда не входят admin password/API key, data-protection keys, PostgreSQL connection string/password, Telegram token/chat ID и encryption key. Их нужно хранить отдельно в secret manager.
 
 Ручной backup:
 

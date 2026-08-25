@@ -19,7 +19,9 @@ docker compose up -d --build
 | Переменная | Назначение |
 |---|---|
 | `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` | База, пользователь и пароль PostgreSQL |
-| `ADMIN_API_KEY` | Ключ заголовка `X-Admin-Key`; в Production 24–256 значимых символов |
+| `ADMIN_USERNAME` | Логин web-администратора; 3–64 символа `A-Z`, `a-z`, `0-9`, `.`, `_`, `-` |
+| `ADMIN_PASSWORD` | Отдельный пароль web-администратора; в Production 24–256 значимых символов |
+| `ADMIN_API_KEY` | Независимый ключ automation-заголовка `X-Admin-Key`; в Production 24–256 значимых символов |
 | `BACKGROUND_WORKERS_ENABLED` | Запуск collector, validator, maintenance и backup workers в API-реплике |
 | `VALIDATION_CONCURRENCY` | Параллельные сетевые проверки, `1..1000` |
 | `VALIDATION_BATCH_SIZE` | Размер распределённой validation lease, `1..100000` |
@@ -33,7 +35,9 @@ docker compose up -d --build
 | `PROMETHEUS_*`, `ALERTMANAGER_*` | Loopback-порты и bounded retention monitoring profile |
 | `PROXYHARBOR_IMAGE_PREFIX`, `PROXYHARBOR_IMAGE_TAG` | GHCR namespace и версия для release overlay |
 
-`POSTGRES_PASSWORD`, `ADMIN_API_KEY`, backup key и Telegram credentials Compose монтирует как bounded secret files. Приложение собирает строку PostgreSQL после чтения password file, поэтому пароль не появляется в process environment как часть connection string.
+`POSTGRES_PASSWORD`, `ADMIN_PASSWORD`, `ADMIN_API_KEY`, backup key и Telegram credentials Compose монтирует как bounded secret files. Приложение собирает строку PostgreSQL после чтения password file, поэтому пароль не появляется в process environment как часть connection string.
+
+Ключи подписи административной cookie-сессии сохраняются в volume `data-protection` по пути `/app/data-protection`. Благодаря этому активные сессии переживают пересоздание API-контейнера; volume не включается в прикладной backup и должен оставаться доступным только API-процессу.
 
 ## Collector
 
@@ -98,6 +102,7 @@ Defaults ниже соответствуют `src/ProxyHarbor.Api/appsettings.js
 ```powershell
 $env:ConnectionStrings__Postgres='Host=localhost;Port=5432;Database=proxyharbor;Username=proxyharbor;Password=development-only'
 $env:Security__AdminApiKey='development-admin-key'
+$env:Security__AdminPassword='development-admin-password'
 $env:Backup__Enabled='false'
 dotnet run --project src/ProxyHarbor.Api
 ```

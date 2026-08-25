@@ -11,7 +11,7 @@ Manifest v5 содержит согласованный repeatable-read snapshot
 - безопасные runtime-настройки CORS, trusted networks, hosts и logging;
 - UTC-время, версии manifest/settings schema и `secretsIncluded=false`.
 
-В архив никогда не входят PostgreSQL connection string/password, admin key, Telegram credentials или encryption key. Эти секреты необходимо независимо хранить во внешнем secret manager.
+В архив никогда не входят PostgreSQL connection string/password, admin password, admin API key, Telegram credentials, data-protection keys или encryption key. Эти секреты необходимо независимо хранить во внешнем secret manager.
 
 ## Создание и доставка
 

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Security.Claims;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
 using ProxyHarbor.Api;
@@ -25,7 +26,7 @@ public sealed class ApiSecurityMiddlewareTests
 
         Assert.False(nextCalled);
         Assert.Equal(StatusCodes.Status401Unauthorized, context.Response.StatusCode);
-        Assert.Equal("ApiKey realm=\"ProxyHarbor\"", context.Response.Headers.WWWAuthenticate);
+        Assert.Equal("Cookie, ApiKey realm=\"ProxyHarbor\"", context.Response.Headers.WWWAuthenticate);
         Assert.Equal("no-store", context.Response.Headers.CacheControl);
         Assert.Equal("no-cache", context.Response.Headers.Pragma);
         Assert.Equal("0", context.Response.Headers.Expires);
@@ -53,6 +54,29 @@ public sealed class ApiSecurityMiddlewareTests
         Assert.Equal("no-cache", context.Response.Headers.Pragma);
         Assert.DoesNotContain(AdminKey, string.Join('\n', context.Response.Headers), StringComparison.Ordinal);
         AssertSecurityHeaders(context.Response.Headers);
+    }
+
+    [Fact]
+    public async Task AuthenticatedAdministratorCookiePrincipalPassesWithoutApiKeyHeader()
+    {
+        var context = Context("/api/v1/admin/diagnostics");
+        context.User = new ClaimsPrincipal(new ClaimsIdentity(
+        [
+            new Claim(ClaimTypes.Name, "admin"),
+            new Claim(ClaimTypes.Role, "Administrator")
+        ], "Cookies"));
+        var nextCalled = false;
+        var pipeline = Pipeline(_ =>
+        {
+            nextCalled = true;
+            return Task.CompletedTask;
+        });
+
+        await pipeline(context);
+
+        Assert.True(nextCalled);
+        Assert.Equal(StatusCodes.Status200OK, context.Response.StatusCode);
+        Assert.Equal("no-store", context.Response.Headers.CacheControl);
     }
 
     [Fact]

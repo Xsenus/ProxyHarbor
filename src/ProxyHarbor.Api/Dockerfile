@@ -16,7 +16,7 @@ RUN dotnet publish "src/ProxyHarbor.Api/ProxyHarbor.Api.csproj" -c Release -o /a
     /p:UseAppHost=false /p:Version="$VERSION" /p:SourceRevisionId="$SOURCE_REVISION" /p:ContinuousIntegrationBuild=true
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0.10-alpine3.23@sha256:27b6b84beeede74fd16886177d360799c8e4299ceadfbd64eef57bafead7878a AS runtime
-RUN addgroup -S proxyharbor && adduser -S proxyharbor -G proxyharbor && mkdir -p /app/backups && chown -R proxyharbor:proxyharbor /app
+RUN addgroup -S proxyharbor && adduser -S proxyharbor -G proxyharbor && mkdir -p /app/backups /app/data-protection && chown -R proxyharbor:proxyharbor /app
 WORKDIR /app
 COPY --from=build --chown=proxyharbor:proxyharbor /app .
 USER proxyharbor

@@ -1,6 +1,8 @@
 using System.Globalization;
 using System.Net;
 using System.Threading.RateLimiting;
+using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.ResponseCompression;
@@ -17,16 +19,59 @@ builder.WebHost.ConfigureKestrel(options => options.AddServerHeader = false);
 
 if (!builder.Environment.IsDevelopment())
 {
+    var adminUsername = builder.Configuration["Security:AdminUsername"];
+    var adminPassword = builder.Configuration["Security:AdminPassword"];
     var adminKey = builder.Configuration["Security:AdminApiKey"];
+    var dataProtectionKeysDirectory = builder.Configuration["Security:DataProtectionKeysDirectory"];
+    if (!AdminUsernamePolicy.IsValid(adminUsername))
+        throw new InvalidOperationException(
+            "В Production Security__AdminUsername должен содержать 3–64 символа A-Z, a-z, 0-9, точку, дефис или подчёркивание.");
     if (!AdminApiKeyPolicy.IsValid(adminKey))
         throw new InvalidOperationException(
             "В Production Security__AdminApiKey должен содержать 24–256 значимых Unicode-символов без управляющих знаков и некорректных surrogate.");
+    if (!AdminApiKeyPolicy.IsValid(adminPassword))
+        throw new InvalidOperationException(
+            "В Production Security__AdminPassword должен содержать 24–256 значимых Unicode-символов без управляющих знаков и некорректных surrogate.");
+    if (string.IsNullOrWhiteSpace(dataProtectionKeysDirectory) || !Path.IsPathFullyQualified(dataProtectionKeysDirectory))
+        throw new InvalidOperationException(
+            "В Production Security__DataProtectionKeysDirectory должен содержать абсолютный путь к постоянному каталогу ключей cookie-сессии.");
     if (!ProductionHostPolicy.IsValid(builder.Configuration["AllowedHosts"]))
         throw new InvalidOperationException(
             "В Production AllowedHosts должен содержать 1–32 явных ASCII host pattern без порта; allow-all '*' запрещён.");
 }
 
 builder.Services.AddProxyHarborInfrastructure(builder.Configuration);
+builder.Services.AddSingleton<AdminCredentialValidator>();
+var dataProtection = builder.Services.AddDataProtection().SetApplicationName("ProxyHarbor");
+var configuredKeysDirectory = builder.Configuration["Security:DataProtectionKeysDirectory"];
+if (string.IsNullOrWhiteSpace(configuredKeysDirectory))
+    dataProtection.UseEphemeralDataProtectionProvider();
+else
+    dataProtection.PersistKeysToFileSystem(new DirectoryInfo(configuredKeysDirectory));
+builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
+    .AddCookie(options =>
+    {
+        options.Cookie.Name = "ProxyHarbor.Admin";
+        options.Cookie.HttpOnly = true;
+        options.Cookie.SameSite = SameSiteMode.Strict;
+        options.Cookie.SecurePolicy = builder.Environment.IsDevelopment()
+            ? CookieSecurePolicy.SameAsRequest
+            : CookieSecurePolicy.Always;
+        options.Cookie.Path = "/";
+        options.ExpireTimeSpan = TimeSpan.FromHours(8);
+        options.SlidingExpiration = true;
+        options.Events.OnRedirectToLogin = context =>
+        {
+            context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+            return Task.CompletedTask;
+        };
+        options.Events.OnRedirectToAccessDenied = context =>
+        {
+            context.Response.StatusCode = StatusCodes.Status403Forbidden;
+            return Task.CompletedTask;
+        };
+    });
+builder.Services.AddAuthorization();
 builder.Services.AddControllers().AddJsonOptions(x =>
     x.JsonSerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter()));
 builder.Services.AddOpenApi(options =>
@@ -42,6 +87,13 @@ builder.Services.AddOpenApi(options =>
             Name = "X-Admin-Key",
             Description = "Административный ключ ProxyHarbor; передавайте только по HTTPS."
         };
+        document.Components.SecuritySchemes["AdminSession"] = new OpenApiSecurityScheme
+        {
+            Type = SecuritySchemeType.ApiKey,
+            In = ParameterLocation.Cookie,
+            Name = "ProxyHarbor.Admin",
+            Description = "HttpOnly cookie-сессия, выдаваемая POST /api/v1/auth/login."
+        };
         return Task.CompletedTask;
     });
     options.AddOperationTransformer((operation, context, _) =>
@@ -53,6 +105,10 @@ builder.Services.AddOpenApi(options =>
             operation.Security.Add(new OpenApiSecurityRequirement
             {
                 [new OpenApiSecuritySchemeReference("AdminApiKey", context.Document, null)] = []
+            });
+            operation.Security.Add(new OpenApiSecurityRequirement
+            {
+                [new OpenApiSecuritySchemeReference("AdminSession", context.Document, null)] = []
             });
         }
         return Task.CompletedTask;
@@ -98,6 +154,7 @@ builder.Services.AddCors(x => x.AddPolicy("frontend", policy =>
 {
     if (corsOrigins.Length > 0)
         policy.WithOrigins(corsOrigins).AllowAnyHeader().AllowAnyMethod()
+            .AllowCredentials()
             .WithExposedHeaders(
                 "Content-Disposition", "X-Export-Limit", "X-Export-Offset", "X-Export-Cursor",
                 "X-Export-Truncated", "X-Next-Offset", "X-Next-Cursor");
@@ -134,6 +191,9 @@ builder.Services.AddRateLimiter(x =>
     x.AddPolicy("admin", context => RateLimitPartition.GetFixedWindowLimiter(
         context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
         _ => new FixedWindowRateLimiterOptions { PermitLimit = 20, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
+    x.AddPolicy("admin-login", context => RateLimitPartition.GetFixedWindowLimiter(
+        context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        _ => new FixedWindowRateLimiterOptions { PermitLimit = 5, Window = TimeSpan.FromMinutes(5), QueueLimit = 0 }));
     x.AddPolicy("export", context => RateLimitPartition.GetTokenBucketLimiter(
         context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
         _ => new TokenBucketRateLimiterOptions
@@ -170,6 +230,8 @@ app.UseRouting();
 app.UseCors("frontend");
 app.UseRateLimiter();
 app.UseOutputCache();
+app.UseAuthentication();
+app.UseAuthorization();
 app.UseMiddleware<AdminApiKeyMiddleware>();
 app.MapOpenApi().CacheOutput("public-summary").RequireRateLimiting("public");
 app.MapControllers();

@@ -165,6 +165,7 @@ jobs:
           POSTGRES_DB: proxyharbor
           POSTGRES_USER: proxyharbor
           POSTGRES_PASSWORD: ci-password
+          ADMIN_PASSWORD: ci-admin-password-at-least-24-chars
           ADMIN_API_KEY: ci-admin-key
           BACKUP_ENCRYPTION_KEY: ci-encryption-key-at-least-32-chars
           PUBLIC_HOST: localhost
@@ -209,10 +210,10 @@ jobs:
             .services.api.environment.Security__AdminApiKey == null and
             .services.api.environment.Backup__EncryptionKey == null and
             .services.api.environment.Backup__TelegramBotToken == null and
-            (.services.api.secrets | length) == 5 and
+            (.services.api.secrets | length) == 6 and
             (.services.restore.secrets | length) == 2 and
             (.services.alertmanager.secrets | length) == 2'
-          for secret_value in ci-password ci-admin-key ci-encryption-key-at-least-32-chars 9000000000000000000:CI_ONLY_PLACEHOLDER_NOT_A_REAL_TOKEN -1009000000001234; do
+          for secret_value in ci-password ci-admin-password-at-least-24-chars ci-admin-key ci-encryption-key-at-least-32-chars 9000000000000000000:CI_ONLY_PLACEHOLDER_NOT_A_REAL_TOKEN -1009000000001234; do
             if echo "$production_config" | grep --fixed-strings -- "$secret_value"; then
               echo "Secret value leaked into rendered Compose configuration."
               exit 1
@@ -273,6 +274,7 @@ jobs:
           POSTGRES_DB: proxyharbor
           POSTGRES_USER: proxyharbor
           POSTGRES_PASSWORD: ci-password
+          ADMIN_PASSWORD: ci-admin-password-at-least-24-chars
           ADMIN_API_KEY: ci-admin-key-at-least-24-chars
           BACKUP_ENCRYPTION_KEY: ci-encryption-key-at-least-32-chars
           BACKGROUND_WORKERS_ENABLED: false
@@ -283,6 +285,7 @@ jobs:
         run: |
           mkdir --mode=700 .tmp-ci-secrets
           printf '%s' "$POSTGRES_PASSWORD" > .tmp-ci-secrets/postgres_password
+          printf '%s' "$ADMIN_PASSWORD" > .tmp-ci-secrets/admin_password
           printf '%s' "$ADMIN_API_KEY" > .tmp-ci-secrets/admin_api_key
           printf '%s' "$BACKUP_ENCRYPTION_KEY" > .tmp-ci-secrets/backup_encryption_key
           printf '%s' "$TELEGRAM_BOT_TOKEN" > .tmp-ci-secrets/telegram_bot_token
@@ -317,7 +320,7 @@ jobs:
           assert_secret_values_absent() {
             container_id=$1
             environment=$(docker inspect --format '{{json .Config.Env}}' "$container_id")
-            for secret_value in ci-password ci-admin-key-at-least-24-chars \
+            for secret_value in ci-password ci-admin-password-at-least-24-chars ci-admin-key-at-least-24-chars \
               ci-encryption-key-at-least-32-chars 9000000000000000000:CI_ONLY_PLACEHOLDER_NOT_A_REAL_TOKEN -1009000000001234; do
               if echo "$environment" | grep --fixed-strings -- "$secret_value"; then
                 echo "Secret value leaked into container environment."
@@ -329,7 +332,7 @@ jobs:
           assert_secret_values_absent "$postgres_id"
           assert_secret_values_absent "$restore_id"
           docker inspect --format '{{json .Mounts}}' "$api_id" | jq --exit-status \
-            '[.[] | select(.Destination | startswith("/run/secrets/"))] | length == 5'
+            '[.[] | select(.Destination | startswith("/run/secrets/"))] | length == 6'
           docker inspect --format '{{json .Mounts}}' "$postgres_id" | jq --exit-status \
             '[.[] | select(.Destination == "/run/secrets/postgres_password")] | length == 1'
           docker inspect --format '{{json .Mounts}}' "$restore_id" | jq --exit-status \
@@ -464,6 +467,7 @@ jobs:
              .runtime.connectionStringIncluded == false'
           if echo "$recovered_settings" | grep --fixed-strings --quiet \
             --regexp="$POSTGRES_PASSWORD" \
+            --regexp="$ADMIN_PASSWORD" \
             --regexp="$ADMIN_API_KEY" \
             --regexp="$BACKUP_ENCRYPTION_KEY" \
             --regexp="$TELEGRAM_BOT_TOKEN" \
@@ -670,6 +674,8 @@ jobs:
           ASPNETCORE_URLS: http://127.0.0.1:5080
           ConnectionStrings__Postgres: Host=127.0.0.1;Port=5432;Database=proxyharbor;Username=proxyharbor;Password=integration-password
           Security__AdminApiKey: integration-admin-key-at-least-24-chars
+          Security__AdminPassword: integration-admin-password-at-least-24-chars
+          Security__DataProtectionKeysDirectory: /tmp/proxyharbor-data-protection
           AllowedHosts: 127.0.0.1;localhost
           Collector__BackgroundWorkersEnabled: false
           Backup__Enabled: false

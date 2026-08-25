@@ -96,13 +96,29 @@ describe('ProxyHarbor UI', () => {
     window.history.replaceState({}, '', '/admin/login')
     render(<App />)
     expect(screen.getByRole('heading', { name: 'Вход в управление' })).toBeInTheDocument()
-    expect(screen.getByLabelText('Ключ администратора')).toBeInTheDocument()
+    expect(screen.getByLabelText('Логин')).toHaveAttribute('autocomplete', 'username')
+    expect(screen.getByLabelText('Пароль')).toHaveAttribute('autocomplete', 'current-password')
+    expect(screen.queryByPlaceholderText('X-Admin-Key')).not.toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Лучшие прямо сейчас' })).not.toBeInTheDocument()
     expect(vi.mocked(fetch)).not.toHaveBeenCalled()
   })
 
+  it('submits login and password to the session endpoint without an admin-key header', async () => {
+    window.history.replaceState({}, '', '/admin/login')
+    vi.mocked(fetch).mockResolvedValue(jsonResponseValue({ title: 'Неверный логин или пароль' }, 401))
+    render(<App />)
+    fireEvent.change(screen.getByLabelText('Логин'), { target: { value: 'admin' } })
+    fireEvent.change(screen.getByLabelText('Пароль'), { target: { value: 'wrong-password' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Войти' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Неверный логин или пароль')
+    const [, options] = vi.mocked(fetch).mock.calls[0]
+    expect(options?.credentials).toBe('include')
+    expect(new Headers(options?.headers).has('X-Admin-Key')).toBe(false)
+    expect(JSON.parse(String(options?.body))).toEqual({ username: 'admin', password: 'wrong-password' })
+  })
+
   it('renders a dedicated authenticated admin page without public content', async () => {
-    sessionStorage.setItem('proxyharbor-admin-key', 'valid-key')
     window.history.replaceState({}, '', '/admin')
     vi.mocked(fetch).mockImplementation(async input => {
       const url = String(input)
@@ -117,10 +133,18 @@ describe('ProxyHarbor UI', () => {
     expect(await screen.findByRole('heading', { name: 'Управление сбором' })).toBeInTheDocument()
     expect(await screen.findByLabelText('Диагностика сервиса')).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Лучшие прямо сейчас' })).not.toBeInTheDocument()
-    expect(screen.queryByLabelText('Ключ администратора')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Пароль')).not.toBeInTheDocument()
+    const adminCalls = vi.mocked(fetch).mock.calls.filter(([input]) => String(input).includes('/api/v1/admin/'))
+    expect(adminCalls.length).toBeGreaterThan(0)
+    expect(adminCalls.every(([, options]) => options?.credentials === 'include')).toBe(true)
+    expect(adminCalls.every(([, options]) => !new Headers(options?.headers).has('X-Admin-Key'))).toBe(true)
   })
 })
 
 function jsonResponse(body: unknown, status = 200) {
   return Promise.resolve(new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } }))
+}
+
+function jsonResponseValue(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
 }
