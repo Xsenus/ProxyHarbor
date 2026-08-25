@@ -1,10 +1,10 @@
-# Каталог 56 провайдеров бесплатных прокси
+# Каталог 75 провайдеров бесплатных прокси
 
-Все 56 независимых провайдеров уже входят в `BuiltInSourceCatalog`, а их 98 HTTPS endpoint обрабатываются production collector. Документ предназначен оператору; публичная главная страница источники не раскрывает.
+Все 75 независимых провайдеров уже входят в `BuiltInSourceCatalog`, а их 198 HTTPS endpoint обрабатываются production collector. Документ предназначен оператору; публичная главная страница источники не раскрывает.
 
 Совместимый read-only endpoint `GET /api/v1/sources` пока сохраняется для API-клиентов, но обычный React-интерфейс его не запрашивает и не показывает. Runtime errors, backoff и внутреннее состояние доступны только администратору.
 
-Базовые 81 endpoint прошли полный end-to-end аудит 10 августа 2026 года. 24 августа 2026 года дополнительно проверены 17 живых URL шести новых провайдеров; полный 98-feed прогон является обязательным release-gate и не подменяется этой URL-проверкой.
+Базовые 81 endpoint прошли полный end-to-end аудит 10 августа 2026 года. 24 августа дополнительно проверены 17 URL шести провайдеров. 26 августа проверены ещё 100 живых URL от 19 новых origin-владельцев; полный 198-feed прогон является обязательным release-gate и не подменяется URL-проверкой.
 
 | № | Провайдер | Feed'ов | Протоколы | Представительный источник |
 |---:|---|---:|---|---|
@@ -56,7 +56,7 @@
 | 46 | Fyvri | 1 | HTTP | [GitHub](https://github.com/fyvri/fresh-proxy-list) |
 | 47 | BesJS | 1 | Mixed | [GitHub](https://github.com/Bes-js/public-proxy-list) |
 | 48 | TheRituRajPS | 1 | HTTP | [GitHub](https://github.com/theriturajps/proxy-list) |
-| 49 | Stormsia | 1 | HTTP | [GitHub](https://github.com/stormsia/proxy-list) |
+| 49 | NotThinks | 1 | Mixed | [GitHub](https://github.com/notthinks/proxy-lists) |
 | 50 | MrMarble | 1 | Mixed | [GitHub](https://github.com/MrMarble/proxy-list) |
 | 51 | RelayGlass | 4 | HTTP, HTTPS, SOCKS4, SOCKS5 | [GitHub](https://github.com/relayglass/free-proxy-list) |
 | 52 | ProxyMan | 3 | HTTP, SOCKS4, SOCKS5 | [GitHub](https://github.com/Akshay7273/ProxyMan-free-proxy-list) |
@@ -64,11 +64,30 @@
 | 54 | Mzyui | 3 | HTTP, SOCKS4, SOCKS5 | [GitHub](https://github.com/mzyui/proxy-list) |
 | 55 | Naravid | 3 | HTTP, SOCKS4, SOCKS5 | [GitHub](https://github.com/naravid19/checked-proxies) |
 | 56 | aQuiner | 1 | HTTP | [GitHub](https://github.com/aQuiner/free-proxy-list) |
+| 57 | Sevenworks | 4 | HTTP, HTTPS, SOCKS4, SOCKS5 | [GitHub](https://github.com/SevenworksDev/proxy-list) |
+| 58 | HideIP | 4 | HTTP, HTTPS, SOCKS4, SOCKS5 | [GitHub](https://github.com/zloi-user/hideip.me) |
+| 59 | Tsprnay | 4 | HTTP, HTTPS, SOCKS4, SOCKS5 | [GitHub](https://github.com/Tsprnay/Proxy-lists) |
+| 60 | ALIILAPRO | 3 | HTTP, SOCKS4, SOCKS5 | [GitHub](https://github.com/ALIILAPRO/Proxy) |
+| 61 | NikolaiT | 4 | HTTP, HTTPS, SOCKS4, SOCKS5 | [GitHub](https://github.com/NikolaiT/free-proxy-list) |
+| 62 | VannDev | 21 | HTTP, HTTPS, SOCKS4, SOCKS5, site-tested | [GitHub](https://github.com/Vann-Dev/proxy-list) |
+| 63 | SoliSpirit | 4 | HTTP, HTTPS, SOCKS4, SOCKS5 | [GitHub](https://github.com/SoliSpirit/proxy-list) |
+| 64 | Elliottophellia | 6 | HTTP, SOCKS4, SOCKS5 | [GitHub](https://github.com/elliottophellia/proxylist) |
+| 65 | CB-X2 | 1 | Mixed | [GitHub](https://github.com/CB-X2-Jun/proxy-lists) |
+| 66 | HendrikBGR | 1 | Mixed | [GitHub](https://github.com/hendrikbgr/Free-Proxy-Repo) |
+| 67 | NoArche | 5 | Mixed, HTTP, HTTPS, SOCKS4, SOCKS5 | [GitHub](https://github.com/noarche/proxylist-socks5-sock4-exported-updates) |
+| 68 | ProxyGenerator | 19 | Mixed, HTTP, HTTPS, SOCKS4, SOCKS5, service-tested | [GitHub](https://github.com/proxygenerator1/ProxyGenerator) |
+| 69 | Seeh-Saah | 5 | Mixed, HTTP, HTTPS, SOCKS4, SOCKS5 | [GitHub](https://github.com/Seeh-Saah/awesome-free-proxy-list) |
+| 70 | 7and1 | 3 | HTTP, SOCKS4, SOCKS5 | [GitHub](https://github.com/7and1/free-proxy-list) |
+| 71 | TomJiu | 4 | Mixed, HTTP, SOCKS4, SOCKS5 | [GitHub](https://github.com/tomjiu/proxy-pipeline) |
+| 72 | GHSTFACES | 5 | Mixed, HTTP, HTTPS, SOCKS4, SOCKS5 | [GitHub](https://github.com/GHSTFACES/PL) |
+| 73 | Andigwandi | 1 | Mixed | [GitHub](https://github.com/andigwandi/free-proxy) |
+| 74 | KevinRiver | 3 | Mixed, HTTP, SOCKS5 | [GitHub](https://github.com/kevinriverrrr-sudo/free-proxy-list) |
+| 75 | Xnuvers | 3 | Mixed | [GitHub](https://github.com/Xnuvers007/free-proxy) |
 
 ## Что именно гарантирует ProxyHarbor
 
 Доступность feed и работоспособность прокси — разные проверки. Source audit требует, чтобы каждый встроенный endpoint присутствовал, был включён, успешно и полностью обработан текущим production-циклом и вернул хотя бы одного кандидата. После межисточниковой дедупликации validator независимо открывает соединение через каждый кандидат, проверяет заявленный протокол, TLS/HTTP-маршрут, внешний адрес и задержку. В публичные JSON, XML, TXT и CSV попадают только недавно подтверждённые живые адреса.
 
-Бесплатные прокси меняются каждую минуту, поэтому нельзя честно обещать, что все строки внешнего feed будут рабочими. Гарантия сервиса другая и проверяемая: все 56 провайдеров входят в сбор; неработающие адреса не публикуются; отказавший, пустой или усечённый feed сразу становится нездоровым в diagnostics, Prometheus и еженедельном CI-аудите.
+Бесплатные прокси меняются каждую минуту, поэтому нельзя честно обещать, что все строки внешнего feed будут рабочими. Гарантия сервиса другая и проверяемая: все 75 провайдеров входят в сбор; неработающие адреса не публикуются; отказавший, пустой или усечённый feed сразу становится нездоровым в diagnostics, Prometheus и еженедельном CI-аудите.
 
-Полные 98 URL, их протоколы и эксплуатационный порядок находятся в [`BuiltInSourceCatalog.cs`](../src/ProxyHarbor.Infrastructure/BuiltInSourceCatalog.cs). Команда воспроизводимого production-аудита описана в [`SOURCES.md`](SOURCES.md).
+Полные 198 URL, их протоколы и эксплуатационный порядок находятся в [`BuiltInSourceCatalog.cs`](../src/ProxyHarbor.Infrastructure/BuiltInSourceCatalog.cs). Команда воспроизводимого production-аудита описана в [`SOURCES.md`](SOURCES.md).

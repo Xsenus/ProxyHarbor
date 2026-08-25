@@ -53,7 +53,7 @@ sequenceDiagram
 
 ### Каталог
 
-Встроенный каталог компилируется в приложение и содержит 98 HTTPS endpoint от 56 независимых provider identities. GitHub raw feed считается принадлежащим owner репозитория; остальные — DNS hostname. Startup seed синхронизирует канонические URL, protocol, name и priority, сохраняя операторский `Enabled`.
+Встроенный каталог компилируется в приложение и содержит 198 HTTPS endpoint от 75 независимых provider identities. GitHub raw feed считается принадлежащим owner репозитория; остальные — DNS hostname. Startup seed синхронизирует канонические URL, protocol, name и priority, сохраняя операторский `Enabled`.
 
 ### Загрузка
 
