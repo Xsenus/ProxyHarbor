@@ -20,7 +20,8 @@ namespace ProxyHarbor.Api.Controllers;
 public sealed class ProxiesController(
     IDbContextFactory<ProxyHarborDbContext> dbFactory,
     IOptions<CollectorOptions> collectorOptions,
-    IProxyExportDbContextFactory exportDbFactory) : ControllerBase
+    IProxyExportDbContextFactory exportDbFactory,
+    IFreeExportAccessService freeExportAccess) : ControllerBase
 {
     private const int MaxExportPageSize = 50_000;
     private const int MaxLegacyOffset = 5_000_000;
@@ -41,7 +42,17 @@ public sealed class ProxiesController(
     internal ProxiesController(
         IDbContextFactory<ProxyHarborDbContext> testDbFactory,
         IOptions<CollectorOptions> testCollectorOptions)
-        : this(testDbFactory, testCollectorOptions, new TestExportDbContextFactory(testDbFactory))
+        : this(testDbFactory, testCollectorOptions, new TestExportDbContextFactory(testDbFactory),
+            AllowAllExportAccessService.Instance)
+    {
+    }
+
+    /// <summary>Совместимый конструктор интеграционных тестов потокового PostgreSQL export.</summary>
+    internal ProxiesController(
+        IDbContextFactory<ProxyHarborDbContext> testDbFactory,
+        IOptions<CollectorOptions> testCollectorOptions,
+        IProxyExportDbContextFactory testExportDbFactory)
+        : this(testDbFactory, testCollectorOptions, testExportDbFactory, AllowAllExportAccessService.Instance)
     {
     }
 
@@ -51,7 +62,7 @@ public sealed class ProxiesController(
         IOptions<CollectorOptions> testCollectorOptions,
         IProxyExportDbContextFactory testExportDbFactory,
         TimeSpan exportTimeout)
-        : this(testDbFactory, testCollectorOptions, testExportDbFactory)
+        : this(testDbFactory, testCollectorOptions, testExportDbFactory, AllowAllExportAccessService.Instance)
     {
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(exportTimeout, TimeSpan.Zero);
         _exportTimeout = exportTimeout;
@@ -276,10 +287,32 @@ public sealed class ProxiesController(
         };
         if (contentType is null)
             return Problem("Поддерживаются форматы json, xml, txt и csv.", statusCode: 400);
+        var access = await freeExportAccess.AcquireAsync(
+            User,
+            HttpContext.Connection.RemoteIpAddress?.ToString(),
+            cancellationToken);
+        if (!access.Allowed)
+        {
+            var wait = Math.Max(1, (int)Math.Ceiling((access.NextAllowedAt!.Value - DateTimeOffset.UtcNow).TotalSeconds));
+            Response.Headers.RetryAfter = wait.ToString(CultureInfo.InvariantCulture);
+            Response.Headers["X-Access-Tier"] = access.Tier;
+            var problem = new ProblemDetails
+            {
+                Title = "Лимит бесплатной выгрузки",
+                Detail = FreeExportAccessService.UpgradeMessage,
+                Status = StatusCodes.Status429TooManyRequests
+            };
+            problem.Extensions["limit"] = FreeExportAccessService.FreeLimit;
+            problem.Extensions["cooldownSeconds"] = FreeExportAccessService.CooldownSeconds;
+            problem.Extensions["nextAllowedAt"] = access.NextAllowedAt;
+            problem.Extensions["upgradeUrl"] = "/account";
+            return StatusCode(StatusCodes.Status429TooManyRequests, problem);
+        }
+        var effectiveLimit = access.IsPaid ? limit : FreeExportAccessService.FreeLimit;
         var seekMode = !offset.HasValue;
         var fingerprint = PublicationCursor.FilterFingerprint(protocol, maxLatencyMs, minSuccessRate, countries);
         PublicationPosition? position = null;
-        if (seekMode && after is not null)
+        if (seekMode && access.IsPaid && after is not null)
         {
             if (!PublicationCursor.TryDecode(after, fingerprint, out var decoded))
                 return InvalidCursor();
@@ -310,24 +343,31 @@ public sealed class ProxiesController(
             var freshAfter = DateTimeOffset.UtcNow.AddMinutes(-collectorOptions.Value.PublicFreshnessMinutes);
             var query = ApplyFilters(db.Proxies.AsNoTracking().Where(x =>
                 x.Status == ProxyStatus.Alive && x.LastCheckedAt >= freshAfter), protocol, maxLatencyMs, minSuccessRate, countries);
-            if (seekMode)
+            if (seekMode && access.IsPaid)
             {
                 query = query.Where(x => x.LatencyMs != null);
                 if (position.HasValue) query = ApplyAfter(query, position.Value);
             }
             var ordered = OrderForPublication(query);
             var legacyOffset = offset ?? 0;
-            var nextOffset = (long)legacyOffset + limit;
+            if (!access.IsPaid)
+            {
+                // Free tier получает центральный срез ранжированного каталога: не самые
+                // быстрые premium-записи и не хвост с худшим качеством.
+                var available = await query.CountAsync(exportToken);
+                legacyOffset = Math.Max(0, (available - effectiveLimit) / 2);
+            }
+            var nextOffset = (long)legacyOffset + effectiveLimit;
             // Предварительный index-only boundary-запрос не материализует body и
             // позволяет выставить continuation headers до первой потоковой записи.
-            var pageQuery = seekMode ? ordered : ordered.Skip(legacyOffset);
+            var pageQuery = seekMode && access.IsPaid ? ordered : ordered.Skip(legacyOffset);
             bool hasMore;
             string? nextCursor = null;
-            if (seekMode)
+            if (seekMode && access.IsPaid)
             {
                 // Последняя включённая строка и один look-ahead дают hasMore и cursor
                 // одним round-trip вместо двух одинаковых проходов по индексу.
-                var boundary = await pageQuery.Skip(limit - 1).Take(2)
+                var boundary = await pageQuery.Skip(effectiveLimit - 1).Take(2)
                     .Select(x => new PublicationPosition(x.LatencyMs!.Value, x.SuccessfulChecks, x.Id))
                     .ToListAsync(exportToken);
                 hasMore = boundary.Count == 2;
@@ -337,19 +377,25 @@ public sealed class ProxiesController(
             {
                 hasMore = await ordered.Skip((int)nextOffset).AnyAsync(exportToken);
             }
-            var proxies = pageQuery.Take(limit)
+            var proxies = pageQuery.Take(effectiveLimit)
                 .AsAsyncEnumerable().Select(ProxyDto.From);
             if (ControllerContext.HttpContext is not null)
-                HttpContext.Items["ProxyHarbor.ProxyItems"] = limit;
+                HttpContext.Items["ProxyHarbor.ProxyItems"] = effectiveLimit;
             var suffix = protocol?.ToString().ToLowerInvariant() ?? "all";
             Response.ContentType = contentType;
             var pageSuffix = seekMode ? "-seek" : legacyOffset == 0 ? string.Empty : $"-offset-{legacyOffset}";
             Response.Headers.ContentDisposition =
                 $"attachment; filename=\"proxies-{suffix}{pageSuffix}.{normalizedFormat}\"";
             Response.Headers.CacheControl = "no-store";
-            Response.Headers["X-Export-Limit"] = limit.ToString(CultureInfo.InvariantCulture);
+            Response.Headers["X-Export-Limit"] = effectiveLimit.ToString(CultureInfo.InvariantCulture);
             Response.Headers["X-Export-Truncated"] = hasMore ? "true" : "false";
-            if (seekMode)
+            Response.Headers["X-Access-Tier"] = access.Tier;
+            if (!access.IsPaid)
+            {
+                Response.Headers["X-Free-Cooldown"] = FreeExportAccessService.CooldownSeconds.ToString(CultureInfo.InvariantCulture);
+                Response.Headers["Link"] = "</account>; rel=\"upgrade\"";
+            }
+            if (seekMode && access.IsPaid)
             {
                 Response.Headers["X-Export-Cursor"] = after ?? "start";
                 if (nextCursor is not null) Response.Headers["X-Next-Cursor"] = nextCursor;
@@ -358,7 +404,7 @@ public sealed class ProxiesController(
             {
                 Response.Headers["X-Export-Offset"] = legacyOffset.ToString(CultureInfo.InvariantCulture);
             }
-            if (!seekMode && hasMore)
+            if (access.IsPaid && !seekMode && hasMore)
                 Response.Headers["X-Next-Offset"] = nextOffset.ToString(CultureInfo.InvariantCulture);
 
             // Фиксируем continuation headers до первой записи. После этого timeout
@@ -366,7 +412,7 @@ public sealed class ProxiesController(
             await Response.StartAsync(exportToken);
             switch (normalizedFormat)
             {
-                case "json": await WriteJsonAsync(Response.Body, proxies, exportToken); break;
+                case "json": await WriteJsonAsync(Response.Body, proxies, access, exportToken); break;
                 case "txt": await WriteTextAsync(Response.Body, proxies, exportToken); break;
                 case "csv": await WriteCsvAsync(Response.Body, proxies, exportToken); break;
                 case "xml": await WriteXmlAsync(Response.Body, proxies, exportToken); break;
@@ -393,11 +439,33 @@ public sealed class ProxiesController(
         Status = StatusCodes.Status400BadRequest
     });
 
-    private static async Task WriteJsonAsync(Stream output, IAsyncEnumerable<ProxyDto> proxies, CancellationToken token)
+    private static async Task WriteJsonAsync(
+        Stream output,
+        IAsyncEnumerable<ProxyDto> proxies,
+        FreeExportAccess access,
+        CancellationToken token)
     {
         // SerializeAsync умеет потоково перечислять IAsyncEnumerable и не выполняет
         // запрещённый Kestrel synchronous flush при включённом Brotli/Gzip.
+        if (access.IsPaid)
+        {
+            await JsonSerializer.SerializeAsync(output, proxies, ExportJsonOptions, token);
+            return;
+        }
+
+        var metadata = JsonSerializer.Serialize(new
+        {
+            tier = access.Tier,
+            limited = true,
+            limit = FreeExportAccessService.FreeLimit,
+            cooldownSeconds = FreeExportAccessService.CooldownSeconds,
+            nextAllowedAt = access.NextAllowedAt,
+            message = FreeExportAccessService.UpgradeMessage,
+            upgradeUrl = "/account"
+        }, ExportJsonOptions);
+        await output.WriteAsync(Encoding.UTF8.GetBytes($"{{\"access\":{metadata},\"proxies\":"), token);
         await JsonSerializer.SerializeAsync(output, proxies, ExportJsonOptions, token);
+        await output.WriteAsync("}"u8.ToArray(), token);
     }
 
     private static async Task WriteTextAsync(Stream output, IAsyncEnumerable<ProxyDto> proxies, CancellationToken token)
@@ -595,6 +663,17 @@ public sealed class ProxiesController(
         public Task<ProxyHarborDbContext> CreateDbContextAsync(
             CancellationToken cancellationToken = default) =>
             factory.CreateDbContextAsync(cancellationToken);
+    }
+
+    /// <summary>Старые transport-тесты проверяют только формат и явно обходят коммерческую политику.</summary>
+    private sealed class AllowAllExportAccessService : IFreeExportAccessService
+    {
+        internal static AllowAllExportAccessService Instance { get; } = new();
+        public Task<FreeExportAccess> AcquireAsync(
+            System.Security.Claims.ClaimsPrincipal principal,
+            string? remoteIp,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(new FreeExportAccess(true, true, int.MaxValue, null, "paid"));
     }
 }
 

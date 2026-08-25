@@ -119,7 +119,7 @@ Legacy streaming export с `offset`.
 
 | Format | Content-Type | Представление |
 |---|---|---|
-| `json` | `application/json` | Массив `ProxyDto` |
+| `json` | `application/json` | Для платного доступа — массив `ProxyDto`; для free — объект `access` + массив `proxies` |
 | `xml` | `application/xml` | `<proxies><proxy>…` |
 | `txt` | `text/plain` | Один канонический URL на строку |
 | `csv` | `text/csv` | Header и quoted fields |
@@ -142,6 +142,39 @@ curl -OJ 'https://proxy.example.com/api/v1/export/txt?protocol=Socks5&limit=1000
 - `X-Export-Offset`;
 - `X-Export-Truncated`;
 - `X-Next-Offset`, если вероятно продолжение.
+
+### Бесплатная и платная выдача
+
+Сервер проверяет активную подписку при каждом export-запросе. `Pro`, `Unlimited`, их
+действующий trial и администратор сохраняют запрошенный `limit` до 50 000. Аккаунт
+на `free` получает 10 записей из центральной части отфильтрованного рейтинга — не
+premium-верхушку и не худший хвост. Для гостя тот же лимит привязан к IP. Следующая
+бесплатная выгрузка доступна ровно через 600 секунд; состояние хранится в PostgreSQL
+и не сбрасывается при рестарте API.
+
+Успешный free JSON имеет форму:
+
+```json
+{
+  "access": {
+    "tier": "free",
+    "limited": true,
+    "limit": 10,
+    "cooldownSeconds": 600,
+    "nextAllowedAt": "2026-08-26T12:10:00Z",
+    "message": "Бесплатный доступ: 10 прокси среднего качества раз в 10 минут. Для неограниченного доступа купите подписку.",
+    "upgradeUrl": "/account"
+  },
+  "proxies": []
+}
+```
+
+TXT, CSV и XML сохраняют прежнюю машинно-читаемую структуру без рекламных строк.
+Во всех free-форматах сервер добавляет `X-Access-Tier: free`,
+`X-Free-Cooldown: 600` и `Link: </account>; rel="upgrade"`. Повтор до истечения
+интервала возвращает `429`, `Retry-After` и `ProblemDetails` с `nextAllowedAt`,
+`limit`, `cooldownSeconds` и `upgradeUrl`. Параметры `limit`, `offset` и `after` не
+позволяют увеличить или сместить бесплатную выборку.
 
 ## GET `/api/v1/export/{format}/seek`
 

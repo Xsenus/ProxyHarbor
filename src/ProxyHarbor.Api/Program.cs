@@ -123,6 +123,7 @@ builder.Services.AddHostedService<TelegramOutboundWorker>();
 builder.Services.AddHostedService<TelegramPollingWorker>();
 builder.Services.AddHostedService<TelegramSubscriptionReminderWorker>();
 builder.Services.AddSingleton<ProxyAccessMonitor>();
+builder.Services.AddScoped<IFreeExportAccessService, FreeExportAccessService>();
 builder.Services.AddHostedService(services => services.GetRequiredService<ProxyAccessMonitor>());
 builder.Services.AddControllers().AddJsonOptions(x =>
     x.JsonSerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter()));
@@ -209,7 +210,8 @@ builder.Services.AddCors(x => x.AddPolicy("frontend", policy =>
             .AllowCredentials()
             .WithExposedHeaders(
                 "Content-Disposition", "X-Export-Limit", "X-Export-Offset", "X-Export-Cursor",
-                "X-Export-Truncated", "X-Next-Offset", "X-Next-Cursor");
+                "X-Export-Truncated", "X-Next-Offset", "X-Next-Cursor", "X-Access-Tier",
+                "X-Free-Cooldown", "Link", "Retry-After");
 }));
 builder.Services.AddRateLimiter(x =>
 {

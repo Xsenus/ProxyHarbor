@@ -117,6 +117,7 @@ public sealed class BackupPipelineTests
                 [
                     "database/access-block-rules.json",
                     "database/backup-runs.json",
+                    "database/free-proxy-export-grants.json",
                     "database/payment-configuration.json",
                     "database/payment-orders.json",
                     "database/proxies.json",

@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Xml.Linq;
+using System.Globalization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -553,6 +554,70 @@ public sealed class ProxyPublicationTests
         FailedChecks = status == ProxyStatus.Dead ? 1 : 0
     };
 
+    [Fact]
+    public async Task FreeJsonExportReturnsTenMiddleRankedProxiesAndUpgradeMetadata()
+    {
+        var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+            .UseInMemoryDatabase($"free-json-export-{Guid.NewGuid():N}").Options;
+        await using (var seed = new ProxyHarborDbContext(options))
+        {
+            for (var index = 1; index <= 30; index++)
+            {
+                var endpoint = Endpoint($"10.0.0.{index}", ProxyStatus.Alive, DateTimeOffset.UtcNow);
+                endpoint.LatencyMs = index * 10;
+                seed.Proxies.Add(endpoint);
+            }
+            await seed.SaveChangesAsync();
+        }
+
+        var factory = new TestDbFactory(options);
+        var access = new FreeExportAccess(true, false, 10, DateTimeOffset.UtcNow.AddMinutes(10), "free");
+        var controller = new ProxiesController(factory,
+            Options.Create(new CollectorOptions { PublicFreshnessMinutes = 15 }), factory,
+            new StubFreeExportAccessService(access));
+        await using var output = new AsyncOnlyMemoryStream();
+        controller.ControllerContext = new ControllerContext
+        {
+            HttpContext = new DefaultHttpContext { Response = { Body = output } }
+        };
+
+        Assert.IsType<EmptyResult>(await controller.Export(
+            "json", null, null, null, CancellationToken.None, limit: 1_000));
+
+        using var json = JsonDocument.Parse(output.ToArray());
+        Assert.Equal("free", json.RootElement.GetProperty("access").GetProperty("tier").GetString());
+        Assert.Contains("купите подписку",
+            json.RootElement.GetProperty("access").GetProperty("message").GetString(),
+            StringComparison.OrdinalIgnoreCase);
+        var proxies = json.RootElement.GetProperty("proxies").EnumerateArray().ToArray();
+        Assert.Equal(10, proxies.Length);
+        Assert.Equal("10.0.0.11", proxies[0].GetProperty("host").GetString());
+        Assert.Equal("10.0.0.20", proxies[^1].GetProperty("host").GetString());
+        Assert.Equal("10", controller.Response.Headers["X-Export-Limit"].ToString());
+        Assert.Equal("free", controller.Response.Headers["X-Access-Tier"].ToString());
+    }
+
+    [Fact]
+    public async Task FreeExportCooldownReturns429WithRetryAndUpgradeDetails()
+    {
+        var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+            .UseInMemoryDatabase($"free-export-denied-{Guid.NewGuid():N}").Options;
+        var factory = new TestDbFactory(options);
+        var nextAllowedAt = DateTimeOffset.UtcNow.AddMinutes(8);
+        var controller = new ProxiesController(factory,
+            Options.Create(new CollectorOptions { PublicFreshnessMinutes = 15 }), factory,
+            new StubFreeExportAccessService(new(false, false, 10, nextAllowedAt, "free")));
+        controller.ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() };
+
+        var result = Assert.IsType<ObjectResult>(await controller.Export(
+            "json", null, null, null, CancellationToken.None));
+
+        Assert.Equal(StatusCodes.Status429TooManyRequests, result.StatusCode);
+        var problem = Assert.IsType<ProblemDetails>(result.Value);
+        Assert.Equal("/account", problem.Extensions["upgradeUrl"]);
+        Assert.True(int.Parse(controller.Response.Headers.RetryAfter.ToString(), CultureInfo.InvariantCulture) > 0);
+    }
+
     private static ProxiesController Controller(
         DbContextOptions<ProxyHarborDbContext> options,
         out AsyncOnlyMemoryStream output)
@@ -565,6 +630,14 @@ public sealed class ProxyPublicationTests
             HttpContext = new DefaultHttpContext { Response = { Body = output } }
         };
         return controller;
+    }
+
+    private sealed class StubFreeExportAccessService(FreeExportAccess access) : IFreeExportAccessService
+    {
+        public Task<FreeExportAccess> AcquireAsync(
+            System.Security.Claims.ClaimsPrincipal principal,
+            string? remoteIp,
+            CancellationToken cancellationToken) => Task.FromResult(access);
     }
 
     private sealed class TestDbFactory(DbContextOptions<ProxyHarborDbContext> options)

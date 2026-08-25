@@ -29,6 +29,8 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
     public DbSet<SubscriptionAdminAction> SubscriptionAdminActions => Set<SubscriptionAdminAction>();
     /// <summary>Агрегированная статистика выдачи адресов и посещений сайта.</summary>
     public DbSet<ProxyAccessBucket> ProxyAccessBuckets => Set<ProxyAccessBucket>();
+    /// <summary>Серверные интервалы бесплатной выгрузки по аккаунту или IP.</summary>
+    public DbSet<FreeProxyExportGrant> FreeProxyExportGrants => Set<FreeProxyExportGrant>();
     /// <summary>Правила блокировки клиентов выдачи.</summary>
     public DbSet<AccessBlockRule> AccessBlockRules => Set<AccessBlockRule>();
     /// <summary>Singleton runtime-настройка торгового Telegram-бота.</summary>
@@ -123,6 +125,13 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
         accessBucket.ToTable(table => table.HasCheckConstraint(
             "CK_ProxyAccessBuckets_Counters",
             "\"Requests\" >= 0 AND \"BlockedRequests\" >= 0 AND \"ProxyItems\" >= 0 AND \"BytesSent\" >= 0"));
+
+        var freeExportGrant = builder.Entity<FreeProxyExportGrant>();
+        freeExportGrant.HasKey(x => x.ClientKey);
+        freeExportGrant.Property(x => x.ClientKey).HasMaxLength(128);
+        freeExportGrant.HasIndex(x => x.NextAllowedAt);
+        freeExportGrant.ToTable(table => table.HasCheckConstraint(
+            "CK_FreeProxyExportGrants_Timeline", "\"NextAllowedAt\" > \"LastGrantedAt\""));
 
         var blockRule = builder.Entity<AccessBlockRule>();
         blockRule.HasIndex(x => new { x.Enabled, x.ExpiresAt });
