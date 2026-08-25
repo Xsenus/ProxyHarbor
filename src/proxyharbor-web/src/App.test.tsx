@@ -198,6 +198,42 @@ describe('ProxyHarbor UI', () => {
       String(input).includes('/api/v1/admin/sources?page=2&pageSize=10'))).toBe(true))
   })
 
+  it('searches sources on the server and clears the applied filter', async () => {
+    window.history.replaceState({}, '', '/admin/sources')
+    vi.mocked(fetch).mockImplementation(async input => {
+      const url = String(input)
+      if (url.includes('/api/v1/admin/sources?')) {
+        const search = new URL(url, 'https://example.test').searchParams.get('search')
+        const items = search === 'proxyscrape' ? [{
+          id: 'source-search', name: 'ProxyScrape HTTP', url: 'https://example.com/proxies.txt',
+          defaultProtocol: 'Http', enabled: true, priority: 10, lastItemCount: 42,
+          lastResultTruncated: false, consecutiveFailures: 0, isBuiltIn: true, provider: 'ProxyScrape',
+        }] : []
+        return jsonResponse({ items, page: 1, pageSize: 10, total: items.length })
+      }
+      if (url.includes('/api/v1/admin/diagnostics')) return jsonResponse({
+        serverTime: new Date().toISOString(), databaseBytes: 0,
+        validationQueue: { total: 0, due: 0 }, recentRuns: [], recentValidationRuns: [], recentBackups: [],
+      })
+      return jsonResponse({ title: 'Unexpected request' }, 500)
+    })
+
+    render(<App />)
+    const search = await screen.findByRole('searchbox', { name: 'Поиск источников' })
+    fireEvent.change(search, { target: { value: 'proxyscrape' } })
+    fireEvent.submit(screen.getByRole('search'))
+
+    expect(await screen.findByText('ProxyScrape HTTP')).toBeInTheDocument()
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([input]) =>
+      String(input).includes('page=1&pageSize=10&search=proxyscrape'))).toBe(true))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Очистить поиск' }))
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([input]) => {
+      const url = new URL(String(input), 'https://example.test')
+      return url.pathname.endsWith('/api/v1/admin/sources') && !url.searchParams.has('search')
+    })).toBe(true))
+  })
+
   it('shows proxy lifetime statistics and pages the protected inventory on the server', async () => {
     window.history.replaceState({}, '', '/admin/proxies')
     vi.mocked(fetch).mockImplementation(async input => {

@@ -210,6 +210,40 @@ public sealed class AdminSourceControllerTests
     }
 
     [Fact]
+    public async Task SourcesSearchesEntireCatalogByNameUrlAndProviderBeforePaging()
+    {
+        var definition = BuiltInSourceCatalog.Sources[0];
+        var options = Options($"source-search-{Guid.NewGuid():N}");
+        await using (var seed = new ProxyHarborDbContext(options))
+        {
+            seed.Sources.AddRange(
+                new ProxySource { Name = "Private Alpha", Url = "https://8.8.8.8/alpha.txt", Priority = 100 },
+                new ProxySource { Name = "Private Beta", Url = "https://8.8.8.8/special-feed.txt", Priority = 110 },
+                new ProxySource
+                {
+                    Name = definition.Name,
+                    Url = definition.Url,
+                    DefaultProtocol = definition.Protocol,
+                    Priority = 120
+                });
+            await seed.SaveChangesAsync();
+        }
+
+        var controller = Controller(options);
+        var byName = await controller.Sources(page: 1, pageSize: 10, search: " alpha ", token: CancellationToken.None);
+        var byUrl = await controller.Sources(page: 1, pageSize: 10, search: "SPECIAL-FEED", token: CancellationToken.None);
+        var byProvider = await controller.Sources(page: 1, pageSize: 10, search: definition.Provider, token: CancellationToken.None);
+
+        Assert.Equal(["Private Alpha"], Page(byName).Items.Select(item => item.Name));
+        Assert.Equal(["Private Beta"], Page(byUrl).Items.Select(item => item.Name));
+        Assert.Equal([definition.Name], Page(byProvider).Items.Select(item => item.Name));
+        Assert.All([Page(byName), Page(byUrl), Page(byProvider)], page => Assert.Equal(1, page.Total));
+
+        static PagedResult<SourceResponse> Page(ActionResult<PagedResult<SourceResponse>> result) =>
+            Assert.IsType<PagedResult<SourceResponse>>(Assert.IsType<OkObjectResult>(result.Result).Value);
+    }
+
+    [Fact]
     [Trait("Category", "PostgresIntegration")]
     public async Task ConcurrentCreatesReturnCreatedAndConflictInsteadOfLeakingUniqueViolation()
     {
