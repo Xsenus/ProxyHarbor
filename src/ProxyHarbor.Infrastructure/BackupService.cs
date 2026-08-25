@@ -286,6 +286,7 @@ public sealed class BackupService(
                 await WriteJsonAsync(archive, "database/roles.json", db.Roles.AsNoTracking().AsAsyncEnumerable(), token);
                 await WriteJsonAsync(archive, "database/user-roles.json", db.UserRoles.AsNoTracking().AsAsyncEnumerable(), token);
                 await WriteJsonAsync(archive, "database/subscriptions.json", db.Subscriptions.AsNoTracking().AsAsyncEnumerable(), token);
+                await WriteJsonAsync(archive, "database/payment-orders.json", db.PaymentOrders.AsNoTracking().AsAsyncEnumerable(), token);
                 await WriteJsonAsync(archive, "settings/collector.json", collectorOptions.Value, token);
                 await WriteJsonAsync(archive, "settings/backup.json",
                     BackupSettingsSnapshot.FromOptions(options, telegramConfigured), token);
@@ -294,6 +295,8 @@ public sealed class BackupService(
                 await WriteJsonAsync(archive, "manifest.json",
                     new
                     {
+                        // v6 допускает additive database entries; старые v6 архивы без
+                        // payment-orders по-прежнему полностью восстанавливаются.
                         version = 6,
                         settingsSchemaVersion = 1,
                         createdAt = DateTimeOffset.UtcNow,
@@ -543,7 +546,11 @@ internal sealed record BackupRuntimeSettings(
     bool AdminApiKeyConfigured,
     bool AdminApiKeyIncluded,
     bool ConnectionStringConfigured,
-    bool ConnectionStringIncluded)
+    bool ConnectionStringIncluded,
+    bool PaymentsEnabled,
+    IReadOnlyDictionary<string, BackupPaymentProductSettings> PaymentProducts,
+    string[] EnabledPaymentProviders,
+    bool PaymentSecretsIncluded)
 {
     internal static BackupRuntimeSettings FromConfiguration(IConfiguration configuration) => new(
         configuration.GetSection("Cors:Origins").Get<string[]>() ?? [],
@@ -554,8 +561,30 @@ internal sealed record BackupRuntimeSettings(
         !string.IsNullOrWhiteSpace(configuration["Security:AdminApiKey"]),
         AdminApiKeyIncluded: false,
         !string.IsNullOrWhiteSpace(configuration.GetConnectionString("Postgres")),
-        ConnectionStringIncluded: false);
+        ConnectionStringIncluded: false,
+        configuration.GetValue<bool>("Payments:Enabled"),
+        configuration.GetSection("Payments:Products").GetChildren().ToDictionary(
+            child => child.Key,
+            child => new BackupPaymentProductSettings(
+                child.GetValue<bool>("Enabled"), child["Name"] ?? string.Empty,
+                child["Plan"] ?? string.Empty, child.GetValue<int>("DurationDays"),
+                child.GetValue<long>("AmountMinor"), child["Currency"] ?? string.Empty,
+                child["Description"] ?? string.Empty),
+            StringComparer.OrdinalIgnoreCase),
+        configuration.GetSection("Payments:Providers").GetChildren()
+            .Where(child => child.GetValue<bool>("Enabled")).Select(child => child.Key).ToArray(),
+        PaymentSecretsIncluded: false);
 }
+
+/// <summary>Несекретная коммерческая часть одного продукта в backup.</summary>
+internal sealed record BackupPaymentProductSettings(
+    bool Enabled,
+    string Name,
+    string Plan,
+    int DurationDays,
+    long AmountMinor,
+    string Currency,
+    string Description);
 
 /// <summary>
 /// Полный безопасный срез BackupOptions. FromOptions fail-closed требует явно

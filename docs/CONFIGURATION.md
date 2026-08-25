@@ -36,6 +36,37 @@ docker compose up -d --build
 | `PROMETHEUS_*`, `ALERTMANAGER_*` | Loopback-порты и bounded retention monitoring profile |
 | `PROXYHARBOR_IMAGE_PREFIX`, `PROXYHARBOR_IMAGE_TAG` | GHCR namespace и версия для release overlay |
 
+## Платежи и подписки
+
+Биллинг по умолчанию выключен (`PAYMENTS_ENABLED=false`). Сначала заключите договор с провайдером,
+получите merchant-реквизиты и проверьте тестовый платёж. ProxyHarbor использует hosted checkout:
+номер карты и CVC не поступают в API и не сохраняются в PostgreSQL. В БД остаются только заказ,
+сумма, валюта, провайдер, внешний идентификатор и статус.
+
+Поддержаны пять шлюзов:
+
+| Провайдер | Переменные | URL уведомления |
+|---|---|---|
+| ЮKassa | `YOOKASSA_ENABLED`, `YOOKASSA_SHOP_ID`, `YOOKASSA_SECRET_KEY` | `/api/v1/payments/webhooks/yookassa` |
+| CloudPayments | `CLOUDPAYMENTS_ENABLED`, `CLOUDPAYMENTS_PUBLIC_ID`, `CLOUDPAYMENTS_API_SECRET` | `/api/v1/payments/webhooks/cloudpayments` (Pay, POST) |
+| Robokassa | `ROBOKASSA_ENABLED`, `ROBOKASSA_MERCHANT_LOGIN`, `ROBOKASSA_PASSWORD1`, `ROBOKASSA_PASSWORD2`, `ROBOKASSA_TEST_MODE` | `/api/v1/payments/webhooks/robokassa` (ResultURL; SHA-256) |
+| Т-Банк | `TBANK_ENABLED`, `TBANK_TERMINAL_KEY`, `TBANK_PASSWORD` | URL передаётся в `Init` автоматически |
+| Stripe | `STRIPE_ENABLED`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | `/api/v1/payments/webhooks/stripe` (`checkout.session.completed`) |
+
+Секреты Compose монтирует read-only файлами; в environment контейнера находятся только публичные
+merchant ID и переключатели. Включайте общий `PAYMENTS_ENABLED=true` только после настройки хотя бы
+одного шлюза. Stripe применим только к merchant, зарегистрированному в поддерживаемой Stripe стране.
+
+Каталог цен находится в `Payments:Products` (`appsettings.json`). Значения `499 ₽` и `999 ₽` —
+предварительные defaults, а не утверждённая публичная оферта; перед включением оплаты задайте итоговые
+цены, срок доступа, налоговую ставку и требования онлайн-кассы вместе с бухгалтером. Клиент не может
+подменить цену: checkout всегда получает сумму и срок из серверного каталога.
+
+Успешный подписанный webhook переводит заказ в `paid`, продлевает доступ от более поздней даты
+(`сейчас` или текущее окончание подписки) и добавляет роль `Subscriber`. Повторная доставка одного
+уведомления идемпотентна и не продлевает тариф второй раз. История последних 50 платежей доступна
+в личном кабинете и включается в зашифрованный backup.
+
 `POSTGRES_PASSWORD`, `ADMIN_PASSWORD`, `ADMIN_API_KEY`, backup key и Telegram credentials Compose монтирует как bounded secret files. SMTP-пароль подключается отдельным `SecretFiles__SmtpPassword`, когда почтовый relay настроен. Приложение собирает строку PostgreSQL после чтения password file, поэтому пароль не появляется в process environment как часть connection string.
 
 ### Восстановление пароля по SMTP

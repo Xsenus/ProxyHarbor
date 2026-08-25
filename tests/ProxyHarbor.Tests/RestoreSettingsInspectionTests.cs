@@ -110,7 +110,11 @@ public sealed class RestoreSettingsInspectionTests
             AdminApiKeyConfigured: true,
             AdminApiKeyIncluded: false,
             ConnectionStringConfigured: true,
-            ConnectionStringIncluded: false);
+            ConnectionStringIncluded: false,
+            PaymentsEnabled: false,
+            PaymentProducts: new Dictionary<string, BackupPaymentProductSettings>(),
+            EnabledPaymentProviders: [],
+            PaymentSecretsIncluded: false);
         var stream = new MemoryStream();
         using (var writer = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true))
         {

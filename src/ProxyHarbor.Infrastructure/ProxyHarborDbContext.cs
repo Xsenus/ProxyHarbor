@@ -21,6 +21,8 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
     public DbSet<BackupRun> BackupRuns => Set<BackupRun>();
     /// <summary>Текущие тарифы пользователей, отделённые от Identity-ролей.</summary>
     public DbSet<UserSubscription> Subscriptions => Set<UserSubscription>();
+    /// <summary>Аудируемые заказы на оплату без платёжных реквизитов.</summary>
+    public DbSet<PaymentOrder> PaymentOrders => Set<PaymentOrder>();
 
     /// <inheritdoc />
     protected override void OnModelCreating(ModelBuilder builder)
@@ -48,6 +50,29 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
             table.HasCheckConstraint("CK_Subscriptions_Plan", "\"Plan\" IN ('free', 'pro', 'unlimited')");
             table.HasCheckConstraint("CK_Subscriptions_Status", "\"Status\" IN ('active', 'trialing', 'past_due', 'canceled', 'expired')");
             table.HasCheckConstraint("CK_Subscriptions_Timeline", "\"ExpiresAt\" IS NULL OR \"ExpiresAt\" >= \"StartedAt\"");
+        });
+
+        var payment = builder.Entity<PaymentOrder>();
+        payment.HasIndex(x => x.IdempotencyKey).IsUnique();
+        payment.HasIndex(x => new { x.Provider, x.ProviderPaymentId }).IsUnique();
+        payment.HasIndex(x => new { x.UserId, x.CreatedAt });
+        payment.Property(x => x.ProductCode).HasMaxLength(64);
+        payment.Property(x => x.Plan).HasMaxLength(32);
+        payment.Property(x => x.Provider).HasMaxLength(32);
+        payment.Property(x => x.Currency).HasMaxLength(3);
+        payment.Property(x => x.Status).HasMaxLength(32);
+        payment.Property(x => x.ProviderPaymentId).HasMaxLength(255);
+        payment.Property(x => x.CheckoutUrl).HasMaxLength(2048);
+        payment.Property(x => x.IdempotencyKey).HasMaxLength(64);
+        payment.HasOne(x => x.User).WithMany().HasForeignKey(x => x.UserId)
+            .OnDelete(DeleteBehavior.Restrict);
+        payment.ToTable(table =>
+        {
+            table.HasCheckConstraint("CK_PaymentOrders_Plan", "\"Plan\" IN ('pro', 'unlimited')");
+            table.HasCheckConstraint("CK_PaymentOrders_Status", "\"Status\" IN ('pending', 'paid', 'failed', 'canceled', 'refunded')");
+            table.HasCheckConstraint("CK_PaymentOrders_Amount", "\"AmountMinor\" > 0 AND \"DurationDays\" BETWEEN 1 AND 3660");
+            table.HasCheckConstraint("CK_PaymentOrders_Currency", "char_length(\"Currency\") = 3 AND \"Currency\" = upper(\"Currency\")");
+            table.HasCheckConstraint("CK_PaymentOrders_Timeline", "\"PaidAt\" IS NULL OR (\"PaidAt\" >= \"CreatedAt\" AND \"Status\" IN ('paid', 'refunded'))");
         });
 
         var proxy = builder.Entity<ProxyEndpoint>();

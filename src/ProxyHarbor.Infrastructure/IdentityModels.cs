@@ -42,6 +42,60 @@ public sealed class UserSubscription
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 
+/// <summary>Заказ на оплату подписки; карточные и банковские реквизиты здесь не хранятся.</summary>
+public sealed class PaymentOrder
+{
+    /// <summary>Внутренний неизменяемый идентификатор заказа.</summary>
+    public Guid Id { get; set; } = Guid.NewGuid();
+    /// <summary>Владелец заказа.</summary>
+    public Guid UserId { get; set; }
+    /// <summary>Навигация к владельцу.</summary>
+    public ApplicationUser User { get; set; } = null!;
+    /// <summary>Код продукта из конфигурации каталога.</summary>
+    public string ProductCode { get; set; } = string.Empty;
+    /// <summary>Тариф, который будет активирован только после подтверждённой оплаты.</summary>
+    public string Plan { get; set; } = SubscriptionPlans.Pro;
+    /// <summary>Платёжный шлюз: yookassa, cloudpayments, robokassa, tbank или stripe.</summary>
+    public string Provider { get; set; } = string.Empty;
+    /// <summary>Сумма в минимальных единицах валюты, например копейках.</summary>
+    public long AmountMinor { get; set; }
+    /// <summary>Трёхбуквенный ISO 4217 код валюты.</summary>
+    public string Currency { get; set; } = "RUB";
+    /// <summary>Продолжительность оплаченного доступа.</summary>
+    public int DurationDays { get; set; }
+    /// <summary>pending, paid, failed, canceled или refunded.</summary>
+    public string Status { get; set; } = PaymentStatuses.Pending;
+    /// <summary>Идентификатор операции на стороне шлюза.</summary>
+    public string? ProviderPaymentId { get; set; }
+    /// <summary>Hosted checkout URL; номера карт никогда не проходят через ProxyHarbor.</summary>
+    public string? CheckoutUrl { get; set; }
+    /// <summary>Ключ защиты повторной отправки checkout-запроса.</summary>
+    public string IdempotencyKey { get; set; } = Guid.NewGuid().ToString("N");
+    /// <summary>Создание заказа в UTC.</summary>
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+    /// <summary>Момент подтверждения оплаты шлюзом.</summary>
+    public DateTimeOffset? PaidAt { get; set; }
+    /// <summary>Последняя синхронизация состояния.</summary>
+    public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
+/// <summary>Строго ограниченные состояния платёжного заказа.</summary>
+public static class PaymentStatuses
+{
+    /// <summary>Ожидается действие пользователя или подтверждение шлюза.</summary>
+    public const string Pending = "pending";
+    /// <summary>Оплата окончательно подтверждена.</summary>
+    public const string Paid = "paid";
+    /// <summary>Шлюз сообщил об ошибке операции.</summary>
+    public const string Failed = "failed";
+    /// <summary>Оплата отменена до завершения.</summary>
+    public const string Canceled = "canceled";
+    /// <summary>Деньги возвращены плательщику.</summary>
+    public const string Refunded = "refunded";
+    /// <summary>Все допустимые состояния.</summary>
+    public static readonly string[] All = [Pending, Paid, Failed, Canceled, Refunded];
+}
+
 /// <summary>Стабильные системные роли; UI никогда не определяет права самостоятельно.</summary>
 public static class UserRoles
 {

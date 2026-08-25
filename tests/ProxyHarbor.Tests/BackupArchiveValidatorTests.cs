@@ -312,7 +312,11 @@ public sealed class BackupArchiveValidatorTests
                 AdminApiKeyConfigured: true,
                 AdminApiKeyIncluded: false,
                 ConnectionStringConfigured: true,
-                ConnectionStringIncluded: false), jsonOptions));
+                ConnectionStringIncluded: false,
+                PaymentsEnabled: false,
+                PaymentProducts: new Dictionary<string, BackupPaymentProductSettings>(),
+                EnabledPaymentProviders: [],
+                PaymentSecretsIncluded: false), jsonOptions));
     }
 
     private static void AddEntry(ZipArchive archive, string name, string contents)
