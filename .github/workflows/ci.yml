@@ -165,7 +165,7 @@ jobs:
           POSTGRES_DB: proxyharbor
           POSTGRES_USER: proxyharbor
           POSTGRES_PASSWORD: ci-password
-          ADMIN_PASSWORD: ci-admin-password-at-least-24-chars
+          ADMIN_PASSWORD: Ci-admin-password-at-least-24-chars!
           ADMIN_API_KEY: ci-admin-key
           BACKUP_ENCRYPTION_KEY: ci-encryption-key-at-least-32-chars
           PUBLIC_HOST: localhost
@@ -213,7 +213,7 @@ jobs:
             (.services.api.secrets | length) == 6 and
             (.services.restore.secrets | length) == 2 and
             (.services.alertmanager.secrets | length) == 2'
-          for secret_value in ci-password ci-admin-password-at-least-24-chars ci-admin-key ci-encryption-key-at-least-32-chars 9000000000000000000:CI_ONLY_PLACEHOLDER_NOT_A_REAL_TOKEN -1009000000001234; do
+          for secret_value in ci-password 'Ci-admin-password-at-least-24-chars!' ci-admin-key ci-encryption-key-at-least-32-chars 9000000000000000000:CI_ONLY_PLACEHOLDER_NOT_A_REAL_TOKEN -1009000000001234; do
             if echo "$production_config" | grep --fixed-strings -- "$secret_value"; then
               echo "Secret value leaked into rendered Compose configuration."
               exit 1
@@ -274,7 +274,7 @@ jobs:
           POSTGRES_DB: proxyharbor
           POSTGRES_USER: proxyharbor
           POSTGRES_PASSWORD: ci-password
-          ADMIN_PASSWORD: ci-admin-password-at-least-24-chars
+          ADMIN_PASSWORD: Ci-admin-password-at-least-24-chars!
           ADMIN_API_KEY: ci-admin-key-at-least-24-chars
           BACKUP_ENCRYPTION_KEY: ci-encryption-key-at-least-32-chars
           BACKGROUND_WORKERS_ENABLED: false
@@ -320,7 +320,7 @@ jobs:
           assert_secret_values_absent() {
             container_id=$1
             environment=$(docker inspect --format '{{json .Config.Env}}' "$container_id")
-            for secret_value in ci-password ci-admin-password-at-least-24-chars ci-admin-key-at-least-24-chars \
+            for secret_value in ci-password 'Ci-admin-password-at-least-24-chars!' ci-admin-key-at-least-24-chars \
               ci-encryption-key-at-least-32-chars 9000000000000000000:CI_ONLY_PLACEHOLDER_NOT_A_REAL_TOKEN -1009000000001234; do
               if echo "$environment" | grep --fixed-strings -- "$secret_value"; then
                 echo "Secret value leaked into container environment."
@@ -456,7 +456,7 @@ jobs:
           recovered_settings=$(docker compose --profile tools run --rm --no-deps -T restore \
             --input "/app/backups/$backup_file" --inspect-settings)
           echo "$recovered_settings" | jq --exit-status \
-            '.manifest.version == 5 and
+            '.manifest.version == 6 and
              .manifest.settingsSchemaVersion == 1 and
              .manifest.secretsIncluded == false and
              .collector.validationConcurrency == 800 and
@@ -674,7 +674,7 @@ jobs:
           ASPNETCORE_URLS: http://127.0.0.1:5080
           ConnectionStrings__Postgres: Host=127.0.0.1;Port=5432;Database=proxyharbor;Username=proxyharbor;Password=integration-password
           Security__AdminApiKey: integration-admin-key-at-least-24-chars
-          Security__AdminPassword: integration-admin-password-at-least-24-chars
+          Security__AdminPassword: Integration-admin-password-at-least-24-chars!
           Security__DataProtectionKeysDirectory: /tmp/proxyharbor-data-protection
           AllowedHosts: 127.0.0.1;localhost
           Collector__BackgroundWorkersEnabled: false
@@ -727,13 +727,24 @@ jobs:
           test "$invalid_login_status" -eq 401
           login_status=$(curl --silent --dump-header "$security_headers" --output /dev/null --write-out '%{http_code}' \
             --request POST --header 'Content-Type: application/json' \
-            --data '{"username":"admin","password":"integration-admin-password-at-least-24-chars"}' \
+            --data '{"username":"admin","password":"Integration-admin-password-at-least-24-chars!"}' \
             http://127.0.0.1:5080/api/v1/auth/login)
           test "$login_status" -eq 200
-          grep --ignore-case '^Set-Cookie: ProxyHarbor.Admin=' "$security_headers"
+          grep --ignore-case '^Set-Cookie: ProxyHarbor.Session=' "$security_headers"
           grep --ignore-case '^Set-Cookie: .*httponly' "$security_headers"
           grep --ignore-case '^Set-Cookie: .*secure' "$security_headers"
           grep --ignore-case '^Set-Cookie: .*samesite=strict' "$security_headers"
+          registered=$(curl --fail --silent --request POST --header 'Content-Type: application/json' \
+            --data '{"username":"smoke.user","email":"smoke@example.com","displayName":"Smoke User","password":"Test-user-42!"}' \
+            http://127.0.0.1:5080/api/v1/auth/register)
+          echo "$registered" | jq --exit-status \
+            '.username == "smoke.user" and .email == "smoke@example.com" and
+             (.roles | index("User")) != null and .subscription.plan == "free" and
+             .entitlements.unlimitedProxyAccess == false'
+          email_login=$(curl --fail --silent --request POST --header 'Content-Type: application/json' \
+            --data '{"username":"smoke@example.com","password":"Test-user-42!"}' \
+            http://127.0.0.1:5080/api/v1/auth/login)
+          echo "$email_login" | jq --exit-status '.username == "smoke.user" and .email == "smoke@example.com"'
           curl --silent --request OPTIONS --dump-header "$security_headers" --output /dev/null \
             --header 'Origin: https://dashboard.example' --header 'Access-Control-Request-Method: GET' \
             http://127.0.0.1:5080/api/v1/proxies
@@ -751,7 +762,7 @@ jobs:
             .components.securitySchemes.AdminApiKey.type == "apiKey" and
             .components.securitySchemes.AdminApiKey.name == "X-Admin-Key" and
             .components.securitySchemes.AdminSession.type == "apiKey" and
-            .components.securitySchemes.AdminSession.name == "ProxyHarbor.Admin" and
+            .components.securitySchemes.AdminSession.name == "ProxyHarbor.Session" and
             .paths["/api/v1/admin/sources"].post.security[0].AdminApiKey == [] and
             .paths["/api/v1/admin/sources"].post.security[1].AdminSession == [] and
             .paths["/api/v1/stats"].get.responses["200"].content["application/json"].schema["$ref"] ==

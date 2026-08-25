@@ -28,10 +28,10 @@ ProxyHarbor загружает 98 HTTPS-feed от 56 независимых пр
 - измерение полной latency, exit IP, анонимности, success rate и адаптивное расписание повторных проверок;
 - горизонтально масштабируемая очередь через lease token и `FOR UPDATE SKIP LOCKED`;
 - публичная keyset pagination и потоковый экспорт до 50 000 строк за запрос;
-- React-панель с серверной пагинацией, входом по логину и паролю на `/admin/login` и отдельным адаптивным кабинетом `/admin`, разделённым на обзор, операции, источники и резервные копии; сведения об источниках доступны только оператору;
+- React-панель с серверной пагинацией, единым входом по логину или email на `/login`, личным кабинетом `/account` и отдельным адаптивным кабинетом `/admin`, разделённым на обзор, пользователей, операции, источники и резервные копии; сведения об источниках доступны только оператору;
 - OpenAPI, Prometheus-метрики, готовые alerts и operator diagnostics;
 - PHB3 backup БД и безопасных настроек: diskless ZIP → AES-256-GCM → self-verification → atomic publish → Telegram;
-- транзакционный restore всех пяти таблиц с проверкой архива, semantic invariants и полным rollback при ошибке;
+- транзакционный restore proxy-данных, audit-истории, аккаунтов, ролей и подписок с проверкой архива и полным rollback при ошибке;
 - hardened Docker deployment: non-root, read-only root filesystem, dropped capabilities, healthchecks и resource ceilings;
 - multi-architecture GHCR release workflow с SBOM, provenance и immutable image digests.
 
@@ -76,6 +76,7 @@ cp .env.example .env
 ```dotenv
 POSTGRES_PASSWORD=REPLACE_ME
 ADMIN_USERNAME=admin
+ADMIN_EMAIL=admin@example.com
 ADMIN_PASSWORD=REPLACE_WITH_A_DIFFERENT_SECRET
 ADMIN_API_KEY=REPLACE_ME
 BACKUP_ENCRYPTION_KEY=REPLACE_ME
@@ -157,9 +158,13 @@ curl 'http://localhost:8080/api/v1/stats'
 
 Полный контракт фильтров, форматов, заголовков, ошибок и rate limits: [docs/API.md](docs/API.md).
 
-## Административный API
+## Аккаунты и административный API
 
-Браузер входит через `POST /api/v1/auth/login` по `ADMIN_USERNAME` и отдельному `ADMIN_PASSWORD`. Сервер выдаёт временную `HttpOnly`, `Secure`, `SameSite=Strict` cookie; пароль не сохраняется в React, `sessionStorage` или `localStorage`. CLI и automation независимо используют `ADMIN_API_KEY` в заголовке `X-Admin-Key`:
+При первом запуске `ADMIN_USERNAME`, `ADMIN_EMAIL` и `ADMIN_PASSWORD` создают bootstrap-администратора в ASP.NET Identity. После этого пароль меняется из профиля и не перезаписывается при рестарте. Любой аккаунт может входить по логину или email; пароль хранится только как Identity hash. Сервер выдаёт временную `HttpOnly`, `Secure`, `SameSite=Strict` cookie `ProxyHarbor.Session`, а React не сохраняет credentials в browser storage.
+
+Подготовлены роли `User`, `Subscriber`, `Administrator`, тарифы `free`, `pro`, `unlimited` и состояния подписки. Пока публичная выдача остаётся бесплатной; entitlement `unlimitedProxyAccess` уже вычисляется сервером для будущего биллинга. Регистрация, профиль, смена и восстановление пароля доступны через `/register`, `/account` и `/forgot-password`. Для отправки reset-писем задайте SMTP-параметры из [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
+
+CLI и automation независимо используют `ADMIN_API_KEY` в заголовке `X-Admin-Key`:
 
 ```text
 GET    /api/v1/admin/sources
@@ -168,6 +173,8 @@ POST   /api/v1/admin/sources
 PUT    /api/v1/admin/sources/{id}
 DELETE /api/v1/admin/sources/{id}
 GET    /api/v1/admin/diagnostics
+GET    /api/v1/admin/users
+PUT    /api/v1/admin/users/{id}
 POST   /api/v1/admin/collect
 POST   /api/v1/admin/validate
 POST   /api/v1/admin/backup
@@ -179,7 +186,7 @@ Invoke-RestMethod http://localhost:8080/api/v1/admin/diagnostics -Headers $admin
 Invoke-RestMethod http://localhost:8080/api/v1/admin/collect -Method Post -Headers $adminHeaders
 ```
 
-Передавайте credentials только через HTTPS. Ответы auth/admin API получают `Cache-Control: no-store`; вход ограничен пятью попытками за пять минут на IP, а логин, пароль и API key сравниваются по SHA-256 в constant time. Cookie-сессия живёт до восьми часов и подписывается ключами из отдельного постоянного Docker volume.
+Передавайте credentials только через HTTPS. Ответы auth/admin API получают `Cache-Control: no-store`; вход защищён rate limit и 15-минутной блокировкой после пяти ошибок. Пароли хеширует ASP.NET Identity, а API key сравнивается по SHA-256 в constant time. Cookie-сессия живёт до восьми часов и подписывается ключами из отдельного постоянного Docker volume.
 
 ## Backup и восстановление
 
@@ -188,8 +195,9 @@ Backup содержит:
 - прокси и их полную validation-статистику;
 - встроенные и пользовательские источники;
 - collection, validation и backup audit;
+- пользователей, роли и подписки без исходных паролей и reset token;
 - полные безопасные `Collector`/`Backup`/runtime-настройки;
-- manifest версии 5 с явным `secretsIncluded=false`.
+- manifest версии 6 с явным `secretsIncluded=false`.
 
 В архив никогда не входят admin password/API key, data-protection keys, PostgreSQL connection string/password, Telegram token/chat ID и encryption key. Их нужно хранить отдельно в secret manager.
 

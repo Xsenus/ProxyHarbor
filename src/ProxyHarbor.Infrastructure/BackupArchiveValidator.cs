@@ -26,10 +26,18 @@ public static class BackupArchiveValidator
         "settings/backup.json",
         "settings/runtime.json"
     ];
+    private static readonly string[] IdentityEntries =
+    [
+        "database/users.json",
+        "database/roles.json",
+        "database/user-roles.json",
+        "database/subscriptions.json"
+    ];
     private static readonly HashSet<string> AllowedEntries = new(
         RequiredDatabaseEntries
             .Concat(["database/backup-runs.json", "database/validation-runs.json"])
             .Concat(CurrentSettingsEntries)
+            .Concat(IdentityEntries)
             .Append("manifest.json"),
         StringComparer.Ordinal);
 
@@ -63,7 +71,7 @@ public static class BackupArchiveValidator
         if (!root.TryGetProperty("version", out var version) ||
             version.ValueKind != JsonValueKind.Number ||
             !version.TryGetInt32(out var versionNumber) ||
-            versionNumber is < 2 or > 5)
+            versionNumber is < 2 or > 6)
             throw new InvalidDataException("Версия manifest backup не поддерживается.");
         if (!root.TryGetProperty("secretsIncluded", out var secretsIncluded) ||
             secretsIncluded.ValueKind is not (JsonValueKind.True or JsonValueKind.False) ||
@@ -85,6 +93,10 @@ public static class BackupArchiveValidator
             RequireExactProperties(root,
                 ["version", "settingsSchemaVersion", "createdAt", "secretsIncluded"], "manifest.json");
 
+        if (versionNumber < 6 &&
+            archive.Entries.Any(entry => IdentityEntries.Contains(entry.FullName, StringComparer.Ordinal)))
+            throw new InvalidDataException("Identity snapshot поддерживается только backup schema версии 6.");
+
         foreach (var name in RequiredDatabaseEntries)
             _ = RequiredEntry(archive, name);
         if (versionNumber >= 3)
@@ -95,6 +107,8 @@ public static class BackupArchiveValidator
         }
         if (versionNumber >= 4)
             _ = RequiredEntry(archive, "database/validation-runs.json");
+        if (versionNumber >= 6)
+            foreach (var name in IdentityEntries) _ = RequiredEntry(archive, name);
 
         if (versionNumber >= 5)
         {

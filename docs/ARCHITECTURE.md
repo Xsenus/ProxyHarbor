@@ -155,7 +155,7 @@ API lease удерживается owning PostgreSQL session от startup до s
 
 ## Backup architecture
 
-Под одной repeatable-read транзакцией пять таблиц и safe settings сериализуются в ZIP, который сразу передаётся через bounded pipe в PHB3 encryptor. Plaintext ZIP на backup volume не создаётся. Ciphertext полностью self-verifies, durable flush выполняется до atomic rename. Только после этого запускаются retention и Telegram delivery.
+Под одной repeatable-read транзакцией девять таблиц (proxy/audit и Identity/subscription) и safe settings сериализуются в ZIP, который сразу передаётся через bounded pipe в PHB3 encryptor. Plaintext ZIP на backup volume не создаётся. Ciphertext полностью self-verifies, durable flush выполняется до atomic rename. Только после этого запускаются retention и Telegram delivery.
 
 Подробности и schema: [BACKUP_RESTORE.md](BACKUP_RESTORE.md).
 
@@ -164,9 +164,10 @@ API lease удерживается owning PostgreSQL session от startup до s
 1. External feeds — полностью недоверенные body/headers/DNS.
 2. Proxy servers — недоверенный transport до системно проверяемого TLS.
 3. Control endpoint — доверенный HTTPS origin, но bounded parser всё равно обязателен.
-4. Browser/admin session — логин и пароль отправляются только на login endpoint; браузер получает HttpOnly Secure SameSite=Strict cookie и не хранит исходные credentials.
-5. Telegram — внешний API; response/exception sanitizing не допускает token/chat ID в audit.
-6. Backup archive — аутентифицируется PHB3 и строго валидируется до destructive restore.
+4. Browser/account session — ASP.NET Identity хранит пользователей, роли, lockout, password hashes и reset tokens; вход принимает логин или email, а браузер получает HttpOnly Secure SameSite=Strict cookie и не хранит исходные credentials.
+5. Subscription entitlement — роль отвечает за доступ к функциям, а отдельная `UserSubscription` хранит тариф и жизненный цикл будущего billing provider; публичные лимиты пока не включены.
+6. Telegram — внешний API; response/exception sanitizing не допускает token/chat ID в audit.
+7. Backup archive — аутентифицируется PHB3 и строго валидируется до destructive restore.
 7. Reverse proxy headers — принимаются только от явно заданной CIDR и одного hop.
 
 Полный анализ: [../SECURITY.md](../SECURITY.md).

@@ -1,5 +1,5 @@
-using System.Text.Json;
 using System.Security.Claims;
+using System.Text.Json;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
 using ProxyHarbor.Api;
@@ -52,6 +52,9 @@ public sealed class ApiSecurityMiddlewareTests
         Assert.Equal(StatusCodes.Status204NoContent, context.Response.StatusCode);
         Assert.Equal("no-store", context.Response.Headers.CacheControl);
         Assert.Equal("no-cache", context.Response.Headers.Pragma);
+        Assert.True(context.User.Identity?.IsAuthenticated);
+        Assert.Equal("ApiKey", context.User.Identity?.AuthenticationType);
+        Assert.True(context.User.IsInRole("Administrator"));
         Assert.DoesNotContain(AdminKey, string.Join('\n', context.Response.Headers), StringComparison.Ordinal);
         AssertSecurityHeaders(context.Response.Headers);
     }
@@ -77,6 +80,25 @@ public sealed class ApiSecurityMiddlewareTests
         Assert.True(nextCalled);
         Assert.Equal(StatusCodes.Status200OK, context.Response.StatusCode);
         Assert.Equal("no-store", context.Response.Headers.CacheControl);
+    }
+
+    [Fact]
+    public async Task AuthenticatedUserWithoutAdministratorRoleReceivesForbidden()
+    {
+        var context = Context("/api/v1/admin/diagnostics");
+        context.User = new ClaimsPrincipal(new ClaimsIdentity(
+        [
+            new Claim(ClaimTypes.Name, "customer"),
+            new Claim(ClaimTypes.Role, "User")
+        ], "Cookies"));
+
+        await Pipeline(_ => throw new InvalidOperationException("next must not run"))(context);
+
+        Assert.Equal(StatusCodes.Status403Forbidden, context.Response.StatusCode);
+        Assert.False(context.Response.Headers.ContainsKey("WWW-Authenticate"));
+        context.Response.Body.Position = 0;
+        using var json = await JsonDocument.ParseAsync(context.Response.Body);
+        Assert.Equal("Недостаточно прав", json.RootElement.GetProperty("title").GetString());
     }
 
     [Fact]

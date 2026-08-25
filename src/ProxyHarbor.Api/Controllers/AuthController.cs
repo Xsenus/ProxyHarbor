@@ -1,57 +1,218 @@
 using System.ComponentModel.DataAnnotations;
-using System.Security.Claims;
-using Microsoft.AspNetCore.Authentication;
-using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.EntityFrameworkCore;
+using ProxyHarbor.Infrastructure;
 
 namespace ProxyHarbor.Api.Controllers;
 
-/// <summary>Создаёт и завершает защищённую cookie-сессию административного интерфейса.</summary>
+/// <summary>Управляет регистрацией, входом, сессией и восстановлением аккаунта.</summary>
 [ApiController]
 [Route("api/v1/auth")]
 [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
-public sealed class AuthController(AdminCredentialValidator credentials) : ControllerBase
+public sealed class AuthController(
+    UserManager<ApplicationUser> users,
+    SignInManager<ApplicationUser> signIn,
+    ProxyHarborDbContext db,
+    IAccountEmailSender emailSender,
+    ILogger<AuthController> logger) : ControllerBase
 {
-    /// <summary>Проверяет логин с паролем и выдаёт HttpOnly SameSite-сессию.</summary>
+    private static readonly Action<ILogger, Guid, Exception?> RecoveryEmailFailed = LoggerMessage.Define<Guid>(
+        LogLevel.Error, new EventId(1501, "RecoveryEmailFailed"),
+        "Не удалось отправить письмо восстановления аккаунта {UserId}");
+    /// <summary>Принимает логин или email и выдаёт общую HttpOnly cookie-сессию.</summary>
     [HttpPost("login")]
-    [EnableRateLimiting("admin-login")]
-    public async Task<IActionResult> Login([FromBody] AdminLoginRequest request)
+    [EnableRateLimiting("account-login")]
+    public async Task<IActionResult> Login([FromBody] AccountLoginRequest request)
     {
-        if (!credentials.Validate(request.Username, request.Password))
-            return Unauthorized(new ProblemDetails { Title = "Неверный логин или пароль", Status = 401 });
+        var user = await FindByIdentifierAsync(request.Username);
+        if (user is null || !user.IsActive) return InvalidCredentials();
 
-        var identity = new ClaimsIdentity(
-        [
-            new Claim(ClaimTypes.Name, request.Username),
-            new Claim(ClaimTypes.Role, "Administrator")
-        ], CookieAuthenticationDefaults.AuthenticationScheme);
-        await HttpContext.SignInAsync(
-            CookieAuthenticationDefaults.AuthenticationScheme,
-            new ClaimsPrincipal(identity),
-            new AuthenticationProperties { IsPersistent = false, AllowRefresh = true });
-        return Ok(new { username = request.Username });
+        var result = await signIn.PasswordSignInAsync(user, request.Password, false, lockoutOnFailure: true);
+        if (!result.Succeeded) return InvalidCredentials();
+
+        user.LastLoginAt = DateTimeOffset.UtcNow;
+        await users.UpdateAsync(user);
+        return Ok(await CreateSessionAsync(user));
     }
 
-    /// <summary>Возвращает состояние текущей административной сессии.</summary>
+    /// <summary>Создаёт бесплатный аккаунт и сразу открывает пользовательскую сессию.</summary>
+    [HttpPost("register")]
+    [EnableRateLimiting("account-register")]
+    public async Task<IActionResult> Register([FromBody] RegisterAccountRequest request)
+    {
+        // Npgsql использует retrying execution strategy. Поэтому вся транзакция,
+        // включая Identity-записи и подписку, должна быть единицей повторения.
+        var strategy = db.Database.CreateExecutionStrategy();
+        return await strategy.ExecuteAsync<IActionResult>(async () =>
+        {
+            await using var transaction = await db.Database.BeginTransactionAsync();
+            var user = new ApplicationUser
+            {
+                UserName = request.Username.Trim(),
+                Email = request.Email.Trim(),
+                DisplayName = request.DisplayName?.Trim(),
+                IsActive = true
+            };
+            var created = await users.CreateAsync(user, request.Password);
+            if (!created.Succeeded) return IdentityProblem(created, "Не удалось создать аккаунт");
+            var roleResult = await users.AddToRoleAsync(user, UserRoles.User);
+            if (!roleResult.Succeeded) return IdentityProblem(roleResult, "Не удалось назначить права аккаунта");
+
+            db.Subscriptions.Add(new UserSubscription { UserId = user.Id });
+            await db.SaveChangesAsync();
+            await transaction.CommitAsync();
+            await signIn.SignInAsync(user, isPersistent: false);
+            return StatusCode(StatusCodes.Status201Created, await CreateSessionAsync(user));
+        });
+    }
+
+    /// <summary>Не раскрывая наличие email, отправляет одноразовую ссылку восстановления.</summary>
+    [HttpPost("forgot-password")]
+    [EnableRateLimiting("account-recovery")]
+    public async Task<IActionResult> ForgotPassword([FromBody] ForgotPasswordRequest request, CancellationToken cancellationToken)
+    {
+        if (!emailSender.IsConfigured)
+            return Problem(title: "Восстановление по email временно недоступно", statusCode: 503);
+
+        var user = await users.FindByEmailAsync(request.Email.Trim());
+        if (user is { IsActive: true })
+        {
+            try
+            {
+                var token = await users.GeneratePasswordResetTokenAsync(user);
+                await emailSender.SendPasswordResetAsync(user.Email!, token, cancellationToken);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                // Ответ одинаков для существующего и неизвестного адреса: email нельзя перечислить.
+                RecoveryEmailFailed(logger, user.Id, exception);
+            }
+        }
+        return Accepted(new { message = "Если аккаунт существует, ссылка отправлена на указанную почту." });
+    }
+
+    /// <summary>Применяет одноразовый Identity token и отзывает прежние cookie-сессии.</summary>
+    [HttpPost("reset-password")]
+    [EnableRateLimiting("account-recovery")]
+    public async Task<IActionResult> ResetPassword([FromBody] ResetPasswordRequest request)
+    {
+        var user = await users.FindByEmailAsync(request.Email.Trim());
+        if (user is null || !user.IsActive)
+            return BadRequest(new ProblemDetails { Title = "Ссылка недействительна или устарела", Status = 400 });
+        var result = await users.ResetPasswordAsync(user, request.Token, request.NewPassword);
+        if (!result.Succeeded)
+            return BadRequest(new ProblemDetails { Title = "Ссылка недействительна или устарела", Status = 400 });
+        if (!user.EmailConfirmed)
+        {
+            user.EmailConfirmed = true;
+            await users.UpdateAsync(user);
+        }
+        await users.UpdateSecurityStampAsync(user);
+        return NoContent();
+    }
+
+    /// <summary>Возвращает профиль, роли и entitlement-параметры текущей сессии.</summary>
     [HttpGet("session")]
-    [Authorize(Roles = "Administrator")]
-    [EnableRateLimiting("admin")]
-    public IActionResult Session() => Ok(new { username = User.Identity?.Name });
+    [Authorize]
+    [EnableRateLimiting("account")]
+    public async Task<IActionResult> Session()
+    {
+        var user = await users.GetUserAsync(User);
+        return user is null || !user.IsActive ? Unauthorized() : Ok(await CreateSessionAsync(user));
+    }
 
     /// <summary>Инвалидирует cookie текущего браузера.</summary>
     [HttpPost("logout")]
-    [Authorize(Roles = "Administrator")]
-    [EnableRateLimiting("admin")]
+    [Authorize]
+    [EnableRateLimiting("account")]
     public async Task<IActionResult> Logout()
     {
-        await HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+        await signIn.SignOutAsync();
         return NoContent();
     }
+
+    private async Task<ApplicationUser?> FindByIdentifierAsync(string identifier)
+    {
+        var value = identifier.Trim();
+        return value.Contains('@', StringComparison.Ordinal)
+            ? await users.FindByEmailAsync(value)
+            : await users.FindByNameAsync(value);
+    }
+
+    private async Task<object> CreateSessionAsync(ApplicationUser user)
+    {
+        var roles = await users.GetRolesAsync(user);
+        var subscription = await db.Subscriptions.AsNoTracking().SingleOrDefaultAsync(x => x.UserId == user.Id);
+        var paidAccess = roles.Contains(UserRoles.Administrator, StringComparer.Ordinal) ||
+            subscription is { Status: SubscriptionStatuses.Active or SubscriptionStatuses.Trialing } &&
+            subscription.Plan is SubscriptionPlans.Pro or SubscriptionPlans.Unlimited &&
+            (subscription.ExpiresAt is null || subscription.ExpiresAt > DateTimeOffset.UtcNow);
+        return new
+        {
+            id = user.Id,
+            username = user.UserName,
+            email = user.Email,
+            displayName = user.DisplayName,
+            roles,
+            subscription = subscription is null ? null : new
+            {
+                subscription.Plan,
+                subscription.Status,
+                subscription.StartedAt,
+                subscription.ExpiresAt
+            },
+            entitlements = new { unlimitedProxyAccess = paidAccess }
+        };
+    }
+
+    private UnauthorizedObjectResult InvalidCredentials() =>
+        Unauthorized(new ProblemDetails { Title = "Неверный логин, email или пароль", Status = 401 });
+
+    private static BadRequestObjectResult IdentityProblem(IdentityResult result, string title) =>
+        new(new ValidationProblemDetails(result.Errors.GroupBy(x => x.Code, StringComparer.Ordinal)
+            .ToDictionary(x => x.Key, x => x.Select(error => error.Description).ToArray(), StringComparer.Ordinal))
+        { Title = title, Status = 400 });
 }
 
-/// <summary>Bounded JSON-модель административного входа.</summary>
-public sealed record AdminLoginRequest(
-    [Required, StringLength(AdminUsernamePolicy.MaximumLength, MinimumLength = AdminUsernamePolicy.MinimumLength)] string Username,
-    [Required, StringLength(AdminApiKeyPolicy.MaximumLength, MinimumLength = 1)] string Password);
+/// <summary>Bounded-модель входа; Username может содержать логин либо email.</summary>
+public sealed class AccountLoginRequest
+{
+    /// <summary>Логин или email без account enumeration.</summary>
+    [Required, StringLength(254, MinimumLength = 3)] public string Username { get; set; } = string.Empty;
+    /// <summary>Текущий пароль.</summary>
+    [Required, StringLength(256, MinimumLength = 1)] public string Password { get; set; } = string.Empty;
+}
+
+/// <summary>Данные регистрации бесплатного аккаунта.</summary>
+public sealed class RegisterAccountRequest
+{
+    /// <summary>Переносимый уникальный логин.</summary>
+    [Required, RegularExpression("^[A-Za-z0-9._-]{3,64}$")] public string Username { get; set; } = string.Empty;
+    /// <summary>Уникальный адрес для входа и восстановления.</summary>
+    [Required, EmailAddress, StringLength(254)] public string Email { get; set; } = string.Empty;
+    /// <summary>Необязательное отображаемое имя.</summary>
+    [StringLength(120)] public string? DisplayName { get; set; }
+    /// <summary>Пароль, дополнительно проверяемый Identity policy.</summary>
+    [Required, StringLength(256, MinimumLength = 12)] public string Password { get; set; } = string.Empty;
+}
+
+/// <summary>Запрос ссылки восстановления без account enumeration.</summary>
+public sealed class ForgotPasswordRequest
+{
+    /// <summary>Email потенциального владельца.</summary>
+    [Required, EmailAddress, StringLength(254)] public string Email { get; set; } = string.Empty;
+}
+
+/// <summary>Одноразовая смена пароля по Identity token из email.</summary>
+public sealed class ResetPasswordRequest
+{
+    /// <summary>Email из ссылки восстановления.</summary>
+    [Required, EmailAddress, StringLength(254)] public string Email { get; set; } = string.Empty;
+    /// <summary>URL-decoded одноразовый token.</summary>
+    [Required, StringLength(4096)] public string Token { get; set; } = string.Empty;
+    /// <summary>Новый пароль.</summary>
+    [Required, StringLength(256, MinimumLength = 12)] public string NewPassword { get; set; } = string.Empty;
+}

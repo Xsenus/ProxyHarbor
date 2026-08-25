@@ -117,8 +117,12 @@ public sealed class BackupPipelineTests
                 [
                     "database/backup-runs.json",
                     "database/proxies.json",
+                    "database/roles.json",
                     "database/runs.json",
                     "database/sources.json",
+                    "database/subscriptions.json",
+                    "database/user-roles.json",
+                    "database/users.json",
                     "database/validation-runs.json",
                     "manifest.json",
                     "settings/backup.json",
@@ -133,7 +137,7 @@ public sealed class BackupPipelineTests
             Assert.True(sources.RootElement[0].GetProperty("lastResultTruncated").GetBoolean());
             using var manifestStream = BackupArchiveValidator.RequiredEntry(archive, "manifest.json").Open();
             using var manifest = await JsonDocument.ParseAsync(manifestStream);
-            Assert.Equal(5, manifest.RootElement.GetProperty("version").GetInt32());
+            Assert.Equal(6, manifest.RootElement.GetProperty("version").GetInt32());
             Assert.Equal(1, manifest.RootElement.GetProperty("settingsSchemaVersion").GetInt32());
         }
         finally

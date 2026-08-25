@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Security.Claims;
 using System.Text;
 using Microsoft.AspNetCore.Mvc;
 
@@ -57,12 +58,25 @@ public sealed class AdminApiKeyMiddleware
         CryptographicOperations.ZeroMemory(providedHash);
         if (!authenticated)
         {
-            context.Response.StatusCode = StatusCodes.Status401Unauthorized;
-            context.Response.Headers.WWWAuthenticate = "Cookie, ApiKey realm=\"ProxyHarbor\"";
+            var signedInWithoutAdminRole = context.User.Identity?.IsAuthenticated == true;
+            context.Response.StatusCode = signedInWithoutAdminRole
+                ? StatusCodes.Status403Forbidden
+                : StatusCodes.Status401Unauthorized;
+            if (!signedInWithoutAdminRole)
+                context.Response.Headers.WWWAuthenticate = "Cookie, ApiKey realm=\"ProxyHarbor\"";
             context.Response.Headers.CacheControl = "no-store";
-            await context.Response.WriteAsJsonAsync(new ProblemDetails { Title = "Требуется административная авторизация", Status = 401 });
+            await context.Response.WriteAsJsonAsync(new ProblemDetails
+            {
+                Title = signedInWithoutAdminRole ? "Недостаточно прав" : "Требуется административная авторизация",
+                Status = context.Response.StatusCode
+            });
             return;
         }
+        // Преобразуем успешно проверенный automation key в стандартного principal,
+        // чтобы endpoint-level [Authorize] применял ту же роль, что и cookie-сессия.
+        context.User = new ClaimsPrincipal(new ClaimsIdentity(
+            [new Claim(ClaimTypes.Name, "admin-api-key"), new Claim(ClaimTypes.Role, "Administrator")],
+            authenticationType: "ApiKey"));
         await _next(context);
     }
 }

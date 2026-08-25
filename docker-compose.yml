@@ -45,9 +45,18 @@ services:
       ConnectionStrings__Postgres: Host=postgres;Port=5432;Database=${POSTGRES_DB};Username=${POSTGRES_USER}
       SecretFiles__PostgresPassword: /run/secrets/postgres_password
       Security__AdminUsername: ${ADMIN_USERNAME:-admin}
+      Security__AdminEmail: ${ADMIN_EMAIL:-admin@proxy.blagodaty.ru}
       Security__DataProtectionKeysDirectory: /app/data-protection
       SecretFiles__AdminApiKey: /run/secrets/admin_api_key
       SecretFiles__AdminPassword: /run/secrets/admin_password
+      SecretFiles__SmtpPassword: ${SMTP_PASSWORD_FILE:-}
+      Email__Host: ${SMTP_HOST:-}
+      Email__Port: ${SMTP_PORT:-587}
+      Email__UseSsl: ${SMTP_USE_SSL:-true}
+      Email__Username: ${SMTP_USERNAME:-}
+      Email__FromAddress: ${SMTP_FROM_ADDRESS:-}
+      Email__FromName: ${SMTP_FROM_NAME:-ProxyHarbor}
+      Email__PublicBaseUrl: ${PUBLIC_BASE_URL:-https://proxy.blagodaty.ru}
       SecretFiles__BackupEncryptionKey: /run/secrets/backup_encryption_key
       SecretFiles__TelegramBotToken: /run/secrets/telegram_bot_token
       SecretFiles__TelegramChatId: /run/secrets/telegram_chat_id

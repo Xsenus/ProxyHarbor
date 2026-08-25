@@ -34,6 +34,13 @@ public sealed class DatabaseInvariantIntegrationTests
         "CK_ValidationRuns_Counters",
         "CK_ValidationRuns_State"
     ];
+    private static readonly string[] IdentityConstraints =
+    [
+        "CK_AspNetUsers_ActiveTimeline",
+        "CK_Subscriptions_Plan",
+        "CK_Subscriptions_Status",
+        "CK_Subscriptions_Timeline"
+    ];
 
     [Fact]
     public void EfModelContainsEveryRequiredConstraint()
@@ -49,7 +56,8 @@ public sealed class DatabaseInvariantIntegrationTests
             .Order(StringComparer.Ordinal)
             .ToArray();
 
-        Assert.Equal(ExpectedConstraints, actual);
+        Assert.All(ExpectedConstraints, expected => Assert.Contains(expected, actual));
+        Assert.All(IdentityConstraints, expected => Assert.Contains(expected, actual));
     }
 
     [Fact]
@@ -172,7 +180,7 @@ public sealed class DatabaseInvariantIntegrationTests
                       AND constraint_row.conname LIKE 'CK\_%' ESCAPE '\'
                       AND table_row.relnamespace = current_schema()::regnamespace
                     """).SingleAsync();
-                Assert.Equal(ExpectedConstraints.Length, validatedCount);
+                Assert.Equal(ExpectedConstraints.Length + IdentityConstraints.Length, validatedCount);
             }
 
             await AssertRejectedAsync(options, db => db.Proxies.Add(new ProxyEndpoint

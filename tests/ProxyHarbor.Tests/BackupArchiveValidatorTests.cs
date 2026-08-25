@@ -45,6 +45,32 @@ public sealed class BackupArchiveValidatorTests
     }
 
     [Fact]
+    public void VersionSixRequiresAndAcceptsCompleteIdentitySnapshot()
+    {
+        var settings = CurrentSettings();
+        using var archive = CreateArchive(
+            """{"version":6,"settingsSchemaVersion":1,"createdAt":"2026-08-25T10:00:00Z","secretsIncluded":false}""",
+            includeBackupRuns: true, includeValidationRuns: true, includeSettings: true, includeIdentity: true,
+            collectorSettings: settings.Collector, backupSettings: settings.Backup, runtimeSettings: settings.Runtime);
+
+        BackupArchiveValidator.Validate(archive);
+    }
+
+    [Fact]
+    public void VersionFiveRejectsIdentitySnapshotFromNewerSchema()
+    {
+        var settings = CurrentSettings();
+        using var archive = CreateArchive(
+            """{"version":5,"settingsSchemaVersion":1,"createdAt":"2026-08-25T10:00:00Z","secretsIncluded":false}""",
+            includeBackupRuns: true, includeValidationRuns: true, includeSettings: true, includeIdentity: true,
+            collectorSettings: settings.Collector, backupSettings: settings.Backup, runtimeSettings: settings.Runtime);
+
+        var exception = Assert.Throws<InvalidDataException>(() => BackupArchiveValidator.Validate(archive));
+
+        Assert.Contains("версии 6", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void VersionFiveRejectsPresentButIncompleteSettingsObject()
     {
         var settings = CurrentSettings();
@@ -238,6 +264,7 @@ public sealed class BackupArchiveValidatorTests
         bool includeBackupRuns = false,
         bool includeValidationRuns = false,
         bool includeSettings = false,
+        bool includeIdentity = false,
         string? omittedEntry = null,
         string? unexpectedEntry = null,
         string collectorSettings = "{}",
@@ -254,6 +281,13 @@ public sealed class BackupArchiveValidatorTests
             AddEntry(writer, "database/runs.json", "[]");
             if (includeBackupRuns) AddEntry(writer, "database/backup-runs.json", "[]");
             if (includeValidationRuns) AddEntry(writer, "database/validation-runs.json", "[]");
+            if (includeIdentity)
+            {
+                AddEntry(writer, "database/users.json", "[]");
+                AddEntry(writer, "database/roles.json", "[]");
+                AddEntry(writer, "database/user-roles.json", "[]");
+                AddEntry(writer, "database/subscriptions.json", "[]");
+            }
             if (includeSettings)
             {
                 if (omittedEntry != "settings/collector.json") AddEntry(writer, "settings/collector.json", collectorSettings);

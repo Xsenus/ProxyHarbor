@@ -1,107 +1,59 @@
-using System.Security.Claims;
-using Microsoft.AspNetCore.Authentication;
-using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.Mvc;
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.DependencyInjection;
+using System.ComponentModel.DataAnnotations;
+using Microsoft.Extensions.Options;
 using ProxyHarbor.Api;
 using ProxyHarbor.Api.Controllers;
 
 namespace ProxyHarbor.Tests;
 
-/// <summary>Проверяет выдачу и завершение browser-сессии без реального cookie handler.</summary>
+/// <summary>Фиксирует bounded-контракты аккаунтов и fail-closed SMTP configuration.</summary>
 public sealed class AuthControllerTests
 {
-    private const string Password = "browser-admin-password-at-least-24-chars";
-
-    [Fact]
-    public async Task ValidCredentialsCreateAdministratorSession()
+    [Theory]
+    [InlineData("admin")]
+    [InlineData("admin@proxy.example")]
+    public void LoginIdentifierAcceptsUsernameOrEmail(string identifier)
     {
-        var authentication = new RecordingAuthenticationService();
-        var controller = CreateController(authentication);
+        var request = new AccountLoginRequest { Username = identifier, Password = "some-password" };
 
-        var result = await controller.Login(new AdminLoginRequest("admin", Password));
-
-        Assert.IsType<OkObjectResult>(result);
-        Assert.NotNull(authentication.SignedInPrincipal);
-        Assert.Equal("admin", authentication.SignedInPrincipal.Identity?.Name);
-        Assert.True(authentication.SignedInPrincipal.IsInRole("Administrator"));
-        Assert.False(authentication.Properties?.IsPersistent);
+        Assert.Empty(Validate(request));
     }
 
     [Fact]
-    public async Task InvalidCredentialsReturnGenericUnauthorizedWithoutSession()
+    public void RegistrationRequiresPortableUsernameEmailAndLongPassword()
     {
-        var authentication = new RecordingAuthenticationService();
-        var controller = CreateController(authentication);
+        var invalid = new RegisterAccountRequest { Username = "bad user", Email = "not-email", Password = "short" };
+        var valid = new RegisterAccountRequest { Username = "proxy.user", Email = "user@example.com", DisplayName = "Proxy User", Password = "Long-password-123!" };
 
-        var result = await controller.Login(new AdminLoginRequest("admin", "wrong"));
-
-        var unauthorized = Assert.IsType<UnauthorizedObjectResult>(result);
-        var problem = Assert.IsType<ProblemDetails>(unauthorized.Value);
-        Assert.Equal("Неверный логин или пароль", problem.Title);
-        Assert.Null(authentication.SignedInPrincipal);
+        Assert.NotEmpty(Validate(invalid));
+        Assert.Empty(Validate(valid));
     }
 
     [Fact]
-    public async Task LogoutRemovesCurrentSessionAndSessionReturnsUsername()
+    public void EmailSenderIsDisabledUntilEverySecretIsConfigured()
     {
-        var authentication = new RecordingAuthenticationService();
-        var controller = CreateController(authentication);
-        controller.ControllerContext.HttpContext.User = new ClaimsPrincipal(new ClaimsIdentity(
-            [new Claim(ClaimTypes.Name, "admin"), new Claim(ClaimTypes.Role, "Administrator")], "Cookies"));
+        var incomplete = new SmtpAccountEmailSender(Options.Create(new AccountEmailOptions
+        {
+            Host = "smtp.example.com",
+            Username = "proxy",
+            FromAddress = "noreply@example.com"
+        }));
+        var complete = new SmtpAccountEmailSender(Options.Create(new AccountEmailOptions
+        {
+            Host = "smtp.example.com",
+            Username = "proxy",
+            Password = "secret",
+            FromAddress = "noreply@example.com",
+            PublicBaseUrl = "https://proxy.example.com"
+        }));
 
-        var session = Assert.IsType<OkObjectResult>(controller.Session());
-        Assert.Contains("admin", session.Value?.ToString(), StringComparison.Ordinal);
-        Assert.IsType<NoContentResult>(await controller.Logout());
-        Assert.True(authentication.SignedOut);
+        Assert.False(incomplete.IsConfigured);
+        Assert.True(complete.IsConfigured);
     }
 
-    private static AuthController CreateController(RecordingAuthenticationService authentication)
+    private static List<ValidationResult> Validate(object value)
     {
-        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
-        {
-            ["Security:AdminUsername"] = "admin",
-            ["Security:AdminPassword"] = Password
-        }).Build();
-        var services = new ServiceCollection()
-            .AddSingleton<IAuthenticationService>(authentication)
-            .BuildServiceProvider();
-        return new AuthController(new AdminCredentialValidator(configuration))
-        {
-            ControllerContext = new ControllerContext
-            {
-                HttpContext = new DefaultHttpContext { RequestServices = services }
-            }
-        };
-    }
-
-    private sealed class RecordingAuthenticationService : IAuthenticationService
-    {
-        internal ClaimsPrincipal? SignedInPrincipal { get; private set; }
-        internal AuthenticationProperties? Properties { get; private set; }
-        internal bool SignedOut { get; private set; }
-
-        public Task SignInAsync(HttpContext context, string? scheme, ClaimsPrincipal principal, AuthenticationProperties? properties)
-        {
-            SignedInPrincipal = principal;
-            Properties = properties;
-            return Task.CompletedTask;
-        }
-
-        public Task SignOutAsync(HttpContext context, string? scheme, AuthenticationProperties? properties)
-        {
-            SignedOut = true;
-            return Task.CompletedTask;
-        }
-
-        public Task<AuthenticateResult> AuthenticateAsync(HttpContext context, string? scheme) =>
-            Task.FromResult(AuthenticateResult.NoResult());
-
-        public Task ChallengeAsync(HttpContext context, string? scheme, AuthenticationProperties? properties) =>
-            Task.CompletedTask;
-
-        public Task ForbidAsync(HttpContext context, string? scheme, AuthenticationProperties? properties) =>
-            Task.CompletedTask;
+        var results = new List<ValidationResult>();
+        Validator.TryValidateObject(value, new ValidationContext(value), results, validateAllProperties: true);
+        return results;
     }
 }

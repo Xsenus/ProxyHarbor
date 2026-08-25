@@ -95,8 +95,8 @@ describe('ProxyHarbor UI', () => {
   it('renders a dedicated login page without the public catalog', () => {
     window.history.replaceState({}, '', '/admin/login')
     render(<App />)
-    expect(screen.getByRole('heading', { name: 'Вход в управление' })).toBeInTheDocument()
-    expect(screen.getByLabelText('Логин')).toHaveAttribute('autocomplete', 'username')
+    expect(screen.getByRole('heading', { name: 'Вход в ProxyHarbor' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Логин или email')).toHaveAttribute('autocomplete', 'username')
     expect(screen.getByLabelText('Пароль')).toHaveAttribute('autocomplete', 'current-password')
     expect(screen.queryByPlaceholderText('X-Admin-Key')).not.toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Лучшие прямо сейчас' })).not.toBeInTheDocument()
@@ -107,7 +107,7 @@ describe('ProxyHarbor UI', () => {
     window.history.replaceState({}, '', '/admin/login')
     vi.mocked(fetch).mockResolvedValue(jsonResponseValue({ title: 'Неверный логин или пароль' }, 401))
     render(<App />)
-    fireEvent.change(screen.getByLabelText('Логин'), { target: { value: 'admin' } })
+    fireEvent.change(screen.getByLabelText('Логин или email'), { target: { value: 'admin' } })
     fireEvent.change(screen.getByLabelText('Пароль'), { target: { value: 'wrong-password' } })
     fireEvent.click(screen.getByRole('button', { name: 'Войти' }))
 
@@ -116,6 +116,17 @@ describe('ProxyHarbor UI', () => {
     expect(options?.credentials).toBe('include')
     expect(new Headers(options?.headers).has('X-Admin-Key')).toBe(false)
     expect(JSON.parse(String(options?.body))).toEqual({ username: 'admin', password: 'wrong-password' })
+  })
+
+  it.each([
+    ['/register', 'Создать аккаунт'],
+    ['/forgot-password', 'Восстановить пароль'],
+    ['/reset-password?email=user%40example.com&token=token', 'Новый пароль'],
+  ])('renders the %s account flow without public content', (path, heading) => {
+    window.history.replaceState({}, '', path)
+    render(<App />)
+    expect(screen.getByRole('heading', { name: heading })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Лучшие прямо сейчас' })).not.toBeInTheDocument()
   })
 
   it('renders a dedicated authenticated admin page without public content', async () => {
@@ -148,6 +159,7 @@ describe('ProxyHarbor UI', () => {
     ['/admin/operations', 'Операции'],
     ['/admin/sources', 'Источники'],
     ['/admin/backups', 'Резервные копии'],
+    ['/admin/users', 'Пользователи'],
   ])('opens the %s admin section as a separate workspace', async (path, heading) => {
     window.history.replaceState({}, '', path)
     vi.mocked(fetch).mockImplementation(async input => {
