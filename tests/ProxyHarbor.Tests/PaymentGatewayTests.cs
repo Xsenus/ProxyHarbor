@@ -198,6 +198,38 @@ public sealed class PaymentGatewayTests
         Assert.Equal(expectedStatus, result.Status);
     }
 
+    [Fact]
+    public async Task CloudPaymentsSupportsSignedGetNotification()
+    {
+        var order = Guid.NewGuid();
+        var query = $"InvoiceId={order:D}&TransactionId=43&Amount=499.00&Currency=RUB";
+        var context = Request("GET", string.Empty);
+        context.Request.QueryString = new QueryString("?" + query);
+        using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes("cloud-secret"));
+        context.Request.Headers["Content-HMAC"] = Convert.ToBase64String(hmac.ComputeHash(Encoding.UTF8.GetBytes(query)));
+
+        var result = await FullClient().ReadNotificationAsync("cloudpayments", context.Request, CancellationToken.None);
+
+        Assert.Equal(order, result.OrderId);
+        Assert.Equal(PaymentStatuses.Paid, result.Status);
+    }
+
+    [Fact]
+    public async Task StripeUnpaidSessionRemainsPending()
+    {
+        var order = Guid.NewGuid();
+        var body = JsonSerializer.Serialize(new { data = new { @object = new { id = "cs_pending", payment_status = "unpaid", amount_total = 49_900, currency = "rub", metadata = new { order_id = order.ToString("D") } } } });
+        var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes("stripe-webhook"));
+        var signature = Convert.ToHexString(hmac.ComputeHash(Encoding.UTF8.GetBytes($"{timestamp}.{body}"))).ToLowerInvariant();
+        var context = Request("POST", body);
+        context.Request.Headers["Stripe-Signature"] = $"t={timestamp},v1={signature}";
+
+        var result = await FullClient().ReadNotificationAsync("stripe", context.Request, CancellationToken.None);
+
+        Assert.Equal(PaymentStatuses.Pending, result.Status);
+    }
+
     private static PaymentGatewayClient Client(string secret)
     {
         var options = new PaymentOptions
