@@ -67,6 +67,25 @@ services:
       Backup__Enabled: ${BACKUP_ENABLED:-false}
       Backup__Directory: /app/backups
       Backup__HistoryRetentionDays: ${BACKUP_HISTORY_RETENTION_DAYS:-365}
+      Payments__Enabled: ${PAYMENTS_ENABLED:-false}
+      Payments__PublicBaseUrl: ${PUBLIC_BASE_URL:-https://proxy.blagodaty.ru}
+      Payments__Providers__yookassa__Enabled: ${YOOKASSA_ENABLED:-false}
+      Payments__Providers__yookassa__MerchantId: ${YOOKASSA_SHOP_ID:-}
+      Payments__Providers__cloudpayments__Enabled: ${CLOUDPAYMENTS_ENABLED:-false}
+      Payments__Providers__cloudpayments__PublicId: ${CLOUDPAYMENTS_PUBLIC_ID:-}
+      Payments__Providers__robokassa__Enabled: ${ROBOKASSA_ENABLED:-false}
+      Payments__Providers__robokassa__MerchantId: ${ROBOKASSA_MERCHANT_LOGIN:-}
+      Payments__Providers__robokassa__TestMode: ${ROBOKASSA_TEST_MODE:-false}
+      Payments__Providers__tbank__Enabled: ${TBANK_ENABLED:-false}
+      Payments__Providers__tbank__MerchantId: ${TBANK_TERMINAL_KEY:-}
+      Payments__Providers__stripe__Enabled: ${STRIPE_ENABLED:-false}
+      SecretFiles__YooKassaSecret: /run/secrets/yookassa_secret
+      SecretFiles__CloudPaymentsSecret: /run/secrets/cloudpayments_secret
+      SecretFiles__RobokassaPassword1: /run/secrets/robokassa_password1
+      SecretFiles__RobokassaPassword2: /run/secrets/robokassa_password2
+      SecretFiles__TBankPassword: /run/secrets/tbank_password
+      SecretFiles__StripeSecret: /run/secrets/stripe_secret
+      SecretFiles__StripeWebhookSecret: /run/secrets/stripe_webhook_secret
     secrets:
       - postgres_password
       - admin_api_key
@@ -74,6 +93,13 @@ services:
       - backup_encryption_key
       - telegram_bot_token
       - telegram_chat_id
+      - yookassa_secret
+      - cloudpayments_secret
+      - robokassa_password1
+      - robokassa_password2
+      - tbank_password
+      - stripe_secret
+      - stripe_webhook_secret
     volumes:
       - backups:/app/backups
       - data-protection:/app/data-protection
@@ -175,3 +201,17 @@ secrets:
     environment: TELEGRAM_BOT_TOKEN
   telegram_chat_id:
     environment: TELEGRAM_CHAT_ID
+  yookassa_secret:
+    environment: YOOKASSA_SECRET_KEY
+  cloudpayments_secret:
+    environment: CLOUDPAYMENTS_API_SECRET
+  robokassa_password1:
+    environment: ROBOKASSA_PASSWORD1
+  robokassa_password2:
+    environment: ROBOKASSA_PASSWORD2
+  tbank_password:
+    environment: TBANK_PASSWORD
+  stripe_secret:
+    environment: STRIPE_SECRET_KEY
+  stripe_webhook_secret:
+    environment: STRIPE_WEBHOOK_SECRET

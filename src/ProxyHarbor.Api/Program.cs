@@ -98,6 +98,16 @@ builder.Services.AddOptions<AccountEmailOptions>().Bind(builder.Configuration.Ge
         "Email:PublicBaseUrl должен быть абсолютным HTTPS URL")
     .ValidateOnStart();
 builder.Services.AddSingleton<IAccountEmailSender, SmtpAccountEmailSender>();
+builder.Services.AddOptions<PaymentOptions>().Bind(builder.Configuration.GetSection(PaymentOptions.Section))
+    .Validate(x => Uri.TryCreate(x.PublicBaseUrl, UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttps,
+        "Payments:PublicBaseUrl должен быть абсолютным HTTPS URL")
+    .Validate(x => x.Products.Values.All(product =>
+        !product.Enabled || product.AmountMinor > 0 && product.DurationDays is >= 1 and <= 3660 &&
+        product.Currency.Length == 3 && SubscriptionPlans.All.Contains(product.Plan) && product.Plan != SubscriptionPlans.Free),
+        "Активные Payments:Products должны иметь положительную цену, платный тариф, ISO currency и срок 1..3660 дней")
+    .ValidateOnStart();
+builder.Services.AddHttpClient();
+builder.Services.AddScoped<PaymentGatewayClient>();
 builder.Services.AddControllers().AddJsonOptions(x =>
     x.JsonSerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter()));
 builder.Services.AddOpenApi(options =>
@@ -230,6 +240,9 @@ builder.Services.AddRateLimiter(x =>
         context.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value ??
             context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
         _ => new FixedWindowRateLimiterOptions { PermitLimit = 60, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
+    x.AddPolicy("payment-webhook", context => RateLimitPartition.GetFixedWindowLimiter(
+        context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        _ => new FixedWindowRateLimiterOptions { PermitLimit = 300, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
     x.AddPolicy("export", context => RateLimitPartition.GetTokenBucketLimiter(
         context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
         _ => new TokenBucketRateLimiterOptions

@@ -29,6 +29,7 @@ ProxyHarbor загружает 98 HTTPS-feed от 56 независимых пр
 - горизонтально масштабируемая очередь через lease token и `FOR UPDATE SKIP LOCKED`;
 - публичная keyset pagination и потоковый экспорт до 50 000 строк за запрос;
 - React-панель с серверной пагинацией, единым входом по логину или email на `/login`, личным кабинетом `/account` и отдельным адаптивным кабинетом `/admin`, разделённым на обзор, пользователей, операции, источники и резервные копии; сведения об источниках доступны только оператору;
+- расширяемый биллинг подписок через hosted checkout ЮKassa, CloudPayments, Robokassa, Т-Банка и Stripe: серверные цены, проверяемые webhooks, идемпотентная активация доступа и история платежей без хранения карточных данных;
 - OpenAPI, Prometheus-метрики, готовые alerts и operator diagnostics;
 - PHB3 backup БД и безопасных настроек: diskless ZIP → AES-256-GCM → self-verification → atomic publish → Telegram;
 - транзакционный restore proxy-данных, audit-истории, аккаунтов, ролей и подписок с проверкой архива и полным rollback при ошибке;

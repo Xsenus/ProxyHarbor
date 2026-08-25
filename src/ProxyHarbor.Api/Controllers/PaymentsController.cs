@@ -1,0 +1,189 @@
+using System.ComponentModel.DataAnnotations;
+using System.Data;
+using System.Text.Json;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
+using ProxyHarbor.Infrastructure;
+
+namespace ProxyHarbor.Api.Controllers;
+
+/// <summary>Каталог подписок, hosted checkout и идемпотентная обработка webhooks.</summary>
+[ApiController]
+[Route("api/v1/payments")]
+[ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
+public sealed class PaymentsController(
+    UserManager<ApplicationUser> users,
+    ProxyHarborDbContext db,
+    PaymentGatewayClient gateways,
+    IOptions<PaymentOptions> configured) : ControllerBase
+{
+    private readonly PaymentOptions options = configured.Value;
+
+    /// <summary>Возвращает разрешённые продукты и состояние всех поддерживаемых шлюзов.</summary>
+    [Authorize, HttpGet("catalog"), EnableRateLimiting("account")]
+    public IActionResult Catalog() => Ok(new
+    {
+        enabled = options.Enabled,
+        products = options.Products.Where(x => x.Value.Enabled).Select(x => new
+        {
+            code = x.Key, x.Value.Name, x.Value.Plan, x.Value.DurationDays,
+            x.Value.AmountMinor, currency = x.Value.Currency.ToUpperInvariant(), x.Value.Description
+        }),
+        providers = KnownProviders.Select(code => new
+        {
+            code,
+            name = options.Providers.TryGetValue(code, out var value) && !string.IsNullOrWhiteSpace(value.DisplayName)
+                ? value.DisplayName : ProviderName(code),
+            available = options.Enabled && value is not null && PaymentProviderConfiguration.IsReady(code, value)
+        })
+    });
+
+    /// <summary>Создаёт локальный заказ и возвращает URL страницы выбранного провайдера.</summary>
+    [Authorize, HttpPost("checkout"), EnableRateLimiting("account")]
+    public async Task<IActionResult> Checkout([FromBody] CreateCheckoutRequest request, CancellationToken token)
+    {
+        var user = await users.GetUserAsync(User);
+        if (user is null || !user.IsActive) return Unauthorized();
+        var productCode = request.ProductCode.Trim().ToLowerInvariant();
+        var providerCode = request.Provider.Trim().ToLowerInvariant();
+        if (!options.Enabled || !options.Products.TryGetValue(productCode, out var product) || !product.Enabled)
+            return Problem("Выбранный продукт недоступен.", statusCode: 400);
+        if (!KnownProviders.Contains(providerCode, StringComparer.Ordinal) ||
+            !options.Providers.TryGetValue(providerCode, out var provider) ||
+            !PaymentProviderConfiguration.IsReady(providerCode, provider))
+            return Problem("Выбранный способ оплаты недоступен.", statusCode: 400);
+        if (!SubscriptionPlans.All.Contains(product.Plan, StringComparer.Ordinal) || product.Plan == SubscriptionPlans.Free ||
+            product.AmountMinor <= 0 || product.DurationDays is < 1 or > 3660)
+            return Problem("Конфигурация тарифа некорректна.", statusCode: 503);
+
+        var order = new PaymentOrder
+        {
+            UserId = user.Id, ProductCode = productCode, Plan = product.Plan,
+            Provider = providerCode, AmountMinor = product.AmountMinor,
+            Currency = product.Currency.ToUpperInvariant(), DurationDays = product.DurationDays
+        };
+        db.PaymentOrders.Add(order);
+        await db.SaveChangesAsync(token);
+        try
+        {
+            var checkout = await gateways.CreateAsync(order, user, token);
+            order.ProviderPaymentId = checkout.ProviderPaymentId;
+            order.CheckoutUrl = checkout.CheckoutUrl;
+            order.UpdatedAt = DateTimeOffset.UtcNow;
+            await db.SaveChangesAsync(token);
+            return Ok(new { order.Id, checkoutUrl = checkout.CheckoutUrl });
+        }
+        catch
+        {
+            order.Status = PaymentStatuses.Failed;
+            order.UpdatedAt = DateTimeOffset.UtcNow;
+            await db.SaveChangesAsync(CancellationToken.None);
+            throw;
+        }
+    }
+
+    /// <summary>История платежей текущего пользователя.</summary>
+    [Authorize, HttpGet("orders"), EnableRateLimiting("account")]
+    public async Task<IActionResult> Orders(CancellationToken token)
+    {
+        var user = await users.GetUserAsync(User);
+        if (user is null || !user.IsActive) return Unauthorized();
+        return Ok(await db.PaymentOrders.AsNoTracking().Where(x => x.UserId == user.Id)
+            .OrderByDescending(x => x.CreatedAt).Take(50)
+            .Select(x => new { x.Id, x.ProductCode, x.Plan, x.Provider, x.AmountMinor, x.Currency, x.Status, x.CreatedAt, x.PaidAt })
+            .ToArrayAsync(token));
+    }
+
+    /// <summary>Публичная точка уведомлений; доверие основано на подписи/повторной проверке шлюза.</summary>
+    [AllowAnonymous, AcceptVerbs("GET", "POST", Route = "webhooks/{providerCode}"), IgnoreAntiforgeryToken, EnableRateLimiting("payment-webhook")]
+    public async Task<IActionResult> Webhook(string providerCode, CancellationToken token)
+    {
+        providerCode = providerCode.Trim().ToLowerInvariant();
+        if (!KnownProviders.Contains(providerCode, StringComparer.Ordinal)) return NotFound();
+        PaymentNotification notification;
+        try { notification = await gateways.ReadNotificationAsync(providerCode, Request, token); }
+        catch (Exception exception) when (exception is InvalidOperationException or JsonException or FormatException or KeyNotFoundException)
+        { return Problem("Уведомление не прошло проверку.", statusCode: 400); }
+
+        await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, token);
+        var order = await db.PaymentOrders.SingleOrDefaultAsync(x => x.Id == notification.OrderId, token);
+        if (order is null || order.Provider != providerCode || order.AmountMinor != notification.AmountMinor ||
+            !string.Equals(order.Currency, notification.Currency, StringComparison.OrdinalIgnoreCase))
+            return Problem("Параметры уведомления не соответствуют заказу.", statusCode: 400);
+        if (order.Status == notification.Status ||
+            order.Status == PaymentStatuses.Paid && notification.Status != PaymentStatuses.Refunded)
+        {
+            await transaction.CommitAsync(token);
+            return Acknowledgement(providerCode, order);
+        }
+
+        order.ProviderPaymentId ??= notification.ProviderPaymentId;
+        if (!string.Equals(order.ProviderPaymentId, notification.ProviderPaymentId, StringComparison.Ordinal))
+            return Problem("Идентификатор операции не соответствует заказу.", statusCode: 400);
+        order.Status = notification.Status;
+        order.UpdatedAt = DateTimeOffset.UtcNow;
+        if (notification.Status == PaymentStatuses.Paid)
+        {
+            order.PaidAt = DateTimeOffset.UtcNow;
+            var subscription = await db.Subscriptions.SingleAsync(x => x.UserId == order.UserId, token);
+            var begins = subscription.ExpiresAt is { } expires && expires > order.PaidAt ? expires : order.PaidAt.Value;
+            subscription.Plan = order.Plan;
+            subscription.Status = SubscriptionStatuses.Active;
+            subscription.StartedAt = order.PaidAt.Value;
+            subscription.ExpiresAt = begins.AddDays(order.DurationDays);
+            subscription.ExternalCustomerId ??= order.UserId.ToString("D");
+            subscription.ExternalSubscriptionId = notification.ProviderPaymentId;
+            subscription.UpdatedAt = order.PaidAt.Value;
+            var account = await users.FindByIdAsync(order.UserId.ToString());
+            if (account is not null && !await users.IsInRoleAsync(account, UserRoles.Subscriber))
+                await users.AddToRoleAsync(account, UserRoles.Subscriber);
+        }
+        else if (notification.Status == PaymentStatuses.Refunded)
+        {
+            // Отзыв относится только к подписке, последней активированной этим заказом.
+            // Более свежая оплаченная подписка не должна пострадать от старого refund.
+            var subscription = await db.Subscriptions.SingleAsync(x => x.UserId == order.UserId, token);
+            if (string.Equals(subscription.ExternalSubscriptionId, notification.ProviderPaymentId, StringComparison.Ordinal))
+            {
+                subscription.Status = SubscriptionStatuses.Canceled;
+                subscription.ExpiresAt = DateTimeOffset.UtcNow;
+                subscription.UpdatedAt = DateTimeOffset.UtcNow;
+                var account = await users.FindByIdAsync(order.UserId.ToString());
+                if (account is not null && await users.IsInRoleAsync(account, UserRoles.Subscriber))
+                    await users.RemoveFromRoleAsync(account, UserRoles.Subscriber);
+            }
+        }
+        await db.SaveChangesAsync(token);
+        await transaction.CommitAsync(token);
+        return Acknowledgement(providerCode, order);
+    }
+
+    private IActionResult Acknowledgement(string provider, PaymentOrder order) => provider switch
+    {
+        "robokassa" => Content($"OK{order.ProviderPaymentId}"),
+        "tbank" => Content("OK"),
+        "cloudpayments" => Ok(new { code = 0 }),
+        _ => Ok()
+    };
+
+    private static string ProviderName(string code) => code switch
+    {
+        "yookassa" => "ЮKassa", "cloudpayments" => "CloudPayments", "robokassa" => "Robokassa",
+        "tbank" => "Т-Банк", "stripe" => "Stripe", _ => code
+    };
+
+    private static readonly string[] KnownProviders = ["yookassa", "cloudpayments", "robokassa", "tbank", "stripe"];
+}
+
+/// <summary>Минимальный запрос: цена и срок всегда берутся с доверенного сервера.</summary>
+public sealed class CreateCheckoutRequest
+{
+    /// <summary>Код продукта из опубликованного каталога.</summary>
+    [Required, StringLength(64, MinimumLength = 1)] public string ProductCode { get; set; } = string.Empty;
+    /// <summary>Код выбранного платёжного шлюза.</summary>
+    [Required, StringLength(32, MinimumLength = 1)] public string Provider { get; set; } = string.Empty;
+}

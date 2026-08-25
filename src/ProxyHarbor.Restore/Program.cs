@@ -260,6 +260,7 @@ internal static class RestoreApplication
                 await db.UserClaims.ExecuteDeleteAsync(token);
                 await db.RoleClaims.ExecuteDeleteAsync(token);
                 await db.UserRoles.ExecuteDeleteAsync(token);
+                await db.PaymentOrders.ExecuteDeleteAsync(token);
                 await db.Subscriptions.ExecuteDeleteAsync(token);
                 await db.Users.ExecuteDeleteAsync(token);
                 await db.Roles.ExecuteDeleteAsync(token);
@@ -324,6 +325,8 @@ internal static class RestoreApplication
                 userCount = await ImportIdentityAsync<ApplicationUser>(archive, "database/users.json", db, token);
                 _ = await ImportIdentityAsync<IdentityUserRole<Guid>>(archive, "database/user-roles.json", db, token);
                 _ = await ImportIdentityAsync<UserSubscription>(archive, "database/subscriptions.json", db, token);
+                if (archive.GetEntry("database/payment-orders.json") is not null)
+                    _ = await ImportIdentityAsync<PaymentOrder>(archive, "database/payment-orders.json", db, token);
             }
             hooks?.BeforeCommit?.Invoke();
             // Не начинаем COMMIT, если shutdown поступил после завершения всех COPY. Явная

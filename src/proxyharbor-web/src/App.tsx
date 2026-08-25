@@ -25,6 +25,10 @@ const APP_VERSION = import.meta.env.VITE_APP_VERSION ?? '0.0.0-local'
 const protocols: Protocol[] = ['Http', 'Https', 'Socks4', 'Socks5']
 type AdminSection = 'overview' | 'operations' | 'sources' | 'backups' | 'users'
 type AccountProfile = { id: string; userName: string; email: string; displayName?: string; createdAt: string; lastLoginAt?: string; roles: string[]; subscription?: { plan: string; status: string; startedAt: string; expiresAt?: string } }
+type PaymentCatalog = { enabled: boolean; products: PaymentProduct[]; providers: PaymentProvider[] }
+type PaymentProduct = { code: string; name: string; plan: string; durationDays: number; amountMinor: number; currency: string; description: string }
+type PaymentProvider = { code: string; name: string; available: boolean }
+type PaymentOrder = { id: string; productCode: string; plan: string; provider: string; amountMinor: number; currency: string; status: string; createdAt: string; paidAt?: string }
 type AdminUser = AccountProfile & { isActive: boolean }
 type UserAccessDraft = { isActive: boolean; administrator: boolean; subscriber: boolean; plan: string; status: string }
 type SourceDraft = { name: string; url: string; protocol: Protocol; priority: number; enabled: boolean }
@@ -707,19 +711,34 @@ function AccountPage() {
   const [passwords, setPasswords] = useState({currentPassword: '', newPassword: ''})
   const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
+  const [payments, setPayments] = useState<PaymentCatalog | null>(null)
+  const [orders, setOrders] = useState<PaymentOrder[]>([])
+  const [checkoutBusy, setCheckoutBusy] = useState('')
   const loadProfile = useCallback(async () => {
-    const response = await fetch(`${API}/api/v1/account/profile`, {credentials: 'include'})
+    const [response, catalogResponse, ordersResponse] = await Promise.all([
+      fetch(`${API}/api/v1/account/profile`, {credentials: 'include'}),
+      fetch(`${API}/api/v1/payments/catalog`, {credentials: 'include'}),
+      fetch(`${API}/api/v1/payments/orders`, {credentials: 'include'}),
+    ])
     if (response.status === 401) { window.location.replace('/login'); return }
     if (!response.ok) { setError(await responseMessage(response, 'Профиль недоступен')); return }
     const data = await response.json() as AccountProfile; setProfile(data); setDisplayName(data.displayName ?? '')
+    if (catalogResponse.ok) setPayments(await catalogResponse.json() as PaymentCatalog)
+    if (ordersResponse.ok) setOrders(await ordersResponse.json() as PaymentOrder[])
   }, [])
   useEffect(() => { const initial = window.setTimeout(() => void loadProfile(), 0); return () => window.clearTimeout(initial) }, [loadProfile])
   const saveProfile = async (event: React.FormEvent) => { event.preventDefault(); setError(''); const response = await fetch(`${API}/api/v1/account/profile`, {method:'PUT', credentials:'include', headers:{'Content-Type':'application/json'}, body:JSON.stringify({displayName})}); if (!response.ok) {setError(await responseMessage(response,'Не удалось сохранить профиль'));return} setNotice('Профиль сохранён'); await loadProfile() }
   const changePassword = async (event: React.FormEvent) => { event.preventDefault(); setError(''); const response = await fetch(`${API}/api/v1/account/change-password`, {method:'POST',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify(passwords)}); if(!response.ok){setError(await responseMessage(response,'Не удалось изменить пароль'));return} setPasswords({currentPassword:'',newPassword:''});setNotice('Пароль изменён. Другие сессии будут отозваны.') }
   const logout = async () => { await fetch(`${API}/api/v1/auth/logout`, {method:'POST',credentials:'include'}); window.location.replace('/login') }
+  const checkout = async (productCode:string, provider:string) => { const key=`${productCode}:${provider}`;setCheckoutBusy(key);setError('');const response=await fetch(`${API}/api/v1/payments/checkout`,{method:'POST',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({productCode,provider})});if(!response.ok){setError(await responseMessage(response,'Не удалось открыть оплату'));setCheckoutBusy('');return}const result=await response.json() as {checkoutUrl:string};window.location.assign(result.checkoutUrl) }
   return <main className="account-page"><header><a className="brand" href="/"><span className="brand-mark"><Network/></span><span>Proxy<span>Harbor</span></span></a><div><a href="/">На главную</a>{profile?.roles.includes('Administrator') && <a href="/admin">Админ-панель</a>}<button onClick={logout}><LogOut/>Выйти</button></div></header><section className="account-container"><div className="admin-section-heading"><div><span className="kicker">PERSONAL ACCOUNT</span><h1>Профиль</h1><p>Учётные данные, безопасность и параметры подписки.</p></div></div>{error && <div className="admin-notice"><X/>{error}</div>}{notice && <div className="account-success"><Check/>{notice}</div>}
     <div className="account-profile-grid"><section className="admin-card profile-card"><div className="profile-avatar"><User/></div><h2>{profile?.displayName || profile?.userName || 'Загрузка…'}</h2><p>{profile?.email}</p><div className="role-badges">{profile?.roles.map(role => <span key={role}>{role}</span>)}</div></section><section className="admin-card subscription-card"><span className="kicker">ПОДПИСКА</span><CreditCard/><strong>{planLabel(profile?.subscription?.plan)}</strong><p>{profile?.subscription ? `Статус: ${profile.subscription.status}` : 'Данные загружаются'}</p></section></div>
     <div className="account-forms"><section className="admin-card"><h2>Данные профиля</h2><form onSubmit={saveProfile}><label htmlFor="profile-login">Логин</label><input id="profile-login" disabled value={profile?.userName ?? ''}/><label htmlFor="profile-email">Email</label><input id="profile-email" disabled value={profile?.email ?? ''}/><label htmlFor="profile-name">Отображаемое имя</label><input id="profile-name" maxLength={120} value={displayName} onChange={event=>setDisplayName(event.target.value)}/><button>Сохранить</button></form></section><section className="admin-card"><h2>Сменить пароль</h2><form onSubmit={changePassword}><label htmlFor="current-password">Текущий пароль</label><input id="current-password" required type="password" autoComplete="current-password" value={passwords.currentPassword} onChange={event=>setPasswords({...passwords,currentPassword:event.target.value})}/><label htmlFor="new-password">Новый пароль</label><input id="new-password" required minLength={12} type="password" autoComplete="new-password" value={passwords.newPassword} onChange={event=>setPasswords({...passwords,newPassword:event.target.value})}/><button>Изменить пароль</button></form></section></div>
+    <section className="admin-card billing-card"><span className="kicker">BILLING</span><h2>Тарифы и оплата</h2><p>Оплата проходит на защищённой странице выбранного сервиса. ProxyHarbor не получает и не хранит реквизиты карты.</p>
+      <div className="payment-products">{payments?.products.map(product=><article key={product.code}><div><strong>{product.name}</strong><p>{product.description}</p><b>{money(product.amountMinor,product.currency)}</b></div><div className="payment-providers">{payments.providers.map(provider=><button key={provider.code} disabled={!provider.available||!!checkoutBusy} title={provider.available?'Перейти к защищённой оплате':'Провайдер ещё не подключён'} onClick={()=>void checkout(product.code,provider.code)}>{checkoutBusy===`${product.code}:${provider.code}`?'Открываем…':provider.name}</button>)}</div></article>)}</div>
+      {!payments?.enabled&&<div className="billing-pending"><Clock3/>Приём платежей подготовлен, но merchant-аккаунты ещё не подключены.</div>}
+      {orders.length>0&&<div className="payment-history"><h3>История платежей</h3>{orders.map(order=><div key={order.id}><span>{planLabel(order.plan)} · {providerLabel(order.provider)}</span><b>{money(order.amountMinor,order.currency)}</b><em className={`payment-status ${order.status}`}>{paymentStatusLabel(order.status)}</em><time>{new Date(order.createdAt).toLocaleDateString('ru-RU')}</time></div>)}</div>}
+    </section>
   </section></main>
 }
 
@@ -782,6 +801,9 @@ function catalogStatusClass(catalog?: SourceCatalogSnapshot) { return !catalog ?
 function statusLabel(status?: string) { return status === 'completed' ? 'успешно' : status === 'failed' ? 'ошибка' : status === 'running' ? 'выполняется' : 'нет данных' }
 function backupDelivery(run: BackupRun) { return run.sentToTelegram ? 'доставлен в Telegram' : run.telegramConfigured ? 'Telegram не доставлен' : 'только локально' }
 function planLabel(plan?: string) { return plan === 'unlimited' ? 'Unlimited' : plan === 'pro' ? 'Pro' : 'Free' }
+function money(minor:number,currency:string){return new Intl.NumberFormat('ru-RU',{style:'currency',currency}).format(minor/100)}
+function providerLabel(provider:string){return ({yookassa:'ЮKassa',cloudpayments:'CloudPayments',robokassa:'Robokassa',tbank:'Т-Банк',stripe:'Stripe'} as Record<string,string>)[provider]??provider}
+function paymentStatusLabel(status:string){return ({pending:'Ожидает оплаты',paid:'Оплачен',failed:'Ошибка',canceled:'Отменён',refunded:'Возвращён'} as Record<string,string>)[status]??status}
 function label(protocol: Protocol) { return ({Http: 'HTTP', Https: 'HTTPS', Socks4: 'SOCKS4', Socks5: 'SOCKS5'})[protocol] }
 function timeAgo(value: string) { const sec = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 1000)); if (sec < 10) return 'только что'; if (sec < 60) return `${sec} сек назад`; if (sec < 3600) return `${Math.floor(sec / 60)} мин назад`; return `${Math.floor(sec / 3600)} ч назад` }
 function timeUntil(value: string) { const sec = Math.max(0, Math.ceil((new Date(value).getTime() - Date.now()) / 1000)); if (sec < 60) return `через ${sec} сек`; if (sec < 3600) return `через ${Math.ceil(sec / 60)} мин`; return `через ${Math.ceil(sec / 3600)} ч` }

@@ -38,6 +38,7 @@ public static class BackupArchiveValidator
             .Concat(["database/backup-runs.json", "database/validation-runs.json"])
             .Concat(CurrentSettingsEntries)
             .Concat(IdentityEntries)
+            .Append("database/payment-orders.json")
             .Append("manifest.json"),
         StringComparer.Ordinal);
 
@@ -119,6 +120,7 @@ public static class BackupArchiveValidator
             {
                 RequireFalse(rootElement, "adminApiKeyIncluded", "settings/runtime.json");
                 RequireFalse(rootElement, "connectionStringIncluded", "settings/runtime.json");
+                RequireFalse(rootElement, "paymentSecretsIncluded", "settings/runtime.json");
             });
         }
     }
