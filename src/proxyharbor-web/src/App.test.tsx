@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
 
@@ -182,6 +182,71 @@ describe('ProxyHarbor UI', () => {
     expect(await screen.findByText('Источник 2')).toBeInTheDocument()
     await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([input]) =>
       String(input).includes('/api/v1/admin/sources?page=2&pageSize=10'))).toBe(true))
+  })
+
+  it('creates sources in a modal editor', async () => {
+    window.history.replaceState({}, '', '/admin/sources')
+    vi.mocked(fetch).mockImplementation(async (input, options) => {
+      const url = String(input)
+      if (url.includes('/api/v1/admin/sources?')) return jsonResponse({ items: [], page: 1, pageSize: 10, total: 0 })
+      if (url.endsWith('/api/v1/admin/sources') && options?.method === 'POST') return jsonResponse({}, 201)
+      if (url.includes('/api/v1/admin/diagnostics')) return jsonResponse({
+        serverTime: new Date().toISOString(), databaseBytes: 0,
+        validationQueue: { total: 0, due: 0 }, recentRuns: [], recentValidationRuns: [], recentBackups: [],
+      })
+      return jsonResponse({ title: 'Unexpected request' }, 500)
+    })
+
+    render(<App />)
+    const addButton = await screen.findByRole('button', { name: 'Добавить источник' })
+    await waitFor(() => expect(addButton).toBeEnabled())
+    fireEvent.click(addButton)
+    const dialog = screen.getByRole('dialog', { name: 'Добавить источник' })
+    fireEvent.change(within(dialog).getByLabelText('Название'), { target: { value: 'Новый feed' } })
+    fireEvent.change(within(dialog).getByLabelText('HTTPS URL'), { target: { value: 'https://example.com/new.txt' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Добавить источник' }))
+
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([input, options]) => {
+      if (!String(input).endsWith('/api/v1/admin/sources') || options?.method !== 'POST') return false
+      return JSON.parse(String(options.body)).name === 'Новый feed'
+    })).toBe(true))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+  })
+
+  it('edits and deletes a custom source from the same modal', async () => {
+    window.history.replaceState({}, '', '/admin/sources')
+    const source = {
+      id: 'source-edit', name: 'Редактируемый feed', url: 'https://example.com/old.txt',
+      defaultProtocol: 'Http', enabled: true, priority: 100, lastItemCount: 10,
+      lastResultTruncated: false, consecutiveFailures: 0, isBuiltIn: false,
+    }
+    vi.mocked(fetch).mockImplementation(async (input, options) => {
+      const url = String(input)
+      if (url.includes('/api/v1/admin/sources?')) return jsonResponse({ items: [source], page: 1, pageSize: 10, total: 1 })
+      if (url.endsWith('/api/v1/admin/sources/source-edit') && ['PUT', 'DELETE'].includes(String(options?.method))) return new Response(null, { status: 204 })
+      if (url.includes('/api/v1/admin/diagnostics')) return jsonResponse({
+        serverTime: new Date().toISOString(), databaseBytes: 0,
+        validationQueue: { total: 0, due: 0 }, recentRuns: [], recentValidationRuns: [], recentBackups: [],
+      })
+      return jsonResponse({ title: 'Unexpected request' }, 500)
+    })
+
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Изменить' }))
+    let dialog = screen.getByRole('dialog', { name: 'Редактировать источник' })
+    fireEvent.change(within(dialog).getByLabelText('Название'), { target: { value: 'Обновлённый feed' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Сохранить изменения' }))
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([input, options]) =>
+      String(input).endsWith('/source-edit') && options?.method === 'PUT' &&
+      JSON.parse(String(options.body)).name === 'Обновлённый feed')).toBe(true))
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Изменить' }))
+    dialog = screen.getByRole('dialog', { name: 'Редактировать источник' })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Удалить источник' }))
+    expect(within(dialog).getByText('Удалить источник безвозвратно?')).toBeInTheDocument()
+    fireEvent.click(within(dialog).getByRole('button', { name: /^Удалить$/ }))
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([input, options]) =>
+      String(input).endsWith('/source-edit') && options?.method === 'DELETE')).toBe(true))
   })
 
   it.each([
