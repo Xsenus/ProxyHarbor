@@ -39,6 +39,12 @@ public sealed class TelegramBotOptions
     public int WebhookMaxConnections { get; set; } = 20;
     /// <summary>Цена каждого кода продукта в Stars.</summary>
     public Dictionary<string, int> ProductStars { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>Коды продуктов, цена которых рассчитывается от основного каталога.</summary>
+    public HashSet<string> AutomaticProductCodes { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>Количество Stars на одну целую единицу валюты продукта.</summary>
+    public decimal StarsPerCurrencyUnit { get; set; } = 1m;
+    /// <summary>Шаг округления автоматической цены вверх.</summary>
+    public int StarsRoundingStep { get; set; } = 5;
     /// <summary>Секретный bot token; доступен только серверу.</summary>
     public string BotToken { get; set; } = string.Empty;
     /// <summary>Секрет проверки webhook header.</summary>
@@ -120,6 +126,9 @@ public sealed class TelegramBotConfigurationStore(
                 ProxyFileMaxItems = settings.ProxyFileMaxItems,
                 WebhookMaxConnections = settings.WebhookMaxConnections,
                 ProductStars = new Dictionary<string, int>(settings.ProductStars, StringComparer.OrdinalIgnoreCase),
+                AutomaticProductCodes = new HashSet<string>(settings.AutomaticProductCodes ?? [], StringComparer.OrdinalIgnoreCase),
+                StarsPerCurrencyUnit = settings.StarsPerCurrencyUnit <= 0 ? 1m : settings.StarsPerCurrencyUnit,
+                StarsRoundingStep = settings.StarsRoundingStep <= 0 ? 5 : settings.StarsRoundingStep,
                 BotToken = secrets.BotToken,
                 WebhookSecret = secrets.WebhookSecret,
                 BotId = entity.BotId,
@@ -148,7 +157,8 @@ public sealed class TelegramBotConfigurationStore(
         entity.SettingsJson = JsonSerializer.Serialize(new StoredSettings(
             options.Enabled, options.UpdateMode, options.Name, options.Description,
             options.ShortDescription, options.SupportText, options.ProxyFileMaxItems,
-            options.WebhookMaxConnections, options.ProductStars), Json);
+            options.WebhookMaxConnections, options.ProductStars, options.AutomaticProductCodes,
+            options.StarsPerCurrencyUnit, options.StarsRoundingStep), Json);
         entity.ProtectedSecrets = protector.Protect(JsonSerializer.Serialize(
             new StoredSecrets(options.BotToken, options.WebhookSecret), Json));
         entity.BotId = options.BotId;
@@ -167,6 +177,39 @@ public sealed class TelegramBotConfigurationStore(
         string SupportText,
         int ProxyFileMaxItems,
         int WebhookMaxConnections,
-        Dictionary<string, int> ProductStars);
+        Dictionary<string, int> ProductStars,
+        HashSet<string>? AutomaticProductCodes = null,
+        decimal StarsPerCurrencyUnit = 1m,
+        int StarsRoundingStep = 5);
     private sealed record StoredSecrets(string BotToken, string WebhookSecret);
+}
+
+/// <summary>Единая формула цены Stars для админки и runtime торгового бота.</summary>
+public static class TelegramStarsPricing
+{
+    /// <summary>Возвращает ручную цену либо автоматически рассчитывает её из цены подписки.</summary>
+    public static bool TryResolve(
+        TelegramBotOptions options,
+        string productCode,
+        PaymentProductOptions product,
+        out int stars)
+    {
+        if (!options.AutomaticProductCodes.Contains(productCode))
+            return options.ProductStars.TryGetValue(productCode, out stars) && stars is >= 1 and <= 1_000_000;
+
+        stars = Calculate(product.AmountMinor, options.StarsPerCurrencyUnit, options.StarsRoundingStep);
+        return stars is >= 1 and <= 1_000_000;
+    }
+
+    /// <summary>
+    /// Переводит цену из минимальных денежных единиц в Stars и округляет вверх,
+    /// чтобы округление никогда не уменьшало заданную владельцем стоимость.
+    /// </summary>
+    public static int Calculate(long amountMinor, decimal starsPerCurrencyUnit, int roundingStep)
+    {
+        if (amountMinor <= 0 || starsPerCurrencyUnit <= 0 || roundingStep <= 0) return 0;
+        var raw = amountMinor / 100m * starsPerCurrencyUnit;
+        var rounded = decimal.Ceiling(raw / roundingStep) * roundingStep;
+        return rounded > 1_000_000m ? 0 : decimal.ToInt32(rounded);
+    }
 }

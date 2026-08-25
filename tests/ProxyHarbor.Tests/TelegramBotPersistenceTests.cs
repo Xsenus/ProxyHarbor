@@ -20,7 +20,10 @@ public sealed class TelegramBotPersistenceTests
         {
             Enabled = true, PublicBaseUrl = "https://attacker.example", BotToken = "123:TEST_ONLY_NOT_A_REAL_TOKEN",
             WebhookSecret = "safe_webhook_secret", BotId = 42, BotUsername = "ProxyHarborBot",
-            ProductStars = new Dictionary<string, int> { ["pro-30"] = 250 }
+            ProductStars = new Dictionary<string, int> { ["pro-30"] = 250 },
+            AutomaticProductCodes = new(StringComparer.OrdinalIgnoreCase) { "unlimited-30" },
+            StarsPerCurrencyUnit = 1.25m,
+            StarsRoundingStep = 10
         });
 
         var persisted = await db.TelegramBotConfigurations.SingleAsync();
@@ -29,6 +32,9 @@ public sealed class TelegramBotPersistenceTests
         Assert.Equal("123:TEST_ONLY_NOT_A_REAL_TOKEN", restored.BotToken);
         Assert.Equal("https://proxy.example.test/api/v1/telegram/webhook/proxyharborbot", restored.WebhookUrl);
         Assert.Equal(250, restored.ProductStars["pro-30"]);
+        Assert.Contains("UNLIMITED-30", restored.AutomaticProductCodes);
+        Assert.Equal(1.25m, restored.StarsPerCurrencyUnit);
+        Assert.Equal(10, restored.StarsRoundingStep);
     }
 
     [Fact]

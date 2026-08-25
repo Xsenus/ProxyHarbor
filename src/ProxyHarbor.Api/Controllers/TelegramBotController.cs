@@ -55,6 +55,14 @@ public sealed class AdminTelegramController(
     public async Task<IActionResult> Get(CancellationToken token)
     {
         var options = await configurations.GetAsync(token);
+        var catalog = await payments.GetAsync(token);
+        var effectiveProductStars = catalog.Products
+            .Where(x => TelegramStarsPricing.TryResolve(options, x.Key, x.Value, out _))
+            .ToDictionary(x => x.Key, x =>
+            {
+                _ = TelegramStarsPricing.TryResolve(options, x.Key, x.Value, out var stars);
+                return stars;
+            }, StringComparer.OrdinalIgnoreCase);
         var now = DateTimeOffset.UtcNow;
         var stats = new
         {
@@ -79,14 +87,28 @@ public sealed class AdminTelegramController(
             options.ProxyFileMaxItems,
             options.WebhookMaxConnections,
             options.ProductStars,
+            options.AutomaticProductCodes,
+            options.StarsPerCurrencyUnit,
+            options.StarsRoundingStep,
+            effectiveProductStars,
             tokenConfigured = options.BotToken.Length > 0,
             options.BotId,
             options.BotUsername,
             options.ProvisionedAt,
             options.UpdatedAt,
             webhookUrl = options.WebhookUrl,
+            avatarUrl = "/api/v1/admin/telegram/avatar",
             stats
         });
+    }
+
+    /// <summary>Показывает в админке то же встроенное изображение, которое применяется к профилю бота.</summary>
+    [HttpGet("avatar")]
+    public IActionResult Avatar()
+    {
+        var stream = typeof(TelegramBotApiClient).Assembly.GetManifestResourceStream(
+            "ProxyHarbor.Api.Assets.telegram-bot-avatar.png");
+        return stream is null ? NotFound() : File(stream, "image/png", enableRangeProcessing: false);
     }
 
     /// <summary>Проверяет token и автоматически настраивает профиль, изображение, команды и transport.</summary>
@@ -102,9 +124,13 @@ public sealed class AdminTelegramController(
             !TelegramTokenPolicy.IsValid(botToken))
             return Invalid("Проверьте token и ограничения полей Telegram Bot API.");
         var catalog = await payments.GetAsync(token);
-        if (request.ProductStars.Count > 10 || request.ProductStars.Any(x =>
-            !catalog.Products.ContainsKey(x.Key) || x.Value is < 1 or > 1_000_000))
-            return Invalid("Цены Stars должны относиться к существующим тарифам и находиться в диапазоне 1..1000000.");
+        if (request.ProductStars.Count > 10 || request.AutomaticProductCodes.Count > 10 ||
+            request.StarsPerCurrencyUnit is < 0.01m or > 1_000m || request.StarsRoundingStep is < 1 or > 1_000 ||
+            request.ProductStars.Any(x => !catalog.Products.ContainsKey(x.Key) || x.Value is < 1 or > 1_000_000) ||
+            request.AutomaticProductCodes.Any(x => !catalog.Products.ContainsKey(x)) ||
+            request.AutomaticProductCodes.Any(x => TelegramStarsPricing.Calculate(
+                catalog.Products[x].AmountMinor, request.StarsPerCurrencyUnit, request.StarsRoundingStep) == 0))
+            return Invalid("Проверьте тарифы, коэффициент и шаг: итоговая цена должна находиться в диапазоне 1..1000000 Stars.");
 
         TelegramBotIdentity identity;
         try { identity = await api.GetMeAsync(botToken, token); }
@@ -121,6 +147,9 @@ public sealed class AdminTelegramController(
             ProxyFileMaxItems = request.ProxyFileMaxItems,
             WebhookMaxConnections = request.WebhookMaxConnections,
             ProductStars = new Dictionary<string, int>(request.ProductStars, StringComparer.OrdinalIgnoreCase),
+            AutomaticProductCodes = new HashSet<string>(request.AutomaticProductCodes, StringComparer.OrdinalIgnoreCase),
+            StarsPerCurrencyUnit = request.StarsPerCurrencyUnit,
+            StarsRoundingStep = request.StarsRoundingStep,
             BotToken = botToken,
             WebhookSecret = current.BotId == identity.Id && current.WebhookSecret.Length > 0
                 ? current.WebhookSecret : WebhookSecret(),
@@ -263,6 +292,12 @@ public sealed class UpdateTelegramBotRequest
     [Range(1, 100)] public int WebhookMaxConnections { get; set; } = 20;
     /// <summary>Цены продуктов в Telegram Stars.</summary>
     [Required] public Dictionary<string, int> ProductStars { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>Тарифы, цену которых нужно автоматически синхронизировать с основным каталогом.</summary>
+    [Required] public HashSet<string> AutomaticProductCodes { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>Количество Stars на одну целую единицу валюты тарифа.</summary>
+    [Range(typeof(decimal), "0.01", "1000")] public decimal StarsPerCurrencyUnit { get; set; } = 1m;
+    /// <summary>Шаг безопасного округления автоматической цены вверх.</summary>
+    [Range(1, 1_000)] public int StarsRoundingStep { get; set; } = 5;
     /// <summary>Новый token; null сохраняет прежний.</summary>
     [StringLength(256)] public string? BotToken { get; set; }
 }
