@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Activity, ArrowDownToLine, ArrowRight, Ban, Bell, Bot, CalendarClock, Check, ChevronDown, Clock3, CreditCard, Database, Eye, EyeOff, Gauge, HardDriveDownload, LayoutDashboard, LockKeyhole, LogOut, Mail, MessageCircle, Network, Pencil, Play, Plus, Radio, Receipt, RefreshCw, Send, Server, Settings2, ShieldCheck, ShieldOff, Star, Trash2, User, Users, Wifi, Workflow, X } from 'lucide-react'
+import { Activity, ArrowDownToLine, ArrowRight, Ban, Bell, Bot, CalendarClock, Check, ChevronDown, Clock3, CreditCard, Database, Eye, EyeOff, Gauge, Globe2, HardDriveDownload, LayoutDashboard, LockKeyhole, LogOut, Mail, MessageCircle, MousePointerClick, Network, Pencil, Play, Plus, Radio, Receipt, RefreshCw, Send, Server, Settings2, ShieldCheck, ShieldOff, Star, Trash2, User, Users, Wifi, Workflow, X } from 'lucide-react'
 
 type Protocol = 'Http' | 'Https' | 'Socks4' | 'Socks5'
 type Proxy = { host: string; port: number; protocol: Protocol; url: string; latencyMs: number; successRate: number; exitIp?: string; lastCheckedAt: string; firstAliveAt?: string; lastAliveAt?: string; activeSince?: string; activeForSeconds?: number }
@@ -40,6 +40,8 @@ type SubscriptionPage = PagedResult<AdminSubscription> & { summary:{active:numbe
 type AccessClient = {ipAddress:string;userId?:string;requests:number;blockedRequests:number;proxyItems:number;bytesSent:number;lastSeenAt:string}
 type AccessRule = {id:string;kind:string;value:string;userId?:string;reason:string;enabled:boolean;expiresAt?:string;createdAt:string}
 type AccessPage = PagedResult<AccessClient> & {rules:AccessRule[];summary:{requests:number;proxyItems:number;uniqueIps:number;activeRules:number}}
+type SiteVisitor = {ipAddress:string;userId?:string;userName?:string;email?:string;displayName?:string;pageViews:number;pages:number;firstSeenAt:string;lastSeenAt:string}
+type SiteVisitorPage = PagedResult<SiteVisitor> & {summary:{pageViews:number;uniqueVisitors:number;authenticatedVisitors:number;active24Hours:number};retentionDays:number}
 type AdminUser = AccountProfile & { isActive: boolean }
 type UserAccessDraft = { isActive: boolean; administrator: boolean; subscriber: boolean; plan: string; status: string }
 type SourceDraft = { name: string; url: string; protocol: Protocol; priority: number; enabled: boolean }
@@ -104,6 +106,16 @@ export default function App() {
   const adminAbortRef = useRef<AbortController | null>(null)
   const adminSessionIdRef = useRef(0)
   const adminMutationAbortRefs = useRef(new Set<AbortController>())
+  const recordedVisitRef = useRef('')
+
+  // Beacon не задерживает переход со страницы. Сервер принимает только pathname,
+  // сводит его к фиксированному коду и не сохраняет query/fragment или tracking cookies.
+  useEffect(() => {
+    if (recordedVisitRef.current === currentPath || typeof navigator.sendBeacon !== 'function') return
+    recordedVisitRef.current = currentPath
+    const payload = new Blob([JSON.stringify({ path: currentPath })], { type: 'application/json' })
+    navigator.sendBeacon(`${API}/api/v1/telemetry/visit`, payload)
+  }, [currentPath])
 
   const cancelPublicRequests = useCallback(() => {
     publicRequestIdRef.current++
@@ -912,12 +924,39 @@ function AdminSubscriptionsPage(){
 }
 
 /** Наблюдаемость выдачи и блокировки клиентов с самым высоким трафиком. */
-function AdminAccessPage(){
+function AdminAccessTrafficPage(){
   const [data,setData]=useState<AccessPage|null>(null);const [page,setPage]=useState(1);const [modal,setModal]=useState(false);const [draft,setDraft]=useState({kind:'ip',value:'',reason:'',expiresAt:''});const [error,setError]=useState('');const [busy,setBusy]=useState(false)
   const load=useCallback(async()=>{const response=await fetch(`${API}/api/v1/admin/access?page=${page}&pageSize=10`,{credentials:'include'});if(!response.ok){setError(await responseMessage(response,'Статистика доступа недоступна'));return}setData(await response.json() as AccessPage);setError('')},[page]);useEffect(()=>{const timer=window.setTimeout(()=>void load(),0);return()=>window.clearTimeout(timer)},[load])
   const create=async()=>{setBusy(true);const response=await fetch(`${API}/api/v1/admin/access/rules`,{method:'POST',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({...draft,expiresAt:draft.expiresAt?new Date(draft.expiresAt).toISOString():null})});if(!response.ok)setError(await responseMessage(response,'Правило не создано'));else{setModal(false);setDraft({kind:'ip',value:'',reason:'',expiresAt:''});await load()}setBusy(false)}
   const toggle=async(rule:AccessRule)=>{await fetch(`${API}/api/v1/admin/access/rules/${rule.id}`,{method:'PUT',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:!rule.enabled,expiresAt:rule.expiresAt??null})});await load()}
   return <section className="admin-section"><div className="admin-section-heading"><div><span className="kicker">TRAFFIC CONTROL</span><h1>Доступ и IP</h1><p>Агрегаты за 30 дней, самые активные клиенты и блокировки IP, подсетей или аккаунтов.</p></div><button className="primary-admin-button" onClick={()=>setModal(true)}><Ban/>Добавить блокировку</button></div>{error&&<div className="admin-notice"><X/>{error}</div>}<div className="admin-summary-grid compact-summary"><article><span className="summary-icon"><Activity/></span><div><small>Запросов</small><strong>{formatNumber(data?.summary.requests)}</strong></div></article><article><span className="summary-icon"><Database/></span><div><small>Выдано адресов</small><strong>{formatNumber(data?.summary.proxyItems)}</strong></div></article><article><span className="summary-icon"><Network/></span><div><small>Уникальных IP</small><strong>{formatNumber(data?.summary.uniqueIps)}</strong></div></article><article><span className="summary-icon"><ShieldOff/></span><div><small>Активных правил</small><strong>{formatNumber(data?.summary.activeRules)}</strong></div></article></div><div className="access-layout"><section className="admin-card admin-registry"><div className="card-heading"><div><span className="kicker">НАГРУЗКА</span><h2>Клиенты выдачи</h2></div></div><div className="admin-data-table access-table"><div className="admin-data-head"><span>IP / аккаунт</span><span>Запросов</span><span>Прокси</span><span>Трафик</span><span>Последний</span></div>{data?.items.map(item=><article key={`${item.ipAddress}:${item.userId}`}><span><b>{item.ipAddress}</b><small>{item.userId?`Аккаунт ${item.userId.slice(0,8)}`:'Анонимный доступ'}</small></span><b>{formatNumber(item.requests)}</b><span>{formatNumber(item.proxyItems)}</span><span>{formatBytes(item.bytesSent)}</span><time>{timeAgo(item.lastSeenAt)}</time></article>)}</div>{data&&data.total>10&&<ProxyPagination page={page} pageSize={10} total={data.total} totalPages={Math.ceil(data.total/10)} onPageChange={setPage} onPageSizeChange={()=>{}}/>}</section><section className="admin-card rules-card"><div className="card-heading"><div><span className="kicker">ПРАВИЛА</span><h2>Блокировки</h2></div></div><div className="rule-list">{data?.rules.length===0&&<div className="empty-state"><ShieldCheck/>Блокировок нет.</div>}{data?.rules.map(rule=><article key={rule.id}><div><b>{rule.kind.toUpperCase()} · {rule.value}</b><small>{rule.reason}{rule.expiresAt?` · до ${new Date(rule.expiresAt).toLocaleString('ru-RU')}`:' · бессрочно'}</small></div><Toggle checked={rule.enabled} onChange={()=>void toggle(rule)} label={rule.enabled?'Активно':'Отключено'}/></article>)}</div></section></div>{modal&&<div className="source-editor-backdrop"><section className="source-editor-modal"><div className="source-editor-heading"><div><span className="kicker">ACCESS RULE</span><h2>Новая блокировка</h2><p>Правило начнёт применяться к каталогу и экспорту сразу после сохранения.</p></div><button className="icon-button" onClick={()=>setModal(false)}><X/></button></div><div className="source-editor-grid"><label>Тип<StyledSelect value={draft.kind} onChange={kind=>setDraft({...draft,kind})} options={[["ip","IP-адрес"],["cidr","Подсеть CIDR"],["user","Пользователь UUID"]]}/></label><label>Значение<input value={draft.value} onChange={e=>setDraft({...draft,value:e.target.value})} placeholder={draft.kind==='cidr'?'203.0.113.0/24':draft.kind==='user'?'UUID пользователя':'203.0.113.10'}/></label><label>Действует до<input type="datetime-local" value={draft.expiresAt} onChange={e=>setDraft({...draft,expiresAt:e.target.value})}/></label></div><label className="modal-wide-label">Причина<textarea required minLength={3} maxLength={500} value={draft.reason} onChange={e=>setDraft({...draft,reason:e.target.value})}/></label><div className="source-editor-actions"><span/><button className="secondary-admin-button" onClick={()=>setModal(false)}>Отмена</button><button className="primary-admin-button" disabled={busy||draft.reason.trim().length<3||!draft.value.trim()} onClick={()=>void create()}><Ban/>{busy?'Создаём…':'Заблокировать'}</button></div></section></div>}</section>
+}
+
+/** Совмещает эксплуатационную выдачу и независимую статистику посещений сайта. */
+function AdminAccessPage(){return <><AdminAccessTrafficPage/><AdminSiteVisitorsPage/></>}
+
+/** Посетители сайта за 30 дней; IP-агрегаты автоматически удаляются через 90 дней. */
+function AdminSiteVisitorsPage(){
+  const [data,setData]=useState<SiteVisitorPage|null>(null)
+  const [page,setPage]=useState(1)
+  const [pageSize,setPageSize]=useState(10)
+  const [error,setError]=useState('')
+  const [loading,setLoading]=useState(false)
+  const load=useCallback(async()=>{
+    setLoading(true)
+    const response=await fetch(`${API}/api/v1/admin/access/visitors?page=${page}&pageSize=${pageSize}`,{credentials:'include'})
+    if(!response.ok)setError(await responseMessage(response,'Статистика посещений недоступна'))
+    else{setData(await response.json() as SiteVisitorPage);setError('')}
+    setLoading(false)
+  },[page,pageSize])
+  useEffect(()=>{const timer=window.setTimeout(()=>void load(),0);return()=>window.clearTimeout(timer)},[load])
+  const summary=data?.summary
+  return <section className="admin-section access-visitors-section" aria-labelledby="site-visitors-title">
+    <div className="admin-subsection-heading"><div><span className="kicker">SITE ANALYTICS</span><h2 id="site-visitors-title">Посетители сайта</h2><p>First-party статистика за 30 дней без рекламных cookies и сохранения query-параметров.</p></div><button className="icon-button" aria-label="Обновить статистику посещений" disabled={loading} onClick={()=>void load()}><RefreshCw className={loading?'spin':''}/></button></div>
+    {error&&<div className="admin-notice" role="alert"><X/>{error}</div>}
+    <div className="admin-summary-grid compact-summary visitor-summary"><article><span className="summary-icon"><MousePointerClick/></span><div><small>Просмотры</small><strong>{formatNumber(summary?.pageViews)}</strong><p>загрузок страниц</p></div></article><article><span className="summary-icon"><Globe2/></span><div><small>Посетители</small><strong>{formatNumber(summary?.uniqueVisitors)}</strong><p>уникальных IP</p></div></article><article><span className="summary-icon"><User/></span><div><small>С аккаунтом</small><strong>{formatNumber(summary?.authenticatedVisitors)}</strong><p>авторизованных</p></div></article><article><span className="summary-icon"><Clock3/></span><div><small>За 24 часа</small><strong>{formatNumber(summary?.active24Hours)}</strong><p>активных IP</p></div></article></div>
+    <section className="admin-card admin-registry site-visitors-card"><div className="card-heading"><div><span className="kicker">ЖУРНАЛ ПОСЕЩЕНИЙ</span><h2>IP и аккаунты</h2></div><span className="section-count">{data?.total??0}</span></div><div className="admin-data-table visitor-table"><div className="admin-data-head"><span>IP / аккаунт</span><span>Просмотры</span><span>Страницы</span><span>Первый визит</span><span>Последний визит</span></div>{!data?<div className="empty-state"><RefreshCw className="spin"/>Загружаем посещения…</div>:data.items.length===0?<div className="empty-state"><Globe2/>Посещения начнут появляться после обновления сайта.</div>:data.items.map(item=><article key={`${item.ipAddress}:${item.userId??'anonymous'}`}><span><b>{item.ipAddress}</b><small>{item.displayName||item.userName||item.email||'Анонимный посетитель'}</small></span><b>{formatNumber(item.pageViews)}</b><span>{formatNumber(item.pages)}</span><time>{new Date(item.firstSeenAt).toLocaleString('ru-RU')}</time><time>{timeAgo(item.lastSeenAt)}</time></article>)}</div>{data&&data.total>pageSize&&<ProxyPagination page={page} pageSize={pageSize} total={data.total} totalPages={Math.ceil(data.total/pageSize)} onPageChange={setPage} onPageSizeChange={size=>{setPageSize(size);setPage(1)}}/>}<p className="privacy-note"><ShieldCheck/>IP сохраняются только в пятиминутных агрегатах и удаляются через {data?.retentionDays??90} дней. Global Privacy Control учитывается.</p></section>
+  </section>
 }
 
 /** Пагинация повторяет серверный UX RMS: размер, страницы, быстрый переход и итог. */

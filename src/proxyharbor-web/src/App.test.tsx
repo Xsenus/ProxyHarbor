@@ -309,8 +309,22 @@ describe('ProxyHarbor UI', () => {
 
   it('shows aggregated IP traffic and creates block rules in a modal', async () => {
     window.history.replaceState({}, '', '/admin/access')
-    vi.mocked(fetch).mockImplementation(async input => {const url=String(input);if(url.includes('/api/v1/admin/sources'))return jsonResponse({items:[],page:1,pageSize:10,total:0});if(url.includes('/api/v1/admin/diagnostics'))return jsonResponse({serverTime:new Date().toISOString(),databaseBytes:0,validationQueue:{total:0,due:0},recentRuns:[],recentValidationRuns:[],recentBackups:[]});if(url.includes('/api/v1/admin/access'))return jsonResponse({items:[{ipAddress:'203.0.113.10',requests:123,blockedRequests:0,proxyItems:1200,bytesSent:2048,lastSeenAt:new Date().toISOString()}],page:1,pageSize:10,total:1,rules:[],summary:{requests:123,proxyItems:1200,uniqueIps:1,activeRules:0}});return jsonResponse({title:'Unexpected'},500)})
-    render(<App/>);expect(await screen.findByRole('heading',{name:'Доступ и IP'})).toBeInTheDocument();expect(await screen.findByText('203.0.113.10')).toBeInTheDocument();fireEvent.click(screen.getByRole('button',{name:'Добавить блокировку'}));expect(screen.getByRole('heading',{name:'Новая блокировка'})).toBeInTheDocument()
+    vi.mocked(fetch).mockImplementation(async input => {
+      const url=String(input)
+      if(url.includes('/api/v1/admin/sources'))return jsonResponse({items:[],page:1,pageSize:10,total:0})
+      if(url.includes('/api/v1/admin/diagnostics'))return jsonResponse({serverTime:new Date().toISOString(),databaseBytes:0,validationQueue:{total:0,due:0},recentRuns:[],recentValidationRuns:[],recentBackups:[]})
+      if(url.includes('/api/v1/admin/access/visitors'))return jsonResponse({items:[{ipAddress:'198.51.100.20',displayName:'Посетитель',pageViews:7,pages:3,firstSeenAt:new Date().toISOString(),lastSeenAt:new Date().toISOString()}],page:1,pageSize:10,total:1,retentionDays:90,summary:{pageViews:7,uniqueVisitors:1,authenticatedVisitors:0,active24Hours:1}})
+      if(url.includes('/api/v1/admin/access'))return jsonResponse({items:[{ipAddress:'203.0.113.10',requests:123,blockedRequests:0,proxyItems:1200,bytesSent:2048,lastSeenAt:new Date().toISOString()}],page:1,pageSize:10,total:1,rules:[],summary:{requests:123,proxyItems:1200,uniqueIps:1,activeRules:0}})
+      return jsonResponse({title:'Unexpected'},500)
+    })
+    render(<App/>)
+    expect(await screen.findByRole('heading',{name:'Доступ и IP'})).toBeInTheDocument()
+    expect(await screen.findByText('203.0.113.10')).toBeInTheDocument()
+    expect(await screen.findByRole('heading',{name:'Посетители сайта'})).toBeInTheDocument()
+    expect(await screen.findByText('198.51.100.20')).toBeInTheDocument()
+    expect(screen.getByText(/удаляются через 90 дней/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button',{name:'Добавить блокировку'}))
+    expect(screen.getByRole('heading',{name:'Новая блокировка'})).toBeInTheDocument()
   })
 })
 

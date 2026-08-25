@@ -224,6 +224,7 @@ Readiness не кэшируется и выполняет zero-row probe все�
 | `GET /api/v1/admin/subscriptions` | Подписки с фильтрами и показателями active/trial/suspended/expiring |
 | `PUT /api/v1/admin/subscriptions/{id}` | Изменить тариф/статус/дату либо продлить на `extensionDays`; действие аудируется |
 | `GET /api/v1/admin/access` | Агрегаты выдачи за 30 дней, активные блокировки и самые нагружающие IP |
+| `GET /api/v1/admin/access/visitors` | Постраничные IP/аккаунты посетителей, просмотры и сводка за 30 дней |
 | `POST /api/v1/admin/access/rules` | Заблокировать точный IP, CIDR или UUID пользователя с причиной и сроком |
 | `PUT /api/v1/admin/access/rules/{id}` | Включить, выключить либо изменить срок правила |
 | `GET/PUT /api/v1/admin/telegram` | Статистика и настройка commerce-бота без выдачи сохранённых секретов |
@@ -233,7 +234,7 @@ Readiness не кэшируется и выполняет zero-row probe все�
 | `PUT /api/v1/admin/telegram/chats/{id}` | Настроить уведомления или блокировку чата |
 | `POST /api/v1/admin/telegram/messages` | Поставить личный ответ или bounded broadcast в очередь |
 
-Публичный `POST /api/v1/telegram/webhook/{username}` принимает только update выбранного бота, ограничен 1 MiB/rate limit и требует секретный заголовок Telegram. Полная эксплуатация и Stars flow описаны в [TELEGRAM_BOT.md](TELEGRAM_BOT.md).
+Публичный `POST /api/v1/telemetry/visit` принимает только pathname текущей SPA-страницы и сводит его к фиксированному коду. Query/fragment не сохраняются, рекламные cookies не создаются, `Sec-GPC: 1` отключает запись, а IP-агрегаты удаляются через 90 дней. Публичный `POST /api/v1/telegram/webhook/{username}` принимает только update выбранного бота, ограничен 1 MiB/rate limit и требует секретный заголовок Telegram. Полная эксплуатация и Stars flow описаны в [TELEGRAM_BOT.md](TELEGRAM_BOT.md).
 
 Для CLI и automation сохранён API key:
 

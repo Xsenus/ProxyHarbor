@@ -7,11 +7,13 @@ using ProxyHarbor.Infrastructure;
 
 namespace ProxyHarbor.Api;
 
-/// <summary>Неблокирующий приём метрик выдачи с периодическим агрегированным flush.</summary>
+/// <summary>Неблокирующий приём метрик выдачи и посещений с периодическим агрегированным flush.</summary>
 public sealed class ProxyAccessMonitor(
     IDbContextFactory<ProxyHarborDbContext> dbFactory,
     ILogger<ProxyAccessMonitor> logger) : BackgroundService
 {
+    /// <summary>Префикс отделяет посещения сайта от запросов каталога и экспорта.</summary>
+    public const string SitePagePrefix = "page:";
     private static readonly Action<ILogger, Exception?> FlushFailed = LoggerMessage.Define(
         LogLevel.Error, new EventId(1501, "ProxyAccessFlushFailed"),
         "Не удалось сохранить агрегат доступа к proxy API.");
@@ -37,6 +39,10 @@ public sealed class ProxyAccessMonitor(
         };
         MergeCounter(key, increment);
     }
+
+    /// <summary>Учитывает один просмотр нормализованной страницы без сохранения URL-параметров.</summary>
+    public void RecordSiteVisit(HttpContext context, string normalizedPage) =>
+        Record(context, SitePagePrefix + normalizedPage, blocked: false);
 
     /// <summary>Проверяет локальный неизменяемый снимок активных правил.</summary>
     public bool IsBlocked(IPAddress? address, Guid? userId)

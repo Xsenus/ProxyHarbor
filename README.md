@@ -12,7 +12,7 @@ ProxyHarbor загружает 98 HTTPS-feed от 56 независимых пр
 - 17 новых endpoint шести провайдеров прошли URL/live-аудит 24 августа 2026 года; полный 98-feed end-to-end аудит выполняется CI и перед production-релизом.
 - Последний полный production-цикл: 888 116 разобранных строк, 290 217 уникальных кандидатов за 4,965 секунды.
 - Проверочная партия: 1 600/1 600 результатов, без `Deferred`; одинаковый набор Alive во всех четырёх форматах.
-- Backend: 676 автоматических тестов; frontend: 28 component/accessibility tests.
+- Backend: 680 автоматических тестов; frontend: 28 component/accessibility tests.
 - Frontend: Vitest, ESLint, TypeScript production build и axe-core accessibility gate.
 - Release build компилируется с warnings-as-errors и обязательной XML-документацией публичного production API.
 - CI проверяет PostgreSQL migrations, backup/restore, OpenAPI, Docker Compose, security contracts, зависимости и Git-историю.
@@ -28,7 +28,7 @@ ProxyHarbor загружает 98 HTTPS-feed от 56 независимых пр
 - измерение полной latency, exit IP, анонимности, success rate и адаптивное расписание повторных проверок;
 - горизонтально масштабируемая очередь через lease token и `FOR UPDATE SKIP LOCKED`;
 - публичная keyset pagination и потоковый экспорт до 50 000 строк за запрос;
-- React-панель с серверной пагинацией, единым входом по логину или email на `/login`, личным кабинетом `/account` и отдельным адаптивным кабинетом `/admin`: обзор, пользователи, операции, источники, резервные копии, биллинг, подписки и контроль IP;
+- React-панель с серверной пагинацией, единым входом по логину или email на `/login`, личным кабинетом `/account` и отдельным адаптивным кабинетом `/admin`: обзор, пользователи, операции, источники, резервные копии, биллинг, подписки, контроль IP и first-party статистика посещений;
 - биллинг через hosted checkout ЮKassa, CloudPayments, Robokassa, Т-Банка и Stripe: отдельный диалог каждого шлюза, общий фильтруемый реестр счетов, runtime-тарифы, зашифрованные merchant-секреты, проверяемые webhooks и идемпотентная активация без хранения карточных данных;
 - полноценный Telegram commerce-бот: автоматическая настройка профиля/иконки/команд, Stars invoices, личный кабинет и статистика, TXT-файлы прокси, уведомления о подписке, FAQ, CRM-диалоги и безопасная массовая рассылка через персистентную очередь; webhook и long polling поддерживаются одним runtime;
 - реестр подписок со сроками, статусом `suspended`, ручным продлением и неизменяемым аудитом; агрегированная статистика выдачи по IP/аккаунту и мгновенные блокировки точного IP, CIDR или пользователя;
@@ -165,7 +165,7 @@ curl 'http://localhost:8080/api/v1/stats'
 
 При первом запуске `ADMIN_USERNAME`, `ADMIN_EMAIL` и `ADMIN_PASSWORD` создают bootstrap-администратора в ASP.NET Identity. После этого пароль меняется из профиля и не перезаписывается при рестарте. Любой аккаунт может входить по логину или email; пароль хранится только как Identity hash. Сервер выдаёт временную `HttpOnly`, `Secure`, `SameSite=Strict` cookie `ProxyHarbor.Session`, а React не сохраняет credentials в browser storage.
 
-Подготовлены роли `User`, `Subscriber`, `Administrator`, тарифы `free`, `pro`, `unlimited` и состояния подписки, включая ручную приостановку `suspended`. Администратор управляет подписками на `/admin/subscriptions`, а трафиком выдачи и блокировками — на `/admin/access`. Пока публичная выдача остаётся бесплатной; entitlement `unlimitedProxyAccess` уже вычисляется сервером для будущего биллинга. Регистрация, профиль, смена и восстановление пароля доступны через `/register`, `/account` и `/forgot-password`. Для отправки reset-писем задайте SMTP-параметры из [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
+Подготовлены роли `User`, `Subscriber`, `Administrator`, тарифы `free`, `pro`, `unlimited` и состояния подписки, включая ручную приостановку `suspended`. Администратор управляет подписками на `/admin/subscriptions`, а трафиком выдачи, посещениями и блокировками — на `/admin/access`. Посещения учитываются пятиминутными IP-агрегатами без рекламных cookies и query-параметров, уважают `Sec-GPC: 1` и удаляются через 90 дней. Пока публичная выдача остаётся бесплатной; entitlement `unlimitedProxyAccess` уже вычисляется сервером для будущего биллинга. Регистрация, профиль, смена и восстановление пароля доступны через `/register`, `/account` и `/forgot-password`. Для отправки reset-писем задайте SMTP-параметры из [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
 
 CLI и automation независимо используют `ADMIN_API_KEY` в заголовке `X-Admin-Key`:
 
