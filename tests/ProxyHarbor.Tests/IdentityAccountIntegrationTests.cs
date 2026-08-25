@@ -191,7 +191,14 @@ public sealed class IdentityAccountIntegrationTests
 
         var list = await controller.List(0, 500);
         var page = Assert.IsType<OkObjectResult>(list.Result);
-        Assert.Equal(2, Assert.IsType<PagedResult<object>>(page.Value).Total);
+        var firstPage = Assert.IsType<PagedResult<AdminUserResponse>>(page.Value);
+        Assert.Equal(2, firstPage.Total);
+        Assert.Equal(100, firstPage.PageSize);
+        var searched = await controller.List(1, 10, "member@example", "active", SubscriptionPlans.Free);
+        var searchPage = Assert.IsType<PagedResult<AdminUserResponse>>(
+            Assert.IsType<OkObjectResult>(searched.Result).Value);
+        Assert.Single(searchPage.Items);
+        Assert.Equal("member", searchPage.Items[0].UserName);
         Assert.IsType<BadRequestObjectResult>(await controller.Update(member.Id, new UpdateUserAccessRequest
         {
             IsActive = true,
@@ -225,6 +232,9 @@ public sealed class IdentityAccountIntegrationTests
         Assert.True(await users.IsInRoleAsync(member, UserRoles.Subscriber));
         Assert.Equal(SubscriptionPlans.Pro,
             (await fixture.Get<ProxyHarborDbContext>().Subscriptions.SingleAsync(x => x.UserId == member.Id)).Plan);
+        var paid = await controller.List(1, 10, null, "active", SubscriptionPlans.Pro);
+        Assert.Single(Assert.IsType<PagedResult<AdminUserResponse>>(
+            Assert.IsType<OkObjectResult>(paid.Result).Value).Items);
 
         var secondAdministrator = new ApplicationUser { UserName = "admin.two", Email = "admin.two@example.com" };
         Assert.True((await users.CreateAsync(secondAdministrator, "Initial-user-42!")).Succeeded);
