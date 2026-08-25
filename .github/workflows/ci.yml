@@ -718,8 +718,22 @@ jobs:
           unauthorized_status=$(curl --silent --dump-header "$security_headers" --output /dev/null --write-out '%{http_code}' \
             http://127.0.0.1:5080/api/v1/admin/sources)
           test "$unauthorized_status" -eq 401
-          grep --ignore-case '^WWW-Authenticate: ApiKey' "$security_headers"
+          grep --ignore-case '^WWW-Authenticate: Cookie, ApiKey' "$security_headers"
           grep --ignore-case '^Cache-Control: no-store' "$security_headers"
+          invalid_login_status=$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            --request POST --header 'Content-Type: application/json' \
+            --data '{"username":"admin","password":"wrong-password"}' \
+            http://127.0.0.1:5080/api/v1/auth/login)
+          test "$invalid_login_status" -eq 401
+          login_status=$(curl --silent --dump-header "$security_headers" --output /dev/null --write-out '%{http_code}' \
+            --request POST --header 'Content-Type: application/json' \
+            --data '{"username":"admin","password":"integration-admin-password-at-least-24-chars"}' \
+            http://127.0.0.1:5080/api/v1/auth/login)
+          test "$login_status" -eq 200
+          grep --ignore-case '^Set-Cookie: ProxyHarbor.Admin=' "$security_headers"
+          grep --ignore-case '^Set-Cookie: .*httponly' "$security_headers"
+          grep --ignore-case '^Set-Cookie: .*secure' "$security_headers"
+          grep --ignore-case '^Set-Cookie: .*samesite=strict' "$security_headers"
           curl --silent --request OPTIONS --dump-header "$security_headers" --output /dev/null \
             --header 'Origin: https://dashboard.example' --header 'Access-Control-Request-Method: GET' \
             http://127.0.0.1:5080/api/v1/proxies
@@ -736,7 +750,10 @@ jobs:
           echo "$openapi" | jq --exit-status '
             .components.securitySchemes.AdminApiKey.type == "apiKey" and
             .components.securitySchemes.AdminApiKey.name == "X-Admin-Key" and
+            .components.securitySchemes.AdminSession.type == "apiKey" and
+            .components.securitySchemes.AdminSession.name == "ProxyHarbor.Admin" and
             .paths["/api/v1/admin/sources"].post.security[0].AdminApiKey == [] and
+            .paths["/api/v1/admin/sources"].post.security[1].AdminSession == [] and
             .paths["/api/v1/stats"].get.responses["200"].content["application/json"].schema["$ref"] ==
               "#/components/schemas/StatsResponse" and
             (.components.schemas.PublicCollectionRunResponse.properties | has("id") | not) and
