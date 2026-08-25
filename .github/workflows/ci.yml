@@ -210,7 +210,7 @@ jobs:
             .services.api.environment.Security__AdminApiKey == null and
             .services.api.environment.Backup__EncryptionKey == null and
             .services.api.environment.Backup__TelegramBotToken == null and
-            (.services.api.secrets | length) == 13 and
+            (.services.api.secrets | length) == 17 and
             (.services.restore.secrets | length) == 2 and
             (.services.alertmanager.secrets | length) == 2'
           for secret_value in ci-password 'Ci-admin-password-at-least-24-chars!' ci-admin-key ci-encryption-key-at-least-32-chars 9000000000000000000:CI_ONLY_PLACEHOLDER_NOT_A_REAL_TOKEN -1009000000001234; do
