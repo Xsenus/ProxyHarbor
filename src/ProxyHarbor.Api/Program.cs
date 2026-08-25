@@ -227,9 +227,14 @@ builder.Services.AddRateLimiter(x =>
             SegmentsPerWindow = 6,
             QueueLimit = 0
         }));
+    // Панель выполняет несколько параллельных чтений и обновляет диагностику в фоне.
+    // Считаем лимит на конкретную защищённую учётную запись, а не на общий IP
+    // офиса/NAT, и оставляем запас для переходов между административными разделами.
     x.AddPolicy("admin", context => RateLimitPartition.GetFixedWindowLimiter(
-        context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
-        _ => new FixedWindowRateLimiterOptions { PermitLimit = 20, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
+        context.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value ??
+            context.User.Identity?.Name ??
+            context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        _ => new FixedWindowRateLimiterOptions { PermitLimit = 120, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
     x.AddPolicy("account-login", context => RateLimitPartition.GetFixedWindowLimiter(
         context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
         _ => new FixedWindowRateLimiterOptions { PermitLimit = 5, Window = TimeSpan.FromMinutes(5), QueueLimit = 0 }));
@@ -281,12 +286,14 @@ app.UseResponseCompression();
 app.UseRouting();
 app.UseCors("frontend");
 app.UseAuthentication();
+// API key должен сформировать административный principal до выбора partition
+// rate limiter; cookie-аутентификация уже выполнена предыдущим middleware.
+app.UseMiddleware<AdminApiKeyMiddleware>();
 app.UseMiddleware<ProxyAccessMiddleware>();
 app.UseRateLimiter();
 app.UseOutputCache();
-// Сначала аутентифицируем automation API key и создаём role principal; затем
-// стандартный Authorization middleware проверяет endpoint-level политики.
-app.UseMiddleware<AdminApiKeyMiddleware>();
+// Стандартный Authorization middleware проверяет endpoint-level политики для
+// cookie-сессии или сформированного выше automation API key principal.
 app.UseAuthorization();
 app.MapOpenApi().CacheOutput("public-summary").RequireRateLimiting("public");
 app.MapControllers();
