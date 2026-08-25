@@ -20,4 +20,10 @@ describe('responsive accessibility stylesheet', () => {
     expect(stylesheet).toContain('.key-input input,.key-input button,.admin-actions button,.source-form input,.source-form select,.source-form button,.source-controls button{min-height:44px}')
     expect(stylesheet).toContain('.source-controls button{min-width:44px}')
   })
+
+  it('overrides Chromium autofill without hiding saved credentials', () => {
+    expect(stylesheet).toContain('.login-field input:-webkit-autofill')
+    expect(stylesheet).toContain('-webkit-text-fill-color:#e9f6f2!important')
+    expect(stylesheet).toContain('0 0 0 1000px #091410 inset!important')
+  })
 })

@@ -3,6 +3,7 @@ using System.IO.Compression;
 using System.IO.Pipelines;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -279,6 +280,12 @@ public sealed class BackupService(
                 // поэтому в снимок входят лишь полностью определённые предыдущие попытки.
                 await WriteJsonAsync(archive, "database/backup-runs.json",
                     db.BackupRuns.AsNoTracking().Where(x => x.Id != backupRunId).AsAsyncEnumerable(), token);
+                // Identity rows входят в тот же repeatable-read snapshot. Исходных паролей
+                // и reset token в этих таблицах нет; password hash защищён шифрованием PHB3.
+                await WriteJsonAsync(archive, "database/users.json", db.Users.AsNoTracking().AsAsyncEnumerable(), token);
+                await WriteJsonAsync(archive, "database/roles.json", db.Roles.AsNoTracking().AsAsyncEnumerable(), token);
+                await WriteJsonAsync(archive, "database/user-roles.json", db.UserRoles.AsNoTracking().AsAsyncEnumerable(), token);
+                await WriteJsonAsync(archive, "database/subscriptions.json", db.Subscriptions.AsNoTracking().AsAsyncEnumerable(), token);
                 await WriteJsonAsync(archive, "settings/collector.json", collectorOptions.Value, token);
                 await WriteJsonAsync(archive, "settings/backup.json",
                     BackupSettingsSnapshot.FromOptions(options, telegramConfigured), token);
@@ -287,7 +294,7 @@ public sealed class BackupService(
                 await WriteJsonAsync(archive, "manifest.json",
                     new
                     {
-                        version = 5,
+                        version = 6,
                         settingsSchemaVersion = 1,
                         createdAt = DateTimeOffset.UtcNow,
                         secretsIncluded = false

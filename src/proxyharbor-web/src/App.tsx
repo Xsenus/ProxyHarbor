@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Activity, ArrowDownToLine, ArrowRight, Check, Clock3, Database, Gauge, HardDriveDownload, LayoutDashboard, LockKeyhole, LogOut, Network, Play, RefreshCw, Server, ShieldCheck, User, Wifi, Workflow, X } from 'lucide-react'
+import { Activity, ArrowDownToLine, ArrowRight, Check, Clock3, CreditCard, Database, Eye, EyeOff, Gauge, HardDriveDownload, LayoutDashboard, LockKeyhole, LogOut, Mail, Network, Play, RefreshCw, Server, ShieldCheck, User, Users, Wifi, Workflow, X } from 'lucide-react'
 
 type Protocol = 'Http' | 'Https' | 'Socks4' | 'Socks5'
 type Proxy = { host: string; port: number; protocol: Protocol; url: string; latencyMs: number; successRate: number; exitIp?: string; lastCheckedAt: string; firstAliveAt?: string; lastAliveAt?: string; activeSince?: string; activeForSeconds?: number }
@@ -23,7 +23,10 @@ type Diagnostics = {
 const API = import.meta.env.VITE_API_URL ?? ''
 const APP_VERSION = import.meta.env.VITE_APP_VERSION ?? '0.0.0-local'
 const protocols: Protocol[] = ['Http', 'Https', 'Socks4', 'Socks5']
-type AdminSection = 'overview' | 'operations' | 'sources' | 'backups'
+type AdminSection = 'overview' | 'operations' | 'sources' | 'backups' | 'users'
+type AccountProfile = { id: string; userName: string; email: string; displayName?: string; createdAt: string; lastLoginAt?: string; roles: string[]; subscription?: { plan: string; status: string; startedAt: string; expiresAt?: string } }
+type AdminUser = AccountProfile & { isActive: boolean }
+type UserAccessDraft = { isActive: boolean; administrator: boolean; subscriber: boolean; plan: string; status: string }
 
 function isAbortError(reason: unknown) {
   return reason instanceof Error && reason.name === 'AbortError'
@@ -41,11 +44,16 @@ export default function App() {
   const [total, setTotal] = useState(0)
   const [apiError, setApiError] = useState('')
   const currentPath = window.location.pathname.replace(/\/+$/, '') || '/'
-  const loginPage = currentPath === '/admin/login'
+  const loginPage = currentPath === '/admin/login' || currentPath === '/login'
+  const registerPage = currentPath === '/register'
+  const forgotPasswordPage = currentPath === '/forgot-password'
+  const resetPasswordPage = currentPath === '/reset-password'
+  const accountOpen = currentPath === '/account' || currentPath === '/account/profile'
   const adminOpen = currentPath === '/admin' || currentPath.startsWith('/admin/') && !loginPage
   const adminSection: AdminSection = currentPath === '/admin/sources' ? 'sources'
     : currentPath === '/admin/operations' ? 'operations'
-      : currentPath === '/admin/backups' ? 'backups' : 'overview'
+      : currentPath === '/admin/backups' ? 'backups'
+        : currentPath === '/admin/users' ? 'users' : 'overview'
   const [adminAuthenticated, setAdminAuthenticated] = useState(false)
   const [adminError, setAdminError] = useState('')
   const [sources, setSources] = useState<Source[]>([])
@@ -162,7 +170,11 @@ export default function App() {
         setAdminAuthenticated(false)
         setSources([])
         setDiagnostics(null)
-        window.location.replace('/admin/login')
+        window.location.replace('/login')
+        return
+      }
+      if ([sourcesResponse, diagnosticsResponse].some(response => response.status === 403)) {
+        window.location.replace('/account')
         return
       }
       if (!sourcesResponse.ok) throw new Error(await responseMessage(sourcesResponse, 'Административная сессия недоступна'))
@@ -235,7 +247,7 @@ export default function App() {
     setAction('')
     setSourceBusy('')
     try { await fetch(`${API}/api/v1/auth/logout`, { method: 'POST', credentials: 'include' }) }
-    finally { window.location.replace('/admin/login') }
+    finally { window.location.replace('/login') }
   }, [invalidateAdminSession])
 
   const runAdminAction = async (name: 'collect' | 'validate' | 'backup') => {
@@ -249,7 +261,7 @@ export default function App() {
       const response = await fetch(`${API}/api/v1/admin/${name}`, { method: 'POST', credentials: 'include', signal: controller.signal })
       if (sessionId !== adminSessionIdRef.current) return
       if (!response.ok) {
-        if (response.status === 401) { setAdminAuthenticated(false); window.location.replace('/admin/login') }
+        if (response.status === 401) { setAdminAuthenticated(false); window.location.replace('/login') }
         throw new Error(await responseMessage(response, 'Административная операция не выполнена'))
       }
       await Promise.all([load(), loadAdminData()])
@@ -278,7 +290,7 @@ export default function App() {
       })
       if (sessionId !== adminSessionIdRef.current) return
       if (!response.ok) {
-        if (response.status === 401) { setAdminAuthenticated(false); window.location.replace('/admin/login') }
+        if (response.status === 401) { setAdminAuthenticated(false); window.location.replace('/login') }
         throw new Error(await responseMessage(response, 'Не удалось добавить источник'))
       }
       setSourceDraft({ name: '', url: '', protocol: 'Http', priority: 100 })
@@ -307,7 +319,7 @@ export default function App() {
       })
       if (sessionId !== adminSessionIdRef.current) return
       if (!response.ok) {
-        if (response.status === 401) { setAdminAuthenticated(false); window.location.replace('/admin/login') }
+        if (response.status === 401) { setAdminAuthenticated(false); window.location.replace('/login') }
         throw new Error(await responseMessage(response, 'Не удалось изменить состояние источника'))
       }
       await loadAdminData()
@@ -331,7 +343,7 @@ export default function App() {
       const response = await fetch(`${API}/api/v1/admin/sources/${source.id}`, { method: 'DELETE', credentials: 'include', signal: controller.signal })
       if (sessionId !== adminSessionIdRef.current) return
       if (!response.ok) {
-        if (response.status === 401) { setAdminAuthenticated(false); window.location.replace('/admin/login') }
+        if (response.status === 401) { setAdminAuthenticated(false); window.location.replace('/login') }
         throw new Error(await responseMessage(response, 'Не удалось удалить источник'))
       }
       await loadAdminData()
@@ -357,13 +369,17 @@ export default function App() {
   const adminMutationBusy = !!action || !!sourceBusy
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
 
-  if (loginPage) return <AdminLoginPage/>
+  if (loginPage) return <AccountLoginPage/>
+  if (registerPage) return <RegisterPage/>
+  if (forgotPasswordPage) return <ForgotPasswordPage/>
+  if (resetPasswordPage) return <ResetPasswordPage/>
+  if (accountOpen) return <AccountPage/>
 
   return <div className="app-shell">
     {!adminOpen && <><header>
       <a className="brand" href="#top" aria-label="ProxyHarbor — наверх"><span className="brand-mark"><Network size={20}/></span><span>Proxy<span>Harbor</span></span></a>
-      <nav><a href="#catalog">Прокси</a><a href="#api">API</a><a className="admin-link" href="/admin/login"><LockKeyhole size={15}/> Управление</a></nav>
-      <a className="mobile-admin" aria-label="Войти в управление" href="/admin/login"><LockKeyhole size={17}/></a>
+      <nav><a href="#catalog">Прокси</a><a href="#api">API</a><a className="admin-link" href="/login"><LockKeyhole size={15}/> Войти</a></nav>
+      <a className="mobile-admin" aria-label="Войти в аккаунт" href="/login"><LockKeyhole size={17}/></a>
       <div className={`live-pill ${apiError ? 'offline' : ''}`} aria-live="polite"><span/> {loading ? 'проверка…' : apiError ? 'API недоступен' : 'система активна'}</div>
     </header>
 
@@ -417,8 +433,9 @@ export default function App() {
           <a className={adminSection === 'operations' ? 'active' : ''} aria-current={adminSection === 'operations' ? 'page' : undefined} href="/admin/operations"><Workflow/>Операции</a>
           <a className={adminSection === 'sources' ? 'active' : ''} aria-current={adminSection === 'sources' ? 'page' : undefined} href="/admin/sources"><Server/>Источники <b>{sources.length || '—'}</b></a>
           <a className={adminSection === 'backups' ? 'active' : ''} aria-current={adminSection === 'backups' ? 'page' : undefined} href="/admin/backups"><HardDriveDownload/>Резервные копии</a>
+          <a className={adminSection === 'users' ? 'active' : ''} aria-current={adminSection === 'users' ? 'page' : undefined} href="/admin/users"><Users/>Пользователи</a>
         </nav>
-        <div className="admin-sidebar-foot"><a href="/"><ArrowRight/>На главную</a><button onClick={logoutAdmin}><LogOut/>Выйти</button></div>
+        <div className="admin-sidebar-foot"><a href="/account"><User/>Профиль</a><a href="/"><ArrowRight/>На главную</a><button onClick={logoutAdmin}><LogOut/>Выйти</button></div>
       </aside>
 
       <section className="admin-content">
@@ -473,6 +490,7 @@ export default function App() {
             <div className="backup-summary"><article><span><Database/></span><div><small>Размер базы</small><strong>{formatBytes(diagnostics?.databaseBytes)}</strong></div></article><article><span><HardDriveDownload/></span><div><small>Последняя копия</small><strong>{latestBackup ? formatBytes(latestBackup.sizeBytes) : '—'}</strong></div></article><article><span><ShieldCheck/></span><div><small>Доставка</small><strong>{latestBackup ? backupDelivery(latestBackup) : 'Нет данных'}</strong></div></article></div>
             <AdminRunHistory title="История резервного копирования" empty="Резервные копии ещё не создавались.">{diagnostics?.recentBackups.map(run => <HistoryRow key={run.id} status={run.status} title={run.fileName ?? 'Резервная копия'} detail={`${formatBytes(run.sizeBytes)} · ${backupDelivery(run)}`} time={run.startedAt}/>)}</AdminRunHistory>
           </section>}
+          {adminSection === 'users' && <AdminUsersPage/>}
         </>}
       </section>
     </main>}
@@ -495,10 +513,11 @@ function HistoryRow({status, title, detail, time}: {status?: string; title: stri
   return <article><i className={statusClass(status)}/><div><b>{title}</b><small>{detail}</small></div><time>{timeAgo(time)}</time></article>
 }
 
-/** Изолированная страница входа: на ней нет публичного каталога и элементов админ-панели. */
-function AdminLoginPage() {
+/** Общая страница входа для администраторов и будущих клиентов. */
+function AccountLoginPage() {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
@@ -514,8 +533,9 @@ function AdminLoginPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password }),
       })
-      if (!response.ok) throw new Error(await responseMessage(response, 'Неверный логин или пароль'))
-      window.location.assign('/admin')
+      if (!response.ok) throw new Error(await responseMessage(response, 'Неверный логин, email или пароль'))
+      const session = await response.json() as { roles?: string[] }
+      window.location.assign(session.roles?.includes('Administrator') ? '/admin' : '/account')
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Не удалось выполнить вход')
       setBusy(false)
@@ -525,20 +545,130 @@ function AdminLoginPage() {
   return <main className="login-page">
     <a className="brand" href="/"><span className="brand-mark"><Network size={20}/></span><span>Proxy<span>Harbor</span></span></a>
     <section className="login-card" aria-labelledby="login-title">
-      <span className="kicker">ADMIN ACCESS</span>
-      <h1 id="login-title">Вход в управление</h1>
-      <p>Введите логин и пароль администратора. После входа браузер получит защищённую сессию.</p>
+      <span className="kicker">ACCOUNT ACCESS</span>
+      <h1 id="login-title">Вход в ProxyHarbor</h1>
+      <p>Используйте логин или email. Одна защищённая сессия открывает личный кабинет в соответствии с вашими правами.</p>
       <form className="login-form" onSubmit={submit}>
-        <label htmlFor="admin-username">Логин</label>
-        <div className="login-field"><User size={18}/><input id="admin-username" autoFocus required type="text" placeholder="Логин" autoComplete="username" autoCapitalize="none" spellCheck={false} minLength={3} maxLength={64} value={username} onChange={event => setUsername(event.target.value)}/></div>
+        <label htmlFor="account-identifier">Логин или email</label>
+        <div className="login-field"><User size={18}/><input id="account-identifier" autoFocus required type="text" placeholder="login или name@example.com" autoComplete="username" autoCapitalize="none" spellCheck={false} minLength={3} maxLength={254} value={username} onChange={event => setUsername(event.target.value)}/></div>
         <label htmlFor="admin-password">Пароль</label>
-        <div className="login-field"><LockKeyhole size={18}/><input id="admin-password" required type="password" placeholder="Пароль" autoComplete="current-password" maxLength={256} value={password} onChange={event => setPassword(event.target.value)}/></div>
+        <div className="login-field"><LockKeyhole size={18}/><input id="admin-password" required type={showPassword ? 'text' : 'password'} placeholder="Пароль" autoComplete="current-password" maxLength={256} value={password} onChange={event => setPassword(event.target.value)}/><button className="password-toggle" type="button" aria-label={showPassword ? 'Скрыть пароль' : 'Показать пароль'} onClick={() => setShowPassword(value => !value)}>{showPassword ? <EyeOff/> : <Eye/>}</button></div>
+        <a className="forgot-link" href="/forgot-password">Забыли пароль?</a>
         <button className="login-submit" type="submit" disabled={busy || !username || !password}>{busy ? 'Проверяем…' : 'Войти'}</button>
       </form>
       {error && <div className="admin-notice" role="alert"><X size={16}/>{error}</div>}
+      <div className="account-auth-footer"><span>Ещё нет аккаунта?</span><a href="/register">Зарегистрироваться</a></div>
       <a className="back-link" href="/">← Вернуться на главную</a>
     </section>
   </main>
+}
+
+/** Самостоятельная регистрация создаёт только безопасную базовую роль User и free-подписку. */
+function RegisterPage() {
+  const [form, setForm] = useState({ username: '', email: '', displayName: '', password: '', confirm: '' })
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault()
+    if (form.password !== form.confirm) { setError('Пароли не совпадают'); return }
+    setBusy(true); setError('')
+    try {
+      const response = await fetch(`${API}/api/v1/auth/register`, { method: 'POST', credentials: 'include', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(form) })
+      if (!response.ok) throw new Error(await responseMessage(response, 'Не удалось создать аккаунт'))
+      window.location.assign('/account')
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Не удалось создать аккаунт'); setBusy(false) }
+  }
+  return <AuthLayout title="Создать аккаунт" kicker="FREE ACCOUNT" description="Бесплатный аккаунт уже готов к будущим тарифам и персональным лимитам.">
+    <form className="login-form registration-form" onSubmit={submit}>
+      <label htmlFor="register-name">Как к вам обращаться</label><div className="login-field"><User/><input id="register-name" maxLength={120} autoComplete="name" placeholder="Имя (необязательно)" value={form.displayName} onChange={event => setForm({...form, displayName: event.target.value})}/></div>
+      <label htmlFor="register-username">Логин</label><div className="login-field"><User/><input id="register-username" required minLength={3} maxLength={64} pattern="[A-Za-z0-9._-]+" autoComplete="username" placeholder="proxy.user" value={form.username} onChange={event => setForm({...form, username: event.target.value})}/></div>
+      <label htmlFor="register-email">Email</label><div className="login-field"><Mail/><input id="register-email" required type="email" maxLength={254} autoComplete="email" placeholder="name@example.com" value={form.email} onChange={event => setForm({...form, email: event.target.value})}/></div>
+      <label htmlFor="register-password">Пароль</label><div className="login-field"><LockKeyhole/><input id="register-password" required minLength={12} maxLength={256} type="password" autoComplete="new-password" placeholder="Не менее 12 символов" value={form.password} onChange={event => setForm({...form, password: event.target.value})}/></div>
+      <label htmlFor="register-confirm">Повторите пароль</label><div className="login-field"><ShieldCheck/><input id="register-confirm" required type="password" autoComplete="new-password" placeholder="Повторите пароль" value={form.confirm} onChange={event => setForm({...form, confirm: event.target.value})}/></div>
+      <button className="login-submit" disabled={busy}>{busy ? 'Создаём…' : 'Создать аккаунт'}</button>
+    </form>{error && <div className="admin-notice" role="alert"><X/>{error}</div>}<a className="back-link" href="/login">← Уже есть аккаунт</a>
+  </AuthLayout>
+}
+
+/** Запрос восстановления всегда показывает нейтральный результат без раскрытия аккаунта. */
+function ForgotPasswordPage() {
+  const [email, setEmail] = useState('')
+  const [message, setMessage] = useState('')
+  const [error, setError] = useState('')
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault(); setError(''); setMessage('')
+    const response = await fetch(`${API}/api/v1/auth/forgot-password`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({email}) })
+    if (!response.ok) { setError(await responseMessage(response, 'Не удалось отправить письмо')); return }
+    setMessage('Если аккаунт существует, ссылка уже отправлена на указанную почту.')
+  }
+  return <AuthLayout title="Восстановить пароль" kicker="ACCOUNT RECOVERY" description="Укажите email аккаунта — мы отправим одноразовую защищённую ссылку.">
+    <form className="login-form" onSubmit={submit}><label htmlFor="recovery-email">Email</label><div className="login-field"><Mail/><input id="recovery-email" required type="email" autoComplete="email" placeholder="name@example.com" value={email} onChange={event => setEmail(event.target.value)}/></div><button className="login-submit">Отправить ссылку</button></form>
+    {message && <div className="account-success" role="status"><Check/>{message}</div>}{error && <div className="admin-notice" role="alert"><X/>{error}</div>}<a className="back-link" href="/login">← Вернуться ко входу</a>
+  </AuthLayout>
+}
+
+/** Применяет email и token только из ссылки, а новый пароль вводится дважды. */
+function ResetPasswordPage() {
+  const query = new URLSearchParams(window.location.search)
+  const email = query.get('email') ?? ''
+  const token = query.get('token') ?? ''
+  const [password, setPassword] = useState('')
+  const [confirm, setConfirm] = useState('')
+  const [message, setMessage] = useState('')
+  const [error, setError] = useState('')
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault(); setError('')
+    if (!email || !token) { setError('Ссылка восстановления неполная'); return }
+    if (password !== confirm) { setError('Пароли не совпадают'); return }
+    const response = await fetch(`${API}/api/v1/auth/reset-password`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({email, token, newPassword: password}) })
+    if (!response.ok) { setError(await responseMessage(response, 'Ссылка недействительна или устарела')); return }
+    setMessage('Пароль изменён. Теперь можно войти в аккаунт.')
+  }
+  return <AuthLayout title="Новый пароль" kicker="SECURE RESET" description={email ? `Восстановление для ${email}` : 'Проверьте полноту ссылки из письма.'}>
+    {!message && <form className="login-form" onSubmit={submit}><label htmlFor="reset-password">Новый пароль</label><div className="login-field"><LockKeyhole/><input id="reset-password" required minLength={12} type="password" autoComplete="new-password" value={password} onChange={event => setPassword(event.target.value)}/></div><label htmlFor="reset-confirm">Повторите пароль</label><div className="login-field"><ShieldCheck/><input id="reset-confirm" required type="password" autoComplete="new-password" value={confirm} onChange={event => setConfirm(event.target.value)}/></div><button className="login-submit">Изменить пароль</button></form>}
+    {message && <div className="account-success"><Check/>{message}</div>}{error && <div className="admin-notice" role="alert"><X/>{error}</div>}<a className="back-link" href="/login">← Перейти ко входу</a>
+  </AuthLayout>
+}
+
+/** Единая оболочка auth-экранов сохраняет визуальный ритм и семантику заголовков. */
+function AuthLayout({title, kicker, description, children}: {title: string; kicker: string; description: string; children: React.ReactNode}) {
+  return <main className="login-page"><a className="brand" href="/"><span className="brand-mark"><Network size={20}/></span><span>Proxy<span>Harbor</span></span></a><section className="login-card account-auth-card" aria-labelledby="auth-title"><span className="kicker">{kicker}</span><h1 id="auth-title">{title}</h1><p>{description}</p>{children}</section></main>
+}
+
+/** Личный кабинет работает для любой роли и не запрашивает административные API. */
+function AccountPage() {
+  const [profile, setProfile] = useState<AccountProfile | null>(null)
+  const [displayName, setDisplayName] = useState('')
+  const [passwords, setPasswords] = useState({currentPassword: '', newPassword: ''})
+  const [notice, setNotice] = useState('')
+  const [error, setError] = useState('')
+  const loadProfile = useCallback(async () => {
+    const response = await fetch(`${API}/api/v1/account/profile`, {credentials: 'include'})
+    if (response.status === 401) { window.location.replace('/login'); return }
+    if (!response.ok) { setError(await responseMessage(response, 'Профиль недоступен')); return }
+    const data = await response.json() as AccountProfile; setProfile(data); setDisplayName(data.displayName ?? '')
+  }, [])
+  useEffect(() => { const initial = window.setTimeout(() => void loadProfile(), 0); return () => window.clearTimeout(initial) }, [loadProfile])
+  const saveProfile = async (event: React.FormEvent) => { event.preventDefault(); setError(''); const response = await fetch(`${API}/api/v1/account/profile`, {method:'PUT', credentials:'include', headers:{'Content-Type':'application/json'}, body:JSON.stringify({displayName})}); if (!response.ok) {setError(await responseMessage(response,'Не удалось сохранить профиль'));return} setNotice('Профиль сохранён'); await loadProfile() }
+  const changePassword = async (event: React.FormEvent) => { event.preventDefault(); setError(''); const response = await fetch(`${API}/api/v1/account/change-password`, {method:'POST',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify(passwords)}); if(!response.ok){setError(await responseMessage(response,'Не удалось изменить пароль'));return} setPasswords({currentPassword:'',newPassword:''});setNotice('Пароль изменён. Другие сессии будут отозваны.') }
+  const logout = async () => { await fetch(`${API}/api/v1/auth/logout`, {method:'POST',credentials:'include'}); window.location.replace('/login') }
+  return <main className="account-page"><header><a className="brand" href="/"><span className="brand-mark"><Network/></span><span>Proxy<span>Harbor</span></span></a><div><a href="/">На главную</a>{profile?.roles.includes('Administrator') && <a href="/admin">Админ-панель</a>}<button onClick={logout}><LogOut/>Выйти</button></div></header><section className="account-container"><div className="admin-section-heading"><div><span className="kicker">PERSONAL ACCOUNT</span><h1>Профиль</h1><p>Учётные данные, безопасность и параметры подписки.</p></div></div>{error && <div className="admin-notice"><X/>{error}</div>}{notice && <div className="account-success"><Check/>{notice}</div>}
+    <div className="account-profile-grid"><section className="admin-card profile-card"><div className="profile-avatar"><User/></div><h2>{profile?.displayName || profile?.userName || 'Загрузка…'}</h2><p>{profile?.email}</p><div className="role-badges">{profile?.roles.map(role => <span key={role}>{role}</span>)}</div></section><section className="admin-card subscription-card"><span className="kicker">ПОДПИСКА</span><CreditCard/><strong>{planLabel(profile?.subscription?.plan)}</strong><p>{profile?.subscription ? `Статус: ${profile.subscription.status}` : 'Данные загружаются'}</p></section></div>
+    <div className="account-forms"><section className="admin-card"><h2>Данные профиля</h2><form onSubmit={saveProfile}><label htmlFor="profile-login">Логин</label><input id="profile-login" disabled value={profile?.userName ?? ''}/><label htmlFor="profile-email">Email</label><input id="profile-email" disabled value={profile?.email ?? ''}/><label htmlFor="profile-name">Отображаемое имя</label><input id="profile-name" maxLength={120} value={displayName} onChange={event=>setDisplayName(event.target.value)}/><button>Сохранить</button></form></section><section className="admin-card"><h2>Сменить пароль</h2><form onSubmit={changePassword}><label htmlFor="current-password">Текущий пароль</label><input id="current-password" required type="password" autoComplete="current-password" value={passwords.currentPassword} onChange={event=>setPasswords({...passwords,currentPassword:event.target.value})}/><label htmlFor="new-password">Новый пароль</label><input id="new-password" required minLength={12} type="password" autoComplete="new-password" value={passwords.newPassword} onChange={event=>setPasswords({...passwords,newPassword:event.target.value})}/><button>Изменить пароль</button></form></section></div>
+  </section></main>
+}
+
+/** Управление ролями и тарифом остаётся отдельным административным разделом. */
+function AdminUsersPage() {
+  const [items, setItems] = useState<AdminUser[]>([])
+  const [drafts, setDrafts] = useState<Record<string,UserAccessDraft>>({})
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState('')
+  const loadUsers = useCallback(async () => { const response=await fetch(`${API}/api/v1/admin/users?pageSize=50`,{credentials:'include'}); if(!response.ok){setError(await responseMessage(response,'Пользователи недоступны'));return} const data=await response.json() as PagedResult<AdminUser>;setItems(data.items);setDrafts(Object.fromEntries(data.items.map(user=>[user.id,{isActive:user.isActive,administrator:user.roles.includes('Administrator'),subscriber:user.roles.includes('Subscriber'),plan:user.subscription?.plan??'free',status:user.subscription?.status??'active'}]))) },[])
+  useEffect(()=>{const initial=window.setTimeout(()=>void loadUsers(),0);return()=>window.clearTimeout(initial)},[loadUsers])
+  const save = async (user:AdminUser) => { const draft=drafts[user.id];if(!draft)return;setBusy(user.id);setError('');const roles=['User',...(draft.subscriber?['Subscriber']:[]),...(draft.administrator?['Administrator']:[])];const response=await fetch(`${API}/api/v1/admin/users/${user.id}`,{method:'PUT',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({isActive:draft.isActive,roles,plan:draft.plan,status:draft.status,expiresAt:user.subscription?.expiresAt??null})});if(!response.ok)setError(await responseMessage(response,'Не удалось обновить права'));else await loadUsers();setBusy('') }
+  const update=(id:string,patch:Partial<UserAccessDraft>)=>setDrafts(current=>({...current,[id]:{...current[id],...patch}}))
+  return <section className="admin-section" aria-labelledby="admin-users-title"><div className="admin-section-heading"><div><span className="kicker">ACCESS CONTROL</span><h1 id="admin-users-title">Пользователи</h1><p>Роли отвечают за доступ к функциям, а тариф — за будущие лимиты выдачи прокси.</p></div><span className="section-count">{items.length}</span></div>{error&&<div className="admin-notice"><X/>{error}</div>}<section className="admin-card users-card"><div className="user-list">{items.map(user=>{const draft=drafts[user.id];return <article key={user.id}><div className="user-identity"><span><User/></span><div><b>{user.displayName||user.userName}</b><small>{user.email} · создан {new Date(user.createdAt).toLocaleDateString('ru-RU')}</small></div></div>{draft&&<div className="user-access-controls"><label><input type="checkbox" checked={draft.isActive} onChange={e=>update(user.id,{isActive:e.target.checked})}/> Активен</label><label><input type="checkbox" checked={draft.subscriber} onChange={e=>update(user.id,{subscriber:e.target.checked})}/> Subscriber</label><label><input type="checkbox" checked={draft.administrator} onChange={e=>update(user.id,{administrator:e.target.checked})}/> Admin</label><select aria-label={`Тариф ${user.userName}`} value={draft.plan} onChange={e=>update(user.id,{plan:e.target.value})}><option value="free">Free</option><option value="pro">Pro</option><option value="unlimited">Unlimited</option></select><select aria-label={`Статус ${user.userName}`} value={draft.status} onChange={e=>update(user.id,{status:e.target.value})}><option value="active">Active</option><option value="trialing">Trial</option><option value="past_due">Past due</option><option value="canceled">Canceled</option><option value="expired">Expired</option></select><button disabled={!!busy} onClick={()=>void save(user)}>{busy===user.id?'Сохраняем…':'Сохранить'}</button></div>}</article>})}</div></section></section>
 }
 
 /** Пагинация повторяет серверный UX RMS: размер, страницы, быстрый переход и итог. */
@@ -586,6 +716,7 @@ function statusClass(status?: string) { return status === 'completed' ? 'status-
 function catalogStatusClass(catalog?: SourceCatalogSnapshot) { return !catalog ? '' : catalog.isHealthy ? 'status-ok' : catalog.isComplete ? 'status-running' : 'status-failed' }
 function statusLabel(status?: string) { return status === 'completed' ? 'успешно' : status === 'failed' ? 'ошибка' : status === 'running' ? 'выполняется' : 'нет данных' }
 function backupDelivery(run: BackupRun) { return run.sentToTelegram ? 'доставлен в Telegram' : run.telegramConfigured ? 'Telegram не доставлен' : 'только локально' }
+function planLabel(plan?: string) { return plan === 'unlimited' ? 'Unlimited' : plan === 'pro' ? 'Pro' : 'Free' }
 function label(protocol: Protocol) { return ({Http: 'HTTP', Https: 'HTTPS', Socks4: 'SOCKS4', Socks5: 'SOCKS5'})[protocol] }
 function timeAgo(value: string) { const sec = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 1000)); if (sec < 10) return 'только что'; if (sec < 60) return `${sec} сек назад`; if (sec < 3600) return `${Math.floor(sec / 60)} мин назад`; return `${Math.floor(sec / 3600)} ч назад` }
 function timeUntil(value: string) { const sec = Math.max(0, Math.ceil((new Date(value).getTime() - Date.now()) / 1000)); if (sec < 60) return `через ${sec} сек`; if (sec < 3600) return `через ${Math.ceil(sec / 60)} мин`; return `через ${Math.ceil(sec / 3600)} ч` }

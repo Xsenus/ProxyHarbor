@@ -1,10 +1,13 @@
+using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
 using ProxyHarbor.Domain;
 
 namespace ProxyHarbor.Infrastructure;
 
 /// <summary>Контекст PostgreSQL со всеми индексами и начальными источниками.</summary>
-public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> options) : DbContext(options)
+public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> options)
+    : IdentityDbContext<ApplicationUser, IdentityRole<Guid>, Guid>(options)
 {
     /// <summary>Все собранные и дедуплицированные proxy endpoints.</summary>
     public DbSet<ProxyEndpoint> Proxies => Set<ProxyEndpoint>();
@@ -16,11 +19,38 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
     public DbSet<ValidationRun> ValidationRuns => Set<ValidationRun>();
     /// <summary>История создания и Telegram-доставки backup.</summary>
     public DbSet<BackupRun> BackupRuns => Set<BackupRun>();
+    /// <summary>Текущие тарифы пользователей, отделённые от Identity-ролей.</summary>
+    public DbSet<UserSubscription> Subscriptions => Set<UserSubscription>();
 
     /// <inheritdoc />
-    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    protected override void OnModelCreating(ModelBuilder builder)
     {
-        var proxy = modelBuilder.Entity<ProxyEndpoint>();
+        base.OnModelCreating(builder);
+
+        var user = builder.Entity<ApplicationUser>();
+        user.Property(x => x.DisplayName).HasMaxLength(120);
+        user.HasIndex(x => x.CreatedAt);
+        user.ToTable(table => table.HasCheckConstraint(
+            "CK_AspNetUsers_ActiveTimeline",
+            "\"LastLoginAt\" IS NULL OR \"LastLoginAt\" >= \"CreatedAt\""));
+
+        var subscription = builder.Entity<UserSubscription>();
+        subscription.HasIndex(x => x.UserId).IsUnique();
+        subscription.HasIndex(x => new { x.Plan, x.Status, x.ExpiresAt });
+        subscription.Property(x => x.Plan).HasMaxLength(32);
+        subscription.Property(x => x.Status).HasMaxLength(32);
+        subscription.Property(x => x.ExternalCustomerId).HasMaxLength(255);
+        subscription.Property(x => x.ExternalSubscriptionId).HasMaxLength(255);
+        subscription.HasOne(x => x.User).WithOne(x => x.Subscription)
+            .HasForeignKey<UserSubscription>(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
+        subscription.ToTable(table =>
+        {
+            table.HasCheckConstraint("CK_Subscriptions_Plan", "\"Plan\" IN ('free', 'pro', 'unlimited')");
+            table.HasCheckConstraint("CK_Subscriptions_Status", "\"Status\" IN ('active', 'trialing', 'past_due', 'canceled', 'expired')");
+            table.HasCheckConstraint("CK_Subscriptions_Timeline", "\"ExpiresAt\" IS NULL OR \"ExpiresAt\" >= \"StartedAt\"");
+        });
+
+        var proxy = builder.Entity<ProxyEndpoint>();
         proxy.HasIndex(x => new { x.Host, x.Port, x.Protocol }).IsUnique();
         // Публичная выдача читает только Alive. Частичные индексы не раздуваются
         // сотнями тысяч Pending/Dead строк и точно повторяют стабильный API order.
@@ -70,7 +100,7 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
             table.HasCheckConstraint("CK_Proxies_DeferredAttempt", "NOT \"LastValidationDeferred\" OR \"LastValidationAttemptAt\" IS NOT NULL");
         });
 
-        var source = modelBuilder.Entity<ProxySource>();
+        var source = builder.Entity<ProxySource>();
         source.HasIndex(x => x.Url).IsUnique();
         source.HasIndex(x => new { x.Enabled, x.ConsecutiveFailures });
         source.HasIndex(x => new { x.Enabled, x.NextFetchAt });
@@ -86,7 +116,7 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
             table.HasCheckConstraint("CK_Sources_ContentTimeline", "\"LastContentFetchedAt\" IS NULL OR (\"LastFetchedAt\" IS NOT NULL AND \"LastSucceededAt\" IS NOT NULL AND \"LastContentFetchedAt\" <= \"LastFetchedAt\" AND \"LastContentFetchedAt\" <= \"LastSucceededAt\")");
         });
 
-        var collectionRun = modelBuilder.Entity<CollectionRun>();
+        var collectionRun = builder.Entity<CollectionRun>();
         collectionRun.Property(x => x.Error).HasMaxLength(2000);
         collectionRun.ToTable(table =>
         {
@@ -94,7 +124,7 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
             table.HasCheckConstraint("CK_Runs_Counters", "\"SourcesProcessed\" >= 0 AND \"SourcesSucceeded\" >= 0 AND \"SourcesFailed\" >= 0 AND \"SourcesSkipped\" >= 0 AND \"SourcesTruncated\" >= 0 AND \"CandidatesFound\" >= 0 AND \"NewProxies\" >= 0 AND \"AliveProxies\" >= 0 AND \"SourcesSucceeded\"::bigint + \"SourcesFailed\"::bigint = \"SourcesProcessed\" AND \"SourcesTruncated\" <= \"SourcesSucceeded\" AND \"NewProxies\" <= \"CandidatesFound\"");
         });
 
-        var validationRun = modelBuilder.Entity<ValidationRun>();
+        var validationRun = builder.Entity<ValidationRun>();
         validationRun.HasIndex(x => x.LeaseId).IsUnique();
         validationRun.HasIndex(x => x.StartedAt);
         validationRun.HasIndex(x => new { x.Status, x.FinishedAt });
@@ -106,7 +136,7 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
             table.HasCheckConstraint("CK_ValidationRuns_Counters", "\"Claimed\" >= 0 AND \"Checked\" >= 0 AND \"Alive\" >= 0 AND \"Deferred\" >= 0 AND \"Checked\"::bigint + \"Deferred\"::bigint <= \"Claimed\" AND \"Alive\" <= \"Checked\"");
         });
 
-        var backupRun = modelBuilder.Entity<BackupRun>();
+        var backupRun = builder.Entity<BackupRun>();
         backupRun.HasIndex(x => x.StartedAt);
         backupRun.HasIndex(x => new { x.Status, x.FinishedAt });
         backupRun.Property(x => x.Status).HasMaxLength(32);

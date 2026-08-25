@@ -24,13 +24,13 @@ curl --fail https://proxy.example.com/api/v1/stats
 
 Проверьте отдельно admin-аутентификацию, создание зашифрованного backup, подтверждённую Telegram-доставку, расшифровку и пробное восстановление в отдельную БД. Команда `./tools/Audit-Backup.ps1 -ApiBaseUrl https://proxy.example.com -AdminKey $ADMIN_KEY -ReportPath artifacts/backup-audit.json` запускает конкретный backup и fail-closed требует канонический непустой PHB3, завершённый persisted audit и `sentToTelegram=true`; `-AllowLocalOnly` предназначен только для явно выбранного локального canary. Настройте внешний мониторинг `/health/ready`, срока TLS-сертификата, свободного диска, PostgreSQL и ключевых Prometheus-метрик.
 
-До аварийной замены данных извлеките безопасную конфигурацию из backup v5 без подключения к БД и сохраните её вне временного restore-контейнера:
+До аварийной замены данных извлеките безопасную конфигурацию из backup v6 без подключения к БД и сохраните её вне временного restore-контейнера:
 
 ```bash
 docker compose --profile tools run --rm --no-deps -T restore \
   --input /app/backups/proxyharbor-YYYYMMDD-HHMMSS.phbackup \
   --inspect-settings > recovery-settings.json
-jq --exit-status '.manifest.version == 5 and .manifest.secretsIncluded == false' recovery-settings.json
+jq --exit-status '.manifest.version == 6 and .manifest.secretsIncluded == false' recovery-settings.json
 ```
 
 Снимок предназначен для операторской сверки и не применяется автоматически. Он содержит collector/backup/runtime, CORS, trusted proxy и logging settings, но никогда не содержит admin password/API key, PostgreSQL connection string, Telegram credentials, data-protection keys или encryption key. Эти значения восстановите из внешнего secret store, затем выполните пробный restore в отдельную БД.

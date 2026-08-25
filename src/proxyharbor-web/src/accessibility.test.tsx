@@ -67,7 +67,7 @@ describe('ProxyHarbor accessibility', () => {
   it('has no automated WCAG violations on the dedicated login page', async () => {
     window.history.replaceState({}, '', '/admin/login')
     render(<App />)
-    await screen.findByRole('heading', { name: 'Вход в управление' })
+    await screen.findByRole('heading', { name: 'Вход в ProxyHarbor' })
 
     assertNoViolations(await axe.run(document.body, axeOptions))
   })

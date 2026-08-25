@@ -12,10 +12,12 @@ public sealed class RestoreSettingsInspectionTests
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private const string EncryptionKey = "settings-inspection-key-32-characters";
 
-    [Fact]
-    public void ReadsValidatedVersionFiveSettingsWithoutSecrets()
+    [Theory]
+    [InlineData(5)]
+    [InlineData(6)]
+    public void ReadsValidatedCurrentSettingsWithoutSecrets(int version)
     {
-        using var archive = CreateArchive(version: 5);
+        using var archive = CreateArchive(version);
         BackupArchiveValidator.Validate(archive);
 
         var inspection = RestoreApplication.ReadSettingsInspection(archive);
@@ -23,7 +25,7 @@ public sealed class RestoreSettingsInspectionTests
         using var document = JsonDocument.Parse(json);
         var root = document.RootElement;
 
-        Assert.Equal(5, root.GetProperty("manifest").GetProperty("version").GetInt32());
+        Assert.Equal(version, root.GetProperty("manifest").GetProperty("version").GetInt32());
         Assert.Equal(800, root.GetProperty("collector").GetProperty("validationConcurrency").GetInt32());
         Assert.False(root.GetProperty("backup").GetProperty("secretsIncluded").GetBoolean());
         Assert.False(root.GetProperty("runtime").GetProperty("adminApiKeyIncluded").GetBoolean());
@@ -42,7 +44,7 @@ public sealed class RestoreSettingsInspectionTests
         var exception = Assert.Throws<InvalidDataException>(
             () => RestoreApplication.ReadSettingsInspection(archive));
 
-        Assert.Contains("только для backup manifest v5", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("только для backup manifest v5 или v6", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -112,7 +114,7 @@ public sealed class RestoreSettingsInspectionTests
         var stream = new MemoryStream();
         using (var writer = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true))
         {
-            if (version == 5)
+            if (version is 5 or 6)
                 AddJson(writer, "manifest.json",
                     new { version, settingsSchemaVersion = 1, createdAt = DateTimeOffset.UtcNow, secretsIncluded = false });
             else
@@ -123,6 +125,13 @@ public sealed class RestoreSettingsInspectionTests
             AddJson(writer, "database/runs.json", Array.Empty<object>());
             AddJson(writer, "database/validation-runs.json", Array.Empty<object>());
             AddJson(writer, "database/backup-runs.json", Array.Empty<object>());
+            if (version == 6)
+            {
+                AddJson(writer, "database/users.json", Array.Empty<object>());
+                AddJson(writer, "database/roles.json", Array.Empty<object>());
+                AddJson(writer, "database/user-roles.json", Array.Empty<object>());
+                AddJson(writer, "database/subscriptions.json", Array.Empty<object>());
+            }
             AddJson(writer, "settings/collector.json", collector);
             AddJson(writer, "settings/backup.json", backup);
             AddJson(writer, "settings/runtime.json", runtime);

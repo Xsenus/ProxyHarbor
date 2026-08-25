@@ -1,9 +1,9 @@
 using System.Globalization;
 using System.Net;
 using System.Threading.RateLimiting;
-using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.ResponseCompression;
 using Microsoft.EntityFrameworkCore;
@@ -41,17 +41,35 @@ if (!builder.Environment.IsDevelopment())
 }
 
 builder.Services.AddProxyHarborInfrastructure(builder.Configuration);
-builder.Services.AddSingleton<AdminCredentialValidator>();
 var dataProtection = builder.Services.AddDataProtection().SetApplicationName("ProxyHarbor");
 var configuredKeysDirectory = builder.Configuration["Security:DataProtectionKeysDirectory"];
 if (string.IsNullOrWhiteSpace(configuredKeysDirectory))
     dataProtection.UseEphemeralDataProtectionProvider();
 else
     dataProtection.PersistKeysToFileSystem(new DirectoryInfo(configuredKeysDirectory));
-builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
-    .AddCookie(options =>
+builder.Services.AddIdentityCore<ApplicationUser>(options =>
     {
-        options.Cookie.Name = "ProxyHarbor.Admin";
+        options.User.RequireUniqueEmail = true;
+        options.User.AllowedUserNameCharacters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-";
+        options.Password.RequiredLength = 12;
+        options.Password.RequiredUniqueChars = 4;
+        options.Password.RequireDigit = true;
+        options.Password.RequireLowercase = true;
+        options.Password.RequireUppercase = true;
+        options.Password.RequireNonAlphanumeric = true;
+        options.Lockout.AllowedForNewUsers = true;
+        options.Lockout.MaxFailedAccessAttempts = 5;
+        options.Lockout.DefaultLockoutTimeSpan = TimeSpan.FromMinutes(15);
+        options.Tokens.PasswordResetTokenProvider = TokenOptions.DefaultProvider;
+    })
+    .AddRoles<IdentityRole<Guid>>()
+    .AddSignInManager()
+    .AddEntityFrameworkStores<ProxyHarborDbContext>()
+    .AddDefaultTokenProviders();
+builder.Services.AddAuthentication(IdentityConstants.ApplicationScheme).AddIdentityCookies();
+builder.Services.ConfigureApplicationCookie(options =>
+    {
+        options.Cookie.Name = "ProxyHarbor.Session";
         options.Cookie.HttpOnly = true;
         options.Cookie.SameSite = SameSiteMode.Strict;
         options.Cookie.SecurePolicy = builder.Environment.IsDevelopment()
@@ -71,7 +89,15 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
             return Task.CompletedTask;
         };
     });
+builder.Services.Configure<SecurityStampValidatorOptions>(options =>
+    options.ValidationInterval = TimeSpan.FromMinutes(5));
 builder.Services.AddAuthorization();
+builder.Services.AddOptions<AccountEmailOptions>().Bind(builder.Configuration.GetSection(AccountEmailOptions.Section))
+    .Validate(x => x.Port is >= 1 and <= 65_535, "Email:Port должен быть 1..65535")
+    .Validate(x => Uri.TryCreate(x.PublicBaseUrl, UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttps,
+        "Email:PublicBaseUrl должен быть абсолютным HTTPS URL")
+    .ValidateOnStart();
+builder.Services.AddSingleton<IAccountEmailSender, SmtpAccountEmailSender>();
 builder.Services.AddControllers().AddJsonOptions(x =>
     x.JsonSerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter()));
 builder.Services.AddOpenApi(options =>
@@ -91,7 +117,7 @@ builder.Services.AddOpenApi(options =>
         {
             Type = SecuritySchemeType.ApiKey,
             In = ParameterLocation.Cookie,
-            Name = "ProxyHarbor.Admin",
+            Name = "ProxyHarbor.Session",
             Description = "HttpOnly cookie-сессия, выдаваемая POST /api/v1/auth/login."
         };
         return Task.CompletedTask;
@@ -191,9 +217,19 @@ builder.Services.AddRateLimiter(x =>
     x.AddPolicy("admin", context => RateLimitPartition.GetFixedWindowLimiter(
         context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
         _ => new FixedWindowRateLimiterOptions { PermitLimit = 20, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
-    x.AddPolicy("admin-login", context => RateLimitPartition.GetFixedWindowLimiter(
+    x.AddPolicy("account-login", context => RateLimitPartition.GetFixedWindowLimiter(
         context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
         _ => new FixedWindowRateLimiterOptions { PermitLimit = 5, Window = TimeSpan.FromMinutes(5), QueueLimit = 0 }));
+    x.AddPolicy("account-register", context => RateLimitPartition.GetFixedWindowLimiter(
+        context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        _ => new FixedWindowRateLimiterOptions { PermitLimit = 3, Window = TimeSpan.FromMinutes(15), QueueLimit = 0 }));
+    x.AddPolicy("account-recovery", context => RateLimitPartition.GetFixedWindowLimiter(
+        context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        _ => new FixedWindowRateLimiterOptions { PermitLimit = 5, Window = TimeSpan.FromMinutes(15), QueueLimit = 0 }));
+    x.AddPolicy("account", context => RateLimitPartition.GetFixedWindowLimiter(
+        context.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value ??
+            context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        _ => new FixedWindowRateLimiterOptions { PermitLimit = 60, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
     x.AddPolicy("export", context => RateLimitPartition.GetTokenBucketLimiter(
         context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
         _ => new TokenBucketRateLimiterOptions
@@ -228,11 +264,13 @@ app.UseExceptionHandler();
 app.UseResponseCompression();
 app.UseRouting();
 app.UseCors("frontend");
+app.UseAuthentication();
 app.UseRateLimiter();
 app.UseOutputCache();
-app.UseAuthentication();
-app.UseAuthorization();
+// Сначала аутентифицируем automation API key и создаём role principal; затем
+// стандартный Authorization middleware проверяет endpoint-level политики.
 app.UseMiddleware<AdminApiKeyMiddleware>();
+app.UseAuthorization();
 app.MapOpenApi().CacheOutput("public-summary").RequireRateLimiting("public");
 app.MapControllers();
 app.MapGet("/health/live", () => Results.Ok(new { status = "healthy" }));
@@ -262,6 +300,7 @@ await using (var startupDb = await dbFactory.CreateDbContextAsync())
 {
     await DatabaseSeeder.InitializeAsync(startupDb);
 }
+await IdentitySeeder.InitializeAsync(app.Services, builder.Configuration);
 
 var runtimeLeaseLost = LoggerMessage.Define(
     LogLevel.Critical,

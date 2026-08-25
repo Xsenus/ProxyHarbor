@@ -197,15 +197,26 @@ CSV нейтрализует spreadsheet formula injection. JSON/XML/TXT/CSV и�
 
 Readiness не кэшируется и выполняет zero-row probe всех operational tables/columns.
 
-## Admin authentication
+## Account authentication
 
 Браузер создаёт сессию, отправляя JSON на `POST /api/v1/auth/login`:
 
 ```json
-{ "username": "admin", "password": "..." }
+{ "username": "admin или admin@example.com", "password": "..." }
 ```
 
-Успешный ответ устанавливает непостоянную `HttpOnly`, `Secure`, `SameSite=Strict` cookie. `GET /api/v1/auth/session` проверяет сессию, `POST /api/v1/auth/logout` завершает её. Login rate limit — 5 попыток за 5 минут на IP.
+Успешный ответ устанавливает непостоянную `HttpOnly`, `Secure`, `SameSite=Strict` cookie `ProxyHarbor.Session`. `GET /api/v1/auth/session` возвращает профиль, роли, подписку и entitlement, `POST /api/v1/auth/logout` завершает сессию. Login rate limit — 5 попыток за 5 минут на IP; после пяти неверных паролей Identity блокирует аккаунт на 15 минут.
+
+| Endpoint | Назначение |
+|---|---|
+| `POST /api/v1/auth/register` | Создать аккаунт с ролью `User` и тарифом `free` |
+| `POST /api/v1/auth/forgot-password` | Отправить нейтральный reset-response без account enumeration |
+| `POST /api/v1/auth/reset-password` | Применить одноразовый Identity token |
+| `GET /api/v1/account/profile` | Получить профиль, роли и подписку |
+| `PUT /api/v1/account/profile` | Изменить отображаемое имя |
+| `POST /api/v1/account/change-password` | Сменить пароль с проверкой текущего |
+
+Администратор управляет ролями, блокировкой и подпиской через `GET /api/v1/admin/users` и `PUT /api/v1/admin/users/{id}`. Удаление роли у последнего администратора запрещено.
 
 Для CLI и automation сохранён API key:
 
@@ -214,7 +225,7 @@ $adminHeaders = @{ 'X-Admin-Key' = $env:ADMIN_API_KEY }
 Invoke-RestMethod https://proxy.example.com/api/v1/admin/diagnostics -Headers $adminHeaders
 ```
 
-Отсутствующая сессия и отсутствующий, пустой, oversized или многозначный header возвращают `401`, challenge `Cookie, ApiKey` и `ProblemDetails`. Credentials никогда не выводятся в log.
+Отсутствующая сессия и отсутствующий, пустой, oversized или многозначный header возвращают `401`, challenge `Cookie, ApiKey` и `ProblemDetails`. Аутентифицированный пользователь без роли `Administrator` получает `403`. Credentials никогда не выводятся в log.
 
 ## Управление источниками
 

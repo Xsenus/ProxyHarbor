@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Runtime.InteropServices;
 using System.Text.Json;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using ProxyHarbor.Domain;
@@ -112,7 +113,7 @@ internal static class RestoreApplication
             // Успех выводится только после подтверждённого удаления plaintext snapshot.
             Console.WriteLine($"Восстановление завершено: {counts!.Proxies:N0} прокси, {counts.Sources:N0} источников, " +
                 $"{counts.Runs:N0} циклов сбора, {counts.ValidationRuns:N0} validation-партий, " +
-                $"{counts.BackupRuns:N0} циклов backup.");
+                $"{counts.BackupRuns:N0} циклов backup, {counts.Users:N0} аккаунтов.");
             return 0;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -186,13 +187,13 @@ internal static class RestoreApplication
         await Console.Out.WriteLineAsync();
     }
 
-    /// <summary>Читает только записи, чья точная v5-схема уже проверена валидатором.</summary>
+    /// <summary>Читает настройки из v5/v6, чья точная схема уже проверена валидатором.</summary>
     internal static RestoreSettingsInspection ReadSettingsInspection(ZipArchive archive)
     {
         var manifest = ReadJsonObject(archive, "manifest.json");
-        if (manifest.GetProperty("version").GetInt32() != 5)
+        if (manifest.GetProperty("version").GetInt32() is not (5 or 6))
             throw new InvalidDataException(
-                "Полный снимок настроек доступен только для backup manifest v5.");
+                "Полный снимок настроек доступен только для backup manifest v5 или v6.");
 
         return new RestoreSettingsInspection(
             manifest,
@@ -249,6 +250,20 @@ internal static class RestoreApplication
             await db.Runs.ExecuteDeleteAsync(token);
             await db.Proxies.ExecuteDeleteAsync(token);
             await db.Sources.ExecuteDeleteAsync(token);
+            var hasIdentitySnapshot = archive.GetEntry("database/users.json") is not null;
+            if (hasIdentitySnapshot)
+            {
+                // Старые encrypted backups v2-v5 не содержат accounts и поэтому сохраняют
+                // текущие Identity rows. Полный v6 snapshot заменяет их в FK-safe порядке.
+                await db.UserTokens.ExecuteDeleteAsync(token);
+                await db.UserLogins.ExecuteDeleteAsync(token);
+                await db.UserClaims.ExecuteDeleteAsync(token);
+                await db.RoleClaims.ExecuteDeleteAsync(token);
+                await db.UserRoles.ExecuteDeleteAsync(token);
+                await db.Subscriptions.ExecuteDeleteAsync(token);
+                await db.Users.ExecuteDeleteAsync(token);
+                await db.Roles.ExecuteDeleteAsync(token);
+            }
 
             // PostgreSQL binary COPY сохраняет потоковый характер restore и на больших снимках
             // на порядки быстрее отдельных INSERT, создаваемых ChangeTracker/SaveChanges.
@@ -302,13 +317,47 @@ internal static class RestoreApplication
                     WriteBackupRunAsync,
                     hooks,
                     token);
+            var userCount = 0;
+            if (hasIdentitySnapshot)
+            {
+                _ = await ImportIdentityAsync<IdentityRole<Guid>>(archive, "database/roles.json", db, token);
+                userCount = await ImportIdentityAsync<ApplicationUser>(archive, "database/users.json", db, token);
+                _ = await ImportIdentityAsync<IdentityUserRole<Guid>>(archive, "database/user-roles.json", db, token);
+                _ = await ImportIdentityAsync<UserSubscription>(archive, "database/subscriptions.json", db, token);
+            }
             hooks?.BeforeCommit?.Invoke();
             // Не начинаем COMMIT, если shutdown поступил после завершения всех COPY. Явная
             // граница исключает неоднозначный запуск подтверждения с уже отменённым token.
             token.ThrowIfCancellationRequested();
             await transaction.CommitAsync(token);
-            return new RestoreCounts(proxyCount, sourceCount, runCount, validationRunCount, backupRunCount);
+            return new RestoreCounts(proxyCount, sourceCount, runCount, validationRunCount, backupRunCount, userCount);
         });
+    }
+
+    /// <summary>
+    /// Identity-наборы малы относительно proxy-каталога, но всё равно читаются потоково
+    /// и сохраняются bounded-партиями внутри общей restore-транзакции.
+    /// </summary>
+    private static async Task<int> ImportIdentityAsync<TEntity>(
+        ZipArchive archive,
+        string entryName,
+        ProxyHarborDbContext db,
+        CancellationToken token) where TEntity : class
+    {
+        var count = 0;
+        await using var stream = BackupArchiveValidator.RequiredEntry(archive, entryName).Open();
+        await foreach (var entity in JsonSerializer.DeserializeAsyncEnumerable<TEntity>(stream, JsonOptions, token))
+        {
+            if (entity is null) throw new InvalidDataException($"Файл {entryName} содержит пустой объект.");
+            db.Set<TEntity>().Add(entity);
+            count++;
+            if (count % 500 != 0) continue;
+            await db.SaveChangesAsync(token);
+            db.ChangeTracker.Clear();
+        }
+        await db.SaveChangesAsync(token);
+        db.ChangeTracker.Clear();
+        return count;
     }
 
     private static async Task<int> ImportAsync<TEntity>(
@@ -454,7 +503,7 @@ internal static class RestoreApplication
         else await writer.WriteAsync(value, token);
     }
 
-    private sealed record RestoreCounts(int Proxies, int Sources, int Runs, int ValidationRuns, int BackupRuns);
+    private sealed record RestoreCounts(int Proxies, int Sources, int Runs, int ValidationRuns, int BackupRuns, int Users);
 }
 
 /// <summary>
@@ -678,7 +727,7 @@ internal sealed record RestoreOptions(
         dotnet run --project src/ProxyHarbor.Restore -- \
           --input ./proxyharbor.phbackup --replace-existing-data
 
-        Без подключения к БД вывести безопасные настройки manifest v5 в JSON:
+        Без подключения к БД вывести безопасные настройки manifest v5/v6 в JSON:
           --input ./proxyharbor.phbackup --inspect-settings
 
         По умолчанию строка БД читается из ConnectionStrings__Postgres,
@@ -770,7 +819,7 @@ internal sealed record RestoreOptions(
     }
 }
 
-/// <summary>Машиночитаемый, заведомо не содержащий секретов снимок конфигурации backup v5.</summary>
+/// <summary>Машиночитаемый, заведомо не содержащий секретов снимок конфигурации backup v5+.</summary>
 internal sealed record RestoreSettingsInspection(
     JsonElement Manifest,
     JsonElement Collector,

@@ -20,7 +20,8 @@ docker compose up -d --build
 |---|---|
 | `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` | База, пользователь и пароль PostgreSQL |
 | `ADMIN_USERNAME` | Логин web-администратора; 3–64 символа `A-Z`, `a-z`, `0-9`, `.`, `_`, `-` |
-| `ADMIN_PASSWORD` | Отдельный пароль web-администратора; в Production 24–256 значимых символов |
+| `ADMIN_EMAIL` | Bootstrap-email администратора; после первого seed профиль хранится в PostgreSQL |
+| `ADMIN_PASSWORD` | Bootstrap-пароль первого администратора; в Production 24–256 символов, обязательно upper/lowercase, цифра и специальный знак |
 | `ADMIN_API_KEY` | Независимый ключ automation-заголовка `X-Admin-Key`; в Production 24–256 значимых символов |
 | `BACKGROUND_WORKERS_ENABLED` | Запуск collector, validator, maintenance и backup workers в API-реплике |
 | `VALIDATION_CONCURRENCY` | Параллельные сетевые проверки, `1..1000` |
@@ -35,7 +36,19 @@ docker compose up -d --build
 | `PROMETHEUS_*`, `ALERTMANAGER_*` | Loopback-порты и bounded retention monitoring profile |
 | `PROXYHARBOR_IMAGE_PREFIX`, `PROXYHARBOR_IMAGE_TAG` | GHCR namespace и версия для release overlay |
 
-`POSTGRES_PASSWORD`, `ADMIN_PASSWORD`, `ADMIN_API_KEY`, backup key и Telegram credentials Compose монтирует как bounded secret files. Приложение собирает строку PostgreSQL после чтения password file, поэтому пароль не появляется в process environment как часть connection string.
+`POSTGRES_PASSWORD`, `ADMIN_PASSWORD`, `ADMIN_API_KEY`, backup key и Telegram credentials Compose монтирует как bounded secret files. SMTP-пароль подключается отдельным `SecretFiles__SmtpPassword`, когда почтовый relay настроен. Приложение собирает строку PostgreSQL после чтения password file, поэтому пароль не появляется в process environment как часть connection string.
+
+### Восстановление пароля по SMTP
+
+| Переменная | Назначение |
+|---|---|
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USE_SSL` | SMTP relay и TLS-режим |
+| `SMTP_USERNAME` | Имя пользователя relay |
+| `SMTP_PASSWORD_FILE` | Абсолютный путь внутри container к read-only secret-файлу |
+| `SMTP_FROM_ADDRESS`, `SMTP_FROM_NAME` | Проверенный отправитель |
+| `PUBLIC_BASE_URL` | HTTPS origin для reset-ссылки, например `https://proxy.example.com` |
+
+Если SMTP не настроен полностью, сервис продолжает работать, а recovery endpoint возвращает `503` без раскрытия наличия аккаунта.
 
 Ключи подписи административной cookie-сессии сохраняются в volume `data-protection` по пути `/app/data-protection`. Благодаря этому активные сессии переживают пересоздание API-контейнера; volume не включается в прикладной backup и должен оставаться доступным только API-процессу.
 

@@ -56,7 +56,7 @@ Audit требует непустой канонический PHB3, завер�
 docker compose --profile tools run --rm --no-deps -T restore \
   --input /app/backups/proxyharbor-YYYYMMDD-HHMMSS.phbackup \
   --inspect-settings > recovery-settings.json
-jq --exit-status '.manifest.version == 5 and .manifest.secretsIncluded == false' recovery-settings.json
+jq --exit-status '.manifest.version == 6 and .manifest.secretsIncluded == false' recovery-settings.json
 ```
 
 Этот JSON предназначен для операторской сверки. Настройки автоматически не применяются.
@@ -90,7 +90,7 @@ curl --fail https://proxy.example.com/health/ready
 
 API удерживает shared PostgreSQL lifetime lease, restore требует exclusive lease. Поэтому забытая живая реплика блокирует замену данных. Во время restore новые API/worker write pipelines также не стартуют.
 
-Restore выполняет migrations и импорт пяти таблиц транзакционно, проверяет структуру и инварианты snapshot. Успешное сообщение появляется только после подтверждённого удаления временного plaintext. Если cleanup завершился ошибкой, считайте это инцидентом обращения с plaintext и удалите названный каталог вручную.
+Restore выполняет migrations и транзакционный импорт proxy/audit-таблиц, а для backup v6 также аккаунтов, ролей и подписок. Архивы v2–v5 не содержат Identity snapshot и сохраняют текущие аккаунты целевой БД. Успешное сообщение появляется только после подтверждённого удаления временного plaintext. Если cleanup завершился ошибкой, считайте это инцидентом обращения с plaintext и удалите названный каталог вручную.
 
 Если ошибка произошла после возможного commit, сначала исследуйте целевую БД. Не повторяйте destructive restore вслепую.
 
