@@ -5,6 +5,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Добавлены 100 проверенных HTTPS proxy-feed endpoint от 19 новых origin-владельцев; встроенный каталог расширен до 198 endpoint и 75 provider identities, обновлены completeness-gates, тесты и документация.
+
 ### Security
 
 - Добавлен fail-closed Gitleaks scan всей Git-истории с закреплёнными версией и отдельными SHA-256 официальных Linux x64/Windows x64 архивов, redaction вывода и контрактной проверкой CI/release wiring; тот же фактический scan теперь воспроизводится на рабочей Windows-машине без WSL/Docker.

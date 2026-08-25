@@ -2,17 +2,17 @@
 
 Высокопроизводительный сервис на ASP.NET Core 10, React 19 и PostgreSQL для сбора, объективной проверки и публикации бесплатных публичных HTTP(S), SOCKS4 и SOCKS5 прокси.
 
-ProxyHarbor загружает 98 HTTPS-feed от 56 независимых провайдеров, нормализует и дедуплицирует адреса, проверяет их через настоящий proxy-туннель до доверенного TLS endpoint, измеряет задержку и отдаёт только свежие подтверждённые прокси через API и экспорты JSON, XML, TXT и CSV.
+ProxyHarbor загружает 198 HTTPS-feed от 75 независимых провайдеров, нормализует и дедуплицирует адреса, проверяет их через настоящий proxy-туннель до доверенного TLS endpoint, измеряет задержку и отдаёт только свежие подтверждённые прокси через API и экспорты JSON, XML, TXT и CSV.
 
 > Публичные прокси принадлежат третьим лицам и могут читать или изменять незашифрованный трафик. Не передавайте через них пароли, cookies, платёжные данные и другие секреты. Используйте сервис законно и соблюдайте условия источников и целевых ресурсов.
 
 ## Состояние проекта
 
-- 98 встроенных feed от 56 провайдеров; операторский каталог: [docs/SOURCE_CATALOG.md](docs/SOURCE_CATALOG.md).
-- 17 новых endpoint шести провайдеров прошли URL/live-аудит 24 августа 2026 года; полный 98-feed end-to-end аудит выполняется CI и перед production-релизом.
+- 198 встроенных feed от 75 провайдеров; операторский каталог: [docs/SOURCE_CATALOG.md](docs/SOURCE_CATALOG.md).
+- 100 новых endpoint 19 провайдеров прошли URL/live-аудит 26 августа 2026 года; полный 198-feed end-to-end аудит выполняется CI и перед production-релизом.
 - Последний полный production-цикл: 888 116 разобранных строк, 290 217 уникальных кандидатов за 4,965 секунды.
 - Проверочная партия: 1 600/1 600 результатов, без `Deferred`; одинаковый набор Alive во всех четырёх форматах.
-- Backend: 709 автоматических тестов; frontend: 30 component/accessibility tests.
+- Backend: 714 автоматических тестов; frontend: 30 component/accessibility tests.
 - Frontend: Vitest, ESLint, TypeScript production build и axe-core accessibility gate.
 - Release build компилируется с warnings-as-errors и обязательной XML-документацией публичного production API.
 - CI проверяет PostgreSQL migrations, backup/restore, OpenAPI, Docker Compose, security contracts, зависимости и Git-историю.
@@ -43,7 +43,7 @@ ProxyHarbor загружает 98 HTTPS-feed от 56 независимых пр
 
 ```mermaid
 flowchart LR
-    A["98 HTTPS feeds / 56 providers"] --> B["Bounded collector"]
+    A["198 HTTPS feeds / 75 providers"] --> B["Bounded collector"]
     B --> C["Normalize + deduplicate"]
     C --> D["PostgreSQL candidate queue"]
     D --> E["HTTP/SOCKS validation workers"]
@@ -330,7 +330,7 @@ docs/                            архитектура и operator runbooks
 - [мониторинг и incident runbook](docs/MONITORING.md);
 - [производительность](docs/PERFORMANCE.md);
 - [источники и live audit](docs/SOURCES.md);
-- [каталог 56 провайдеров](docs/SOURCE_CATALOG.md);
+- [каталог 75 провайдеров](docs/SOURCE_CATALOG.md);
 - [выпуск версии](docs/RELEASING.md);
 - [первая публикация на GitHub](docs/GITHUB_SETUP.md);
 - [политика безопасности](SECURITY.md);

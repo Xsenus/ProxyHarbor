@@ -144,7 +144,9 @@ public static class DatabaseSeeder
             "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks4.txt",
             "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks5.txt",
             "https://raw.githubusercontent.com/iplocate/free-proxy-list/main/protocols/http.txt",
-            "https://raw.githubusercontent.com/iplocate/free-proxy-list/main/protocols/socks5.txt"
+            "https://raw.githubusercontent.com/iplocate/free-proxy-list/main/protocols/socks5.txt",
+            "https://raw.githubusercontent.com/cyberh4ck3r/free-proxy-list/main/http-proxies.txt",
+            "https://raw.githubusercontent.com/stormsia/proxy-list/main/http.txt"
         };
         // Uri.AbsoluteUri уже канонизирует scheme/host, но path и query остаются
         // регистрозависимыми: /Feed и /feed могут быть разными HTTPS-ресурсами.
