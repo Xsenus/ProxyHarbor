@@ -130,14 +130,39 @@ describe('ProxyHarbor UI', () => {
       return jsonResponse({ title: 'Unexpected request' }, 500)
     })
     render(<App />)
-    expect(await screen.findByRole('heading', { name: 'Управление сбором' })).toBeInTheDocument()
-    expect(await screen.findByLabelText('Диагностика сервиса')).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'Обзор' })).toBeInTheDocument()
+    expect(screen.getByRole('navigation', { name: 'Разделы админ-панели' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Обзор' })).toHaveAttribute('aria-current', 'page')
+    expect(screen.getByRole('link', { name: 'Операции' })).toHaveAttribute('href', '/admin/operations')
+    expect(screen.getByRole('link', { name: /Источники/ })).toHaveAttribute('href', '/admin/sources')
+    expect(screen.getByRole('link', { name: 'Резервные копии' })).toHaveAttribute('href', '/admin/backups')
     expect(screen.queryByRole('heading', { name: 'Лучшие прямо сейчас' })).not.toBeInTheDocument()
     expect(screen.queryByLabelText('Пароль')).not.toBeInTheDocument()
     const adminCalls = vi.mocked(fetch).mock.calls.filter(([input]) => String(input).includes('/api/v1/admin/'))
     expect(adminCalls.length).toBeGreaterThan(0)
     expect(adminCalls.every(([, options]) => options?.credentials === 'include')).toBe(true)
     expect(adminCalls.every(([, options]) => !new Headers(options?.headers).has('X-Admin-Key'))).toBe(true)
+  })
+
+  it.each([
+    ['/admin/operations', 'Операции'],
+    ['/admin/sources', 'Источники'],
+    ['/admin/backups', 'Резервные копии'],
+  ])('opens the %s admin section as a separate workspace', async (path, heading) => {
+    window.history.replaceState({}, '', path)
+    vi.mocked(fetch).mockImplementation(async input => {
+      const url = String(input)
+      if (url.includes('/api/v1/admin/sources')) return jsonResponse([])
+      if (url.includes('/api/v1/admin/diagnostics')) return jsonResponse({
+        serverTime: new Date().toISOString(), databaseBytes: 0,
+        validationQueue: { total: 0, due: 0 }, recentRuns: [], recentValidationRuns: [], recentBackups: [],
+      })
+      return jsonResponse({ title: 'Unexpected request' }, 500)
+    })
+
+    render(<App />)
+    expect(await screen.findByRole('heading', { name: heading, level: 1 })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: new RegExp(`^${heading}`) })).toHaveAttribute('aria-current', 'page')
   })
 })
 
