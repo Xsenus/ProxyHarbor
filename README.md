@@ -12,7 +12,7 @@ ProxyHarbor загружает 98 HTTPS-feed от 56 независимых пр
 - 17 новых endpoint шести провайдеров прошли URL/live-аудит 24 августа 2026 года; полный 98-feed end-to-end аудит выполняется CI и перед production-релизом.
 - Последний полный production-цикл: 888 116 разобранных строк, 290 217 уникальных кандидатов за 4,965 секунды.
 - Проверочная партия: 1 600/1 600 результатов, без `Deferred`; одинаковый набор Alive во всех четырёх форматах.
-- Backend: 704 автоматических теста; frontend: 29 component/accessibility tests.
+- Backend: 709 автоматических тестов; frontend: 30 component/accessibility tests.
 - Frontend: Vitest, ESLint, TypeScript production build и axe-core accessibility gate.
 - Release build компилируется с warnings-as-errors и обязательной XML-документацией публичного production API.
 - CI проверяет PostgreSQL migrations, backup/restore, OpenAPI, Docker Compose, security contracts, зависимости и Git-историю.
@@ -167,12 +167,13 @@ curl 'http://localhost:8080/api/v1/stats'
 
 При первом запуске `ADMIN_USERNAME`, `ADMIN_EMAIL` и `ADMIN_PASSWORD` создают bootstrap-администратора в ASP.NET Identity. После этого пароль меняется из профиля и не перезаписывается при рестарте. Любой аккаунт может входить по логину или email; пароль хранится только как Identity hash. Сервер выдаёт временную `HttpOnly`, `Secure`, `SameSite=Strict` cookie `ProxyHarbor.Session`, а React не сохраняет credentials в browser storage.
 
-Подготовлены роли `User`, `Subscriber`, `Administrator`, тарифы `free`, `pro`, `unlimited` и состояния подписки, включая ручную приостановку `suspended`. Администратор управляет подписками на `/admin/subscriptions`, а трафиком выдачи, посещениями и блокировками — на `/admin/access`. Посещения учитываются пятиминутными IP-агрегатами без рекламных cookies и query-параметров, уважают `Sec-GPC: 1` и удаляются через 90 дней. Пока публичная выдача остаётся бесплатной; entitlement `unlimitedProxyAccess` уже вычисляется сервером для будущего биллинга. Регистрация, профиль, смена и восстановление пароля доступны через `/register`, `/account` и `/forgot-password`. Для отправки reset-писем задайте SMTP-параметры из [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
+Подготовлены роли `User`, `Subscriber`, `Administrator`, тарифы `free`, `pro`, `unlimited` и состояния подписки, включая ручную приостановку `suspended`. Раздел `/admin/proxies` показывает весь накопленный реестр прокси: текущее состояние, страну, задержку, надёжность, непрерывное время работы, историю обнаружения и проверок; фильтрация и пагинация выполняются на сервере. Администратор управляет подписками на `/admin/subscriptions`, а трафиком выдачи, посещениями и блокировками — на `/admin/access`. Посещения учитываются пятиминутными IP-агрегатами без рекламных cookies и query-параметров, уважают `Sec-GPC: 1` и удаляются через 90 дней. Пока публичная выдача остаётся бесплатной; entitlement `unlimitedProxyAccess` уже вычисляется сервером для будущего биллинга. Регистрация, профиль, смена и восстановление пароля доступны через `/register`, `/account` и `/forgot-password`. Для отправки reset-писем задайте SMTP-параметры из [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
 
 CLI и automation независимо используют `ADMIN_API_KEY` в заголовке `X-Admin-Key`:
 
 ```text
 GET    /api/v1/admin/sources
+GET    /api/v1/admin/proxies
 GET    /api/v1/admin/sources/{id}
 POST   /api/v1/admin/sources
 PUT    /api/v1/admin/sources/{id}

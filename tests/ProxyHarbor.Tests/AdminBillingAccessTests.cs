@@ -139,6 +139,7 @@ public sealed class AdminBillingAccessTests
     [InlineData("/admin", "admin-overview")]
     [InlineData("/admin/operations", "admin-operations")]
     [InlineData("/admin/sources", "admin-sources")]
+    [InlineData("/admin/proxies", "admin-proxies")]
     [InlineData("/admin/backups", "admin-backups")]
     [InlineData("/admin/users", "admin-users")]
     [InlineData("/admin/payments", "admin-payments")]

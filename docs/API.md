@@ -260,6 +260,22 @@ Invoke-RestMethod https://proxy.example.com/api/v1/admin/diagnostics -Headers $a
 
 Отсутствующая сессия и отсутствующий, пустой, oversized или многозначный header возвращают `401`, challenge `Cookie, ApiKey` и `ProblemDetails`. Аутентифицированный пользователь без роли `Administrator` получает `403`. Credentials никогда не выводятся в log.
 
+## Административный реестр прокси
+
+### GET `/api/v1/admin/proxies`
+
+Защищённый реестр всех когда-либо обнаруженных прокси. Поддерживает серверную пагинацию
+`page`, `pageSize` (`10..100`), фильтры `status` (`Pending`, `Alive`, `Dead`), `protocol`,
+двухбуквенный `country`, поиск `query` по адресу/выходному IP и сортировку `sort`:
+`lastChecked`, `active`, `latency` или `lastSeen`.
+
+Ответ содержит `items`, `page`, `pageSize`, `total`, глобальную `summary` и список
+`countries`. Для каждого адреса возвращаются текущее состояние, задержка, страна,
+счётчики и процент успешных проверок, первое/последнее обнаружение, первое/последнее
+успешное подключение и `activeForSeconds` — длительность текущей непрерывной Alive-серии.
+Сводка включает свежие и устаревшие Alive, Pending, Dead, ever-alive, среднюю задержку,
+число стран и самый длинный текущий uptime. Lease-токены валидатора в API не выдаются.
+
 ## Управление источниками
 
 ### GET `/api/v1/admin/sources`
