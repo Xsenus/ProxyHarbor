@@ -76,7 +76,7 @@ describe('ProxyHarbor accessibility', () => {
     window.history.replaceState({}, '', '/admin')
     vi.mocked(fetch).mockImplementation(async input => {
       const url = String(input)
-      if (url.includes('/api/v1/admin/sources')) return jsonResponse([])
+      if (url.includes('/api/v1/admin/sources')) return jsonResponse({ items: [], page: 1, pageSize: 10, total: 0 })
       if (url.includes('/api/v1/admin/diagnostics')) return jsonResponse({
         serverTime: new Date().toISOString(), databaseBytes: 0,
         validationQueue: { total: 0, due: 0 }, sourceCatalog: undefined,

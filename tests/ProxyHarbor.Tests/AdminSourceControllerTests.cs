@@ -174,13 +174,39 @@ public sealed class AdminSourceControllerTests
             await seed.SaveChangesAsync();
         }
 
-        var result = await Controller(options).Sources(CancellationToken.None);
+        var result = await Controller(options).Sources(page: 1, pageSize: 10, token: CancellationToken.None);
 
         var responses = Assert.IsType<OkObjectResult>(result.Result).Value;
-        var ordered = Assert.IsType<SourceResponse[]>(responses);
-        Assert.True(ordered[0].IsBuiltIn);
-        Assert.Equal(definition.Provider, ordered[0].Provider);
-        Assert.False(ordered[1].IsBuiltIn);
+        var page = Assert.IsType<PagedResult<SourceResponse>>(responses);
+        Assert.Equal(2, page.Total);
+        Assert.True(page.Items[0].IsBuiltIn);
+        Assert.Equal(definition.Provider, page.Items[0].Provider);
+        Assert.False(page.Items[1].IsBuiltIn);
+    }
+
+    [Fact]
+    public async Task SourcesReturnStableBoundedServerPages()
+    {
+        var options = Options($"source-pages-{Guid.NewGuid():N}");
+        await using (var seed = new ProxyHarborDbContext(options))
+        {
+            seed.Sources.AddRange(Enumerable.Range(1, 12).Select(index => new ProxySource
+            {
+                Name = $"Source {index:D2}",
+                Url = $"https://8.8.8.8/source-{index:D2}.txt",
+                Priority = 100
+            }));
+            await seed.SaveChangesAsync();
+        }
+
+        var result = await Controller(options).Sources(page: 2, pageSize: 10, token: CancellationToken.None);
+
+        var snapshot = Assert.IsType<PagedResult<SourceResponse>>(
+            Assert.IsType<OkObjectResult>(result.Result).Value);
+        Assert.Equal(12, snapshot.Total);
+        Assert.Equal(2, snapshot.Page);
+        Assert.Equal(10, snapshot.PageSize);
+        Assert.Equal(["Source 11", "Source 12"], snapshot.Items.Select(item => item.Name));
     }
 
     [Fact]

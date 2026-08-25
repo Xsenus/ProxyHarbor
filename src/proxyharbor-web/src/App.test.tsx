@@ -133,7 +133,7 @@ describe('ProxyHarbor UI', () => {
     window.history.replaceState({}, '', '/admin')
     vi.mocked(fetch).mockImplementation(async input => {
       const url = String(input)
-      if (url.includes('/api/v1/admin/sources')) return jsonResponse([])
+      if (url.includes('/api/v1/admin/sources')) return jsonResponse({ items: [], page: 1, pageSize: 10, total: 0 })
       if (url.includes('/api/v1/admin/diagnostics')) return jsonResponse({
         serverTime: new Date().toISOString(), databaseBytes: 0,
         validationQueue: { total: 0, due: 0 }, recentRuns: [], recentValidationRuns: [], recentBackups: [],
@@ -155,6 +155,35 @@ describe('ProxyHarbor UI', () => {
     expect(adminCalls.every(([, options]) => !new Headers(options?.headers).has('X-Admin-Key'))).toBe(true)
   })
 
+  it('pages admin sources on the server with the shared catalog controls', async () => {
+    window.history.replaceState({}, '', '/admin/sources')
+    vi.mocked(fetch).mockImplementation(async input => {
+      const url = String(input)
+      if (url.includes('/api/v1/admin/sources?')) {
+        const requestedPage = Number(new URL(url, 'https://example.test').searchParams.get('page') ?? 1)
+        const source = {
+          id: `source-${requestedPage}`, name: `Источник ${requestedPage}`, url: `https://example.com/${requestedPage}.txt`,
+          defaultProtocol: 'Http', enabled: true, priority: 100, lastItemCount: 10,
+          lastResultTruncated: false, consecutiveFailures: 0, isBuiltIn: false,
+        }
+        return jsonResponse({ items: [source], page: requestedPage, pageSize: 10, total: 25 })
+      }
+      if (url.includes('/api/v1/admin/diagnostics')) return jsonResponse({
+        serverTime: new Date().toISOString(), databaseBytes: 0,
+        validationQueue: { total: 0, due: 0 }, recentRuns: [], recentValidationRuns: [], recentBackups: [],
+      })
+      return jsonResponse({ title: 'Unexpected request' }, 500)
+    })
+
+    render(<App />)
+    expect(await screen.findByText('Источник 1')).toBeInTheDocument()
+    expect(screen.getByText('Страница 1 из 3 · Найдено: 25')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Следующая страница' }))
+    expect(await screen.findByText('Источник 2')).toBeInTheDocument()
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([input]) =>
+      String(input).includes('/api/v1/admin/sources?page=2&pageSize=10'))).toBe(true))
+  })
+
   it.each([
     ['/admin/operations', 'Операции'],
     ['/admin/sources', 'Источники'],
@@ -164,7 +193,7 @@ describe('ProxyHarbor UI', () => {
     window.history.replaceState({}, '', path)
     vi.mocked(fetch).mockImplementation(async input => {
       const url = String(input)
-      if (url.includes('/api/v1/admin/sources')) return jsonResponse([])
+      if (url.includes('/api/v1/admin/sources')) return jsonResponse({ items: [], page: 1, pageSize: 10, total: 0 })
       if (url.includes('/api/v1/admin/diagnostics')) return jsonResponse({
         serverTime: new Date().toISOString(), databaseBytes: 0,
         validationQueue: { total: 0, due: 0 }, recentRuns: [], recentValidationRuns: [], recentBackups: [],
