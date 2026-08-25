@@ -52,7 +52,7 @@ export default function App() {
   const [maxLatency, setMaxLatency] = useState(2000)
   const [loading, setLoading] = useState(true)
   const [page, setPage] = useState(1)
-  const [pageSize, setPageSize] = useState(25)
+  const [pageSize, setPageSize] = useState(10)
   const [total, setTotal] = useState(0)
   const [apiError, setApiError] = useState('')
   const currentPath = window.location.pathname.replace(/\/+$/, '') || '/'
@@ -522,7 +522,7 @@ function ProxyPagination({page, pageSize, total, totalPages, onPageChange, onPag
   const go = (next: number) => onPageChange(Math.min(totalPages, Math.max(1, next)))
   const showQuickJump = totalPages > 7
   return <nav className={`pagination${showQuickJump ? '' : ' pagination-compact'}`} aria-label="Пагинация каталога">
-    <div className="page-sizes"><span>Показывать:</span>{[25, 50, 100].map(size => <button key={size} className={pageSize === size ? 'active' : ''} aria-pressed={pageSize === size} onClick={() => onPageSizeChange(size)}>{size}</button>)}</div>
+    <div className="page-sizes"><span>Показывать:</span>{[10, 25, 50, 100].map(size => <button key={size} className={pageSize === size ? 'active' : ''} aria-pressed={pageSize === size} onClick={() => onPageSizeChange(size)}>{size}</button>)}</div>
     <div className="page-controls"><button aria-label="Предыдущая страница" disabled={page === 1} onClick={() => go(page - 1)}>←</button>{pages.map((item, index) => item === '…' ? <span key={`ellipsis-${index}`}>…</span> : <button key={item} className={item === page ? 'active' : ''} aria-current={item === page ? 'page' : undefined} onClick={() => go(item)}>{item}</button>)}<button aria-label="Следующая страница" disabled={page === totalPages} onClick={() => go(page + 1)}>→</button></div>
     {showQuickJump && <form className="page-jump" aria-label="Быстрый переход по страницам" onSubmit={event => { event.preventDefault(); const value = Number(jump); if (Number.isInteger(value) && value > 0) { go(value); setJump('') } }}><input aria-label="Номер страницы" inputMode="numeric" min={1} max={totalPages} type="number" placeholder="Стр." value={jump} onChange={event => setJump(event.target.value)}/><span aria-hidden="true">/ {totalPages}</span><button type="submit" aria-label="Перейти на страницу"><ArrowRight size={14}/></button></form>}
     <p>Страница {page} из {totalPages} · Найдено: {formatNumber(total)}</p>
