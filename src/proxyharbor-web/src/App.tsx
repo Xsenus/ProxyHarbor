@@ -48,7 +48,7 @@ type AccessPage = PagedResult<AccessClient> & {rules:AccessRule[];summary:{reque
 type SiteVisitor = {ipAddress:string;userId?:string;userName?:string;email?:string;displayName?:string;pageViews:number;pages:number;firstSeenAt:string;lastSeenAt:string}
 type SiteVisitorPage = PagedResult<SiteVisitor> & {summary:{pageViews:number;uniqueVisitors:number;authenticatedVisitors:number;active24Hours:number};retentionDays:number}
 type AdminUser = AccountProfile & { isActive: boolean }
-type UserAccessDraft = { isActive: boolean; administrator: boolean; subscriber: boolean; plan: string; status: string }
+type UserAccessDraft = { isActive: boolean; administrator: boolean; subscriber: boolean; plan: string; status: string; expiresAt: string }
 type SourceDraft = { name: string; url: string; protocol: Protocol; priority: number; enabled: boolean }
 type TelegramStats = { users:number;activeUsers30d:number;notificationsEnabled:number;blocked:number;paidOrders:number;starsRevenue:number;queued:number;failed:number }
 type TelegramSettings = { enabled:boolean;updateMode:'webhook'|'polling';name:string;description:string;shortDescription:string;supportText:string;proxyFileMaxItems:number;webhookMaxConnections:number;productStars:Record<string,number>;automaticProductCodes:string[];starsPerCurrencyUnit:number;starsRoundingStep:number;effectiveProductStars:Record<string,number>;tokenConfigured:boolean;botId?:number;botUsername?:string;provisionedAt?:string;updatedAt?:string;webhookUrl:string;avatarUrl:string;stats:TelegramStats }
@@ -929,17 +929,115 @@ function AdminProxiesPage() {
   </section>
 }
 
-/** Управление ролями и тарифом остаётся отдельным административным разделом. */
+/** Серверный реестр остаётся быстрым при сотнях тысяч аккаунтов. */
 function AdminUsersPage() {
-  const [items, setItems] = useState<AdminUser[]>([])
-  const [drafts, setDrafts] = useState<Record<string,UserAccessDraft>>({})
+  const [data, setData] = useState<PagedResult<AdminUser> | null>(null)
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(10)
+  const [searchDraft, setSearchDraft] = useState('')
+  const [search, setSearch] = useState('')
+  const [activityFilter, setActivityFilter] = useState('')
+  const [planFilter, setPlanFilter] = useState('')
+  const [editing, setEditing] = useState<AdminUser | null>(null)
+  const [draft, setDraft] = useState<UserAccessDraft | null>(null)
+  const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  const [busy, setBusy] = useState('')
-  const loadUsers = useCallback(async () => { const response=await fetch(`${API}/api/v1/admin/users?pageSize=50`,{credentials:'include'}); if(!response.ok){setError(await responseMessage(response,'Пользователи недоступны'));return} const data=await response.json() as PagedResult<AdminUser>;setItems(data.items);setDrafts(Object.fromEntries(data.items.map(user=>[user.id,{isActive:user.isActive,administrator:user.roles.includes('Administrator'),subscriber:user.roles.includes('Subscriber'),plan:user.subscription?.plan??'free',status:user.subscription?.status??'active'}]))) },[])
-  useEffect(()=>{const initial=window.setTimeout(()=>void loadUsers(),0);return()=>window.clearTimeout(initial)},[loadUsers])
-  const save = async (user:AdminUser) => { const draft=drafts[user.id];if(!draft)return;setBusy(user.id);setError('');const roles=['User',...(draft.subscriber?['Subscriber']:[]),...(draft.administrator?['Administrator']:[])];const response=await fetch(`${API}/api/v1/admin/users/${user.id}`,{method:'PUT',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({isActive:draft.isActive,roles,plan:draft.plan,status:draft.status,expiresAt:user.subscription?.expiresAt??null})});if(!response.ok)setError(await responseMessage(response,'Не удалось обновить права'));else await loadUsers();setBusy('') }
-  const update=(id:string,patch:Partial<UserAccessDraft>)=>setDrafts(current=>({...current,[id]:{...current[id],...patch}}))
-  return <section className="admin-section" aria-labelledby="admin-users-title"><div className="admin-section-heading"><div><span className="kicker">ACCESS CONTROL</span><h1 id="admin-users-title">Пользователи</h1><p>Роли отвечают за доступ к функциям, а тариф — за будущие лимиты выдачи прокси.</p></div><span className="section-count">{items.length}</span></div>{error&&<div className="admin-notice"><X/>{error}</div>}<section className="admin-card users-card"><div className="user-list">{items.map(user=>{const draft=drafts[user.id];return <article key={user.id}><div className="user-identity"><span><User/></span><div><b>{user.displayName||user.userName}</b><small>{user.email} · создан {new Date(user.createdAt).toLocaleDateString('ru-RU')}</small></div></div>{draft&&<div className="user-access-controls"><label><input type="checkbox" checked={draft.isActive} onChange={e=>update(user.id,{isActive:e.target.checked})}/> Активен</label><label><input type="checkbox" checked={draft.subscriber} onChange={e=>update(user.id,{subscriber:e.target.checked})}/> Subscriber</label><label><input type="checkbox" checked={draft.administrator} onChange={e=>update(user.id,{administrator:e.target.checked})}/> Admin</label><select aria-label={`Тариф ${user.userName}`} value={draft.plan} onChange={e=>update(user.id,{plan:e.target.value})}><option value="free">Free</option><option value="pro">Pro</option><option value="unlimited">Unlimited</option></select><select aria-label={`Статус ${user.userName}`} value={draft.status} onChange={e=>update(user.id,{status:e.target.value})}><option value="active">Active</option><option value="trialing">Trial</option><option value="past_due">Past due</option><option value="canceled">Canceled</option><option value="expired">Expired</option></select><button disabled={!!busy} onClick={()=>void save(user)}>{busy===user.id?'Сохраняем…':'Сохранить'}</button></div>}</article>})}</div></section></section>
+  const [busy, setBusy] = useState(false)
+
+  const loadUsers = useCallback(async (signal?: AbortSignal) => {
+    setLoading(true)
+    const query = new URLSearchParams({ page: String(page), pageSize: String(pageSize) })
+    if (search) query.set('search', search)
+    if (activityFilter) query.set('activity', activityFilter)
+    if (planFilter) query.set('plan', planFilter)
+    try {
+      const response = await fetch(`${API}/api/v1/admin/users?${query}`, { credentials: 'include', signal })
+      if (!response.ok) { setError(await responseMessage(response, 'Пользователи недоступны')); return }
+      setData(await response.json() as PagedResult<AdminUser>)
+      setError('')
+    } catch (reason) {
+      if (!isAbortError(reason)) setError(reason instanceof Error ? reason.message : 'Пользователи недоступны')
+    } finally {
+      if (!signal?.aborted) setLoading(false)
+    }
+  }, [activityFilter, page, pageSize, planFilter, search])
+
+  useEffect(() => {
+    const controller = new AbortController()
+    const timer = window.setTimeout(() => void loadUsers(controller.signal), 0)
+    return () => { window.clearTimeout(timer); controller.abort() }
+  }, [loadUsers])
+
+  const openEditor = (user: AdminUser) => {
+    setEditing(user)
+    setDraft({
+      isActive: user.isActive,
+      administrator: user.roles.includes('Administrator'),
+      subscriber: user.roles.includes('Subscriber'),
+      plan: user.subscription?.plan ?? 'free',
+      status: user.subscription?.status ?? 'active',
+      expiresAt: user.subscription?.expiresAt?.slice(0, 10) ?? '',
+    })
+  }
+
+  const save = async () => {
+    if (!editing || !draft) return
+    setBusy(true)
+    setError('')
+    const roles = ['User', ...(draft.subscriber ? ['Subscriber'] : []), ...(draft.administrator ? ['Administrator'] : [])]
+    const response = await fetch(`${API}/api/v1/admin/users/${editing.id}`, {
+      method: 'PUT', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        isActive: draft.isActive, roles, plan: draft.plan, status: draft.status,
+        expiresAt: draft.expiresAt ? new Date(`${draft.expiresAt}T23:59:59Z`).toISOString() : null,
+      }),
+    })
+    if (!response.ok) setError(await responseMessage(response, 'Не удалось обновить права'))
+    else { setEditing(null); setDraft(null); await loadUsers() }
+    setBusy(false)
+  }
+
+  const totalPages = Math.max(1, Math.ceil((data?.total ?? 0) / pageSize))
+  return <section className="admin-section" aria-labelledby="admin-users-title">
+    <div className="admin-section-heading"><div><span className="kicker">ACCESS CONTROL</span><h1 id="admin-users-title">Пользователи</h1><p>Поиск, роли и подписки в постраничном реестре, который не загружает всю базу в браузер.</p></div><span className="section-count">{data?.total ?? '—'}</span></div>
+    {error && <div className="admin-notice" role="alert"><X/>{error}</div>}
+    <section className="admin-card users-registry">
+      <div className="user-toolbar">
+        <form onSubmit={event => { event.preventDefault(); setSearch(searchDraft.trim()); setPage(1) }}>
+          <Search/><input aria-label="Поиск пользователей" value={searchDraft} onChange={event => setSearchDraft(event.target.value)} placeholder="Имя, логин или почта…"/>
+          {searchDraft && <button type="button" aria-label="Очистить поиск пользователей" onClick={() => { setSearchDraft(''); setSearch(''); setPage(1) }}><X/></button>}
+          <button type="submit">Найти</button>
+        </form>
+        <label><span>Активность</span><StyledSelect ariaLabel="Фильтр активности" value={activityFilter} onChange={value => { setActivityFilter(value); setPage(1) }} options={[["","Все"],["active","Активные"],["disabled","Отключённые"]]} /></label>
+        <label><span>Тариф</span><StyledSelect ariaLabel="Фильтр тарифа" value={planFilter} onChange={value => { setPlanFilter(value); setPage(1) }} options={[["","Все"],["free","Free"],["pro","Pro"],["unlimited","Unlimited"]]} /></label>
+      </div>
+      <div className="admin-data-table users-table">
+        <div className="admin-data-head"><span>Пользователь</span><span>Доступ</span><span>Подписка</span><span>Последний вход</span><span/></div>
+        {loading && !data ? <div className="empty-state"><RefreshCw className="spin"/>Загружаем пользователей…</div>
+          : data?.items.length === 0 ? <div className="empty-state"><Users/>По заданным условиям пользователи не найдены.</div>
+            : data?.items.map(user => <article key={user.id}>
+              <span className="user-identity"><i><User/></i><span><b>{user.displayName || user.userName}</b><small>{user.email}</small><small>@{user.userName} · создан {new Date(user.createdAt).toLocaleDateString('ru-RU')}</small></span></span>
+              <span className="user-role-cell"><em className={`state-pill ${user.isActive ? 'active' : ''}`}>{user.isActive ? 'Активен' : 'Отключён'}</em><small>{user.roles.includes('Administrator') ? 'Администратор' : user.roles.includes('Subscriber') ? 'Подписчик' : 'Пользователь'}</small></span>
+              <span><b>{planLabel(user.subscription?.plan)}</b><small>{subscriptionStatusLabel(user.subscription?.status ?? 'active')}{user.subscription?.expiresAt ? ` · до ${new Date(user.subscription.expiresAt).toLocaleDateString('ru-RU')}` : ' · бессрочно'}</small></span>
+              <time>{user.lastLoginAt ? timeAgo(user.lastLoginAt) : 'Ещё не входил'}</time>
+              <button className="table-action" onClick={() => openEditor(user)}><Pencil/>Управлять</button>
+            </article>)}
+      </div>
+      {data && data.total > 0 && <ProxyPagination
+        page={page} pageSize={pageSize} total={data.total} totalPages={totalPages}
+        onPageChange={setPage}
+        onPageSizeChange={size => { setPageSize(size); setPage(1) }}
+      />}
+    </section>
+    {editing && draft && <div className="source-editor-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget && !busy) { setEditing(null); setDraft(null) } }}>
+      <section className="source-editor-modal user-editor-modal" role="dialog" aria-modal="true" aria-label={`Управление пользователем ${editing.displayName || editing.userName}`}>
+        <div className="source-editor-heading"><div><span className="kicker">USER ACCESS</span><h2>{editing.displayName || editing.userName}</h2><p>{editing.email}. Изменение ролей завершит активные сессии пользователя.</p></div><button className="icon-button" aria-label="Закрыть управление пользователем" disabled={busy} onClick={() => { setEditing(null); setDraft(null) }}><X/></button></div>
+        <div className="user-editor-switches"><Toggle checked={draft.isActive} onChange={isActive => setDraft({...draft,isActive})} label="Аккаунт активен"/><Toggle checked={draft.subscriber} onChange={subscriber => setDraft({...draft,subscriber})} label="Роль подписчика"/><Toggle checked={draft.administrator} onChange={administrator => setDraft({...draft,administrator})} label="Права администратора"/></div>
+        <div className="source-editor-grid"><label>Тариф<StyledSelect ariaLabel="Тариф пользователя" value={draft.plan} onChange={plan => setDraft({...draft,plan})} options={[["free","Free"],["pro","Pro"],["unlimited","Unlimited"]]}/></label><label>Статус подписки<StyledSelect ariaLabel="Статус подписки пользователя" value={draft.status} onChange={status => setDraft({...draft,status})} options={[["active","Активна"],["trialing","Пробная"],["past_due","Просрочена"],["canceled","Отменена"],["expired","Истекла"],["suspended","Приостановлена"]]}/></label><label>Действует до<input type="date" value={draft.expiresAt} onChange={event => setDraft({...draft,expiresAt:event.target.value})}/></label></div>
+        <div className="source-editor-actions"><span/><button className="secondary-admin-button" disabled={busy} onClick={() => { setEditing(null); setDraft(null) }}>Отмена</button><button className="primary-admin-button" disabled={busy} onClick={() => void save()}><ShieldCheck/>{busy ? 'Сохраняем…' : 'Сохранить доступ'}</button></div>
+      </section>
+    </div>}
+  </section>
 }
 
 /** Управление Telegram Bot API, Stars и встроенной CRM из отдельного раздела панели. */

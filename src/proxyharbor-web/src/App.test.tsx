@@ -372,6 +372,37 @@ describe('ProxyHarbor UI', () => {
     expect(screen.getByRole('link', { name: new RegExp(`^${heading}`) })).toHaveAttribute('aria-current', 'page')
   })
 
+  it('loads users as a searchable server-side table with pagination and a separate editor', async () => {
+    window.history.replaceState({}, '', '/admin/users')
+    const user = {
+      id: 'user-1', userName: 'client', email: 'client@example.test', displayName: 'Клиент',
+      isActive: true, createdAt: new Date().toISOString(), lastLoginAt: new Date().toISOString(),
+      roles: ['User', 'Subscriber'], subscription: { plan: 'pro', status: 'active', startedAt: new Date().toISOString() },
+    }
+    vi.mocked(fetch).mockImplementation(async input => {
+      const url = String(input)
+      if (url.includes('/api/v1/admin/sources')) return jsonResponse({items:[],page:1,pageSize:10,total:0})
+      if (url.includes('/api/v1/admin/diagnostics')) return jsonResponse({serverTime:new Date().toISOString(),databaseBytes:0,validationQueue:{total:0,due:0},recentRuns:[],recentValidationRuns:[],recentBackups:[]})
+      if (url.includes('/api/v1/admin/users?')) {
+        const query = new URL(url, 'http://localhost').searchParams
+        return jsonResponse({items:[{...user,id:`user-${query.get('page') ?? '1'}`}],page:Number(query.get('page') ?? 1),pageSize:Number(query.get('pageSize') ?? 10),total:34})
+      }
+      return jsonResponse({title:'Unexpected request'},500)
+    })
+
+    render(<App/>)
+    expect(await screen.findByText('Страница 1 из 4 · Найдено: 34')).toBeInTheDocument()
+    expect(screen.getByText('Последний вход')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button',{name:'Следующая страница'}))
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).includes('/api/v1/admin/users?') && String(input).includes('page=2'))).toBe(true))
+    fireEvent.change(screen.getByRole('textbox',{name:'Поиск пользователей'}),{target:{value:'client@example.test'}})
+    fireEvent.submit(screen.getByRole('textbox',{name:'Поиск пользователей'}).closest('form')!)
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).includes('search=client%40example.test'))).toBe(true))
+    fireEvent.click(await screen.findByRole('button',{name:'Управлять'}))
+    expect(screen.getByRole('dialog',{name:/Управление пользователем/})).toBeInTheDocument()
+    expect(screen.getByRole('switch',{name:'Права администратора'})).toBeInTheDocument()
+  })
+
   it('groups payment settings and opens each provider in its own dialog', async () => {
     window.history.replaceState({}, '', '/admin/payments')
     vi.mocked(fetch).mockImplementation(async input => {
