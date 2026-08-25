@@ -263,6 +263,9 @@ internal static class RestoreApplication
                 await db.UserClaims.ExecuteDeleteAsync(token);
                 await db.RoleClaims.ExecuteDeleteAsync(token);
                 await db.UserRoles.ExecuteDeleteAsync(token);
+                await db.ProxyAccessBuckets.ExecuteDeleteAsync(token);
+                await db.AccessBlockRules.ExecuteDeleteAsync(token);
+                await db.SubscriptionAdminActions.ExecuteDeleteAsync(token);
                 await db.PaymentOrders.ExecuteDeleteAsync(token);
                 await db.Subscriptions.ExecuteDeleteAsync(token);
                 await db.Users.ExecuteDeleteAsync(token);
@@ -330,6 +333,12 @@ internal static class RestoreApplication
                 _ = await ImportIdentityAsync<UserSubscription>(archive, "database/subscriptions.json", db, token);
                 if (archive.GetEntry("database/payment-orders.json") is not null)
                     _ = await ImportIdentityAsync<PaymentOrder>(archive, "database/payment-orders.json", db, token);
+                if (archive.GetEntry("database/subscription-admin-actions.json") is not null)
+                    _ = await ImportIdentityAsync<SubscriptionAdminAction>(archive, "database/subscription-admin-actions.json", db, token);
+                if (archive.GetEntry("database/proxy-access-buckets.json") is not null)
+                    _ = await ImportIdentityAsync<ProxyAccessBucket>(archive, "database/proxy-access-buckets.json", db, token);
+                if (archive.GetEntry("database/access-block-rules.json") is not null)
+                    _ = await ImportIdentityAsync<AccessBlockRule>(archive, "database/access-block-rules.json", db, token);
             }
             if (hasPaymentConfiguration)
                 _ = await ImportIdentityAsync<PaymentConfiguration>(

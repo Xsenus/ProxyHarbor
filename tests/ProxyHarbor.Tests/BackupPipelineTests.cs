@@ -115,13 +115,16 @@ public sealed class BackupPipelineTests
             var names = archive.Entries.Select(entry => entry.FullName).Order(StringComparer.Ordinal).ToArray();
             Assert.Equal(
                 [
+                    "database/access-block-rules.json",
                     "database/backup-runs.json",
                     "database/payment-configuration.json",
                     "database/payment-orders.json",
                     "database/proxies.json",
+                    "database/proxy-access-buckets.json",
                     "database/roles.json",
                     "database/runs.json",
                     "database/sources.json",
+                    "database/subscription-admin-actions.json",
                     "database/subscriptions.json",
                     "database/user-roles.json",
                     "database/users.json",

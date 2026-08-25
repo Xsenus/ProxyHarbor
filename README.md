@@ -28,8 +28,9 @@ ProxyHarbor загружает 98 HTTPS-feed от 56 независимых пр
 - измерение полной latency, exit IP, анонимности, success rate и адаптивное расписание повторных проверок;
 - горизонтально масштабируемая очередь через lease token и `FOR UPDATE SKIP LOCKED`;
 - публичная keyset pagination и потоковый экспорт до 50 000 строк за запрос;
-- React-панель с серверной пагинацией, единым входом по логину или email на `/login`, личным кабинетом `/account` и отдельным адаптивным кабинетом `/admin`, разделённым на обзор, пользователей, операции, источники и резервные копии; сведения об источниках доступны только оператору;
-- управляемый из раздела `/admin/payments` биллинг подписок через hosted checkout ЮKassa, CloudPayments, Robokassa, Т-Банка и Stripe: runtime-тарифы, зашифрованные merchant-секреты, проверяемые webhooks, идемпотентная активация доступа и история платежей без хранения карточных данных;
+- React-панель с серверной пагинацией, единым входом по логину или email на `/login`, личным кабинетом `/account` и отдельным адаптивным кабинетом `/admin`: обзор, пользователи, операции, источники, резервные копии, биллинг, подписки и контроль IP;
+- биллинг через hosted checkout ЮKassa, CloudPayments, Robokassa, Т-Банка и Stripe: отдельный диалог каждого шлюза, общий фильтруемый реестр счетов, runtime-тарифы, зашифрованные merchant-секреты, проверяемые webhooks и идемпотентная активация без хранения карточных данных;
+- реестр подписок со сроками, статусом `suspended`, ручным продлением и неизменяемым аудитом; агрегированная статистика выдачи по IP/аккаунту и мгновенные блокировки точного IP, CIDR или пользователя;
 - OpenAPI, Prometheus-метрики, готовые alerts и operator diagnostics;
 - PHB3 backup БД и безопасных настроек: diskless ZIP → AES-256-GCM → self-verification → atomic publish → Telegram;
 - транзакционный restore proxy-данных, audit-истории, аккаунтов, ролей и подписок с проверкой архива и полным rollback при ошибке;
@@ -163,7 +164,7 @@ curl 'http://localhost:8080/api/v1/stats'
 
 При первом запуске `ADMIN_USERNAME`, `ADMIN_EMAIL` и `ADMIN_PASSWORD` создают bootstrap-администратора в ASP.NET Identity. После этого пароль меняется из профиля и не перезаписывается при рестарте. Любой аккаунт может входить по логину или email; пароль хранится только как Identity hash. Сервер выдаёт временную `HttpOnly`, `Secure`, `SameSite=Strict` cookie `ProxyHarbor.Session`, а React не сохраняет credentials в browser storage.
 
-Подготовлены роли `User`, `Subscriber`, `Administrator`, тарифы `free`, `pro`, `unlimited` и состояния подписки. Пока публичная выдача остаётся бесплатной; entitlement `unlimitedProxyAccess` уже вычисляется сервером для будущего биллинга. Регистрация, профиль, смена и восстановление пароля доступны через `/register`, `/account` и `/forgot-password`. Для отправки reset-писем задайте SMTP-параметры из [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
+Подготовлены роли `User`, `Subscriber`, `Administrator`, тарифы `free`, `pro`, `unlimited` и состояния подписки, включая ручную приостановку `suspended`. Администратор управляет подписками на `/admin/subscriptions`, а трафиком выдачи и блокировками — на `/admin/access`. Пока публичная выдача остаётся бесплатной; entitlement `unlimitedProxyAccess` уже вычисляется сервером для будущего биллинга. Регистрация, профиль, смена и восстановление пароля доступны через `/register`, `/account` и `/forgot-password`. Для отправки reset-писем задайте SMTP-параметры из [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
 
 CLI и automation независимо используют `ADMIN_API_KEY` в заголовке `X-Admin-Key`:
 

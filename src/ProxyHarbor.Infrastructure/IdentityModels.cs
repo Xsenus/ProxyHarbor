@@ -42,6 +42,111 @@ public sealed class UserSubscription
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 
+/// <summary>Неизменяемая запись ручного изменения подписки администратором.</summary>
+public sealed class SubscriptionAdminAction
+{
+    /// <summary>Идентификатор события.</summary>
+    public Guid Id { get; set; } = Guid.NewGuid();
+    /// <summary>Изменённая подписка.</summary>
+    public Guid SubscriptionId { get; set; }
+    /// <summary>Навигация к подписке.</summary>
+    public UserSubscription Subscription { get; set; } = null!;
+    /// <summary>Администратор, выполнивший действие.</summary>
+    public Guid AdministratorId { get; set; }
+    /// <summary>Навигация к администратору.</summary>
+    public ApplicationUser Administrator { get; set; } = null!;
+    /// <summary>Код действия.</summary>
+    public string Action { get; set; } = string.Empty;
+    /// <summary>Тариф до изменения.</summary>
+    public string PreviousPlan { get; set; } = string.Empty;
+    /// <summary>Статус до изменения.</summary>
+    public string PreviousStatus { get; set; } = string.Empty;
+    /// <summary>Срок до изменения.</summary>
+    public DateTimeOffset? PreviousExpiresAt { get; set; }
+    /// <summary>Тариф после изменения.</summary>
+    public string NewPlan { get; set; } = string.Empty;
+    /// <summary>Статус после изменения.</summary>
+    public string NewStatus { get; set; } = string.Empty;
+    /// <summary>Срок после изменения.</summary>
+    public DateTimeOffset? NewExpiresAt { get; set; }
+    /// <summary>Причина ручного изменения.</summary>
+    public string? Reason { get; set; }
+    /// <summary>Время действия в UTC.</summary>
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
+/// <summary>
+/// Пятиминутный агрегат выдачи прокси. Он сохраняет наблюдаемость без создания
+/// отдельной строки на каждый публичный запрос.
+/// </summary>
+public sealed class ProxyAccessBucket
+{
+    /// <summary>Суррогатный ключ агрегата.</summary>
+    public long Id { get; set; }
+    /// <summary>Начало пятиминутного окна.</summary>
+    public DateTimeOffset BucketStartedAt { get; set; }
+    /// <summary>Канонический адрес клиента после доверенного reverse proxy.</summary>
+    public string IpAddress { get; set; } = string.Empty;
+    /// <summary>Аккаунт либо null для анонимного клиента.</summary>
+    public Guid? UserId { get; set; }
+    /// <summary>Навигация к аккаунту.</summary>
+    public ApplicationUser? User { get; set; }
+    /// <summary>Стабильная группа endpoint: catalog или export.</summary>
+    public string Endpoint { get; set; } = string.Empty;
+    /// <summary>Всего запросов.</summary>
+    public int Requests { get; set; }
+    /// <summary>Запросов, остановленных правилом блокировки.</summary>
+    public int BlockedRequests { get; set; }
+    /// <summary>Приблизительное число выданных адресов.</summary>
+    public long ProxyItems { get; set; }
+    /// <summary>Известный объём ответа в байтах.</summary>
+    public long BytesSent { get; set; }
+    /// <summary>Последнее обращение внутри окна.</summary>
+    public DateTimeOffset LastSeenAt { get; set; }
+}
+
+/// <summary>Административное правило блокировки IP/CIDR или пользователя.</summary>
+public sealed class AccessBlockRule
+{
+    /// <summary>Идентификатор правила.</summary>
+    public Guid Id { get; set; } = Guid.NewGuid();
+    /// <summary>Тип цели: ip, cidr или user.</summary>
+    public string Kind { get; set; } = AccessBlockKinds.Ip;
+    /// <summary>Каноническое значение цели.</summary>
+    public string Value { get; set; } = string.Empty;
+    /// <summary>Аккаунт для user-правила.</summary>
+    public Guid? UserId { get; set; }
+    /// <summary>Навигация к заблокированному аккаунту.</summary>
+    public ApplicationUser? User { get; set; }
+    /// <summary>Обязательная причина для аудита.</summary>
+    public string Reason { get; set; } = string.Empty;
+    /// <summary>Активно ли правило.</summary>
+    public bool Enabled { get; set; } = true;
+    /// <summary>Автоматическое окончание блокировки.</summary>
+    public DateTimeOffset? ExpiresAt { get; set; }
+    /// <summary>Создавший правило администратор.</summary>
+    public Guid AdministratorId { get; set; }
+    /// <summary>Навигация к администратору.</summary>
+    public ApplicationUser Administrator { get; set; } = null!;
+    /// <summary>Создание правила.</summary>
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+    /// <summary>Последнее изменение правила.</summary>
+    public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
+/// <summary>Закрытый набор типов правил контроля выдачи.</summary>
+public static class AccessBlockKinds
+{
+    /// <summary>Один IP-адрес.</summary>
+    public const string Ip = "ip";
+    /// <summary>IP-подсеть в CIDR.</summary>
+    public const string Cidr = "cidr";
+    /// <summary>Зарегистрированный пользователь.</summary>
+    public const string User = "user";
+    /// <summary>Все допустимые типы.</summary>
+    public static readonly string[] All = [Ip, Cidr, User];
+}
+
 /// <summary>Заказ на оплату подписки; карточные и банковские реквизиты здесь не хранятся.</summary>
 public sealed class PaymentOrder
 {
@@ -151,6 +256,8 @@ public static class SubscriptionStatuses
     public const string Canceled = "canceled";
     /// <summary>Срок доступа закончился.</summary>
     public const string Expired = "expired";
+    /// <summary>Доступ вручную приостановлен администратором.</summary>
+    public const string Suspended = "suspended";
     /// <summary>Полный разрешённый набор состояний.</summary>
-    public static readonly string[] All = [Active, Trialing, PastDue, Canceled, Expired];
+    public static readonly string[] All = [Active, Trialing, PastDue, Canceled, Expired, Suspended];
 }

@@ -109,6 +109,8 @@ builder.Services.AddOptions<PaymentOptions>().Bind(builder.Configuration.GetSect
 builder.Services.AddHttpClient();
 builder.Services.AddScoped<IPaymentConfigurationStore, PaymentConfigurationStore>();
 builder.Services.AddScoped<PaymentGatewayClient>();
+builder.Services.AddSingleton<ProxyAccessMonitor>();
+builder.Services.AddHostedService(services => services.GetRequiredService<ProxyAccessMonitor>());
 builder.Services.AddControllers().AddJsonOptions(x =>
     x.JsonSerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter()));
 builder.Services.AddOpenApi(options =>
@@ -279,6 +281,7 @@ app.UseResponseCompression();
 app.UseRouting();
 app.UseCors("frontend");
 app.UseAuthentication();
+app.UseMiddleware<ProxyAccessMiddleware>();
 app.UseRateLimiter();
 app.UseOutputCache();
 // Сначала аутентифицируем automation API key и создаём role principal; затем
