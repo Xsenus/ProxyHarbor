@@ -599,11 +599,14 @@ public sealed class TelegramOutboundWorker(
         try
         {
             var api = scope.ServiceProvider.GetRequiredService<TelegramBotApiClient>();
+            var collector = scope.ServiceProvider.GetRequiredService<Microsoft.Extensions.Options.IOptions<CollectorOptions>>().Value;
             message.TelegramMessageId = message.Kind switch
             {
                 TelegramOutboundKinds.Text => await SendTextAsync(api, settings, message, token),
                 TelegramOutboundKinds.Invoice => await SendInvoiceAsync(api, settings, message, token),
-                TelegramOutboundKinds.ProxyFile => await SendProxyFileAsync(api, settings, db, message, token),
+                TelegramOutboundKinds.ProxyFile => await SendProxyFileAsync(
+                    api, settings, db, message,
+                    DateTimeOffset.UtcNow.AddMinutes(-collector.PublicFreshnessMinutes), token),
                 _ => throw new InvalidOperationException("Неизвестный вид Telegram-задания.")
             };
             lastPerChat[message.TelegramChat.ChatId] = DateTimeOffset.UtcNow;
@@ -659,13 +662,28 @@ public sealed class TelegramOutboundWorker(
 
     private static async Task<long> SendProxyFileAsync(
         TelegramBotApiClient api, TelegramBotOptions settings, ProxyHarborDbContext db,
-        TelegramOutboundMessage message, CancellationToken token)
+        TelegramOutboundMessage message, DateTimeOffset freshAfter, CancellationToken token)
     {
         var payload = JsonSerializer.Deserialize<TelegramProxyFilePayload>(message.PayloadJson, Json)
             ?? throw new InvalidOperationException("Пустой proxy_file payload.");
-        var rows = await db.Proxies.AsNoTracking().Where(x => x.Status == ProxyStatus.Alive)
+        var file = await BuildProxyFileAsync(
+            db, Math.Min(payload.Count, settings.ProxyFileMaxItems), freshAfter, token);
+        return await api.SendDocumentAsync(settings.BotToken, message.TelegramChat.ChatId,
+            $"proxyharbor-{DateTimeOffset.UtcNow:yyyyMMdd-HHmm}.txt", file.Content,
+            $"{file.Count:N0} проверенных прокси · сформировано {DateTimeOffset.UtcNow:dd.MM.yyyy HH:mm} UTC", token);
+    }
+
+    /// <summary>
+    /// Формирует выгрузку по тому же окну свежести, что публичный API: одного исторического
+    /// статуса Alive недостаточно для выдачи оплачивающему клиенту.
+    /// </summary>
+    internal static async Task<(byte[] Content, int Count)> BuildProxyFileAsync(
+        ProxyHarborDbContext db, int maximum, DateTimeOffset freshAfter, CancellationToken token)
+    {
+        var rows = await db.Proxies.AsNoTracking()
+            .Where(x => x.Status == ProxyStatus.Alive && x.LastCheckedAt >= freshAfter)
             .OrderBy(x => x.LatencyMs).ThenByDescending(x => x.SuccessfulChecks).ThenBy(x => x.Id)
-            .Take(Math.Min(payload.Count, settings.ProxyFileMaxItems))
+            .Take(Math.Clamp(maximum, 1, 10_000))
             .Select(x => new { x.Host, x.Port, x.Protocol }).ToArrayAsync(token);
         var builder = new StringBuilder(rows.Length * 32);
         foreach (var row in rows)
@@ -674,10 +692,7 @@ public sealed class TelegramOutboundWorker(
             builder.Append(row.Protocol.ToString().ToLowerInvariant()).Append("://")
                 .Append(host).Append(':').Append(row.Port).Append('\n');
         }
-        var content = Encoding.UTF8.GetBytes(builder.ToString());
-        return await api.SendDocumentAsync(settings.BotToken, message.TelegramChat.ChatId,
-            $"proxyharbor-{DateTimeOffset.UtcNow:yyyyMMdd-HHmm}.txt", content,
-            $"{rows.Length:N0} проверенных прокси · сформировано {DateTimeOffset.UtcNow:dd.MM.yyyy HH:mm} UTC", token);
+        return (Encoding.UTF8.GetBytes(builder.ToString()), rows.Length);
     }
 }
 
