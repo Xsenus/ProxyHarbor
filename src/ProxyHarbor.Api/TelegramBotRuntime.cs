@@ -321,7 +321,7 @@ public sealed class TelegramUpdateProcessor(
         var catalog = await payments.GetAsync(token);
         productCode = productCode.Trim().ToLowerInvariant();
         if (!catalog.Enabled || !catalog.Products.TryGetValue(productCode, out var product) || !product.Enabled ||
-            !bot.ProductStars.TryGetValue(productCode, out var stars) || stars is < 1 or > 1_000_000)
+            !TelegramStarsPricing.TryResolve(bot, productCode, product, out var stars))
         {
             await ReplyAsync(chat, "Этот тариф сейчас недоступен для оплаты в Telegram.", $"unavailable:{Guid.NewGuid():N}", token);
             return;
@@ -346,7 +346,8 @@ public sealed class TelegramUpdateProcessor(
     private async Task SendProductsAsync(TelegramChat chat, TelegramBotOptions bot, CancellationToken token)
     {
         var catalog = await payments.GetAsync(token);
-        var products = catalog.Products.Where(x => x.Value.Enabled && bot.ProductStars.TryGetValue(x.Key, out var stars) && stars > 0)
+        var products = catalog.Products.Where(x => x.Value.Enabled &&
+                TelegramStarsPricing.TryResolve(bot, x.Key, x.Value, out _))
             .OrderBy(x => x.Value.DurationDays).ToArray();
         if (!catalog.Enabled || products.Length == 0)
         {
@@ -355,11 +356,21 @@ public sealed class TelegramUpdateProcessor(
         }
         var rows = products.Select(x => new[]
         {
-            new { text = $"{x.Value.Name} · {bot.ProductStars[x.Key]} ⭐", callback_data = $"buy:{x.Key}" }
+            new
+            {
+                text = $"{x.Value.Name} · {ResolvedStars(bot, x.Key, x.Value)} ⭐",
+                callback_data = $"buy:{x.Key}"
+            }
         }).ToArray();
         await queue.EnqueueTextAsync(chat,
             "<b>Выберите подписку</b>\nЦена окончательная и списывается в Telegram Stars только после подтверждения.",
             $"products:{chat.Id:N}:{Guid.NewGuid():N}", replyMarkup: new { inline_keyboard = rows }, token: token);
+    }
+
+    private static int ResolvedStars(TelegramBotOptions options, string code, PaymentProductOptions product)
+    {
+        _ = TelegramStarsPricing.TryResolve(options, code, product, out var stars);
+        return stars;
     }
 
     private async Task SendAccountAsync(TelegramChat chat, CancellationToken token)
