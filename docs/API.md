@@ -7,7 +7,7 @@
 - Публично возвращаются только свежие объективно проверенные Alive-прокси.
 - Ошибки валидации, конфликтов и throttling возвращаются как `application/problem+json`/`ProblemDetails`.
 - OpenAPI текущего процесса доступен по `/openapi/v1.json` и является authoritative контрактом generated clients.
-- Admin endpoints требуют ровно один `X-Admin-Key` и возвращают `Cache-Control: no-store`.
+- Admin endpoints принимают защищённую browser cookie-сессию или ровно один automation-заголовок `X-Admin-Key` и возвращают `Cache-Control: no-store`.
 - Production API следует вызывать только через HTTPS gateway.
 
 ## Модель публичного прокси
@@ -199,12 +199,22 @@ Readiness не кэшируется и выполняет zero-row probe все�
 
 ## Admin authentication
 
+Браузер создаёт сессию, отправляя JSON на `POST /api/v1/auth/login`:
+
+```json
+{ "username": "admin", "password": "..." }
+```
+
+Успешный ответ устанавливает непостоянную `HttpOnly`, `Secure`, `SameSite=Strict` cookie. `GET /api/v1/auth/session` проверяет сессию, `POST /api/v1/auth/logout` завершает её. Login rate limit — 5 попыток за 5 минут на IP.
+
+Для CLI и automation сохранён API key:
+
 ```powershell
 $adminHeaders = @{ 'X-Admin-Key' = $env:ADMIN_API_KEY }
 Invoke-RestMethod https://proxy.example.com/api/v1/admin/diagnostics -Headers $adminHeaders
 ```
 
-Отсутствующий, пустой, oversized или многозначный header возвращает `401`, `WWW-Authenticate: ApiKey realm="ProxyHarbor"` и `ProblemDetails`. Значение ключа никогда не выводится в log.
+Отсутствующая сессия и отсутствующий, пустой, oversized или многозначный header возвращают `401`, challenge `Cookie, ApiKey` и `ProblemDetails`. Credentials никогда не выводятся в log.
 
 ## Управление источниками
 
@@ -315,7 +325,7 @@ DNS проверяется до сохранения. Collection/source mutation
 | Status | Причина |
 |---:|---|
 | `400` | Невалидный enum/filter/cursor/format/URL или слишком глубокий offset |
-| `401` | Нет корректного `X-Admin-Key` |
+| `401` | Нет корректной admin cookie-сессии или `X-Admin-Key` |
 | `404` | Admin source не найден |
 | `409` | Operation lock/restore conflict или duplicate/immutable source |
 | `429` | Rate limit |

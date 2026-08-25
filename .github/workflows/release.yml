@@ -98,6 +98,7 @@ jobs:
           POSTGRES_DB: proxyharbor
           POSTGRES_USER: proxyharbor
           POSTGRES_PASSWORD: release-verify-password
+          ADMIN_PASSWORD: release-verify-admin-password-at-least-24-chars
           ADMIN_API_KEY: release-verify-admin-key-at-least-24-chars
           BACKUP_ENCRYPTION_KEY: release-verify-encryption-key-at-least-32-chars
           TELEGRAM_BOT_TOKEN: 9000000000000000000:CI_ONLY_PLACEHOLDER_NOT_A_REAL_TOKEN

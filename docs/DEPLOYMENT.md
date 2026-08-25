@@ -33,7 +33,7 @@ docker compose --profile tools run --rm --no-deps -T restore \
 jq --exit-status '.manifest.version == 5 and .manifest.secretsIncluded == false' recovery-settings.json
 ```
 
-Снимок предназначен для операторской сверки и не применяется автоматически. Он содержит collector/backup/runtime, CORS, trusted proxy и logging settings, но никогда не содержит admin key, PostgreSQL connection string, Telegram credentials или encryption key. Эти значения восстановите из внешнего secret store, затем выполните пробный restore в отдельную БД.
+Снимок предназначен для операторской сверки и не применяется автоматически. Он содержит collector/backup/runtime, CORS, trusted proxy и logging settings, но никогда не содержит admin password/API key, PostgreSQL connection string, Telegram credentials, data-protection keys или encryption key. Эти значения восстановите из внешнего secret store, затем выполните пробный restore в отдельную БД.
 
 Для замены production-БД сначала остановите все API-реплики, выполните restore и только после успеха верните сервисы:
 

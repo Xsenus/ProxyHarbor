@@ -164,7 +164,7 @@ API lease удерживается owning PostgreSQL session от startup до s
 1. External feeds — полностью недоверенные body/headers/DNS.
 2. Proxy servers — недоверенный transport до системно проверяемого TLS.
 3. Control endpoint — доверенный HTTPS origin, но bounded parser всё равно обязателен.
-4. Browser/admin key — key хранится только в sessionStorage/in-memory и передаётся по HTTPS.
+4. Browser/admin session — логин и пароль отправляются только на login endpoint; браузер получает HttpOnly Secure SameSite=Strict cookie и не хранит исходные credentials.
 5. Telegram — внешний API; response/exception sanitizing не допускает token/chat ID в audit.
 6. Backup archive — аутентифицируется PHB3 и строго валидируется до destructive restore.
 7. Reverse proxy headers — принимаются только от явно заданной CIDR и одного hop.

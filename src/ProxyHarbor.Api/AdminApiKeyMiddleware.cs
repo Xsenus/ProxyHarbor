@@ -22,7 +22,7 @@ public sealed class AdminApiKeyMiddleware
             throw new InvalidOperationException("Допустимый административный ключ не удалось закодировать.");
     }
 
-    /// <summary>Пропускает публичные маршруты и constant-time проверяет X-Admin-Key для admin API.</summary>
+    /// <summary>Принимает admin cookie-сессию либо constant-time проверяет X-Admin-Key для automation API.</summary>
     public async Task InvokeAsync(HttpContext context)
     {
         if (!context.Request.Path.StartsWithSegments("/api/v1/admin"))
@@ -35,6 +35,14 @@ public sealed class AdminApiKeyMiddleware
         context.Response.Headers.CacheControl = "no-store";
         context.Response.Headers.Pragma = "no-cache";
         context.Response.Headers.Expires = "0";
+
+        // Браузер работает через HttpOnly cookie, а CLI/автоматизация сохраняют
+        // обратную совместимость с отдельным X-Admin-Key.
+        if (context.User.IsInRole("Administrator"))
+        {
+            await _next(context);
+            return;
+        }
 
         var headerValues = context.Request.Headers["X-Admin-Key"];
         var hasSingleBoundedValue = headerValues.Count == 1 &&
@@ -50,9 +58,9 @@ public sealed class AdminApiKeyMiddleware
         if (!authenticated)
         {
             context.Response.StatusCode = StatusCodes.Status401Unauthorized;
-            context.Response.Headers.WWWAuthenticate = "ApiKey realm=\"ProxyHarbor\"";
+            context.Response.Headers.WWWAuthenticate = "Cookie, ApiKey realm=\"ProxyHarbor\"";
             context.Response.Headers.CacheControl = "no-store";
-            await context.Response.WriteAsJsonAsync(new ProblemDetails { Title = "Требуется административный ключ", Status = 401 });
+            await context.Response.WriteAsJsonAsync(new ProblemDetails { Title = "Требуется административная авторизация", Status = 401 });
             return;
         }
         await _next(context);

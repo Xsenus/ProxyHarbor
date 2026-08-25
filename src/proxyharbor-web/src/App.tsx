@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Activity, ArrowDownToLine, ArrowRight, Check, Clock3, Database, Gauge, KeyRound, Network, Play, RefreshCw, Server, ShieldCheck, Wifi, X } from 'lucide-react'
+import { Activity, ArrowDownToLine, ArrowRight, Check, Clock3, Database, Gauge, LockKeyhole, Network, Play, RefreshCw, Server, ShieldCheck, User, Wifi, X } from 'lucide-react'
 
 type Protocol = 'Http' | 'Https' | 'Socks4' | 'Socks5'
 type Proxy = { host: string; port: number; protocol: Protocol; url: string; latencyMs: number; successRate: number; exitIp?: string; lastCheckedAt: string; firstAliveAt?: string; lastAliveAt?: string; activeSince?: string; activeForSeconds?: number }
@@ -23,22 +23,6 @@ type Diagnostics = {
 const API = import.meta.env.VITE_API_URL ?? ''
 const APP_VERSION = import.meta.env.VITE_APP_VERSION ?? '0.0.0-local'
 const protocols: Protocol[] = ['Http', 'Https', 'Socks4', 'Socks5']
-const adminKeyStorageName = 'proxyharbor-admin-key'
-
-function readStoredAdminKey() {
-  try { return sessionStorage.getItem(adminKeyStorageName) ?? '' }
-  catch { return '' }
-}
-
-function storeAdminKey(value: string) {
-  try { sessionStorage.setItem(adminKeyStorageName, value) }
-  catch { /* Storage может быть запрещён политикой браузера; in-memory session остаётся рабочей. */ }
-}
-
-function removeStoredAdminKey() {
-  try { sessionStorage.removeItem(adminKeyStorageName) }
-  catch { /* Локальное React-состояние очищается независимо от доступности Storage API. */ }
-}
 
 function isAbortError(reason: unknown) {
   return reason instanceof Error && reason.name === 'AbortError'
@@ -58,7 +42,6 @@ export default function App() {
   const currentPath = window.location.pathname.replace(/\/+$/, '') || '/'
   const loginPage = currentPath === '/admin/login'
   const adminOpen = currentPath === '/admin'
-  const [adminKey, setAdminKey] = useState(readStoredAdminKey)
   const [adminAuthenticated, setAdminAuthenticated] = useState(false)
   const [adminError, setAdminError] = useState('')
   const [sources, setSources] = useState<Source[]>([])
@@ -160,16 +143,11 @@ export default function App() {
   const loadAdminData = useCallback(async (focusFirstAction = false) => {
     const requestId = ++adminRequestIdRef.current
     adminAbortRef.current?.abort()
-    if (!adminKey) {
-      setAdminAuthenticated(false)
-      setAdminLoading(false)
-      return
-    }
     const controller = new AbortController()
     adminAbortRef.current = controller
     setAdminLoading(true)
     try {
-      const requestOptions = { headers: { 'X-Admin-Key': adminKey }, signal: controller.signal }
+      const requestOptions = { credentials: 'include' as const, signal: controller.signal }
       const [sourcesResponse, diagnosticsResponse] = await Promise.all([
         fetch(`${API}/api/v1/admin/sources`, requestOptions),
         fetch(`${API}/api/v1/admin/diagnostics`, requestOptions),
@@ -177,18 +155,16 @@ export default function App() {
       if (requestId !== adminRequestIdRef.current) return
       const unauthorizedResponse = [sourcesResponse, diagnosticsResponse].find(response => response.status === 401)
       if (unauthorizedResponse) {
-        removeStoredAdminKey()
-        setAdminKey('')
         setAdminAuthenticated(false)
         setSources([])
         setDiagnostics(null)
-        throw new Error(await responseMessage(unauthorizedResponse, 'Неверный ключ администратора'))
+        window.location.replace('/admin/login')
+        return
       }
-      if (!sourcesResponse.ok) throw new Error(await responseMessage(sourcesResponse, 'Неверный ключ администратора'))
+      if (!sourcesResponse.ok) throw new Error(await responseMessage(sourcesResponse, 'Административная сессия недоступна'))
       if (!diagnosticsResponse.ok) throw new Error(await responseMessage(diagnosticsResponse, 'Диагностика недоступна'))
       const [sourceRows, diagnosticSnapshot] = await Promise.all([sourcesResponse.json(), diagnosticsResponse.json()])
       if (requestId !== adminRequestIdRef.current) return
-      storeAdminKey(adminKey)
       setSources(sourceRows)
       setDiagnostics(diagnosticSnapshot)
       setAdminAuthenticated(true)
@@ -205,7 +181,7 @@ export default function App() {
         setAdminLoading(false)
       }
     }
-  }, [adminKey])
+  }, [])
 
   useEffect(() => {
     if (!adminAuthenticated || !focusAdminActionAfterLoginRef.current) return
@@ -220,14 +196,9 @@ export default function App() {
     }
     if (autoLoginAttemptedRef.current) return
     autoLoginAttemptedRef.current = true
-    if (!adminKey) return
     const initialLoad = window.setTimeout(() => void loadAdminData(true), 0)
     return () => window.clearTimeout(initialLoad)
-  }, [adminOpen, adminKey, loadAdminData])
-
-  useEffect(() => {
-    if (adminOpen && !adminKey) window.location.replace('/admin/login')
-  }, [adminOpen, adminKey])
+  }, [adminOpen, loadAdminData])
 
   useEffect(() => {
     if (!adminOpen || !adminAuthenticated) return
@@ -251,17 +222,16 @@ export default function App() {
     adminMutationAbortRefs.current.clear()
   }, [])
   useEffect(() => () => invalidateAdminSession(), [invalidateAdminSession])
-  const logoutAdmin = useCallback(() => {
+  const logoutAdmin = useCallback(async () => {
     invalidateAdminSession()
-    removeStoredAdminKey()
-    setAdminKey('')
     setAdminAuthenticated(false)
     setAdminError('')
     setSources([])
     setDiagnostics(null)
     setAction('')
     setSourceBusy('')
-    window.location.replace('/admin/login')
+    try { await fetch(`${API}/api/v1/auth/logout`, { method: 'POST', credentials: 'include' }) }
+    finally { window.location.replace('/admin/login') }
   }, [invalidateAdminSession])
 
   const runAdminAction = async (name: 'collect' | 'validate' | 'backup') => {
@@ -272,10 +242,10 @@ export default function App() {
     setAction(name)
     setAdminError('')
     try {
-      const response = await fetch(`${API}/api/v1/admin/${name}`, { method: 'POST', headers: { 'X-Admin-Key': adminKey }, signal: controller.signal })
+      const response = await fetch(`${API}/api/v1/admin/${name}`, { method: 'POST', credentials: 'include', signal: controller.signal })
       if (sessionId !== adminSessionIdRef.current) return
       if (!response.ok) {
-        if (response.status === 401) { removeStoredAdminKey(); setAdminKey(''); setAdminAuthenticated(false) }
+        if (response.status === 401) { setAdminAuthenticated(false); window.location.replace('/admin/login') }
         throw new Error(await responseMessage(response, 'Административная операция не выполнена'))
       }
       await Promise.all([load(), loadAdminData()])
@@ -298,13 +268,13 @@ export default function App() {
     setAdminError('')
     try {
       const response = await fetch(`${API}/api/v1/admin/sources`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Admin-Key': adminKey },
+        method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...sourceDraft, enabled: true }),
         signal: controller.signal,
       })
       if (sessionId !== adminSessionIdRef.current) return
       if (!response.ok) {
-        if (response.status === 401) { removeStoredAdminKey(); setAdminKey(''); setAdminAuthenticated(false) }
+        if (response.status === 401) { setAdminAuthenticated(false); window.location.replace('/admin/login') }
         throw new Error(await responseMessage(response, 'Не удалось добавить источник'))
       }
       setSourceDraft({ name: '', url: '', protocol: 'Http', priority: 100 })
@@ -327,13 +297,13 @@ export default function App() {
     setAdminError('')
     try {
       const response = await fetch(`${API}/api/v1/admin/sources/${source.id}`, {
-        method: 'PUT', headers: { 'Content-Type': 'application/json', 'X-Admin-Key': adminKey },
+        method: 'PUT', credentials: 'include', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: source.name, url: source.url, protocol: source.defaultProtocol, priority: source.priority, enabled: !source.enabled }),
         signal: controller.signal,
       })
       if (sessionId !== adminSessionIdRef.current) return
       if (!response.ok) {
-        if (response.status === 401) { removeStoredAdminKey(); setAdminKey(''); setAdminAuthenticated(false) }
+        if (response.status === 401) { setAdminAuthenticated(false); window.location.replace('/admin/login') }
         throw new Error(await responseMessage(response, 'Не удалось изменить состояние источника'))
       }
       await loadAdminData()
@@ -354,10 +324,10 @@ export default function App() {
     adminMutationAbortRefs.current.add(controller)
     setSourceBusy(source.id)
     try {
-      const response = await fetch(`${API}/api/v1/admin/sources/${source.id}`, { method: 'DELETE', headers: { 'X-Admin-Key': adminKey }, signal: controller.signal })
+      const response = await fetch(`${API}/api/v1/admin/sources/${source.id}`, { method: 'DELETE', credentials: 'include', signal: controller.signal })
       if (sessionId !== adminSessionIdRef.current) return
       if (!response.ok) {
-        if (response.status === 401) { removeStoredAdminKey(); setAdminKey(''); setAdminAuthenticated(false) }
+        if (response.status === 401) { setAdminAuthenticated(false); window.location.replace('/admin/login') }
         throw new Error(await responseMessage(response, 'Не удалось удалить источник'))
       }
       await loadAdminData()
@@ -387,8 +357,8 @@ export default function App() {
   return <div className="app-shell">
     {!adminOpen && <><header>
       <a className="brand" href="#top" aria-label="ProxyHarbor — наверх"><span className="brand-mark"><Network size={20}/></span><span>Proxy<span>Harbor</span></span></a>
-      <nav><a href="#catalog">Прокси</a><a href="#api">API</a><a className="admin-link" href="/admin/login"><KeyRound size={15}/> Управление</a></nav>
-      <a className="mobile-admin" aria-label="Войти в управление" href="/admin/login"><KeyRound size={17}/></a>
+      <nav><a href="#catalog">Прокси</a><a href="#api">API</a><a className="admin-link" href="/admin/login"><LockKeyhole size={15}/> Управление</a></nav>
+      <a className="mobile-admin" aria-label="Войти в управление" href="/admin/login"><LockKeyhole size={17}/></a>
       <div className={`live-pill ${apiError ? 'offline' : ''}`} aria-live="polite"><span/> {loading ? 'проверка…' : apiError ? 'API недоступен' : 'система активна'}</div>
     </header>
 
@@ -437,7 +407,7 @@ export default function App() {
     {adminOpen && <main className="admin-page">
       <header className="admin-page-header"><a className="brand" href="/"><span className="brand-mark"><Network size={20}/></span><span>Proxy<span>Harbor</span></span></a><button onClick={logoutAdmin}>Выйти</button></header>
       <section className="admin-modal admin-page-panel" aria-labelledby="admin-title">
-        <span className="kicker">ADMIN CONSOLE</span><h2 id="admin-title">Управление сбором</h2><p>Ключ хранится только до закрытия вкладки.</p>
+        <span className="kicker">ADMIN CONSOLE</span><h2 id="admin-title">Управление сбором</h2><p>Вы вошли в защищённую административную сессию.</p>
         {adminError && <div className="admin-notice" role="alert"><X size={16}/>{adminError}</div>}
         <div className="admin-actions">
           <button ref={firstAdminActionRef} onClick={() => runAdminAction('collect')} disabled={!adminAuthenticated || adminMutationBusy}><Play/> {action === 'collect' ? 'Собираем…' : 'Запустить сбор'}</button>
@@ -479,19 +449,24 @@ export default function App() {
 
 /** Изолированная страница входа: на ней нет публичного каталога и элементов админ-панели. */
 function AdminLoginPage() {
-  const [key, setKey] = useState('')
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault()
-    if (!key || busy) return
+    if (!username || !password || busy) return
     setBusy(true)
     setError('')
     try {
-      const response = await fetch(`${API}/api/v1/admin/diagnostics`, { headers: { 'X-Admin-Key': key } })
-      if (!response.ok) throw new Error(await responseMessage(response, 'Неверный ключ администратора'))
-      storeAdminKey(key)
+      const response = await fetch(`${API}/api/v1/auth/login`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      })
+      if (!response.ok) throw new Error(await responseMessage(response, 'Неверный логин или пароль'))
       window.location.assign('/admin')
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Не удалось выполнить вход')
@@ -504,10 +479,13 @@ function AdminLoginPage() {
     <section className="login-card" aria-labelledby="login-title">
       <span className="kicker">ADMIN ACCESS</span>
       <h1 id="login-title">Вход в управление</h1>
-      <p>Введите административный ключ. Он сохранится только до закрытия этой вкладки.</p>
-      <form onSubmit={submit}>
-        <label htmlFor="admin-key">Ключ администратора</label>
-        <div className="key-input"><KeyRound size={18}/><input id="admin-key" autoFocus type="password" placeholder="X-Admin-Key" autoComplete="off" autoCapitalize="none" spellCheck={false} maxLength={256} value={key} onChange={event => setKey(event.target.value)} data-lpignore="true"/><button type="submit" disabled={busy || !key}>{busy ? 'Проверяем…' : 'Войти'}</button></div>
+      <p>Введите логин и пароль администратора. После входа браузер получит защищённую сессию.</p>
+      <form className="login-form" onSubmit={submit}>
+        <label htmlFor="admin-username">Логин</label>
+        <div className="login-field"><User size={18}/><input id="admin-username" autoFocus required type="text" placeholder="Логин" autoComplete="username" autoCapitalize="none" spellCheck={false} minLength={3} maxLength={64} value={username} onChange={event => setUsername(event.target.value)}/></div>
+        <label htmlFor="admin-password">Пароль</label>
+        <div className="login-field"><LockKeyhole size={18}/><input id="admin-password" required type="password" placeholder="Пароль" autoComplete="current-password" maxLength={256} value={password} onChange={event => setPassword(event.target.value)}/></div>
+        <button className="login-submit" type="submit" disabled={busy || !username || !password}>{busy ? 'Проверяем…' : 'Войти'}</button>
       </form>
       {error && <div className="admin-notice" role="alert"><X size={16}/>{error}</div>}
       <a className="back-link" href="/">← Вернуться на главную</a>
