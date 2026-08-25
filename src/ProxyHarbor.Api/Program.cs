@@ -182,12 +182,12 @@ builder.Services.AddOutputCache(options =>
     options.MaximumBodySize = 2 * 1024 * 1024;
     options.AddPolicy("public-list", policy => policy
         .Expire(TimeSpan.FromSeconds(10))
-        .SetVaryByQuery("protocol", "maxLatencyMs", "minSuccessRate", "page", "pageSize"));
+        .SetVaryByQuery(PublicOutputCachePolicies.ListVaryByQuery));
     options.AddPolicy(PublicOutputCachePolicies.SeekFirstPage, policy => policy
         // Произвольные cursor продолжения не должны создавать одноразовые cache entries.
         .With(context => PublicOutputCachePolicies.IsSeekFirstPage(context.HttpContext))
         .Expire(TimeSpan.FromSeconds(10))
-        .SetVaryByQuery("protocol", "maxLatencyMs", "minSuccessRate", "pageSize"));
+        .SetVaryByQuery(PublicOutputCachePolicies.SeekVaryByQuery));
     options.AddPolicy("public-summary", policy => policy
         .Expire(TimeSpan.FromSeconds(15))
         // Неизвестные query-параметры не должны создавать неограниченное число cache keys.

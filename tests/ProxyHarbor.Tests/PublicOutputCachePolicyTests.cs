@@ -9,6 +9,17 @@ namespace ProxyHarbor.Tests;
 /// <summary>Защищает bounded-семантику кэша keyset-каталога.</summary>
 public sealed class PublicOutputCachePolicyTests
 {
+    [Fact]
+    public void CountryIsPartOfEveryProxyPublicationCacheKey()
+    {
+        Assert.Contains("country", PublicOutputCachePolicies.ListVaryByQuery);
+        Assert.Contains("country", PublicOutputCachePolicies.SeekVaryByQuery);
+        Assert.Equal(PublicOutputCachePolicies.ListVaryByQuery.Length,
+            PublicOutputCachePolicies.ListVaryByQuery.Distinct(StringComparer.Ordinal).Count());
+        Assert.Equal(PublicOutputCachePolicies.SeekVaryByQuery.Length,
+            PublicOutputCachePolicies.SeekVaryByQuery.Distinct(StringComparer.Ordinal).Count());
+    }
+
     [Theory]
     [InlineData("", true)]
     [InlineData("?protocol=Socks5&pageSize=100", true)]
