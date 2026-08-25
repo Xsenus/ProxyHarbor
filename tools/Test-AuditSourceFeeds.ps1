@@ -55,7 +55,8 @@ function Start-SourceAuditMock([int]$Port, [ValidateSet('success', 'saved-state'
                         '2026-08-09T11:00:00Z'
                     } else { $fetchedAt }
                     $identity = if ($Mode -eq 'identity-missing') { '' } else { ',"providerIdentity":"host:mock.example"' }
-                    $json = '[{"id":"22222222-2222-2222-2222-222222222222","name":"Mock feed","provider":"Mock provider"' + $identity + ',"isBuiltIn":true,"enabled":true,"priority":1,"defaultProtocol":"Http","lastItemCount":10,"lastResultTruncated":false,"consecutiveFailures":0,"lastFetchedAt":"' + $fetchedAt + '","lastContentFetchedAt":"' + $contentFetchedAt + '","lastError":null}]'
+                    $item = '{"id":"22222222-2222-2222-2222-222222222222","name":"Mock feed","provider":"Mock provider"' + $identity + ',"isBuiltIn":true,"enabled":true,"priority":1,"defaultProtocol":"Http","lastItemCount":10,"lastResultTruncated":false,"consecutiveFailures":0,"lastFetchedAt":"' + $fetchedAt + '","lastContentFetchedAt":"' + $contentFetchedAt + '","lastError":null}'
+                    $json = '{"items":[' + $item + '],"page":1,"pageSize":100,"total":1}'
                 }
 
                 $bytes = [Text.Encoding]::UTF8.GetBytes($json)

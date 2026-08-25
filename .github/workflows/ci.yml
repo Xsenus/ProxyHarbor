@@ -818,10 +818,12 @@ jobs:
           echo "$metrics" | grep 'proxyharbor_validation_checks_per_second 0'
           echo "$metrics" | grep 'proxyharbor_validation_estimated_drain_seconds 0'
           echo "$metrics" | grep 'proxyharbor_advisory_lock_cleanup_failures_total 0'
-          sources=$(curl --fail --silent -H 'X-Admin-Key: integration-admin-key-at-least-24-chars' http://127.0.0.1:5080/api/v1/admin/sources)
-          test "$(echo "$sources" | jq length)" -eq 98
-          test "$(echo "$sources" | jq '[.[] | select(.isBuiltIn)] | length')" -eq 98
-          test "$(echo "$sources" | jq '[.[].provider] | unique | length')" -eq 56
+          integration_admin_key='integration-admin-key-at-least-24-chars'
+          sources=$(curl --fail --silent -H "X-Admin-Key: ${integration_admin_key}" 'http://127.0.0.1:5080/api/v1/admin/sources?page=1&pageSize=100')
+          test "$(echo "$sources" | jq '.total')" -eq 98
+          test "$(echo "$sources" | jq '.items | length')" -eq 98
+          test "$(echo "$sources" | jq '[.items[] | select(.isBuiltIn)] | length')" -eq 98
+          test "$(echo "$sources" | jq '[.items[].provider] | unique | length')" -eq 56
           invalid_status=$(curl --silent --output /dev/null --write-out '%{http_code}' \
             -X POST -H 'Content-Type: application/json' -H 'X-Admin-Key: integration-admin-key-at-least-24-chars' \
             --data '{"name":"x","url":"http://127.0.0.1/list.txt","protocol":"Http"}' \
@@ -958,8 +960,10 @@ jobs:
             curl --fail --silent http://127.0.0.1:5080/health/ready && break
             sleep 1
           done
-          restored_sources=$(curl --fail --silent -H 'X-Admin-Key: integration-admin-key-at-least-24-chars' http://127.0.0.1:5080/api/v1/admin/sources)
-          test "$(echo "$restored_sources" | jq length)" -eq 98
+          integration_admin_key='integration-admin-key-at-least-24-chars'
+          restored_sources=$(curl --fail --silent -H "X-Admin-Key: ${integration_admin_key}" 'http://127.0.0.1:5080/api/v1/admin/sources?page=1&pageSize=100')
+          test "$(echo "$restored_sources" | jq '.total')" -eq 98
+          test "$(echo "$restored_sources" | jq '.items | length')" -eq 98
           restored_proxy=$(PGPASSWORD=integration-password psql -tA -F '|' \
             -h 127.0.0.1 -U proxyharbor -d proxyharbor \
             -c "SELECT \"Host\", \"Port\", \"Protocol\", \"Status\", \"LatencyMs\", \"ExitIp\", \"CountryCode\", \"IsAnonymous\", \"SuccessfulChecks\", \"FailedChecks\", \"ConsecutiveFailedChecks\", \"LastError\" FROM \"Proxies\" WHERE \"Id\" = '20000000-0000-0000-0000-000000000001';")

@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
@@ -11,6 +12,7 @@ namespace ProxyHarbor.Api.Controllers;
 
 /// <summary>Операции администратора; доступ ограничивает middleware по X-Admin-Key.</summary>
 [ApiController, Route("api/v1/admin"), EnableRateLimiting("admin")]
+[Authorize(Roles = UserRoles.Administrator)]
 [ProducesResponseType<ProblemDetails>(StatusCodes.Status401Unauthorized)]
 public sealed class AdminController(
     IDbContextFactory<ProxyHarborDbContext> dbFactory,
@@ -21,14 +23,23 @@ public sealed class AdminController(
     IOptions<BackupOptions> backupOptions,
     IOptions<CollectorOptions> collectorOptions) : ControllerBase
 {
-    /// <summary>Возвращает полный операторский список источников и их runtime-состояние.</summary>
+    /// <summary>Возвращает стабильную bounded-страницу источников и их runtime-состояние.</summary>
     [HttpGet("sources")]
-    [ProducesResponseType<IReadOnlyList<SourceResponse>>(StatusCodes.Status200OK)]
-    public async Task<ActionResult<IReadOnlyList<SourceResponse>>> Sources(CancellationToken token)
+    [ProducesResponseType<PagedResult<SourceResponse>>(StatusCodes.Status200OK)]
+    public async Task<ActionResult<PagedResult<SourceResponse>>> Sources(
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 10,
+        CancellationToken token = default)
     {
+        page = Math.Clamp(page, 1, 100_000);
+        pageSize = Math.Clamp(pageSize, 10, 100);
         await using var db = await dbFactory.CreateDbContextAsync(token);
-        var sources = await db.Sources.AsNoTracking().OrderBy(x => x.Priority).ToListAsync(token);
-        return Ok(sources.Select(SourceResponse.From).ToArray());
+        var query = db.Sources.AsNoTracking();
+        var total = await query.CountAsync(token);
+        var sources = await query.OrderBy(x => x.Priority).ThenBy(x => x.Name).ThenBy(x => x.Id)
+            .Skip((page - 1) * pageSize).Take(pageSize).ToListAsync(token);
+        return Ok(new PagedResult<SourceResponse>(
+            sources.Select(SourceResponse.From).ToArray(), page, pageSize, total));
     }
 
     /// <summary>Возвращает один источник по стабильному идентификатору.</summary>

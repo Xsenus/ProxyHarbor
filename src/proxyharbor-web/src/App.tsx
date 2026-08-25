@@ -57,6 +57,9 @@ export default function App() {
   const [adminAuthenticated, setAdminAuthenticated] = useState(false)
   const [adminError, setAdminError] = useState('')
   const [sources, setSources] = useState<Source[]>([])
+  const [sourcePage, setSourcePage] = useState(1)
+  const [sourcePageSize, setSourcePageSize] = useState(10)
+  const [sourceTotal, setSourceTotal] = useState(0)
   const [diagnostics, setDiagnostics] = useState<Diagnostics | null>(null)
   const [adminLoading, setAdminLoading] = useState(false)
   const [action, setAction] = useState('')
@@ -152,7 +155,11 @@ export default function App() {
     setMaxLatency(value)
   }
 
-  const loadAdminData = useCallback(async (focusFirstAction = false) => {
+  const loadAdminData = useCallback(async (
+    focusFirstAction = false,
+    requestedSourcePage = sourcePage,
+    requestedSourcePageSize = sourcePageSize,
+  ) => {
     const requestId = ++adminRequestIdRef.current
     adminAbortRef.current?.abort()
     const controller = new AbortController()
@@ -160,8 +167,9 @@ export default function App() {
     setAdminLoading(true)
     try {
       const requestOptions = { credentials: 'include' as const, signal: controller.signal }
+      const sourceQuery = new URLSearchParams({ page: String(requestedSourcePage), pageSize: String(requestedSourcePageSize) })
       const [sourcesResponse, diagnosticsResponse] = await Promise.all([
-        fetch(`${API}/api/v1/admin/sources`, requestOptions),
+        fetch(`${API}/api/v1/admin/sources?${sourceQuery}`, requestOptions),
         fetch(`${API}/api/v1/admin/diagnostics`, requestOptions),
       ])
       if (requestId !== adminRequestIdRef.current) return
@@ -169,6 +177,7 @@ export default function App() {
       if (unauthorizedResponse) {
         setAdminAuthenticated(false)
         setSources([])
+        setSourceTotal(0)
         setDiagnostics(null)
         window.location.replace('/login')
         return
@@ -179,9 +188,15 @@ export default function App() {
       }
       if (!sourcesResponse.ok) throw new Error(await responseMessage(sourcesResponse, 'Административная сессия недоступна'))
       if (!diagnosticsResponse.ok) throw new Error(await responseMessage(diagnosticsResponse, 'Диагностика недоступна'))
-      const [sourceRows, diagnosticSnapshot] = await Promise.all([sourcesResponse.json(), diagnosticsResponse.json()])
+      const [sourceSnapshot, diagnosticSnapshot] = await Promise.all([
+        sourcesResponse.json() as Promise<PagedResult<Source>>,
+        diagnosticsResponse.json(),
+      ])
       if (requestId !== adminRequestIdRef.current) return
-      setSources(sourceRows)
+      setSources(sourceSnapshot.items)
+      setSourceTotal(sourceSnapshot.total)
+      const availableSourcePages = Math.max(1, Math.ceil(sourceSnapshot.total / requestedSourcePageSize))
+      if (requestedSourcePage > availableSourcePages) setSourcePage(availableSourcePages)
       setDiagnostics(diagnosticSnapshot)
       setAdminAuthenticated(true)
       setAdminError('')
@@ -197,7 +212,7 @@ export default function App() {
         setAdminLoading(false)
       }
     }
-  }, [])
+  }, [sourcePage, sourcePageSize])
 
   useEffect(() => {
     if (!adminAuthenticated || !focusAdminActionAfterLoginRef.current) return
@@ -243,6 +258,7 @@ export default function App() {
     setAdminAuthenticated(false)
     setAdminError('')
     setSources([])
+    setSourceTotal(0)
     setDiagnostics(null)
     setAction('')
     setSourceBusy('')
@@ -368,6 +384,7 @@ export default function App() {
   const latestBackup = diagnostics?.recentBackups[0]
   const adminMutationBusy = !!action || !!sourceBusy
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
+  const sourceTotalPages = Math.max(1, Math.ceil(sourceTotal / sourcePageSize))
 
   if (loginPage) return <AccountLoginPage/>
   if (registerPage) return <RegisterPage/>
@@ -431,7 +448,7 @@ export default function App() {
         <nav className="admin-nav-group" aria-label="Разделы админ-панели"><span>Управление</span>
           <a className={adminSection === 'overview' ? 'active' : ''} aria-current={adminSection === 'overview' ? 'page' : undefined} href="/admin"><LayoutDashboard/>Обзор</a>
           <a className={adminSection === 'operations' ? 'active' : ''} aria-current={adminSection === 'operations' ? 'page' : undefined} href="/admin/operations"><Workflow/>Операции</a>
-          <a className={adminSection === 'sources' ? 'active' : ''} aria-current={adminSection === 'sources' ? 'page' : undefined} href="/admin/sources"><Server/>Источники <b>{sources.length || '—'}</b></a>
+          <a className={adminSection === 'sources' ? 'active' : ''} aria-current={adminSection === 'sources' ? 'page' : undefined} href="/admin/sources"><Server/>Источники <b>{sourceTotal || '—'}</b></a>
           <a className={adminSection === 'backups' ? 'active' : ''} aria-current={adminSection === 'backups' ? 'page' : undefined} href="/admin/backups"><HardDriveDownload/>Резервные копии</a>
           <a className={adminSection === 'users' ? 'active' : ''} aria-current={adminSection === 'users' ? 'page' : undefined} href="/admin/users"><Users/>Пользователи</a>
         </nav>
@@ -471,7 +488,7 @@ export default function App() {
           </section>}
 
           {adminSection === 'sources' && <section className="admin-section" aria-labelledby="admin-sources-title">
-            <div className="admin-section-heading"><div><span className="kicker">КАТАЛОГ СБОРА</span><h1 id="admin-sources-title">Источники</h1><p>Подключайте собственные HTTPS-feed и управляйте активностью существующих источников.</p></div><span className="section-count">{sources.length}</span></div>
+            <div className="admin-section-heading"><div><span className="kicker">КАТАЛОГ СБОРА</span><h1 id="admin-sources-title">Источники</h1><p>Подключайте собственные HTTPS-feed и управляйте активностью существующих источников.</p></div><span className="section-count">{sourceTotal}</span></div>
             <section className="admin-card source-create"><div className="card-heading"><div><span className="kicker">НОВЫЙ FEED</span><h2>Добавить источник</h2></div></div><form className="source-form" onSubmit={saveSource}>
               <input required minLength={2} maxLength={120} aria-label="Название источника" placeholder="Название" value={sourceDraft.name} onChange={e => setSourceDraft({...sourceDraft, name: e.target.value})}/>
               <input required type="url" maxLength={2048} pattern="https://.*" aria-label="HTTPS URL источника" placeholder="https://example.org/proxies.txt" value={sourceDraft.url} onChange={e => setSourceDraft({...sourceDraft, url: e.target.value})}/>
@@ -479,10 +496,10 @@ export default function App() {
               <input type="number" min={-10000} max={10000} aria-label="Приоритет источника" value={sourceDraft.priority} onChange={e => setSourceDraft({...sourceDraft, priority: Number(e.target.value)})}/>
               <button type="submit" disabled={!adminAuthenticated || adminMutationBusy}>{sourceBusy === 'new' ? 'Добавляем…' : 'Добавить источник'}</button>
             </form></section>
-            <section className="admin-card source-catalog-card"><div className="card-heading"><div><span className="kicker">ВСЕ ИСТОЧНИКИ</span><h2>Каталог <em>{sources.length}</em></h2></div><button className="icon-button" aria-label="Обновить источники" onClick={() => void loadAdminData()} disabled={adminLoading}><RefreshCw className={adminLoading ? 'spin' : ''}/></button></div><div className="source-list">{sources.map(source => <article key={source.id}>
+            <section className="admin-card source-catalog-card"><div className="card-heading"><div><span className="kicker">ВСЕ ИСТОЧНИКИ</span><h2>Каталог <em>{sourceTotal}</em></h2></div><button className="icon-button" aria-label="Обновить источники" onClick={() => void loadAdminData()} disabled={adminLoading}><RefreshCw className={adminLoading ? 'spin' : ''}/></button></div><div className="source-list">{sources.map(source => <article key={source.id}>
               <div><b>{source.name}</b><small>{source.defaultProtocol} · {source.lastItemCount.toLocaleString('ru-RU')} адресов{source.lastContentFetchedAt ? ` · полный feed ${new Date(source.lastContentFetchedAt).toLocaleString('ru-RU')}` : ' · полный feed ещё не получен'}{source.lastResultTruncated ? ' · результат усечён' : ''}{source.consecutiveFailures > 0 ? ` · сбоев подряд: ${source.consecutiveFailures}` : ''}{source.nextFetchAt ? ` · повтор ${timeUntil(source.nextFetchAt)}` : ''}</small></div>
               <div className="source-controls"><span title={source.isBuiltIn ? `Встроенный источник · ${source.provider} · ${source.providerIdentity} · ранг ${source.catalogRank}` : 'Пользовательский источник'} className="source-kind">{source.isBuiltIn ? source.provider : 'свой'}</span><span title={source.lastError} className={source.lastError ? 'source-error' : 'source-ok'}>{source.lastError ? 'ошибка' : source.enabled ? 'активен' : 'пауза'}</span><button disabled={adminMutationBusy} onClick={() => toggleSource(source)}>{source.enabled ? 'Пауза' : 'Включить'}</button>{!source.isBuiltIn && <button className="danger" disabled={adminMutationBusy} onClick={() => removeSource(source)}>Удалить</button>}</div>
-            </article>)}</div></section>
+            </article>)}</div>{sourceTotal > 0 && <ProxyPagination page={sourcePage} pageSize={sourcePageSize} total={sourceTotal} totalPages={sourceTotalPages} onPageChange={next => { setSourcePage(next); void loadAdminData(false, next, sourcePageSize); document.getElementById('admin-sources-title')?.scrollIntoView?.({behavior:'smooth'}) }} onPageSizeChange={size => { setSourcePageSize(size); setSourcePage(1); void loadAdminData(false, 1, size) }}/>}</section>
           </section>}
 
           {adminSection === 'backups' && <section className="admin-section" aria-labelledby="admin-backups-title">

@@ -67,7 +67,20 @@ try {
         $report.candidateLimitReached = [bool]$collection.CandidateLimitReached
     }
 
-    $sources = Invoke-RestMethod -Method Get -Uri "$ApiBaseUrl/api/v1/admin/sources" -Headers $headers
+    # Admin API отдаёт bounded-страницы: аудит обязан собрать весь каталог,
+    # а не ошибочно принять первую сотню за полный набор источников.
+    $sources = @()
+    $sourcePage = 1
+    do {
+        $sourceSnapshot = Invoke-RestMethod -Method Get `
+            -Uri "$ApiBaseUrl/api/v1/admin/sources?page=$sourcePage&pageSize=100" -Headers $headers
+        $pageItems = @($sourceSnapshot.Items)
+        $sources += $pageItems
+        $sourcePage++
+        if ($pageItems.Count -eq 0 -and $sources.Count -lt [int]$sourceSnapshot.Total) {
+            throw 'Admin source pagination вернула пустую страницу до конца каталога.'
+        }
+    } while ($sources.Count -lt [int]$sourceSnapshot.Total)
     $ordered = @($sources | Sort-Object Priority)
     $enabled = @($ordered | Where-Object Enabled)
     $failed = @($enabled | Where-Object { $_.LastItemCount -le 0 -or $_.LastError })

@@ -231,7 +231,10 @@ Invoke-RestMethod https://proxy.example.com/api/v1/admin/diagnostics -Headers $a
 
 ### GET `/api/v1/admin/sources`
 
-Возвращает runtime state, conditional validators evidence, errors, completeness flags и built-in metadata.
+Параметры: `page` (от 1) и `pageSize` (`10..100`, по умолчанию `10`). Возвращает
+`PagedResult<SourceResponse>` с полями `items`, `page`, `pageSize`, `total`.
+Строки стабильно упорядочены по priority, имени и идентификатору; каждая содержит
+runtime state, conditional validators evidence, errors, completeness flags и built-in metadata.
 
 ### GET `/api/v1/admin/sources/{id}`
 
