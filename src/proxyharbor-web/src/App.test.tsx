@@ -48,6 +48,7 @@ describe('ProxyHarbor UI', () => {
     expect(screen.getAllByText('2 ч 0 мин').length).toBeGreaterThan(0)
     expect(screen.getByText('Страница 1 из 4 · Найдено: 77')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Следующая страница' })).toBeEnabled()
+    expect(screen.queryByRole('spinbutton', { name: 'Номер страницы' })).not.toBeInTheDocument()
   })
 
   it('requests the selected page and page size from the server', async () => {
@@ -58,6 +59,26 @@ describe('ProxyHarbor UI', () => {
       const url = String(input)
       return url.includes('/api/v1/proxies?') && url.includes('page=2') && url.includes('pageSize=25')
     })).toBe(true))
+  })
+
+  it('shows the compact quick jump only for a long catalog', async () => {
+    vi.mocked(fetch).mockImplementation(async input => {
+      const url = String(input)
+      if (url.includes('/api/v1/stats')) return jsonResponse(stats)
+      if (url.includes('/api/v1/proxies')) {
+        const requestedPage = Number(new URL(url, 'http://localhost').searchParams.get('page')) || 1
+        return jsonResponse({ items: proxies, page: requestedPage, pageSize: 25, total: 250 })
+      }
+      return jsonResponse({ title: 'Unexpected request' }, 500)
+    })
+
+    render(<App />)
+    const pageInput = await screen.findByRole('spinbutton', { name: 'Номер страницы' })
+    expect(screen.queryByText('Перейти:')).not.toBeInTheDocument()
+    fireEvent.change(pageInput, { target: { value: '8' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Перейти на страницу' }))
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([input]) =>
+      String(input).includes('page=8'))).toBe(true))
   })
 
   it('resets to page one when page size changes', async () => {
