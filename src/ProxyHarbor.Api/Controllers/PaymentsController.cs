@@ -19,40 +19,51 @@ public sealed class PaymentsController(
     UserManager<ApplicationUser> users,
     ProxyHarborDbContext db,
     PaymentGatewayClient gateways,
-    IOptions<PaymentOptions> configured) : ControllerBase
+    IPaymentConfigurationStore configurations) : ControllerBase
 {
-    private readonly PaymentOptions options = configured.Value;
+    /// <summary>Совместимый статический конструктор для изолированных unit-тестов.</summary>
+    internal PaymentsController(
+        UserManager<ApplicationUser> users,
+        ProxyHarborDbContext db,
+        PaymentGatewayClient gateways,
+        IOptions<PaymentOptions> configured)
+        : this(users, db, gateways, new StaticPaymentConfigurationStore(configured)) { }
 
     /// <summary>Возвращает разрешённые продукты и состояние всех поддерживаемых шлюзов.</summary>
     [Authorize, HttpGet("catalog"), EnableRateLimiting("account")]
-    public IActionResult Catalog() => Ok(new
+    public async Task<IActionResult> Catalog(CancellationToken token = default)
     {
-        enabled = options.Enabled,
-        products = options.Products.Where(x => x.Value.Enabled).Select(x => new
+        var options = await configurations.GetAsync(token);
+        return Ok(new
         {
-            code = x.Key, x.Value.Name, x.Value.Plan, x.Value.DurationDays,
-            x.Value.AmountMinor, currency = x.Value.Currency.ToUpperInvariant(), x.Value.Description
-        }),
-        providers = KnownProviders.Select(code => new
-        {
-            code,
-            name = options.Providers.TryGetValue(code, out var value) && !string.IsNullOrWhiteSpace(value.DisplayName)
-                ? value.DisplayName : ProviderName(code),
-            available = options.Enabled && value is not null && PaymentProviderConfiguration.IsReady(code, value)
-        })
-    });
+            enabled = options.Enabled,
+            products = options.Products.Where(x => x.Value.Enabled).Select(x => new
+            {
+                code = x.Key, x.Value.Name, x.Value.Plan, x.Value.DurationDays,
+                x.Value.AmountMinor, currency = x.Value.Currency.ToUpperInvariant(), x.Value.Description
+            }),
+            providers = PaymentProviderConfiguration.Codes.Select(code => new
+            {
+                code,
+                name = options.Providers.TryGetValue(code, out var value) && !string.IsNullOrWhiteSpace(value.DisplayName)
+                    ? value.DisplayName : ProviderName(code),
+                available = options.Enabled && value is not null && PaymentProviderConfiguration.IsReady(code, value)
+            })
+        });
+    }
 
     /// <summary>Создаёт локальный заказ и возвращает URL страницы выбранного провайдера.</summary>
     [Authorize, HttpPost("checkout"), EnableRateLimiting("account")]
     public async Task<IActionResult> Checkout([FromBody] CreateCheckoutRequest request, CancellationToken token)
     {
+        var options = await configurations.GetAsync(token);
         var user = await users.GetUserAsync(User);
         if (user is null || !user.IsActive) return Unauthorized();
         var productCode = request.ProductCode.Trim().ToLowerInvariant();
         var providerCode = request.Provider.Trim().ToLowerInvariant();
         if (!options.Enabled || !options.Products.TryGetValue(productCode, out var product) || !product.Enabled)
             return Problem("Выбранный продукт недоступен.", statusCode: 400);
-        if (!KnownProviders.Contains(providerCode, StringComparer.Ordinal) ||
+        if (!PaymentProviderConfiguration.Codes.Contains(providerCode, StringComparer.Ordinal) ||
             !options.Providers.TryGetValue(providerCode, out var provider) ||
             !PaymentProviderConfiguration.IsReady(providerCode, provider))
             return Problem("Выбранный способ оплаты недоступен.", statusCode: 400);
@@ -103,7 +114,7 @@ public sealed class PaymentsController(
     public async Task<IActionResult> Webhook(string providerCode, CancellationToken token)
     {
         providerCode = providerCode.Trim().ToLowerInvariant();
-        if (!KnownProviders.Contains(providerCode, StringComparer.Ordinal)) return NotFound();
+        if (!PaymentProviderConfiguration.Codes.Contains(providerCode, StringComparer.Ordinal)) return NotFound();
         PaymentNotification notification;
         try { notification = await gateways.ReadNotificationAsync(providerCode, Request, token); }
         catch (Exception exception) when (exception is InvalidOperationException or JsonException or FormatException or KeyNotFoundException)
@@ -176,7 +187,6 @@ public sealed class PaymentsController(
         "tbank" => "Т-Банк", "stripe" => "Stripe", _ => code
     };
 
-    private static readonly string[] KnownProviders = ["yookassa", "cloudpayments", "robokassa", "tbank", "stripe"];
 }
 
 /// <summary>Минимальный запрос: цена и срок всегда берутся с доверенного сервера.</summary>

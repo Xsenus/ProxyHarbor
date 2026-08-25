@@ -89,7 +89,7 @@ public sealed class PaymentControllerTests
         await using var fixture = await Fixture.CreateAsync();
         var disabled = new PaymentOptions { Enabled = false };
         var controller = fixture.Controller(disabled);
-        var catalog = Assert.IsType<OkObjectResult>(controller.Catalog());
+        var catalog = Assert.IsType<OkObjectResult>(await controller.Catalog());
         Assert.Contains("\"enabled\":false", JsonSerializer.Serialize(catalog.Value), StringComparison.Ordinal);
 
         Assert.IsType<ObjectResult>(await controller.Checkout(new CreateCheckoutRequest

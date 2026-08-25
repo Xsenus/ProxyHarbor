@@ -66,6 +66,8 @@ internal sealed record PaymentNotification(Guid OrderId, string ProviderPaymentI
 
 internal static class PaymentProviderConfiguration
 {
+    internal static readonly string[] Codes = ["yookassa", "cloudpayments", "robokassa", "tbank", "stripe"];
+
     internal static bool IsReady(string code, PaymentProviderOptions value) => value.Enabled && code switch
     {
         "yookassa" => Present(value.MerchantId) && Present(value.SecretKey),
@@ -83,22 +85,25 @@ internal static class PaymentProviderConfiguration
 /// Создаёт только страницы оплаты самого провайдера и проверяет подписанные уведомления.
 /// Реквизиты карт никогда не принимаются приложением.
 /// </summary>
-public sealed class PaymentGatewayClient(IHttpClientFactory clients, IOptions<PaymentOptions> configured)
+public sealed class PaymentGatewayClient(IHttpClientFactory clients, IPaymentConfigurationStore configurations)
 {
-    private readonly PaymentOptions options = configured.Value;
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
+
+    /// <summary>Упрощённый конструктор сохраняет совместимость unit-тестов со статической конфигурацией.</summary>
+    internal PaymentGatewayClient(IHttpClientFactory clients, IOptions<PaymentOptions> configured)
+        : this(clients, new StaticPaymentConfigurationStore(configured)) { }
 
     internal async Task<CheckoutResult> CreateAsync(
         PaymentOrder order, ApplicationUser user, CancellationToken token)
     {
-        var provider = RequiredProvider(order.Provider);
+        var (provider, publicBaseUrl) = await RequiredProviderAsync(order.Provider, token);
         return order.Provider switch
         {
-            "yookassa" => await CreateYooKassaAsync(order, provider, token),
-            "cloudpayments" => await CreateCloudPaymentsAsync(order, user, provider, token),
+            "yookassa" => await CreateYooKassaAsync(order, provider, publicBaseUrl, token),
+            "cloudpayments" => await CreateCloudPaymentsAsync(order, user, provider, publicBaseUrl, token),
             "robokassa" => CreateRobokassa(order, user, provider),
-            "tbank" => await CreateTBankAsync(order, user, provider, token),
-            "stripe" => await CreateStripeAsync(order, user, provider, token),
+            "tbank" => await CreateTBankAsync(order, user, provider, publicBaseUrl, token),
+            "stripe" => await CreateStripeAsync(order, user, provider, publicBaseUrl, token),
             _ => throw new InvalidOperationException("Неизвестный платёжный провайдер.")
         };
     }
@@ -106,7 +111,7 @@ public sealed class PaymentGatewayClient(IHttpClientFactory clients, IOptions<Pa
     internal async Task<PaymentNotification> ReadNotificationAsync(
         string providerCode, HttpRequest request, CancellationToken token)
     {
-        var provider = RequiredProvider(providerCode);
+        var (provider, _) = await RequiredProviderAsync(providerCode, token);
         request.EnableBuffering();
         using var reader = new StreamReader(request.Body, Encoding.UTF8, leaveOpen: true);
         var body = await reader.ReadToEndAsync(token);
@@ -122,22 +127,24 @@ public sealed class PaymentGatewayClient(IHttpClientFactory clients, IOptions<Pa
         };
     }
 
-    private PaymentProviderOptions RequiredProvider(string code)
+    private async Task<(PaymentProviderOptions Provider, string PublicBaseUrl)> RequiredProviderAsync(
+        string code, CancellationToken token)
     {
+        var options = await configurations.GetAsync(token);
         if (!options.Enabled || !options.Providers.TryGetValue(code, out var provider) ||
             !PaymentProviderConfiguration.IsReady(code, provider))
             throw new InvalidOperationException("Платёжный провайдер пока не настроен.");
-        return provider;
+        return (provider, options.PublicBaseUrl);
     }
 
     private async Task<CheckoutResult> CreateYooKassaAsync(
-        PaymentOrder order, PaymentProviderOptions provider, CancellationToken token)
+        PaymentOrder order, PaymentProviderOptions provider, string publicBaseUrl, CancellationToken token)
     {
         var payload = new
         {
             amount = new { value = Major(order.AmountMinor), currency = order.Currency },
             capture = true,
-            confirmation = new { type = "redirect", return_url = ReturnUrl(order.Id) },
+            confirmation = new { type = "redirect", return_url = ReturnUrl(publicBaseUrl, order.Id) },
             description = $"ProxyHarbor {order.ProductCode}",
             metadata = new { order_id = order.Id.ToString("D") }
         };
@@ -152,7 +159,7 @@ public sealed class PaymentGatewayClient(IHttpClientFactory clients, IOptions<Pa
     }
 
     private async Task<CheckoutResult> CreateCloudPaymentsAsync(
-        PaymentOrder order, ApplicationUser user, PaymentProviderOptions provider, CancellationToken token)
+        PaymentOrder order, ApplicationUser user, PaymentProviderOptions provider, string publicBaseUrl, CancellationToken token)
     {
         var payload = new Dictionary<string, object?>
         {
@@ -160,7 +167,7 @@ public sealed class PaymentGatewayClient(IHttpClientFactory clients, IOptions<Pa
             ["Description"] = $"ProxyHarbor {order.ProductCode}", ["Email"] = user.Email,
             ["InvoiceId"] = order.Id.ToString("D"), ["AccountId"] = user.Id.ToString("D"),
             ["SendEmail"] = false, ["RequireConfirmation"] = false,
-            ["SuccessRedirectUrl"] = ReturnUrl(order.Id), ["FailRedirectUrl"] = ReturnUrl(order.Id)
+            ["SuccessRedirectUrl"] = ReturnUrl(publicBaseUrl, order.Id), ["FailRedirectUrl"] = ReturnUrl(publicBaseUrl, order.Id)
         };
         using var request = new HttpRequestMessage(HttpMethod.Post, "https://api.cloudpayments.ru/orders/create")
         { Content = JsonContent.Create(payload) };
@@ -194,15 +201,15 @@ public sealed class PaymentGatewayClient(IHttpClientFactory clients, IOptions<Pa
     }
 
     private async Task<CheckoutResult> CreateTBankAsync(
-        PaymentOrder order, ApplicationUser user, PaymentProviderOptions provider, CancellationToken token)
+        PaymentOrder order, ApplicationUser user, PaymentProviderOptions provider, string publicBaseUrl, CancellationToken token)
     {
         var payload = new SortedDictionary<string, object?>(StringComparer.Ordinal)
         {
             ["Amount"] = order.AmountMinor, ["CustomerKey"] = user.Id.ToString("D"),
-            ["Description"] = $"ProxyHarbor {order.ProductCode}", ["FailURL"] = ReturnUrl(order.Id),
-            ["NotificationURL"] = $"{options.PublicBaseUrl.TrimEnd('/')}/api/v1/payments/webhooks/tbank",
+            ["Description"] = $"ProxyHarbor {order.ProductCode}", ["FailURL"] = ReturnUrl(publicBaseUrl, order.Id),
+            ["NotificationURL"] = $"{publicBaseUrl.TrimEnd('/')}/api/v1/payments/webhooks/tbank",
             ["OrderId"] = order.Id.ToString("D"), ["PayType"] = "O",
-            ["SuccessURL"] = ReturnUrl(order.Id), ["TerminalKey"] = provider.MerchantId
+            ["SuccessURL"] = ReturnUrl(publicBaseUrl, order.Id), ["TerminalKey"] = provider.MerchantId
         };
         payload["Token"] = TBankToken(payload, provider.SecretKey);
         using var response = await clients.CreateClient().PostAsJsonAsync(
@@ -213,12 +220,12 @@ public sealed class PaymentGatewayClient(IHttpClientFactory clients, IOptions<Pa
     }
 
     private async Task<CheckoutResult> CreateStripeAsync(
-        PaymentOrder order, ApplicationUser user, PaymentProviderOptions provider, CancellationToken token)
+        PaymentOrder order, ApplicationUser user, PaymentProviderOptions provider, string publicBaseUrl, CancellationToken token)
     {
         var fields = new Dictionary<string, string>
         {
-            ["mode"] = "payment", ["success_url"] = ReturnUrl(order.Id),
-            ["cancel_url"] = ReturnUrl(order.Id), ["customer_email"] = user.Email ?? string.Empty,
+            ["mode"] = "payment", ["success_url"] = ReturnUrl(publicBaseUrl, order.Id),
+            ["cancel_url"] = ReturnUrl(publicBaseUrl, order.Id), ["customer_email"] = user.Email ?? string.Empty,
             ["client_reference_id"] = order.Id.ToString("D"), ["metadata[order_id]"] = order.Id.ToString("D"),
             ["line_items[0][quantity]"] = "1", ["line_items[0][price_data][currency]"] = order.Currency.ToLowerInvariant(),
             ["line_items[0][price_data][unit_amount]"] = order.AmountMinor.ToString(CultureInfo.InvariantCulture),
@@ -306,7 +313,8 @@ public sealed class PaymentGatewayClient(IHttpClientFactory clients, IOptions<Pa
             session.GetProperty("amount_total").GetInt64(), session.GetProperty("currency").GetString()!.ToUpperInvariant());
     }
 
-    private string ReturnUrl(Guid id) => $"{options.PublicBaseUrl.TrimEnd('/')}/account?payment={id:D}";
+    private static string ReturnUrl(string publicBaseUrl, Guid id) =>
+        $"{publicBaseUrl.TrimEnd('/')}/account?payment={id:D}";
     private static string Major(long minor) => (minor / 100m).ToString("0.00", CultureInfo.InvariantCulture);
     private static long ParseMinor(string major) => checked((long)(decimal.Parse(major, CultureInfo.InvariantCulture) * 100m));
     private static string PositiveInvoice(Guid id) => (BitConverter.ToUInt32(id.ToByteArray(), 0) & 0x7fffffff).ToString(CultureInfo.InvariantCulture);

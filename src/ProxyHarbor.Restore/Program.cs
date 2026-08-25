@@ -251,6 +251,9 @@ internal static class RestoreApplication
             await db.Proxies.ExecuteDeleteAsync(token);
             await db.Sources.ExecuteDeleteAsync(token);
             var hasIdentitySnapshot = archive.GetEntry("database/users.json") is not null;
+            var hasPaymentConfiguration = archive.GetEntry("database/payment-configuration.json") is not null;
+            if (hasPaymentConfiguration)
+                await db.PaymentConfigurations.ExecuteDeleteAsync(token);
             if (hasIdentitySnapshot)
             {
                 // Старые encrypted backups v2-v5 не содержат accounts и поэтому сохраняют
@@ -328,6 +331,9 @@ internal static class RestoreApplication
                 if (archive.GetEntry("database/payment-orders.json") is not null)
                     _ = await ImportIdentityAsync<PaymentOrder>(archive, "database/payment-orders.json", db, token);
             }
+            if (hasPaymentConfiguration)
+                _ = await ImportIdentityAsync<PaymentConfiguration>(
+                    archive, "database/payment-configuration.json", db, token);
             hooks?.BeforeCommit?.Invoke();
             // Не начинаем COMMIT, если shutdown поступил после завершения всех COPY. Явная
             // граница исключает неоднозначный запуск подтверждения с уже отменённым token.

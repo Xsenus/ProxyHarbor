@@ -96,6 +96,22 @@ public static class PaymentStatuses
     public static readonly string[] All = [Pending, Paid, Failed, Canceled, Refunded];
 }
 
+/// <summary>
+/// Единственная runtime-конфигурация биллинга. Открытые настройки хранятся JSON,
+/// а реквизиты провайдеров — только в защищённом Data Protection контейнере.
+/// </summary>
+public sealed class PaymentConfiguration
+{
+    /// <summary>Фиксированный ключ singleton-записи.</summary>
+    public int Id { get; set; } = 1;
+    /// <summary>Версионируемые несекретные настройки продуктов и провайдеров.</summary>
+    public string SettingsJson { get; set; } = string.Empty;
+    /// <summary>Зашифрованный JSON с ключами и паролями провайдеров.</summary>
+    public string ProtectedSecrets { get; set; } = string.Empty;
+    /// <summary>Момент последнего административного изменения.</summary>
+    public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
 /// <summary>Стабильные системные роли; UI никогда не определяет права самостоятельно.</summary>
 public static class UserRoles
 {
