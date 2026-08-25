@@ -198,6 +198,30 @@ describe('ProxyHarbor UI', () => {
       String(input).includes('/api/v1/admin/sources?page=2&pageSize=10'))).toBe(true))
   })
 
+  it('shows proxy lifetime statistics and pages the protected inventory on the server', async () => {
+    window.history.replaceState({}, '', '/admin/proxies')
+    vi.mocked(fetch).mockImplementation(async input => {
+      const url = String(input)
+      if (url.includes('/api/v1/admin/proxies?')) return jsonResponse({
+        items: [{ id:'proxy-1',host:'203.0.113.10',port:8080,protocol:'Http',status:'Alive',latencyMs:120,countryCode:'DE',isAnonymous:true,firstSeenAt:'2026-08-20T10:00:00Z',lastSeenAt:new Date().toISOString(),lastCheckedAt:new Date().toISOString(),firstAliveAt:'2026-08-20T11:00:00Z',lastAliveAt:new Date().toISOString(),currentAliveSince:'2026-08-25T10:00:00Z',activeForSeconds:93600,lastValidationDeferred:false,successfulChecks:12,failedChecks:1,consecutiveFailedChecks:0,successRate:92.3 }],
+        page:1,pageSize:10,total:21,
+        summary:{total:100,alive:21,freshAlive:20,staleAlive:1,pending:30,dead:49,everAlive:60,averageAliveLatencyMs:120,countries:2,longestActiveSeconds:93600},
+        countries:[{code:'DE',count:12},{code:'US',count:8}],
+      })
+      if (url.includes('/api/v1/admin/sources')) return jsonResponse({ items: [], page: 1, pageSize: 10, total: 0 })
+      if (url.includes('/api/v1/admin/diagnostics')) return jsonResponse({serverTime:new Date().toISOString(),databaseBytes:0,validationQueue:{total:100,due:0},recentRuns:[],recentValidationRuns:[],recentBackups:[]})
+      return jsonResponse({ title: 'Unexpected request' }, 500)
+    })
+
+    render(<App />)
+    expect(await screen.findByRole('heading', { name:'Прокси', level:1 })).toBeInTheDocument()
+    expect(screen.getByText('203.0.113.10:8080')).toBeInTheDocument()
+    expect(screen.getAllByText('1 д 2 ч').length).toBeGreaterThan(0)
+    expect(screen.getByText('Страница 1 из 3 · Найдено: 21')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name:/^Прокси/ })).toHaveAttribute('aria-current','page')
+    expect(screen.getByLabelText('Страна прокси')).toBeInTheDocument()
+  })
+
   it('creates sources in a modal editor', async () => {
     window.history.replaceState({}, '', '/admin/sources')
     vi.mocked(fetch).mockImplementation(async (input, options) => {

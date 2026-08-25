@@ -40,6 +40,7 @@ public sealed class SiteTelemetryController(ProxyAccessMonitor monitor) : Contro
             "/admin" => "admin-overview",
             "/admin/operations" => "admin-operations",
             "/admin/sources" => "admin-sources",
+            "/admin/proxies" => "admin-proxies",
             "/admin/backups" => "admin-backups",
             "/admin/users" => "admin-users",
             "/admin/payments" => "admin-payments",

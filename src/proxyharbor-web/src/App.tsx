@@ -24,7 +24,10 @@ type Diagnostics = {
 const API = import.meta.env.VITE_API_URL ?? ''
 const APP_VERSION = import.meta.env.VITE_APP_VERSION ?? '0.0.0-local'
 const protocols: Protocol[] = ['Http', 'Https', 'Socks4', 'Socks5']
-type AdminSection = 'overview' | 'operations' | 'sources' | 'backups' | 'users' | 'payments' | 'telegram' | 'subscriptions' | 'access'
+type AdminSection = 'overview' | 'operations' | 'proxies' | 'sources' | 'backups' | 'users' | 'payments' | 'telegram' | 'subscriptions' | 'access'
+type AdminProxyStatus = 'Pending' | 'Alive' | 'Dead'
+type AdminProxy = { id:string;host:string;port:number;protocol:Protocol;status:AdminProxyStatus;latencyMs?:number;exitIp?:string;countryCode?:string;isAnonymous:boolean;firstSeenAt:string;lastSeenAt:string;lastCheckedAt?:string;firstAliveAt?:string;lastAliveAt?:string;currentAliveSince?:string;activeForSeconds?:number;lastValidationAttemptAt?:string;lastValidationDeferred:boolean;nextCheckAt?:string;successfulChecks:number;failedChecks:number;consecutiveFailedChecks:number;successRate:number;lastError?:string }
+type AdminProxyPage = PagedResult<AdminProxy> & { summary:{total:number;alive:number;freshAlive:number;staleAlive:number;pending:number;dead:number;everAlive:number;averageAliveLatencyMs?:number;countries:number;longestActiveSeconds?:number};countries:ProxyCountry[] }
 type AccountProfile = { id: string; userName: string; email: string; displayName?: string; createdAt: string; lastLoginAt?: string; roles: string[]; subscription?: { plan: string; status: string; startedAt: string; expiresAt?: string } }
 type PaymentCatalog = { enabled: boolean; products: PaymentProduct[]; providers: PaymentProvider[] }
 type PaymentProduct = { code: string; name: string; plan: string; durationDays: number; amountMinor: number; currency: string; description: string }
@@ -77,7 +80,8 @@ export default function App() {
   const resetPasswordPage = currentPath === '/reset-password'
   const accountOpen = currentPath === '/account' || currentPath === '/account/profile'
   const adminOpen = currentPath === '/admin' || currentPath.startsWith('/admin/') && !loginPage
-  const adminSection: AdminSection = currentPath === '/admin/sources' ? 'sources'
+  const adminSection: AdminSection = currentPath === '/admin/proxies' ? 'proxies'
+    : currentPath === '/admin/sources' ? 'sources'
     : currentPath === '/admin/operations' ? 'operations'
       : currentPath === '/admin/backups' ? 'backups'
         : currentPath === '/admin/users' ? 'users'
@@ -540,6 +544,7 @@ export default function App() {
         <nav className="admin-nav-group" aria-label="Разделы админ-панели"><span>Управление</span>
           <a className={adminSection === 'overview' ? 'active' : ''} aria-current={adminSection === 'overview' ? 'page' : undefined} href="/admin"><LayoutDashboard/>Обзор</a>
           <a className={adminSection === 'operations' ? 'active' : ''} aria-current={adminSection === 'operations' ? 'page' : undefined} href="/admin/operations"><Workflow/>Операции</a>
+          <a className={adminSection === 'proxies' ? 'active' : ''} aria-current={adminSection === 'proxies' ? 'page' : undefined} href="/admin/proxies"><Wifi/>Прокси <b>{diagnostics?.validationQueue?.total || '—'}</b></a>
           <a className={adminSection === 'sources' ? 'active' : ''} aria-current={adminSection === 'sources' ? 'page' : undefined} href="/admin/sources"><Server/>Источники <b>{sourceTotal || '—'}</b></a>
           <a className={adminSection === 'backups' ? 'active' : ''} aria-current={adminSection === 'backups' ? 'page' : undefined} href="/admin/backups"><HardDriveDownload/>Резервные копии</a>
           <a className={adminSection === 'users' ? 'active' : ''} aria-current={adminSection === 'users' ? 'page' : undefined} href="/admin/users"><Users/>Пользователи</a>
@@ -597,6 +602,7 @@ export default function App() {
             <AdminRunHistory title="История резервного копирования" empty="Резервные копии ещё не создавались.">{diagnostics?.recentBackups.map(run => <HistoryRow key={run.id} status={run.status} title={run.fileName ?? 'Резервная копия'} detail={`${formatBytes(run.sizeBytes)} · ${backupDelivery(run)}`} time={run.startedAt}/>)}</AdminRunHistory>
           </section>}
           {adminSection === 'users' && <AdminUsersPage/>}
+          {adminSection === 'proxies' && <AdminProxiesPage/>}
           {adminSection === 'payments' && <AdminPaymentsPage/>}
           {adminSection === 'telegram' && <AdminTelegramPage/>}
           {adminSection === 'subscriptions' && <AdminSubscriptionsPage/>}
@@ -796,6 +802,51 @@ function AccountPage() {
       {orders.length>0&&<div className="payment-history"><h3>История платежей</h3>{orders.map(order=><div key={order.id}><span>{planLabel(order.plan)} · {providerLabel(order.provider)}</span><b>{money(order.amountMinor,order.currency)}</b><em className={`payment-status ${order.status}`}>{paymentStatusLabel(order.status)}</em><time>{new Date(order.createdAt).toLocaleDateString('ru-RU')}</time></div>)}</div>}
     </section>
   </section></main>
+}
+
+/** Полный административный реестр прокси с накопленной историей проверок. */
+function AdminProxiesPage() {
+  const [data,setData]=useState<AdminProxyPage|null>(null)
+  const [page,setPage]=useState(1)
+  const [pageSize,setPageSize]=useState(10)
+  const [status,setStatus]=useState('')
+  const [protocol,setProtocol]=useState('')
+  const [country,setCountry]=useState('')
+  const [sort,setSort]=useState('lastChecked')
+  const [search,setSearch]=useState('')
+  const [appliedSearch,setAppliedSearch]=useState('')
+  const [loading,setLoading]=useState(false)
+  const [error,setError]=useState('')
+  const load=useCallback(async(signal?:AbortSignal)=>{
+    setLoading(true)
+    const query=new URLSearchParams({page:String(page),pageSize:String(pageSize),sort})
+    if(status)query.set('status',status);if(protocol)query.set('protocol',protocol);if(country)query.set('country',country);if(appliedSearch)query.set('query',appliedSearch)
+    try{const response=await fetch(`${API}/api/v1/admin/proxies?${query}`,{credentials:'include',signal});if(!response.ok){setError(await responseMessage(response,'Реестр прокси недоступен'));return}setData(await response.json() as AdminProxyPage);setError('')}
+    catch(reason){if(!isAbortError(reason))setError('Не удалось получить реестр прокси.')}
+    finally{if(!signal?.aborted)setLoading(false)}
+  },[page,pageSize,status,protocol,country,sort,appliedSearch])
+  useEffect(()=>{const controller=new AbortController();const timer=window.setTimeout(()=>void load(controller.signal),0);return()=>{window.clearTimeout(timer);controller.abort()}},[load])
+  const changeFilter=(setter:(value:string)=>void,value:string)=>{setter(value);setPage(1)}
+  const summary=data?.summary
+  const countries:[string,string][]=[["","Все страны"],...(data?.countries??[]).map(item=>[item.code,`${countryFlag(item.code)} ${countryName(item.code)} · ${formatNumber(item.count)}`] as [string,string])]
+  return <section className="admin-section proxy-admin-section" aria-labelledby="admin-proxies-title">
+    <div className="admin-section-heading"><div><span className="kicker">PROXY INVENTORY</span><h1 id="admin-proxies-title">Прокси</h1><p>Все когда-либо найденные адреса, текущее состояние, скорость, надёжность и непрерывное время работы.</p></div><button className="icon-button" aria-label="Обновить реестр прокси" disabled={loading} onClick={()=>void load()}><RefreshCw className={loading?'spin':''}/></button></div>
+    {error&&<div className="admin-notice" role="alert"><X/>{error}</div>}
+    <div className="admin-summary-grid compact-summary proxy-summary"><article><span className="summary-icon"><Activity/></span><div><small>Работают сейчас</small><strong>{formatNumber(summary?.freshAlive)}</strong><p>{formatNumber(summary?.staleAlive)} ожидают свежей проверки</p></div></article><article><span className="summary-icon"><ShieldCheck/></span><div><small>Работали хотя бы раз</small><strong>{formatNumber(summary?.everAlive)}</strong><p>из {formatNumber(summary?.total)} известных</p></div></article><article><span className="summary-icon"><Gauge/></span><div><small>Средняя задержка</small><strong>{summary?.averageAliveLatencyMs==null?'—':`${formatNumber(summary.averageAliveLatencyMs)} мс`}</strong><p>по свежим рабочим адресам</p></div></article><article><span className="summary-icon"><Clock3/></span><div><small>Самый долгоживущий</small><strong>{formatActiveDuration(summary?.longestActiveSeconds)}</strong><p>{formatNumber(summary?.countries)} стран выхода</p></div></article></div>
+    <section className="admin-card admin-registry proxy-inventory-card">
+      <div className="proxy-admin-filters"><form onSubmit={event=>{event.preventDefault();setAppliedSearch(search.trim());setPage(1)}}><input aria-label="Поиск прокси" maxLength={128} value={search} onChange={event=>setSearch(event.target.value)} placeholder="IP, хост или IP выхода"/><button type="submit">Найти</button></form><StyledSelect ariaLabel="Статус прокси" value={status} onChange={value=>changeFilter(setStatus,value)} options={[["","Все состояния"],["Alive","Рабочие"],["Pending","Ожидают проверки"],["Dead","Нерабочие"]]}/><StyledSelect ariaLabel="Протокол прокси" value={protocol} onChange={value=>changeFilter(setProtocol,value)} options={[["","Все протоколы"],...[...protocols].map(item=>[item,label(item)] as [string,string])]}/><StyledSelect ariaLabel="Страна прокси" value={country} onChange={value=>changeFilter(setCountry,value)} options={countries}/><StyledSelect ariaLabel="Сортировка прокси" value={sort} onChange={value=>changeFilter(setSort,value)} options={[["lastChecked","Недавно проверенные"],["active","Дольше работают"],["latency","Самые быстрые"],["lastSeen","Недавно найдены"]]}/></div>
+      <div className="proxy-filter-summary"><span>Рабочие: <b>{formatNumber(summary?.alive)}</b></span><span>Ожидают: <b>{formatNumber(summary?.pending)}</b></span><span>Нерабочие: <b>{formatNumber(summary?.dead)}</b></span><strong>Найдено по фильтру: {formatNumber(data?.total)}</strong></div>
+      <div className="admin-data-table admin-proxy-table"><div className="admin-data-head"><span>Адрес / страна</span><span>Состояние</span><span>Качество</span><span>Непрерывно работает</span><span>История</span></div>
+        {!data||loading&&!data?<div className="empty-state"><RefreshCw className="spin"/>Загружаем прокси…</div>:data.items.length===0?<div className="empty-state"><Wifi/>По выбранным фильтрам прокси не найдены.</div>:data.items.map(item=><article key={item.id}>
+          <span className="admin-proxy-address"><code>{item.host}:{item.port}</code><small><b className={`badge ${item.protocol.toLowerCase()}`}>{label(item.protocol)}</b>{item.countryCode?`${countryFlag(item.countryCode)} ${countryName(item.countryCode)}`:'Страна не определена'}{item.exitIp&&item.exitIp!==item.host?` · выход ${item.exitIp}`:''}</small></span>
+          <span><em className={`proxy-state ${item.status.toLowerCase()}`}>{adminProxyStatusLabel(item.status)}</em><small title={item.lastError}>{item.lastValidationDeferred?'Результат отложен':item.lastError||`Следующая проверка ${item.nextCheckAt?timeUntil(item.nextCheckAt):'по очереди'}`}</small></span>
+          <span><b>{item.latencyMs==null?'—':`${item.latencyMs} мс`}</b><small>{item.successRate}% · {item.successfulChecks} успешных / {item.failedChecks} ошибок</small></span>
+          <span><b>{item.status==='Alive'?formatActiveDuration(item.activeForSeconds):'Не работает'}</b><small>{item.currentAliveSince?`с ${new Date(item.currentAliveSince).toLocaleString('ru-RU')}`:item.lastAliveAt?`последний раз ${timeAgo(item.lastAliveAt)}`:'ещё не работал'}</small></span>
+          <span><b>{item.lastCheckedAt?timeAgo(item.lastCheckedAt):'Не проверялся'}</b><small>впервые найден {new Date(item.firstSeenAt).toLocaleString('ru-RU')} · в feed {timeAgo(item.lastSeenAt)}</small></span>
+        </article>)}</div>
+      {data&&data.total>0&&<ProxyPagination page={page} pageSize={pageSize} total={data.total} totalPages={Math.max(1,Math.ceil(data.total/pageSize))} onPageChange={next=>{setPage(next);document.getElementById('admin-proxies-title')?.scrollIntoView?.({behavior:'smooth'})}} onPageSizeChange={size=>{setPageSize(size);setPage(1)}}/>}
+    </section>
+  </section>
 }
 
 /** Управление ролями и тарифом остаётся отдельным административным разделом. */
@@ -1055,6 +1106,7 @@ function money(minor:number,currency:string){return new Intl.NumberFormat('ru-RU
 function providerLabel(provider:string){return ({yookassa:'ЮKassa',cloudpayments:'CloudPayments',robokassa:'Robokassa',tbank:'Т-Банк',stripe:'Stripe'} as Record<string,string>)[provider]??provider}
 function paymentStatusLabel(status:string){return ({pending:'Ожидает оплаты',paid:'Оплачен',failed:'Ошибка',canceled:'Отменён',refunded:'Возвращён'} as Record<string,string>)[status]??status}
 function subscriptionStatusLabel(status:string){return ({active:'Активна',trialing:'Пробная',past_due:'Просрочена',canceled:'Отменена',expired:'Истекла',suspended:'Приостановлена'} as Record<string,string>)[status]??status}
+function adminProxyStatusLabel(status:AdminProxyStatus){return ({Alive:'Рабочий',Pending:'Ожидает',Dead:'Нерабочий'} as Record<AdminProxyStatus,string>)[status]}
 function label(protocol: Protocol) { return ({Http: 'HTTP', Https: 'HTTPS', Socks4: 'SOCKS4', Socks5: 'SOCKS5'})[protocol] }
 const regionNames = new Intl.DisplayNames(['ru'], { type: 'region' })
 function countryName(code:string){return regionNames.of(code.toUpperCase())??code.toUpperCase()}
