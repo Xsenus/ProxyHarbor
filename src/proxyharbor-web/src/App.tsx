@@ -1006,7 +1006,7 @@ function AdminUsersPage() {
   }
 
   const totalPages = Math.max(1, Math.ceil((data?.total ?? 0) / pageSize))
-  return <section className="admin-section" aria-labelledby="admin-users-title">
+  return <section className="admin-section users-admin-section" aria-labelledby="admin-users-title">
     <div className="admin-section-heading"><div><span className="kicker">ACCESS CONTROL</span><h1 id="admin-users-title">Пользователи</h1><p>Поиск, роли и подписки в постраничном реестре, который не загружает всю базу в браузер.</p></div><span className="section-count">{data?.total ?? '—'}</span></div>
     {error && <div className="admin-notice" role="alert"><X/>{error}</div>}
     <section className="admin-card users-registry">
