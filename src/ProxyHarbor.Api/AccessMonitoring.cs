@@ -21,12 +21,13 @@ public sealed class ProxyAccessMonitor(
         LogLevel.Error, new EventId(1502, "ProxyAccessMaintenanceFailed"),
         "Не удалось выполнить обслуживание правил/retention proxy API; worker продолжит работу.");
     private readonly ConcurrentDictionary<AccessKey, AccessCounter> counters = new();
+    private readonly ConcurrentQueue<SiteVisitLog> siteVisits = new();
     private volatile AccessRuleSnapshot rules = AccessRuleSnapshot.Empty;
 
     /// <summary>Добавляет запрос к текущему агрегату без обращения к БД.</summary>
     public void Record(HttpContext context, string endpoint, bool blocked)
     {
-        var ip = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+        var ip = NormalizeAddress(context.Connection.RemoteIpAddress);
         Guid? userId = Guid.TryParse(context.User.FindFirstValue(ClaimTypes.NameIdentifier), out var parsed) ? parsed : null;
         var bucket = new DateTimeOffset(DateTimeOffset.UtcNow.UtcTicks / TimeSpan.TicksPerMinute / 5 * TimeSpan.TicksPerMinute * 5, TimeSpan.Zero);
         var key = new AccessKey(bucket, ip, userId, endpoint);
@@ -41,8 +42,23 @@ public sealed class ProxyAccessMonitor(
     }
 
     /// <summary>Учитывает один просмотр нормализованной страницы без сохранения URL-параметров.</summary>
-    public void RecordSiteVisit(HttpContext context, string normalizedPage) =>
+    public void RecordSiteVisit(HttpContext context, string normalizedPage)
+    {
         Record(context, SitePagePrefix + normalizedPage, blocked: false);
+        Guid? userId = Guid.TryParse(context.User.FindFirstValue(ClaimTypes.NameIdentifier), out var parsed) ? parsed : null;
+        siteVisits.Enqueue(new SiteVisitLog
+        {
+            IpAddress = NormalizeAddress(context.Connection.RemoteIpAddress),
+            UserId = userId,
+            Page = normalizedPage,
+            VisitedAt = DateTimeOffset.UtcNow
+        });
+    }
+
+    /// <summary>Сворачивает IPv4-mapped IPv6 к привычному каноническому виду.</summary>
+    internal static string NormalizeAddress(IPAddress? address) => address is null
+        ? "unknown"
+        : (address.IsIPv4MappedToIPv6 ? address.MapToIPv4() : address).ToString();
 
     /// <summary>Проверяет локальный неизменяемый снимок активных правил.</summary>
     public bool IsBlocked(IPAddress? address, Guid? userId)
@@ -50,7 +66,8 @@ public sealed class ProxyAccessMonitor(
         var snapshot = rules;
         if (userId.HasValue && snapshot.Users.Contains(userId.Value)) return true;
         if (address is null) return false;
-        return snapshot.Addresses.Contains(address) || snapshot.Networks.Any(x => x.Contains(address));
+        var normalized = address.IsIPv4MappedToIPv6 ? address.MapToIPv4() : address;
+        return snapshot.Addresses.Contains(normalized) || snapshot.Networks.Any(x => x.Contains(normalized));
     }
 
     /// <summary>Атомарно перечитывает правила после административного изменения.</summary>
@@ -103,6 +120,8 @@ public sealed class ProxyAccessMonitor(
         var cutoff = DateTimeOffset.UtcNow.AddDays(-90);
         await db.ProxyAccessBuckets.Where(x => x.LastSeenAt < cutoff)
             .ExecuteDeleteAsync(token);
+        await db.SiteVisitLogs.Where(x => x.VisitedAt < cutoff)
+            .ExecuteDeleteAsync(token);
         await db.FreeProxyExportGrants.Where(x => x.NextAllowedAt < cutoff)
             .ExecuteDeleteAsync(token);
     }
@@ -110,7 +129,7 @@ public sealed class ProxyAccessMonitor(
     private async Task FlushAsync(CancellationToken token)
     {
         var snapshot = counters.ToArray();
-        if (snapshot.Length == 0) return;
+        if (snapshot.Length == 0 && siteVisits.IsEmpty) return;
         await using var db = await dbFactory.CreateDbContextAsync(token);
         foreach (var pair in snapshot)
         {
@@ -139,6 +158,19 @@ public sealed class ProxyAccessMonitor(
                 MergeCounter(pair.Key, value);
                 FlushFailed(logger, exception);
             }
+        }
+        var visits = new List<SiteVisitLog>(Math.Min(siteVisits.Count, 5_000));
+        while (visits.Count < 5_000 && siteVisits.TryDequeue(out var visit)) visits.Add(visit);
+        if (visits.Count == 0) return;
+        try
+        {
+            db.SiteVisitLogs.AddRange(visits);
+            await db.SaveChangesAsync(token);
+        }
+        catch
+        {
+            foreach (var visit in visits) siteVisits.Enqueue(visit);
+            throw;
         }
     }
 

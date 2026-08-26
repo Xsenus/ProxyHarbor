@@ -276,6 +276,7 @@ internal static class RestoreApplication
                 await db.UserClaims.ExecuteDeleteAsync(token);
                 await db.RoleClaims.ExecuteDeleteAsync(token);
                 await db.UserRoles.ExecuteDeleteAsync(token);
+                await db.SiteVisitLogs.ExecuteDeleteAsync(token);
                 await db.ProxyAccessBuckets.ExecuteDeleteAsync(token);
                 await db.FreeProxyExportGrants.ExecuteDeleteAsync(token);
                 await db.AccessBlockRules.ExecuteDeleteAsync(token);
@@ -351,6 +352,8 @@ internal static class RestoreApplication
                     _ = await ImportIdentityAsync<SubscriptionAdminAction>(archive, "database/subscription-admin-actions.json", db, token);
                 if (archive.GetEntry("database/proxy-access-buckets.json") is not null)
                     _ = await ImportIdentityAsync<ProxyAccessBucket>(archive, "database/proxy-access-buckets.json", db, token);
+                if (archive.GetEntry("database/site-visit-logs.json") is not null)
+                    _ = await ImportIdentityAsync<SiteVisitLog>(archive, "database/site-visit-logs.json", db, token);
                 if (archive.GetEntry("database/free-proxy-export-grants.json") is not null)
                     _ = await ImportIdentityAsync<FreeProxyExportGrant>(archive, "database/free-proxy-export-grants.json", db, token);
                 if (archive.GetEntry("database/access-block-rules.json") is not null)

@@ -88,7 +88,93 @@ public sealed class AdminBillingAccessTests
         var json = System.Text.Json.JsonSerializer.Serialize(result.Value);
         Assert.Contains("\"requests\":20", json);
         Assert.Contains("\"proxyItems\":200", json);
+        foreach (var sort in new[] { "ip", "requests", "proxyItems", "bytesSent", "lastSeen" })
+        foreach (var order in new[] { "asc", "desc" })
+            Assert.IsType<OkObjectResult>(await controller.List(sort: sort, order: order, token: CancellationToken.None));
+        Assert.IsType<BadRequestResult>(await controller.List(sort: "unknown", token: CancellationToken.None));
+        Assert.IsType<BadRequestResult>(await controller.List(order: "sideways", token: CancellationToken.None));
     }
+
+    [Fact]
+    public async Task AccessAndVisitorRegistriesDeduplicateIpAcrossAuthenticationStates()
+    {
+        await using var fixture = new Fixture();
+        var user = new ApplicationUser { Id = Guid.NewGuid(), UserName = "member", Email = "member@example.test" };
+        fixture.Db.Users.Add(user);
+        fixture.Db.ProxyAccessBuckets.AddRange(
+            Bucket("203.0.113.40", 4, 40),
+            Bucket("203.0.113.40", 6, 60, userId: user.Id),
+            Bucket("203.0.113.40", 2, 0, "page:home"),
+            Bucket("203.0.113.40", 3, 0, "page:account", user.Id));
+        await fixture.Db.SaveChangesAsync();
+        var controller = WithPrincipal(new AdminAccessController(fixture.Db,
+            new ProxyAccessMonitor(fixture.Factory, NullLogger<ProxyAccessMonitor>.Instance)), user.Id);
+
+        var traffic = Assert.IsType<OkObjectResult>(await controller.List(token: CancellationToken.None));
+        var trafficJson = System.Text.Json.JsonSerializer.Serialize(traffic.Value);
+        Assert.Contains("\"total\":1", trafficJson);
+        Assert.Contains("\"requests\":10", trafficJson);
+        Assert.Contains("member@example.test", trafficJson);
+
+        var visitors = Assert.IsType<OkObjectResult>(await controller.Visitors(token: CancellationToken.None));
+        var visitorJson = System.Text.Json.JsonSerializer.Serialize(visitors.Value);
+        Assert.Contains("\"total\":1", visitorJson);
+        Assert.Contains("\"PageViews\":5", visitorJson);
+        Assert.Contains("member@example.test", visitorJson);
+        foreach (var sort in new[] { "ip", "pageViews", "pages", "firstSeen", "lastSeen" })
+        foreach (var order in new[] { "asc", "desc" })
+            Assert.IsType<OkObjectResult>(await controller.Visitors(sort: sort, order: order, token: CancellationToken.None));
+        Assert.IsType<BadRequestResult>(await controller.Visitors(sort: "unknown", token: CancellationToken.None));
+        Assert.IsType<BadRequestResult>(await controller.Visitors(order: "sideways", token: CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task VisitHistoryAndRulesAreServerPagedAndSortable()
+    {
+        await using var fixture = new Fixture();
+        var admin = new ApplicationUser { Id = Guid.NewGuid(), UserName = "admin", Email = "admin@example.test" };
+        fixture.Db.Users.Add(admin);
+        fixture.Db.SiteVisitLogs.AddRange(
+            new SiteVisitLog { IpAddress = "198.51.100.2", Page = "home", VisitedAt = DateTimeOffset.UtcNow.AddMinutes(-2) },
+            new SiteVisitLog { IpAddress = "198.51.100.1", UserId = admin.Id, Page = "admin-access", VisitedAt = DateTimeOffset.UtcNow.AddMinutes(-1) });
+        fixture.Db.AccessBlockRules.Add(new AccessBlockRule { Kind = AccessBlockKinds.Ip,
+            Value = "198.51.100.9", Reason = "test rule", AdministratorId = admin.Id });
+        await fixture.Db.SaveChangesAsync();
+        var controller = WithPrincipal(new AdminAccessController(fixture.Db,
+            new ProxyAccessMonitor(fixture.Factory, NullLogger<ProxyAccessMonitor>.Instance)), admin.Id);
+
+        var history = Assert.IsType<OkObjectResult>(await controller.VisitHistory(
+            pageSize: 10, sort: "ip", order: "asc", token: CancellationToken.None));
+        var historyJson = System.Text.Json.JsonSerializer.Serialize(history.Value);
+        Assert.Contains("admin@example.test", historyJson);
+        Assert.Contains("\"total\":2", historyJson);
+        foreach (var sort in new[] { "ip", "page", "visitedAt" })
+        foreach (var order in new[] { "asc", "desc" })
+            Assert.IsType<OkObjectResult>(await controller.VisitHistory(sort: sort, order: order, token: CancellationToken.None));
+        Assert.IsType<OkObjectResult>(await controller.VisitHistory(query: "admin-access", token: CancellationToken.None));
+        Assert.IsType<BadRequestResult>(await controller.VisitHistory(sort: "wrong", token: CancellationToken.None));
+        Assert.IsType<BadRequestResult>(await controller.VisitHistory(order: "sideways", token: CancellationToken.None));
+
+        var rules = Assert.IsType<OkObjectResult>(await controller.Rules(token: CancellationToken.None));
+        Assert.Contains("198.51.100.9", System.Text.Json.JsonSerializer.Serialize(rules.Value));
+        foreach (var sort in new[] { "target", "createdAt", "expiresAt", "status" })
+        foreach (var order in new[] { "asc", "desc" })
+            Assert.IsType<OkObjectResult>(await controller.Rules(sort: sort, order: order, token: CancellationToken.None));
+        Assert.IsType<OkObjectResult>(await controller.Rules(query: "test rule", token: CancellationToken.None));
+        Assert.IsType<BadRequestResult>(await controller.Rules(sort: "wrong", token: CancellationToken.None));
+        Assert.IsType<BadRequestResult>(await controller.Rules(order: "sideways", token: CancellationToken.None));
+    }
+
+    [Theory]
+    [InlineData("::ffff:172.31.40.1", "172.31.40.1")]
+    [InlineData("203.0.113.4", "203.0.113.4")]
+    [InlineData("2001:db8::1", "2001:db8::1")]
+    public void ClientAddressesAreStoredCanonically(string raw, string expected) =>
+        Assert.Equal(expected, ProxyAccessMonitor.NormalizeAddress(System.Net.IPAddress.Parse(raw)));
+
+    [Fact]
+    public void MissingClientAddressUsesStableSentinel() =>
+        Assert.Equal("unknown", ProxyAccessMonitor.NormalizeAddress(null));
 
     [Fact]
     public async Task VisitorRegistrySeparatesPageViewsFromProxyTraffic()

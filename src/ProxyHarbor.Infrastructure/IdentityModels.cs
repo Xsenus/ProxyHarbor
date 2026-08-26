@@ -110,6 +110,27 @@ public sealed class ProxyAccessBucket
 }
 
 /// <summary>
+/// Отдельное событие перехода по странице. В отличие от пятиминутного агрегата
+/// эта запись позволяет администратору увидеть последовательность посещений.
+/// Query-параметры и произвольные URL сюда не попадают.
+/// </summary>
+public sealed class SiteVisitLog
+{
+    /// <summary>Суррогатный ключ журнала.</summary>
+    public long Id { get; set; }
+    /// <summary>Канонический IP после доверенного reverse proxy.</summary>
+    public string IpAddress { get; set; } = string.Empty;
+    /// <summary>Авторизованный аккаунт либо null.</summary>
+    public Guid? UserId { get; set; }
+    /// <summary>Навигация к аккаунту.</summary>
+    public ApplicationUser? User { get; set; }
+    /// <summary>Ограниченный стабильный код страницы.</summary>
+    public string Page { get; set; } = string.Empty;
+    /// <summary>Точное время серверного приёма события.</summary>
+    public DateTimeOffset VisitedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
+/// <summary>
 /// Постоянный маркер последней бесплатной выгрузки. Отдельная запись нужна, чтобы
 /// десятиминутный интервал нельзя было обойти перезапуском API или параллельными запросами.
 /// </summary>

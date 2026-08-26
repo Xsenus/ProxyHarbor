@@ -321,7 +321,8 @@ var forwardedHeaders = new ForwardedHeadersOptions
     ForwardLimit = 1,
     RequireHeaderSymmetry = true
 };
-foreach (var network in knownProxyNetworks) forwardedHeaders.KnownIPNetworks.Add(network);
+foreach (var network in ForwardedNetworkPolicy.ExpandForRuntime(knownProxyNetworks))
+    forwardedHeaders.KnownIPNetworks.Add(network);
 app.UseForwardedHeaders(forwardedHeaders);
 app.UseRequestLocalization();
 app.Use(async (context, next) =>
