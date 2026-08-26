@@ -18,14 +18,18 @@ public sealed class VpnController(IDbContextFactory<ProxyHarborDbContext> dbFact
     [HttpGet]
     public async Task<ActionResult<PagedResult<VpnEndpointResponse>>> Get(
         [FromQuery] int page = 1, [FromQuery] int pageSize = 10,
-        [FromQuery] VpnProtocol? protocol = null, [FromQuery] VpnEndpointStatus? status = VpnEndpointStatus.Reachable,
+        [FromQuery] VpnProtocol? protocol = null, [FromQuery] VpnEndpointStatus? status = null,
         CancellationToken token = default)
     {
         page = Math.Clamp(page, 1, 100_000); pageSize = Math.Clamp(pageSize, 10, 100);
         await using var db = await dbFactory.CreateDbContextAsync(token);
         var query = db.VpnEndpoints.AsNoTracking();
         if (protocol.HasValue) query = query.Where(x => x.Protocol == protocol.Value);
-        if (status.HasValue) query = query.Where(x => x.Status == status.Value);
+        // Не задаём enum как optional-значение параметра: Microsoft.AspNetCore.OpenApi 10
+        // пытается сериализовать boxed int как Nullable<VpnEndpointStatus> и роняет
+        // /openapi/v1.json. Поведение по умолчанию сохраняем внутри метода.
+        var effectiveStatus = status ?? VpnEndpointStatus.Reachable;
+        query = query.Where(x => x.Status == effectiveStatus);
         var total = await query.CountAsync(token);
         var items = await query.OrderBy(x => x.LatencyMs == null).ThenBy(x => x.LatencyMs).ThenBy(x => x.Id)
             .Skip((page - 1) * pageSize).Take(pageSize)

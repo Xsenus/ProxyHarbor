@@ -21,7 +21,8 @@ public sealed class VpnControllerTests
 
         var defaultPage = Page(await controller.Get(token: CancellationToken.None));
         var wireGuardPage = Page(await controller.Get(page: -1, pageSize: 500,
-            protocol: VpnProtocol.WireGuard, status: null, token: CancellationToken.None));
+            protocol: VpnProtocol.WireGuard, status: VpnEndpointStatus.UnsupportedTransport,
+            token: CancellationToken.None));
 
         Assert.Single(defaultPage.Items);
         Assert.Equal("Catalog", defaultPage.Items[0].SourceName);
