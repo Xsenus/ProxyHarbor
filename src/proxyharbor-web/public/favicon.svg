@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="ProxyHarbor">
+  <rect width="64" height="64" rx="18" fill="#6ee7c1"/>
+  <g fill="none" stroke="#07110f" stroke-linecap="round" stroke-linejoin="round" stroke-width="4">
+    <circle cx="32" cy="17" r="5"/>
+    <circle cx="17" cy="46" r="5"/>
+    <circle cx="47" cy="46" r="5"/>
+    <path d="M32 22v11M17 41v-8h30v8M32 33H17M32 33h15"/>
+  </g>
+</svg>

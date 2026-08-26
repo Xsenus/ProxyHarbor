@@ -16,7 +16,10 @@ public sealed class VpnCatalogService(
     IOptions<CollectorOptions> options,
     ILogger<VpnCatalogService> logger)
 {
-    private const int MaximumFeedBytes = 16 * 1024 * 1024;
+    // Один из проверенных встроенных VLESS-feed сейчас имеет размер около 25 MiB.
+    // Лимит 32 MiB оставляет небольшой запас, но по-прежнему жёстко ограничивает
+    // память при загрузке недоверенного внешнего содержимого.
+    private const int MaximumFeedBytes = 32 * 1024 * 1024;
     private static readonly Action<ILogger, Guid, Exception?> SourceFailed =
         LoggerMessage.Define<Guid>(LogLevel.Warning, new EventId(1161, "VpnSourceFailed"), "VPN source {SourceId} failed");
 
@@ -160,7 +163,7 @@ public sealed class VpnCatalogService(
                     timeout.CancelAfter(TimeSpan.FromSeconds(options.Value.SourceTimeoutSeconds));
                     using var response = await httpClientFactory.CreateClient("sources").GetAsync(source.Url, HttpCompletionOption.ResponseHeadersRead, timeout.Token);
                     response.EnsureSuccessStatusCode();
-                    if (response.Content.Headers.ContentLength > MaximumFeedBytes) throw new HttpRequestException("VPN feed превышает 16 MiB");
+                    if (response.Content.Headers.ContentLength > MaximumFeedBytes) throw new HttpRequestException("VPN feed превышает 32 MiB");
                     await using var stream = await response.Content.ReadAsStreamAsync(timeout.Token);
                     using var memory = new MemoryStream();
                     await CopyBoundedAsync(stream, memory, timeout.Token);
@@ -185,7 +188,7 @@ public sealed class VpnCatalogService(
             var read = await input.ReadAsync(buffer, token);
             if (read == 0) return;
             total += read;
-            if (total > MaximumFeedBytes) throw new HttpRequestException("VPN feed превышает 16 MiB");
+            if (total > MaximumFeedBytes) throw new HttpRequestException("VPN feed превышает 32 MiB");
             await output.WriteAsync(buffer.AsMemory(0, read), token);
         }
     }

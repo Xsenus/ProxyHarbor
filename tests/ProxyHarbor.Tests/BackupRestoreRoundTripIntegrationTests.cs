@@ -345,6 +345,9 @@ public sealed class BackupRestoreRoundTripIntegrationTests
         builtIn.HttpLastModifiedAt = SnapshotTime.AddHours(-2);
         db.Sources.Add(ExpectedCustomSource());
         db.Proxies.Add(ExpectedProxy());
+        db.VpnSources.Add(ExpectedVpnSource());
+        db.VpnEndpoints.Add(ExpectedVpnEndpoint());
+        db.VpnEndpointSources.Add(ExpectedVpnEndpointSource());
         db.Runs.Add(ExpectedCollectionRun());
         db.ValidationRuns.Add(ExpectedValidationRun());
         db.BackupRuns.Add(ExpectedBackupRun());
@@ -374,6 +377,16 @@ public sealed class BackupRestoreRoundTripIntegrationTests
         Assert.Equal("representative source error", builtIn.LastError);
         Assert.Equal("\"built-in-v1\"", builtIn.HttpETag);
         Assert.Equal(SnapshotTime.AddHours(-2), builtIn.HttpLastModifiedAt);
+
+        var vpnSource = await db.VpnSources.AsNoTracking()
+            .SingleAsync(source => source.Id == SnapshotIds.VpnSource);
+        Assert.Equivalent(ExpectedVpnSource(), vpnSource, strict: true);
+        var vpnEndpoint = await db.VpnEndpoints.AsNoTracking()
+            .SingleAsync(endpoint => endpoint.Id == SnapshotIds.VpnEndpoint);
+        Assert.Equivalent(ExpectedVpnEndpoint(), vpnEndpoint, strict: true);
+        var vpnProvenance = await db.VpnEndpointSources.AsNoTracking().SingleAsync(link =>
+            link.VpnEndpointId == SnapshotIds.VpnEndpoint && link.VpnSourceId == SnapshotIds.VpnSource);
+        Assert.Equivalent(ExpectedVpnEndpointSource(), vpnProvenance, strict: true);
 
         var run = await db.Runs.AsNoTracking().SingleAsync();
         Assert.Equivalent(ExpectedCollectionRun(), run, strict: true);
@@ -431,6 +444,51 @@ public sealed class BackupRestoreRoundTripIntegrationTests
         LastError = "custom source error",
         HttpETag = "W/\"custom-v1\"",
         HttpLastModifiedAt = SnapshotTime.AddHours(-3)
+    };
+
+    private static VpnSource ExpectedVpnSource() => new()
+    {
+        Id = SnapshotIds.VpnSource,
+        Name = "Custom VPN restore source",
+        Provider = "Round-trip provider",
+        Url = "https://example.com/vpn.txt",
+        DefaultProtocol = VpnProtocol.Vless,
+        Enabled = true,
+        Priority = 321,
+        License = "Public test feed",
+        LastFetchedAt = SnapshotTime,
+        LastSucceededAt = SnapshotTime.AddMinutes(-1),
+        LastItemCount = 7,
+        ConsecutiveFailures = 1,
+        LastError = "representative VPN source error"
+    };
+
+    private static VpnEndpoint ExpectedVpnEndpoint() => new()
+    {
+        Id = SnapshotIds.VpnEndpoint,
+        Host = "vpn.example.com",
+        Port = 443,
+        Protocol = VpnProtocol.Vless,
+        Transport = "tcp",
+        CountryCode = "DE",
+        ConnectionUri = "vless://public-id@vpn.example.com:443?security=tls#round-trip",
+        Status = VpnEndpointStatus.Reachable,
+        LatencyMs = 87,
+        FirstSeenAt = SnapshotTime.AddDays(-3),
+        LastSeenAt = SnapshotTime,
+        LastCheckedAt = SnapshotTime.AddMinutes(-2),
+        NextCheckAt = SnapshotTime.AddMinutes(3),
+        SuccessfulChecks = 19,
+        FailedChecks = 2,
+        LastError = "representative VPN endpoint detail",
+        FirstSourceId = SnapshotIds.VpnSource
+    };
+
+    private static VpnEndpointSource ExpectedVpnEndpointSource() => new()
+    {
+        VpnEndpointId = SnapshotIds.VpnEndpoint,
+        VpnSourceId = SnapshotIds.VpnSource,
+        LastSeenAt = SnapshotTime.AddMinutes(-4)
     };
 
     private static CollectionRun ExpectedCollectionRun() => new()
@@ -524,5 +582,7 @@ public sealed class BackupRestoreRoundTripIntegrationTests
         internal static readonly Guid BackupRun = Guid.Parse("10000000-0000-0000-0000-000000000004");
         internal static readonly Guid Lease = Guid.Parse("10000000-0000-0000-0000-000000000005");
         internal static readonly Guid ValidationRun = Guid.Parse("10000000-0000-0000-0000-000000000006");
+        internal static readonly Guid VpnSource = Guid.Parse("10000000-0000-0000-0000-000000000007");
+        internal static readonly Guid VpnEndpoint = Guid.Parse("10000000-0000-0000-0000-000000000008");
     }
 }
