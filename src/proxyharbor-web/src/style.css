@@ -171,10 +171,16 @@ body{font-size:14px;line-height:1.5}
 .access-admin-section>[role=tabpanel],.access-visitors-section{display:flex;min-height:0;flex:1;flex-direction:column}
 .access-layout{min-height:0;flex:1}.site-visitors-card{flex:1}
 .admin-subsection-heading{align-items:center;margin:0 0 14px}.admin-subsection-heading h2{margin:0;font-size:18px;letter-spacing:-.02em}.admin-subsection-heading .kicker,.admin-subsection-heading p{display:none}
+/* Старое правило аватара использует тот же прямой span, что и контейнер текста.
+   В реестре явно возвращаем тексту нормальную геометрию, иначе имя сжимается до 38 px. */
+.users-table .user-identity>span{display:block;flex:1 1 auto;min-width:0;height:auto;border-radius:0;background:transparent;color:inherit}
+.users-table,.admin-proxy-table{scrollbar-width:thin;scrollbar-color:#315e50 #091510}
+.users-table::-webkit-scrollbar,.admin-proxy-table::-webkit-scrollbar{height:8px}.users-table::-webkit-scrollbar-track,.admin-proxy-table::-webkit-scrollbar-track{background:#091510}.users-table::-webkit-scrollbar-thumb,.admin-proxy-table::-webkit-scrollbar-thumb{border:2px solid #091510;border-radius:99px;background:#315e50}
 
 @media(max-width:900px){
   .admin-section,.proxy-admin-section,.users-admin-section{min-height:calc(100vh - 63px);padding:18px 22px 14px}
   .admin-page-heading{margin-bottom:14px}
+  .admin-sidebar-foot{flex:0 0 42px;width:42px}.admin-sidebar-foot>.language-switcher{display:none}
 }
 @media(max-width:650px){
   .admin-section,.proxy-admin-section,.users-admin-section{padding:14px 14px 12px}
