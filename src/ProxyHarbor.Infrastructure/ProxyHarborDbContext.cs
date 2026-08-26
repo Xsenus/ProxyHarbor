@@ -13,7 +13,7 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
     public DbSet<ProxyEndpoint> Proxies => Set<ProxyEndpoint>();
     /// <summary>Встроенные и пользовательские proxy feed'ы.</summary>
     public DbSet<ProxySource> Sources => Set<ProxySource>();
-    /// <summary>Безопасные метаданные найденных VPN endpoint без credentials.</summary>
+    /// <summary>Найденные VPN endpoint и опубликованные ссылки подключения.</summary>
     public DbSet<VpnEndpoint> VpnEndpoints => Set<VpnEndpoint>();
     /// <summary>Разрешённые публичные VPN feed'ы.</summary>
     public DbSet<VpnSource> VpnSources => Set<VpnSource>();
@@ -317,6 +317,8 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
         vpnEndpoint.HasIndex(x => x.LastSeenAt);
         vpnEndpoint.Property(x => x.Host).HasMaxLength(255);
         vpnEndpoint.Property(x => x.Transport).HasMaxLength(8);
+        vpnEndpoint.Property(x => x.CountryCode).HasMaxLength(2);
+        vpnEndpoint.Property(x => x.ConnectionUri).HasMaxLength(16_384);
         vpnEndpoint.Property(x => x.LastError).HasMaxLength(500);
         vpnEndpoint.HasOne(x => x.FirstSource).WithMany().HasForeignKey(x => x.FirstSourceId)
             .OnDelete(DeleteBehavior.SetNull);

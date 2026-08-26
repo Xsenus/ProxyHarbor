@@ -5,12 +5,12 @@ using ProxyHarbor.Domain;
 
 namespace ProxyHarbor.Infrastructure;
 
-/// <summary>Извлекает только несекретные endpoint-метаданные из распространённых VPN форматов.</summary>
+/// <summary>Извлекает endpoint и готовые публичные URI подключения из распространённых VPN форматов.</summary>
 public static class VpnFeedParser
 {
     private const int MaxDecodedLength = 8 * 1024 * 1024;
 
-    /// <summary>Разбирает bounded feed и возвращает дедуплицированные несекретные endpoint.</summary>
+    /// <summary>Разбирает bounded feed и возвращает дедуплицированные endpoint.</summary>
     public static IReadOnlyList<VpnCandidate> Parse(string content, VpnProtocol fallback)
     {
         if (string.IsNullOrWhiteSpace(content)) return [];
@@ -56,7 +56,7 @@ public static class VpnFeedParser
         if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) || uri.Port is < 1 or > 65_535)
             return false;
         var transport = protocol is VpnProtocol.WireGuard or VpnProtocol.Hysteria2 or VpnProtocol.Tuic ? "udp" : "tcp";
-        candidate = new VpnCandidate(uri.Host, uri.Port, protocol, transport);
+        candidate = new VpnCandidate(uri.Host, uri.Port, protocol, transport, value);
         return IsSafe(candidate);
     }
 
@@ -71,7 +71,7 @@ public static class VpnFeedParser
             var host = address.GetString();
             var portText = portElement.ValueKind == JsonValueKind.Number ? portElement.GetRawText() : portElement.GetString();
             if (host is null || !int.TryParse(portText, out var port)) return;
-            Add(new VpnCandidate(host, port, VpnProtocol.Vmess, "tcp"), result);
+            Add(new VpnCandidate(host, port, VpnProtocol.Vmess, "tcp", value), result);
         }
         catch (JsonException) { }
     }
@@ -141,12 +141,12 @@ public static class VpnFeedParser
     }
 }
 
-/// <summary>Очищенный кандидат без userinfo, query, ключей и описаний.</summary>
+/// <summary>Кандидат с публичной ссылкой подключения, если feed опубликовал URI-формат.</summary>
 public readonly record struct VpnCandidate
 {
-    /// <summary>Создаёт очищенный кандидат.</summary>
-    public VpnCandidate(string host, int port, VpnProtocol protocol, string transport) =>
-        (Host, Port, Protocol, Transport) = (host, port, protocol, transport);
+    /// <summary>Создаёт кандидата.</summary>
+    public VpnCandidate(string host, int port, VpnProtocol protocol, string transport, string? connectionUri = null) =>
+        (Host, Port, Protocol, Transport, ConnectionUri) = (host, port, protocol, transport, connectionUri);
     /// <summary>Публичный IP либо DNS-имя.</summary>
     public string Host { get; init; }
     /// <summary>Сетевой порт.</summary>
@@ -155,4 +155,6 @@ public readonly record struct VpnCandidate
     public VpnProtocol Protocol { get; init; }
     /// <summary>TCP либо UDP.</summary>
     public string Transport { get; init; }
+    /// <summary>Исходная готовая URI-конфигурация для импорта клиентом.</summary>
+    public string? ConnectionUri { get; init; }
 }

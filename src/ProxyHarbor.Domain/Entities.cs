@@ -58,7 +58,7 @@ public enum VpnEndpointStatus
     UnsupportedTransport
 }
 
-/// <summary>Публичный адрес VPN, очищенный от UUID, паролей, ключей и иных секретов.</summary>
+/// <summary>Публичный VPN endpoint и опубликованная провайдером ссылка подключения.</summary>
 public sealed class VpnEndpoint
 {
     /// <summary>Стабильный идентификатор.</summary>
@@ -71,6 +71,13 @@ public sealed class VpnEndpoint
     public VpnProtocol Protocol { get; set; }
     /// <summary>TCP либо UDP; только TCP проверяется активным подключением в первой версии.</summary>
     public string Transport { get; set; } = "tcp";
+    /// <summary>ISO 3166-1 alpha-2 страны endpoint, определённый локальным GeoIP-справочником.</summary>
+    public string? CountryCode { get; set; }
+    /// <summary>
+    /// Готовая публичная URI-конфигурация из открытого feed. Значение требуется клиенту
+    /// для импорта VLESS/VMess/Trojan/SS и не является внутренним секретом ProxyHarbor.
+    /// </summary>
+    public string? ConnectionUri { get; set; }
     /// <summary>Текущее состояние доступности.</summary>
     public VpnEndpointStatus Status { get; set; } = VpnEndpointStatus.Pending;
     /// <summary>Задержка установления TCP-соединения.</summary>
@@ -338,5 +345,15 @@ public sealed record ProxyCheckResult(
     // Контрольная инфраструктура не позволила оценить прокси; статистика качества не меняется.
     bool IsDeferred = false);
 
-/// <summary>Унифицированный ответ со страницей данных.</summary>
-public sealed record PagedResult<T>(IReadOnlyList<T> Items, int Page, int PageSize, int Total);
+/// <summary>Унифицированный ответ со страницей данных и сведениями о тарифном ограничении.</summary>
+public sealed record PagedResult<T>(IReadOnlyList<T> Items, int Page, int PageSize, int Total)
+{
+    /// <summary>Количество записей, доступных текущему тарифу; null означает отсутствие отдельного лимита.</summary>
+    public int? Accessible { get; init; }
+    /// <summary>Признак того, что Total больше доступной текущему клиенту выборки.</summary>
+    public bool Limited { get; init; }
+    /// <summary>Локализованное объяснение ограничения.</summary>
+    public string? Message { get; init; }
+    /// <summary>Ссылка на оформление подписки.</summary>
+    public string? UpgradeUrl { get; init; }
+}

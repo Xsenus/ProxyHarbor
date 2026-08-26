@@ -147,8 +147,7 @@ curl -OJ 'https://proxy.example.com/api/v1/export/txt?protocol=Socks5&limit=1000
 
 Сервер проверяет активную подписку при каждом export-запросе. `Pro`, `Unlimited`, их
 действующий trial и администратор сохраняют запрошенный `limit` до 50 000. Аккаунт
-на `free` получает 10 записей из центральной части отфильтрованного рейтинга — не
-premium-верхушку и не худший хвост. Для гостя тот же лимит привязан к IP. Следующая
+на `free` получает 5 средних записей из разных стран — не premium-верхушку и не худший хвост. Для гостя тот же лимит привязан к IP. Следующая
 бесплатная выгрузка доступна ровно через 600 секунд; состояние хранится в PostgreSQL
 и не сбрасывается при рестарте API.
 
@@ -159,10 +158,10 @@ premium-верхушку и не худший хвост. Для гостя то
   "access": {
     "tier": "free",
     "limited": true,
-    "limit": 10,
+    "limit": 5,
     "cooldownSeconds": 600,
     "nextAllowedAt": "2026-08-26T12:10:00Z",
-    "message": "Бесплатный доступ: 10 прокси среднего качества раз в 10 минут. Для неограниченного доступа купите подписку.",
+    "message": "Бесплатный доступ: 5 прокси среднего качества из разных стран раз в 10 минут. Для неограниченного доступа купите подписку.",
     "upgradeUrl": "/account"
   },
   "proxies": []
@@ -190,6 +189,21 @@ TXT, CSV и XML сохраняют прежнюю машинно-читаему�
 Boundary metadata и тело одного export читаются из одного PostgreSQL `REPEATABLE READ` snapshot. Один процесс одновременно формирует не более двух экспортов. Полная lifetime одного export — не более пяти минут; медленный клиент не может бесконечно удерживать DB snapshot и slot.
 
 CSV нейтрализует spreadsheet formula injection и содержит `countryCode`. JSON/XML/TXT/CSV используют одинаковый порядок и множество строк для одинаковых фильтров/snapshot.
+
+## VPN API
+
+- `GET /api/v1/vpn` — проверенные VPN endpoint с `countryCode` и готовым `connectionUri`; фильтры `protocol`, `status`, `country`, `page`, `pageSize`.
+- `GET /api/v1/vpn/countries` — двухбуквенные ISO-коды и число доступных VPN по странам.
+- `GET /api/v1/vpn/export/json` и `/txt` — готовые URI для импорта в клиент.
+
+Free-тариф получает 10 средних VPN, но ответ сохраняет полный `total`, поле `accessible`, `limited: true`, локализованное сообщение о подписке и `upgradeUrl`. Платная сессия получает обычную серверную пагинацию и экспорт до 5 000 URI за запрос.
+
+```json
+{
+  "access": { "tier": "free", "limited": true, "accessible": 10, "total": 418, "message": "...", "upgradeUrl": "/account" },
+  "vpn": [{ "host": "example.org", "port": 443, "countryCode": "DE", "protocol": "Vless", "connectionUri": "vless://..." }]
+}
+```
 
 ## GET `/api/v1/sources`
 

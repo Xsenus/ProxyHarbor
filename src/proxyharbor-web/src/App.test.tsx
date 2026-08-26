@@ -18,6 +18,7 @@ const proxies = Array.from({ length: 10 }, (_, index) => ({
 
 const vpnEndpoints = [{
   id: '00000000-0000-0000-0000-000000000001', host: 'vpn.example.net', port: 443,
+  countryCode: 'DE', connectionUri: 'vless://public-id@vpn.example.net:443',
   protocol: 'Vless', transport: 'tcp', status: 'Reachable', latencyMs: 84,
   firstSeenAt: new Date(Date.now() - 86_400_000).toISOString(), lastSeenAt: new Date().toISOString(),
   lastCheckedAt: new Date().toISOString(), successfulChecks: 14, failedChecks: 1,
@@ -30,6 +31,7 @@ describe('ProxyHarbor UI', () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
       if (url.includes('/api/v1/stats')) return jsonResponse(stats)
+      if (url.includes('/api/v1/vpn/countries')) return jsonResponse([{ code: 'DE', count: 1 }])
       if (url.includes('/api/v1/vpn')) return jsonResponse({ items: vpnEndpoints, page: 1, pageSize: 10, total: 1 })
       if (url.includes('/api/v1/proxies/countries')) return jsonResponse([{ code: 'US', count: 70 }, { code: 'DE', count: 7 }])
       if (url.includes('/api/v1/proxies')) return jsonResponse({ items: proxies, page: 1, pageSize: 10, total: 77 })
@@ -69,6 +71,7 @@ describe('ProxyHarbor UI', () => {
     expect(screen.getByRole('link', { name: 'VPN' })).toHaveAttribute('href', '#vpn-catalog')
     expect(await screen.findByRole('cell', { name: /^vpn\.example\.net:443$/ })).toBeInTheDocument()
     expect(screen.getByText('Vless')).toBeInTheDocument()
+    expect(screen.getByText('Германия')).toBeInTheDocument()
     expect(screen.queryByText(/источник|feed/i)).not.toBeInTheDocument()
     expect(vi.mocked(fetch).mock.calls.some(([input]) => {
       const url = String(input)
@@ -76,9 +79,38 @@ describe('ProxyHarbor UI', () => {
     })).toBe(true)
   })
 
+  it('copies a ready VPN connection URI from the catalog', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+    render(<App />)
+    const vpnTable = await screen.findByRole('table', { name: 'Проверенные VPN-узлы' })
+    fireEvent.click(await within(vpnTable).findByRole('cell', { name: 'Скопировать готовую VPN-ссылку' }))
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('vless://public-id@vpn.example.net:443'))
+    expect(within(vpnTable).getByText('Скопировано')).toBeInTheDocument()
+  })
+
+  it('explains free proxy and VPN limits while preserving full catalog totals', async () => {
+    vi.mocked(fetch).mockImplementation(async input => {
+      const url = String(input)
+      if (url.includes('/api/v1/stats')) return jsonResponse(stats)
+      if (url.includes('/api/v1/vpn/countries')) return jsonResponse([{ code: 'DE', count: 418 }])
+      if (url.includes('/api/v1/vpn')) return jsonResponse({ items: vpnEndpoints, page: 1, pageSize: 10, total: 418, limited: true, accessible: 10, message: 'Доступно 10 VPN из 418. Подписка откроет весь каталог.', upgradeUrl: '/account' })
+      if (url.includes('/api/v1/proxies/countries')) return jsonResponse([{ code: 'US', count: 77 }])
+      if (url.includes('/api/v1/proxies')) return jsonResponse({ items: proxies.slice(0, 5), page: 1, pageSize: 5, total: 77, limited: true, accessible: 5, message: 'Доступно 5 прокси из 77. Подписка откроет весь каталог.', upgradeUrl: '/account' })
+      return jsonResponse({ title: 'Unexpected request' }, 500)
+    })
+    render(<App />)
+    expect(await screen.findByText('Доступно 5 прокси из 77. Подписка откроет весь каталог.')).toBeInTheDocument()
+    expect(await screen.findByText('Доступно 10 VPN из 418. Подписка откроет весь каталог.')).toBeInTheDocument()
+    expect(screen.getByText('Сейчас доступно: 5 из 77')).toBeInTheDocument()
+    expect(screen.getByText('Сейчас доступно: 10 из 418')).toBeInTheDocument()
+  })
+
   it('filters the catalog by countries through the styled multi-select', async () => {
     render(<App />)
-    const trigger = await screen.findByRole('button', { name: 'Страны' })
+    const proxyTable = await screen.findByRole('table', { name: 'Прокси' })
+    const catalog = proxyTable.closest('section') as HTMLElement
+    const trigger = within(catalog).getByRole('button', { name: 'Страны' })
     fireEvent.click(trigger)
     expect(screen.getByRole('dialog', { name: 'Фильтр по странам' })).toBeInTheDocument()
     const germany = screen.getByRole('checkbox', { name: /Германия/ })
@@ -91,7 +123,7 @@ describe('ProxyHarbor UI', () => {
       const url = String(input)
       return url.includes('/api/v1/proxies?') && url.includes('country=DE')
     })).toBe(true))
-    expect(screen.getByRole('button', { name: /Страны · 1/ })).toHaveAttribute('aria-expanded', 'true')
+    expect(within(catalog).getByRole('button', { name: /Страны · 1/ })).toHaveAttribute('aria-expanded', 'true')
   })
 
   it('requests the selected page and page size from the server', async () => {

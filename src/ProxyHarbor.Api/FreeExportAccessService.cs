@@ -22,6 +22,10 @@ public interface IFreeExportAccessService
         ClaimsPrincipal principal,
         string? remoteIp,
         CancellationToken cancellationToken);
+
+    /// <summary>Проверяет платный доступ без расходования бесплатного cooldown.</summary>
+    Task<bool> HasPaidAccessAsync(ClaimsPrincipal principal, CancellationToken cancellationToken) =>
+        Task.FromResult(false);
 }
 
 /// <summary>
@@ -32,20 +36,40 @@ public sealed class FreeExportAccessService(IDbContextFactory<ProxyHarborDbConte
     : IFreeExportAccessService
 {
     /// <summary>Максимум адресов в одной бесплатной выгрузке.</summary>
-    public const int FreeLimit = 10;
+    public const int FreeLimit = 5;
+    /// <summary>Число готовых VPN-конфигураций в бесплатном каталоге.</summary>
+    public const int FreeVpnLimit = 10;
     /// <summary>Минимальный интервал между бесплатными выгрузками.</summary>
     public const int CooldownSeconds = 600;
     /// <summary>Единый текст ограничения и перехода к подписке.</summary>
     public const string UpgradeMessage =
-        "Бесплатный доступ: 10 прокси среднего качества раз в 10 минут. Для неограниченного доступа купите подписку.";
+        "Бесплатный доступ: 5 прокси среднего качества из разных стран раз в 10 минут. Для неограниченного доступа купите подписку.";
     /// <summary>Возвращает ограничение бесплатного тарифа на языке текущего клиента.</summary>
     public static string GetUpgradeMessage(string? language) => SupportedLanguages.Normalize(language) switch
     {
-        "en" => "Free access: 10 medium-quality proxies once every 10 minutes. Buy a subscription for unlimited access.",
-        "de" => "Kostenloser Zugang: 10 Proxys mittlerer Qualität alle 10 Minuten. Für unbegrenzten Zugriff ist ein Abonnement erforderlich.",
-        "fr" => "Accès gratuit : 10 proxys de qualité moyenne toutes les 10 minutes. Achetez un abonnement pour un accès illimité.",
-        "zh" => "免费访问：每 10 分钟可获取 10 个中等质量代理。购买订阅即可无限制访问。",
+        "en" => "Free access: 5 medium-quality proxies from different countries once every 10 minutes. Buy a subscription for unlimited access.",
+        "de" => "Kostenloser Zugang: 5 Proxys mittlerer Qualität aus verschiedenen Ländern alle 10 Minuten. Für unbegrenzten Zugriff ist ein Abonnement erforderlich.",
+        "fr" => "Accès gratuit : 5 proxys de qualité moyenne de pays différents toutes les 10 minutes. Achetez un abonnement pour un accès illimité.",
+        "zh" => "免费访问：每 10 分钟可获取来自不同国家/地区的 5 个中等质量代理。购买订阅即可无限制访问。",
         _ => UpgradeMessage
+    };
+    /// <summary>Локализованное объяснение бесплатного VPN-каталога.</summary>
+    public static string GetVpnUpgradeMessage(string? language, int total) => SupportedLanguages.Normalize(language) switch
+    {
+        "en" => $"Free access includes 10 medium-quality VPN configurations. All {total:N0} available configurations require a subscription.",
+        "de" => $"Der kostenlose Zugang umfasst 10 VPN-Konfigurationen mittlerer Qualität. Alle {total:N0} verfügbaren Konfigurationen erfordern ein Abonnement.",
+        "fr" => $"L’accès gratuit comprend 10 configurations VPN de qualité moyenne. Les {total:N0} configurations disponibles nécessitent un abonnement.",
+        "zh" => $"免费版可使用 10 个中等质量 VPN 配置。订阅后可访问全部 {total:N0} 个可用配置。",
+        _ => $"В бесплатной версии доступны 10 VPN среднего качества. Все доступные конфигурации ({total:N0}) открываются по подписке."
+    };
+    /// <summary>Локализованное объяснение ограниченного публичного proxy-каталога.</summary>
+    public static string GetProxyCatalogUpgradeMessage(string? language, int total) => SupportedLanguages.Normalize(language) switch
+    {
+        "en" => $"Free access shows 5 medium-quality proxies from different countries. A subscription unlocks all {total:N0} available proxies.",
+        "de" => $"Der kostenlose Zugang zeigt 5 Proxys mittlerer Qualität aus verschiedenen Ländern. Ein Abonnement schaltet alle {total:N0} verfügbaren Proxys frei.",
+        "fr" => $"L’accès gratuit affiche 5 proxys de qualité moyenne de pays différents. Un abonnement débloque les {total:N0} proxys disponibles.",
+        "zh" => $"免费版显示来自不同国家/地区的 5 个中等质量代理。订阅后可访问全部 {total:N0} 个可用代理。",
+        _ => $"В бесплатной версии показаны 5 прокси среднего качества из разных стран. По подписке доступны все рабочие прокси: {total:N0}."
     };
     private static readonly TimeSpan Cooldown = TimeSpan.FromSeconds(CooldownSeconds);
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _inMemoryLocks = new(StringComparer.Ordinal);
@@ -100,6 +124,13 @@ public sealed class FreeExportAccessService(IDbContextFactory<ProxyHarborDbConte
                 .SingleAsync(x => x.ClientKey == clientKey, cancellationToken);
             return DeniedFree(winner.NextAllowedAt);
         }
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> HasPaidAccessAsync(ClaimsPrincipal principal, CancellationToken cancellationToken)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+        return await HasPaidAccessAsync(db, principal, TryGetUserId(principal), cancellationToken);
     }
 
     private async Task<FreeExportAccess> AcquireInMemoryProviderAsync(

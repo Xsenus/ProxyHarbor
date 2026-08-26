@@ -1,5 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
+using ProxyHarbor.Api;
 using ProxyHarbor.Api.Controllers;
 using ProxyHarbor.Domain;
 using ProxyHarbor.Infrastructure;
@@ -25,11 +27,65 @@ public sealed class VpnControllerTests
             token: CancellationToken.None));
 
         Assert.Single(defaultPage.Items);
-        Assert.Equal("Catalog", defaultPage.Items[0].SourceName);
-        Assert.Equal(source.Url, defaultPage.Items[0].SourceUrl);
+        Assert.Null(defaultPage.Items[0].ConnectionUri);
+        Assert.Null(defaultPage.Items[0].CountryCode);
         Assert.Single(wireGuardPage.Items);
         Assert.Equal(100, wireGuardPage.PageSize);
         Assert.Equal(1, wireGuardPage.Page);
+    }
+
+    [Fact]
+    public async Task FreeCatalogReturnsTenReadyLinksAndReportsTheFullCountryCatalog()
+    {
+        var options = Options();
+        var source = Source("Catalog", "https://8.8.8.8/catalog.txt");
+        var endpoints = Enumerable.Range(1, 24).Select(index =>
+        {
+            var country = index % 2 == 0 ? "DE" : "FR";
+            return Endpoint(source, $"1.1.1.{index}", VpnProtocol.Vless,
+                VpnEndpointStatus.Reachable, index * 10, country,
+                $"vless://public-{index}@1.1.1.{index}:443");
+        }).ToArray();
+        await SeedAsync(options, source, endpoints);
+        var controller = new VpnController(new TestDbFactory(options), new FreeAccessService());
+        controller.ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() };
+
+        var page = Page(await controller.Get(page: 3, pageSize: 100, token: CancellationToken.None));
+        var german = Page(await controller.Get(country: ["de"], token: CancellationToken.None));
+        var countries = Assert.IsAssignableFrom<IReadOnlyList<ProxyCountryDto>>(
+            Assert.IsType<OkObjectResult>((await controller.Countries(CancellationToken.None)).Result).Value);
+
+        Assert.Equal(24, page.Total);
+        Assert.Equal(10, page.Items.Count);
+        Assert.Equal(10, page.Accessible);
+        Assert.True(page.Limited);
+        Assert.Contains("24", page.Message, StringComparison.Ordinal);
+        Assert.All(page.Items, item => Assert.StartsWith("vless://", item.ConnectionUri));
+        Assert.Equal(12, german.Total);
+        Assert.All(german.Items, item => Assert.Equal("DE", item.CountryCode));
+        Assert.Equal(["DE", "FR"], countries.Select(item => item.Code).Order().ToArray());
+    }
+
+    [Fact]
+    public async Task FreeVpnExportContainsAccessMetadataAndReadyUris()
+    {
+        var options = Options();
+        var source = Source("Catalog", "https://8.8.8.8/catalog.txt");
+        await SeedAsync(options, source, Enumerable.Range(1, 12).Select(index =>
+            Endpoint(source, $"8.8.8.{index}", VpnProtocol.Trojan, VpnEndpointStatus.Reachable,
+                index, "US", $"trojan://secret-{index}@8.8.8.{index}:443")).ToArray());
+        var controller = new VpnController(new TestDbFactory(options), new FreeAccessService());
+        controller.ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() };
+
+        var result = Assert.IsType<FileContentResult>(await controller.Export("json", token: CancellationToken.None));
+        using var json = System.Text.Json.JsonDocument.Parse(result.FileContents);
+
+        Assert.Equal(12, json.RootElement.GetProperty("access").GetProperty("total").GetInt32());
+        Assert.Equal(10, json.RootElement.GetProperty("access").GetProperty("accessible").GetInt32());
+        Assert.True(json.RootElement.GetProperty("access").GetProperty("limited").GetBoolean());
+        Assert.Equal(10, json.RootElement.GetProperty("vpn").GetArrayLength());
+        Assert.StartsWith("trojan://", json.RootElement.GetProperty("vpn")[0].GetProperty("connectionUri").GetString());
+        Assert.Equal("12", controller.Response.Headers["X-Catalog-Total"].ToString());
     }
 
     [Fact]
@@ -122,13 +178,15 @@ public sealed class VpnControllerTests
         };
 
     private static VpnEndpoint Endpoint(VpnSource source, string host, VpnProtocol protocol,
-        VpnEndpointStatus status, int? latency) => new()
+        VpnEndpointStatus status, int? latency, string? countryCode = null, string? connectionUri = null) => new()
         {
             Host = host,
             Port = 443,
             Protocol = protocol,
             Status = status,
             LatencyMs = latency,
+            CountryCode = countryCode,
+            ConnectionUri = connectionUri,
             FirstSourceId = source.Id,
             FirstSource = source
         };
@@ -158,5 +216,13 @@ public sealed class VpnControllerTests
         public ProxyHarborDbContext CreateDbContext() => new(options);
         public Task<ProxyHarborDbContext> CreateDbContextAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult(CreateDbContext());
+    }
+
+    private sealed class FreeAccessService : IFreeExportAccessService
+    {
+        public Task<FreeExportAccess> AcquireAsync(System.Security.Claims.ClaimsPrincipal principal, string? remoteIp,
+            CancellationToken cancellationToken) => Task.FromResult(new FreeExportAccess(true, false, 5, null, "free"));
+        public Task<bool> HasPaidAccessAsync(System.Security.Claims.ClaimsPrincipal principal,
+            CancellationToken cancellationToken) => Task.FromResult(false);
     }
 }

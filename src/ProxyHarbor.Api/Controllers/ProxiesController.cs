@@ -70,7 +70,6 @@ public sealed class ProxiesController(
 
     /// <summary>Возвращает страницу только живых прокси, отсортированную по задержке.</summary>
     [HttpGet("proxies")]
-    [OutputCache(PolicyName = "public-list")]
     public async Task<ActionResult<PagedResult<ProxyDto>>> Get(
         [FromQuery, EnumDataType(typeof(ProxyProtocol))] ProxyProtocol? protocol,
         [FromQuery, Range(1, int.MaxValue)] int? maxLatencyMs,
@@ -99,14 +98,65 @@ public sealed class ProxiesController(
             var query = ApplyFilters(db.Proxies.AsNoTracking().Where(x =>
                 x.Status == ProxyStatus.Alive && x.LastCheckedAt >= freshAfter),
                 protocol, maxLatencyMs, minSuccessRate, countries);
-            var entities = await OrderForPublication(query)
-                .Skip(skip).Take(pageSize).ToListAsync(token);
             var total = await query.CountAsync(token);
-            return new PagedResult<ProxyDto>(entities.Select(ProxyDto.From).ToList(), page, pageSize, total);
+            var paid = await freeExportAccess.HasPaidAccessAsync(
+                ControllerContext.HttpContext?.User ?? new System.Security.Claims.ClaimsPrincipal(), token);
+            if (paid)
+            {
+                var entities = await OrderForPublication(query).Skip(skip).Take(pageSize).ToListAsync(token);
+                return new PagedResult<ProxyDto>(entities.Select(ProxyDto.From).ToList(), page, pageSize, total);
+            }
+
+            var freeEntities = await SelectDiversifiedFreeProxiesAsync(query, total, token);
+            return new PagedResult<ProxyDto>(freeEntities.Select(ProxyDto.From).ToList(), 1,
+                FreeExportAccessService.FreeLimit, total)
+            {
+                Accessible = Math.Min(total, FreeExportAccessService.FreeLimit),
+                Limited = total > FreeExportAccessService.FreeLimit,
+                Message = FreeExportAccessService.GetProxyCatalogUpgradeMessage(
+                    CultureInfo.CurrentUICulture.TwoLetterISOLanguageName, total),
+                UpgradeUrl = "/account"
+            };
         }, cancellationToken);
         if (ControllerContext.HttpContext is not null)
             HttpContext.Items["ProxyHarbor.ProxyItems"] = result.Items.Count;
         return Ok(result);
+    }
+
+    /// <summary>
+    /// Выбирает медианный по качеству адрес для каждой из самых представленных стран,
+    /// затем заполняет остаток центральной частью общего рейтинга. Так бесплатный набор
+    /// остаётся полезным и географически разнообразным, но не забирает premium-верхушку.
+    /// </summary>
+    private static async Task<List<ProxyEndpoint>> SelectDiversifiedFreeProxiesAsync(
+        IQueryable<ProxyEndpoint> query, int total, CancellationToken token)
+    {
+        var limit = FreeExportAccessService.FreeLimit;
+        var countryCodes = await query.Where(x => x.CountryCode != null)
+            .GroupBy(x => x.CountryCode!)
+            .OrderByDescending(group => group.Count())
+            .ThenBy(group => group.Key)
+            .Select(group => group.Key)
+            .Take(limit)
+            .ToArrayAsync(token);
+        var selected = new List<ProxyEndpoint>(limit);
+        foreach (var countryCode in countryCodes)
+        {
+            var countryQuery = query.Where(x => x.CountryCode == countryCode);
+            var countryTotal = await countryQuery.CountAsync(token);
+            var representative = await OrderForPublication(countryQuery)
+                .Skip(Math.Max(0, (countryTotal - 1) / 2)).FirstOrDefaultAsync(token);
+            if (representative is not null) selected.Add(representative);
+        }
+        if (selected.Count < limit)
+        {
+            var selectedIds = selected.Select(x => x.Id).ToArray();
+            var middle = Math.Max(0, (total - limit * 8) / 2);
+            var candidates = await OrderForPublication(query).Skip(middle).Take(limit * 16).ToListAsync(token);
+            selected.AddRange(candidates.Where(x => !selectedIds.Contains(x.Id)).Take(limit - selected.Count));
+        }
+        return selected.OrderBy(x => x.LatencyMs == null).ThenBy(x => x.LatencyMs)
+            .ThenByDescending(x => x.SuccessfulChecks).Take(limit).ToList();
     }
 
     /// <summary>Совместимый вызов для provider-agnostic unit-тестов без country-фильтра.</summary>
@@ -350,12 +400,14 @@ public sealed class ProxiesController(
             }
             var ordered = OrderForPublication(query);
             var legacyOffset = offset ?? 0;
+            List<ProxyEndpoint>? freeSelection = null;
             if (!access.IsPaid)
             {
-                // Free tier получает центральный срез ранжированного каталога: не самые
-                // быстрые premium-записи и не хвост с худшим качеством.
+                // Бесплатная выдача берёт медианные адреса из разных стран. Это полезнее
+                // пяти почти одинаковых соседних строк и не раскрывает premium-верхушку.
                 var available = await query.CountAsync(exportToken);
-                legacyOffset = Math.Max(0, (available - effectiveLimit) / 2);
+                freeSelection = await SelectDiversifiedFreeProxiesAsync(query, available, exportToken);
+                legacyOffset = 0;
             }
             var nextOffset = (long)legacyOffset + effectiveLimit;
             // Предварительный index-only boundary-запрос не материализует body и
@@ -375,10 +427,13 @@ public sealed class ProxiesController(
             }
             else
             {
-                hasMore = await ordered.Skip((int)nextOffset).AnyAsync(exportToken);
+                hasMore = freeSelection is not null
+                    ? await query.CountAsync(exportToken) > freeSelection.Count
+                    : await ordered.Skip((int)nextOffset).AnyAsync(exportToken);
             }
-            var proxies = pageQuery.Take(effectiveLimit)
-                .AsAsyncEnumerable().Select(ProxyDto.From);
+            var proxies = freeSelection is not null
+                ? EnumerateAsync(freeSelection.Select(ProxyDto.From), exportToken)
+                : pageQuery.Take(effectiveLimit).AsAsyncEnumerable().Select(ProxyDto.From);
             if (ControllerContext.HttpContext is not null)
                 HttpContext.Items["ProxyHarbor.ProxyItems"] = effectiveLimit;
             var suffix = protocol?.ToString().ToLowerInvariant() ?? "all";
@@ -438,6 +493,18 @@ public sealed class ProxiesController(
         Detail = "Cursor повреждён, устарел либо был создан для другого набора фильтров.",
         Status = StatusCodes.Status400BadRequest
     });
+
+    private static async IAsyncEnumerable<ProxyDto> EnumerateAsync(
+        IEnumerable<ProxyDto> values,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken token)
+    {
+        foreach (var value in values)
+        {
+            token.ThrowIfCancellationRequested();
+            yield return value;
+        }
+        await Task.CompletedTask;
+    }
 
     private static async Task WriteJsonAsync(
         Stream output,
@@ -674,6 +741,9 @@ public sealed class ProxiesController(
             string? remoteIp,
             CancellationToken cancellationToken) =>
             Task.FromResult(new FreeExportAccess(true, true, int.MaxValue, null, "paid"));
+        public Task<bool> HasPaidAccessAsync(
+            System.Security.Claims.ClaimsPrincipal principal,
+            CancellationToken cancellationToken) => Task.FromResult(true);
     }
 }
 

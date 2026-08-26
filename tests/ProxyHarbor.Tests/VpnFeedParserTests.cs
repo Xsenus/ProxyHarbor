@@ -4,11 +4,11 @@ using ProxyHarbor.Infrastructure;
 
 namespace ProxyHarbor.Tests;
 
-/// <summary>Проверяет извлечение endpoint и обязательное отбрасывание секретных частей конфигураций.</summary>
+/// <summary>Проверяет endpoint и сохранение готовых URI для публичной выдачи.</summary>
 public sealed class VpnFeedParserTests
 {
     [Fact]
-    public void ParsesUrisAndDoesNotExposeCredentials()
+    public void ParsesUrisAndPreservesReadyConnectionLinks()
     {
         const string content = "vless://secret-uuid@1.1.1.1:443?security=tls#name\n" +
             "trojan://secret-password@8.8.8.8:8443?sni=example.org";
@@ -16,8 +16,8 @@ public sealed class VpnFeedParserTests
         var candidates = VpnFeedParser.Parse(content, VpnProtocol.Vless);
 
         Assert.Collection(candidates.OrderBy(x => x.Host),
-            item => { Assert.Equal("1.1.1.1", item.Host); Assert.Equal(443, item.Port); Assert.Equal(VpnProtocol.Vless, item.Protocol); },
-            item => { Assert.Equal("8.8.8.8", item.Host); Assert.Equal(8443, item.Port); Assert.Equal(VpnProtocol.Trojan, item.Protocol); });
+            item => { Assert.Equal("1.1.1.1", item.Host); Assert.Equal(443, item.Port); Assert.Equal(VpnProtocol.Vless, item.Protocol); Assert.StartsWith("vless://", item.ConnectionUri); },
+            item => { Assert.Equal("8.8.8.8", item.Host); Assert.Equal(8443, item.Port); Assert.Equal(VpnProtocol.Trojan, item.Protocol); Assert.StartsWith("trojan://", item.ConnectionUri); });
         Assert.DoesNotContain(candidates, item => item.Host.Contains("secret", StringComparison.Ordinal));
     }
 
@@ -31,7 +31,7 @@ public sealed class VpnFeedParserTests
         var vmessCandidate = Assert.Single(VpnFeedParser.Parse(vmess, VpnProtocol.Vmess));
         var openVpnCandidate = Assert.Single(VpnFeedParser.Parse(openVpn, VpnProtocol.OpenVpn));
 
-        Assert.Equal(new VpnCandidate("9.9.9.9", 443, VpnProtocol.Vmess, "tcp"), vmessCandidate);
+        Assert.Equal(new VpnCandidate("9.9.9.9", 443, VpnProtocol.Vmess, "tcp", vmess), vmessCandidate);
         Assert.Equal(new VpnCandidate("1.0.0.1", 1194, VpnProtocol.OpenVpn, "udp"), openVpnCandidate);
     }
 
@@ -56,8 +56,8 @@ public sealed class VpnFeedParserTests
         var candidates = VpnFeedParser.Parse(content, VpnProtocol.Vless);
 
         Assert.Equal(6, candidates.Count);
-        Assert.Contains(new VpnCandidate("example.com", 443, VpnProtocol.Vless, "tcp"), candidates);
-        Assert.Contains(new VpnCandidate("1.1.1.1", 8388, VpnProtocol.Shadowsocks, "tcp"), candidates);
+        Assert.Contains(candidates, x => x == new VpnCandidate("example.com", 443, VpnProtocol.Vless, "tcp", x.ConnectionUri) && x.ConnectionUri!.StartsWith("vless://", StringComparison.Ordinal));
+        Assert.Contains(candidates, x => x == new VpnCandidate("1.1.1.1", 8388, VpnProtocol.Shadowsocks, "tcp", x.ConnectionUri) && x.ConnectionUri!.StartsWith("ss://", StringComparison.Ordinal));
         Assert.Contains(candidates, x => x.Protocol == VpnProtocol.Hysteria2 && x.Transport == "udp");
         Assert.Contains(candidates, x => x.Protocol == VpnProtocol.Tuic && x.Transport == "udp");
         Assert.Contains(candidates, x => x.Protocol == VpnProtocol.WireGuard && x.Transport == "udp");

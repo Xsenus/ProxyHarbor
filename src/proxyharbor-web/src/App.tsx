@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Activity, ArrowDownToLine, ArrowRight, Ban, Bell, Bot, CalendarClock, Check, ChevronDown, Clock3, CreditCard, Database, Eye, EyeOff, Gauge, Globe2, HardDriveDownload, LayoutDashboard, LockKeyhole, LogOut, Mail, MessageCircle, MousePointerClick, Network, Pencil, Play, Plus, Radio, Receipt, RefreshCw, Search, Send, Server, Settings2, ShieldCheck, ShieldOff, Star, Trash2, User, Users, Wifi, Workflow, X } from 'lucide-react'
+import { Activity, ArrowDownToLine, ArrowRight, Ban, Bell, Bot, CalendarClock, Check, ChevronDown, Clock3, Copy, CreditCard, Database, Eye, EyeOff, Gauge, Globe2, HardDriveDownload, LayoutDashboard, LockKeyhole, LogOut, Mail, MessageCircle, MousePointerClick, Network, Pencil, Play, Plus, Radio, Receipt, RefreshCw, Search, Send, Server, Settings2, ShieldCheck, ShieldOff, Star, Trash2, User, Users, Wifi, Workflow, X } from 'lucide-react'
 import { currentLocale, LanguageSwitcher, type Language, useI18n } from './i18n'
 import { StyledSelect } from './components/StyledSelect'
 
 type Protocol = 'Http' | 'Https' | 'Socks4' | 'Socks5'
 type Proxy = { host: string; port: number; protocol: Protocol; url: string; latencyMs: number; successRate: number; exitIp?: string; countryCode?: string; lastCheckedAt: string; firstAliveAt?: string; lastAliveAt?: string; activeSince?: string; activeForSeconds?: number }
 type ProxyCountry = { code: string; count: number }
-type PagedResult<T> = { items: T[]; page: number; pageSize: number; total: number }
+type PagedResult<T> = { items: T[]; page: number; pageSize: number; total: number; accessible?:number; limited?:boolean; message?:string; upgradeUrl?:string }
 type Stats = { alive: number; staleAlive: number; pending: number; dead: number; dueForCheck: number; checksInProgress: number; scheduledChecks: number; averageLatencyMs: number | null; sources: number; failingSources: number; repeatedlyFailingSources: number; truncatedSources: number; byProtocol: { protocol: Protocol; count: number }[]; lastRun?: { startedAt: string; candidatesFound: number; newProxies: number; sourcesTruncated: number; candidateLimitReached: boolean; status: string } }
 type Source = { id: string; name: string; url: string; defaultProtocol: Protocol; enabled: boolean; priority: number; lastItemCount: number; lastResultTruncated: boolean; lastFetchedAt?: string; lastSucceededAt?: string; lastContentFetchedAt?: string; nextFetchAt?: string; consecutiveFailures: number; lastError?: string; isBuiltIn: boolean; provider?: string; providerIdentity?: string; catalogRank?: number }
 type CollectionRun = { id: string; startedAt: string; finishedAt?: string; sourcesProcessed: number; sourcesSucceeded: number; sourcesFailed: number; sourcesSkipped: number; sourcesTruncated: number; candidatesFound: number; candidateLimitReached: boolean; newProxies: number; status: string; error?: string }
@@ -59,7 +59,7 @@ type UserAccessDraft = { isActive: boolean; administrator: boolean; subscriber: 
 type SourceDraft = { name: string; url: string; protocol: Protocol; priority: number; enabled: boolean }
 type VpnProtocol = 'OpenVpn'|'WireGuard'|'Vless'|'Vmess'|'Trojan'|'Shadowsocks'|'Hysteria2'|'Tuic'
 type VpnStatus = 'Pending'|'Reachable'|'Unreachable'|'UnsupportedTransport'
-type VpnEndpoint = {id:string;host:string;port:number;protocol:VpnProtocol;transport:'tcp'|'udp';status:VpnStatus;latencyMs?:number;firstSeenAt:string;lastSeenAt:string;lastCheckedAt?:string;successfulChecks:number;failedChecks:number;sourceName?:string;sourceUrl?:string}
+type VpnEndpoint = {id:string;host:string;port:number;countryCode?:string;protocol:VpnProtocol;transport:'tcp'|'udp';status:VpnStatus;latencyMs?:number;firstSeenAt:string;lastSeenAt:string;lastCheckedAt?:string;successfulChecks:number;failedChecks:number;connectionUri?:string}
 type VpnSource = {id:string;name:string;provider:string;url:string;defaultProtocol:VpnProtocol;enabled:boolean;priority:number;license:string;lastFetchedAt?:string;lastSucceededAt?:string;lastItemCount:number;consecutiveFailures:number;lastError?:string;isBuiltIn:boolean}
 type TelegramStats = { users:number;activeUsers30d:number;notificationsEnabled:number;blocked:number;paidOrders:number;starsRevenue:number;queued:number;failed:number }
 type TelegramSettings = { enabled:boolean;updateMode:'webhook'|'polling';name:string;description:string;shortDescription:string;supportText:string;proxyFileMaxItems:number;webhookMaxConnections:number;productStars:Record<string,number>;automaticProductCodes:string[];starsPerCurrencyUnit:number;starsRoundingStep:number;effectiveProductStars:Record<string,number>;tokenConfigured:boolean;botId?:number;botUsername?:string;provisionedAt?:string;updatedAt?:string;webhookUrl:string;avatarUrl:string;stats:TelegramStats }
@@ -70,6 +70,19 @@ const emptySourceDraft: SourceDraft = { name: '', url: '', protocol: 'Http', pri
 
 function isAbortError(reason: unknown) {
   return reason instanceof Error && reason.name === 'AbortError'
+}
+
+/** Копирует готовую конфигурацию и сохраняет работу на браузерах без Clipboard API. */
+async function copyText(value: string) {
+  if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(value)
+  const input = document.createElement('textarea')
+  input.value = value
+  input.style.position = 'fixed'
+  input.style.opacity = '0'
+  document.body.append(input)
+  input.select()
+  document.execCommand('copy')
+  input.remove()
 }
 
 /** Основная панель: публичный каталог и компактное администрирование в одном интерфейсе. */
@@ -85,6 +98,7 @@ export default function App() {
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(10)
   const [total, setTotal] = useState(0)
+  const [catalogAccess, setCatalogAccess] = useState<{limited:boolean;message?:string;accessible?:number;upgradeUrl?:string}>({limited:false})
   const [apiError, setApiError] = useState('')
   const currentPath = window.location.pathname.replace(/\/+$/, '') || '/'
   const loginPage = currentPath === '/admin/login' || currentPath === '/login'
@@ -167,7 +181,7 @@ export default function App() {
       selectedCountries.forEach(country => query.append('country', country))
       const [statsResponse, proxyResponse, countriesResponse] = await Promise.all([
         fetch(`${API}/api/v1/stats`, { signal: controller.signal }),
-        includeCatalog ? fetch(`${API}/api/v1/proxies?${query}`, { signal: controller.signal }) : Promise.resolve(null),
+        includeCatalog ? fetch(`${API}/api/v1/proxies?${query}`, { signal: controller.signal, headers:{'Accept-Language':currentLocale()} }) : Promise.resolve(null),
         includeCatalog ? fetch(`${API}/api/v1/proxies/countries`, { signal: controller.signal }) : Promise.resolve(null),
       ])
       if (!statsResponse.ok || (proxyResponse && !proxyResponse.ok) || (countriesResponse && !countriesResponse.ok)) throw new Error('API пока недоступен')
@@ -178,8 +192,13 @@ export default function App() {
         const snapshot = await proxyResponse.json() as PagedResult<Proxy>
         setProxies(snapshot.items)
         setTotal(snapshot.total)
-        const availablePages = Math.max(1, Math.ceil(snapshot.total / pageSize))
-        if (page > availablePages) setPage(availablePages)
+        setCatalogAccess({limited:Boolean(snapshot.limited),message:snapshot.message,accessible:snapshot.accessible,upgradeUrl:snapshot.upgradeUrl})
+        if (snapshot.limited) {
+          if (page !== 1) setPage(1)
+        } else {
+          const availablePages = Math.max(1, Math.ceil(snapshot.total / pageSize))
+          if (page > availablePages) setPage(availablePages)
+        }
       }
       if (countriesResponse && catalogRequestId === catalogRequestIdRef.current) {
         const countrySnapshot = await countriesResponse.json() as unknown
@@ -618,7 +637,8 @@ export default function App() {
             {loading ? <div role="row"><div className="empty" role="cell" aria-live="polite"><RefreshCw className="spin"/> {t('loadingCatalog')}</div></div> : proxies.length === 0 ? <div role="row"><div className="empty" role="cell" aria-live="polite"><Server/> {t('emptyCatalog')}</div></div> : proxies.map(proxy => <div className="table-row" role="row" key={proxy.url}><code role="cell">{proxy.host}<i>:</i>{proxy.port}</code><span role="cell" className="country-cell" title={proxy.countryCode ? countryName(proxy.countryCode) : t('countryPending')}>{proxy.countryCode ? <><CountryFlag code={proxy.countryCode}/><b>{countryName(proxy.countryCode)}</b></> : <em>—</em>}</span><span role="cell" className={`badge ${proxy.protocol.toLowerCase()}`}>{label(proxy.protocol)}</span><span role="cell" className="latency"><i className={proxy.latencyMs < 800 ? 'fast' : proxy.latencyMs < 1800 ? 'medium' : 'slow'}/>{proxy.latencyMs} ms</span><span role="cell">{proxy.successRate}%</span><span role="cell">{formatActiveDuration(proxy.activeForSeconds)}</span><span role="cell">{timeAgo(proxy.lastCheckedAt)}</span></div>)}
           </div>
         </div>
-        {!loading && total > 0 && <ProxyPagination
+        {!loading&&catalogAccess.limited&&<AccessLimitNotice message={catalogAccess.message} accessible={catalogAccess.accessible} total={total} upgradeUrl={catalogAccess.upgradeUrl}/>}
+        {!loading && total > 0 && !catalogAccess.limited && <ProxyPagination
           page={page} pageSize={pageSize} total={total} totalPages={totalPages}
           onPageChange={next => { setLoading(true); setPage(next); document.getElementById('catalog')?.scrollIntoView?.({ behavior: 'smooth' }) }}
           onPageSizeChange={size => { setLoading(true); setPageSize(size); setPage(1) }}/>
@@ -627,7 +647,7 @@ export default function App() {
 
       <PublicVpnCatalog/>
 
-      <section id="api" className="api-panel"><div><span className="kicker">ONE-CLICK EXPORT</span><h2>{t('exportTitle')}</h2><p>{t('exportText')}</p><small className="geo-attribution">IP geolocation: <a href="https://db-ip.com" target="_blank" rel="noreferrer">DB-IP</a></small></div><div className="export-grid">{['json','xml','txt','csv'].map(format => <a key={format} href={`${API}/api/v1/export/${format}?${exportQuery}`}><span>.{format}</span><ArrowDownToLine size={18}/></a>)}</div><div className="endpoint"><span>GET</span><code>/api/v1/proxies/seek?protocol=Socks5&amp;maxLatencyMs=1000&amp;country=DE</code></div></section>
+      <section id="api" className="api-panel"><div><span className="kicker">ONE-CLICK EXPORT</span><h2>{t('exportTitle')}</h2><p>{t('exportText')}</p><small className="geo-attribution">IP geolocation: <a href="https://db-ip.com" target="_blank" rel="noreferrer">DB-IP</a></small></div><div className="export-grid">{['json','xml','txt','csv'].map(format => <a key={format} href={`${API}/api/v1/export/${format}?${exportQuery}`}><span>Proxy .{format}</span><ArrowDownToLine size={18}/></a>)}{['json','txt'].map(format=><a key={`vpn-${format}`} href={`${API}/api/v1/vpn/export/${format}`}><span>VPN .{format}</span><ArrowDownToLine size={18}/></a>)}</div><div className="endpoint"><span>GET</span><code>/api/v1/vpn?protocol=Vless&amp;country=DE</code></div></section>
     </main>
 
     <footer><div className="brand"><span className="brand-mark"><Network size={18}/></span><span>Proxy<span>Harbor</span></span></div><p>{t('responsible')}</p><span>v{APP_VERSION} · © {new Date().getFullYear()}</span></footer></>}
@@ -727,15 +747,19 @@ export default function App() {
   </div>
 }
 
-/** Публичный VPN-каталог использует отдельную серверную пагинацию и никогда не раскрывает feed или секреты конфигураций. */
+/** Публичный VPN-каталог отдаёт готовые опубликованные URI без раскрытия внутренних feed. */
 function PublicVpnCatalog() {
   const { t } = useI18n()
   const protocols: VpnProtocol[] = ['OpenVpn','WireGuard','Vless','Vmess','Trojan','Shadowsocks','Hysteria2','Tuic']
   const [items,setItems] = useState<VpnEndpoint[]>([])
+  const [countries,setCountries] = useState<ProxyCountry[]>([])
+  const [selectedCountries,setSelectedCountries] = useState<string[]>([])
   const [protocol,setProtocol] = useState<VpnProtocol|'All'>('All')
   const [page,setPage] = useState(1)
   const [pageSize,setPageSize] = useState(10)
   const [total,setTotal] = useState(0)
+  const [access,setAccess] = useState<{limited:boolean;message?:string;accessible?:number;upgradeUrl?:string}>({limited:false})
+  const [copied,setCopied] = useState('')
   const [loading,setLoading] = useState(true)
   const [error,setError] = useState('')
 
@@ -744,21 +768,34 @@ function PublicVpnCatalog() {
     try {
       const query = new URLSearchParams({page:String(page),pageSize:String(pageSize),status:'Reachable'})
       if (protocol !== 'All') query.set('protocol',protocol)
-      const response = await fetch(`${API}/api/v1/vpn?${query}`,{signal})
-      if (!response.ok) throw new Error(await responseMessage(response,t('vpnCatalogUnavailable')))
-      const snapshot = await response.json() as PagedResult<VpnEndpoint>
+      selectedCountries.forEach(country=>query.append('country',country))
+      const [response,countriesResponse] = await Promise.all([
+        fetch(`${API}/api/v1/vpn?${query}`,{signal,headers:{'Accept-Language':currentLocale()}}),
+        fetch(`${API}/api/v1/vpn/countries`,{signal})
+      ])
+      if (!response.ok||!countriesResponse.ok) throw new Error(await responseMessage(response,t('vpnCatalogUnavailable')))
+      const [snapshot,countrySnapshot] = await Promise.all([
+        response.json() as Promise<PagedResult<VpnEndpoint>>,
+        countriesResponse.json() as Promise<ProxyCountry[]>
+      ])
       if (signal?.aborted) return
       setItems(snapshot.items)
       setTotal(snapshot.total)
-      const availablePages = Math.max(1,Math.ceil(snapshot.total/pageSize))
-      if (page > availablePages) setPage(availablePages)
+      setCountries(countrySnapshot)
+      setAccess({limited:Boolean(snapshot.limited),message:snapshot.message,accessible:snapshot.accessible,upgradeUrl:snapshot.upgradeUrl})
+      if (snapshot.limited) {
+        if (page!==1) setPage(1)
+      } else {
+        const availablePages = Math.max(1,Math.ceil(snapshot.total/pageSize))
+        if (page > availablePages) setPage(availablePages)
+      }
       setError('')
     } catch(reason) {
       if (!isAbortError(reason)) setError(reason instanceof Error ? reason.message : t('vpnCatalogUnavailable'))
     } finally {
       if (!signal?.aborted) setLoading(false)
     }
-  },[page,pageSize,protocol,t])
+  },[page,pageSize,protocol,selectedCountries,t])
 
   useEffect(()=>{
     const controller = new AbortController()
@@ -769,14 +806,21 @@ function PublicVpnCatalog() {
   const totalPages = Math.max(1,Math.ceil(total/pageSize))
   return <section id="vpn-catalog" className="catalog public-vpn-catalog" aria-labelledby="vpn-catalog-title">
     <div className="section-heading"><div><span className="kicker">VPN CATALOG</span><h2 id="vpn-catalog-title">{t('vpnCatalog')}</h2><p className="vpn-catalog-description">{t('vpnCatalogText')}</p></div><p>{t('vpnServerSelection',{count:formatNumber(total)})}</p></div>
-    <div className="vpn-public-toolbar"><StyledSelect ariaLabel={t('vpnProtocolFilter')} value={protocol} onChange={value=>{setProtocol(value as VpnProtocol|'All');setPage(1)}} options={[['All',t('allVpnProtocols')],...protocols.map(value=>[value,value] as [string,string])]}/><span className="vpn-safe-status"><ShieldCheck/>{t('available')}</span></div>
+    <div className="vpn-public-toolbar"><div className="vpn-filter-group"><StyledSelect ariaLabel={t('vpnProtocolFilter')} value={protocol} onChange={value=>{setProtocol(value as VpnProtocol|'All');setPage(1)}} options={[['All',t('allVpnProtocols')],...protocols.map(value=>[value,value] as [string,string])]}/><CountryFilter countries={countries} selected={selectedCountries} onChange={value=>{setSelectedCountries(value);setPage(1)}}/></div><span className="vpn-safe-status"><ShieldCheck/>{t('available')}</span></div>
     {error&&<div className="error-banner" role="alert"><X size={17}/>{error}<button onClick={()=>void load()}>{t('retry')}</button></div>}
     <div className="public-vpn-table" role="table" aria-label={t('vpnCatalog')} aria-busy={loading}>
-      <div role="rowgroup"><div className="vpn-public-row vpn-public-head" role="row"><span role="columnheader">{t('address')}</span><span role="columnheader">{t('protocol')}</span><span role="columnheader">{t('transport')}</span><span role="columnheader">{t('status')}</span><span role="columnheader">{t('latency')}</span><span role="columnheader">{t('checked')}</span></div></div>
-      <div role="rowgroup">{loading?<div role="row"><div className="empty" role="cell" aria-live="polite"><RefreshCw className="spin"/> {t('loadingVpnCatalog')}</div></div>:items.length===0?<div role="row"><div className="empty" role="cell" aria-live="polite"><Radio/> {t('emptyVpnCatalog')}</div></div>:items.map(item=><div className="vpn-public-row" role="row" key={item.id}><code role="cell">{item.host}<i>:</i>{item.port}</code><span role="cell" className="vpn-protocol-badge">{item.protocol}</span><span role="cell">{item.transport.toUpperCase()}</span><span role="cell" className="vpn-public-status"><i/>{t('available')}</span><span role="cell" className="latency"><i className={item.latencyMs!=null&&item.latencyMs<800?'fast':item.latencyMs!=null&&item.latencyMs<1800?'medium':'slow'}/>{item.latencyMs!=null?`${item.latencyMs} ms`:'—'}</span><time role="cell" dateTime={item.lastCheckedAt}>{item.lastCheckedAt?timeAgo(item.lastCheckedAt):'—'}</time></div>)}</div>
+      <div role="rowgroup"><div className="vpn-public-row vpn-public-head" role="row"><span role="columnheader">{t('address')}</span><span role="columnheader">{t('country')}</span><span role="columnheader">{t('protocol')}</span><span role="columnheader">{t('latency')}</span><span role="columnheader">{t('checked')}</span><span role="columnheader">{t('vpnConfig')}</span></div></div>
+      <div role="rowgroup">{loading?<div role="row"><div className="empty" role="cell" aria-live="polite"><RefreshCw className="spin"/> {t('loadingVpnCatalog')}</div></div>:items.length===0?<div role="row"><div className="empty" role="cell" aria-live="polite"><Radio/> {t('emptyVpnCatalog')}</div></div>:items.map(item=><div className="vpn-public-row" role="row" key={item.id}><code role="cell">{item.host}<i>:</i>{item.port}</code><span role="cell" className="country-cell" title={item.countryCode?countryName(item.countryCode):t('countryPending')}>{item.countryCode?<><CountryFlag code={item.countryCode}/><b>{countryName(item.countryCode)}</b></>:<em>—</em>}</span><span role="cell" className="vpn-protocol-badge">{item.protocol}</span><span role="cell" className="latency"><i className={item.latencyMs!=null&&item.latencyMs<800?'fast':item.latencyMs!=null&&item.latencyMs<1800?'medium':'slow'}/>{item.latencyMs!=null?`${item.latencyMs} ms`:'—'}</span><time role="cell" dateTime={item.lastCheckedAt}>{item.lastCheckedAt?timeAgo(item.lastCheckedAt):'—'}</time><button role="cell" className="vpn-copy-button" disabled={!item.connectionUri} data-tooltip={item.connectionUri?t('copyVpn'):t('vpnLinkUnavailable')} aria-label={item.connectionUri?t('copyVpn'):t('vpnLinkUnavailable')} onClick={()=>{if(!item.connectionUri)return;void copyText(item.connectionUri).then(()=>{setCopied(item.id);window.setTimeout(()=>setCopied(current=>current===item.id?'':current),1800)})}}>{copied===item.id?<Check/>:<Copy/>}<span>{copied===item.id?t('copied'):t('copy')}</span></button></div>)}</div>
     </div>
-    {!loading&&total>0&&<ProxyPagination page={page} pageSize={pageSize} total={total} totalPages={totalPages} onPageChange={next=>{setPage(next);document.getElementById('vpn-catalog')?.scrollIntoView?.({behavior:'smooth'})}} onPageSizeChange={size=>{setPageSize(size);setPage(1)}}/>}
+    {!loading&&access.limited&&<AccessLimitNotice message={access.message} accessible={access.accessible} total={total} upgradeUrl={access.upgradeUrl}/>}
+    {!loading&&total>0&&!access.limited&&<ProxyPagination page={page} pageSize={pageSize} total={total} totalPages={totalPages} onPageChange={next=>{setPage(next);document.getElementById('vpn-catalog')?.scrollIntoView?.({behavior:'smooth'})}} onPageSizeChange={size=>{setPageSize(size);setPage(1)}}/>}
   </section>
+}
+
+/** Единое объяснение ограничения бесплатного тарифа для обоих каталогов. */
+function AccessLimitNotice({message,accessible,total,upgradeUrl}:{message?:string;accessible?:number;total:number;upgradeUrl?:string}) {
+  const {t}=useI18n()
+  return <aside className="catalog-access-notice" role="note"><div><LockKeyhole/><p><strong>{t('freeCatalog')}</strong><span>{message??t('subscriptionUnlocks',{count:formatNumber(total)})}</span><small>{t('availableNow',{accessible:formatNumber(accessible??0),total:formatNumber(total)})}</small></p></div><a className="primary" href={upgradeUrl??'/account'}>{t('getSubscription')}<ArrowRight/></a></aside>
 }
 
 /** Компактная строка последней административной активности. */
@@ -1014,12 +1058,12 @@ function AdminVpnPage() {
   const totalPages=Math.max(1,Math.ceil(total/pageSize))
   return <section className="admin-section admin-wide-section" aria-labelledby="admin-vpn-title">
     <AdminPageHeader id="admin-vpn-title" title="VPN-каталог"><div className="vpn-header-actions"><button className="secondary-admin-button" disabled={busy} onClick={()=>void run(tab==='sources'?'collect':'validate')}><RefreshCw className={busy?'spin':''}/>{tab==='sources'?'Собрать сейчас':'Проверить сейчас'}</button>{tab==='sources'&&<button className="primary-admin-button" onClick={()=>openEditor()}><Plus/>Добавить feed</button>}</div></AdminPageHeader>
-    <p className="admin-page-description">OpenVPN, WireGuard, VLESS, VMess и другие публичные конфигурации. UUID, пароли и приватные ключи не сохраняются и не публикуются.</p>
+    <p className="admin-page-description">OpenVPN, WireGuard, VLESS, VMess и другие явно опубликованные конфигурации. Готовые URI сохраняются для копирования и API-выдачи.</p>
     <nav className="admin-tabs" aria-label="Раздел VPN"><button className={tab==='endpoints'?'active':''} onClick={()=>selectTab('endpoints')}>VPN-узлы</button><button className={tab==='sources'?'active':''} onClick={()=>selectTab('sources')}>Источники VPN</button></nav>
     {error&&<div className="admin-notice" role="alert"><X/>{error}</div>}
     <section className="admin-card vpn-catalog-card">
       <div className="vpn-toolbar">{tab==='endpoints'?<><StyledSelect ariaLabel="VPN протокол" value={protocol} onChange={value=>{setProtocol(value as VpnProtocol|'All');setPage(1)}} options={['All',...protocols].map(value=>[value,value==='All'?'Все протоколы':value] as const)}/><StyledSelect ariaLabel="Статус VPN" value={status} onChange={value=>{setStatus(value as VpnStatus|'All');setPage(1)}} options={([['All','Все статусы'],['Reachable','Доступен'],['Pending','Ожидает'],['Unreachable','Недоступен'],['UnsupportedTransport','UDP · без активной проверки']] as const)}/></>:<form className="source-search" onSubmit={event=>{event.preventDefault();setSearch(searchDraft.trim());setPage(1)}}><Search/><input aria-label="Поиск VPN-источников" type="search" placeholder="Название, провайдер или URL" value={searchDraft} onChange={event=>setSearchDraft(event.target.value)}/><button className="source-search-submit">Найти</button></form>}</div>
-      {tab==='endpoints'?<div className="admin-data-table vpn-table"><div className="admin-table-head"><span>АДРЕС / ИСТОЧНИК</span><span>ПРОТОКОЛ</span><span>ТРАНСПОРТ</span><span>СТАТУС</span><span>ЗАДЕРЖКА</span><span>ПОСЛЕДНЯЯ ПРОВЕРКА</span></div>{endpoints.map(item=><article key={item.id}><div><b>{item.host}:{item.port}</b><small>{item.sourceUrl?<a href={item.sourceUrl} target="_blank" rel="noreferrer">{item.sourceName??'Открыть исходный feed'}</a>:`впервые ${formatDateTime(item.firstSeenAt)}`}</small></div><strong>{item.protocol}</strong><span>{item.transport.toUpperCase()}</span><span className={`vpn-status ${item.status.toLowerCase()}`}>{item.status==='Reachable'?'Доступен':item.status==='Unreachable'?'Недоступен':item.status==='UnsupportedTransport'?'UDP · метаданные':'Ожидает'}</span><span>{item.latencyMs!=null?`${item.latencyMs} мс`:'—'}</span><time>{item.lastCheckedAt?timeAgo(item.lastCheckedAt):'ещё не проверен'}</time></article>)}</div>:<div className="source-list">{sources.map(source=><article key={source.id}><div><b>{source.name}</b><small>{source.provider} · {source.defaultProtocol} · {source.license} · {formatNumber(source.lastItemCount)} адресов</small></div><div className="source-controls"><span className="source-kind">{source.isBuiltIn?'встроенный':'свой'}</span><span className={source.lastError?'source-error':'source-ok'} title={source.lastError}>{source.lastError?'ошибка':source.enabled?'активен':'пауза'}</span><button className="source-edit-button" onClick={()=>openEditor(source)}><Pencil/>Изменить</button></div></article>)}</div>}
+      {tab==='endpoints'?<div className="admin-data-table vpn-table"><div className="admin-table-head"><span>АДРЕС / СТРАНА</span><span>ПРОТОКОЛ</span><span>ТРАНСПОРТ</span><span>СТАТУС</span><span>ЗАДЕРЖКА</span><span>ПОСЛЕДНЯЯ ПРОВЕРКА</span></div>{endpoints.map(item=><article key={item.id}><div><b>{item.host}:{item.port}</b><small>{item.countryCode?countryName(item.countryCode):`впервые ${formatDateTime(item.firstSeenAt)}`}</small></div><strong>{item.protocol}</strong><span>{item.transport.toUpperCase()}</span><span className={`vpn-status ${item.status.toLowerCase()}`}>{item.status==='Reachable'?'Доступен':item.status==='Unreachable'?'Недоступен':item.status==='UnsupportedTransport'?'UDP · метаданные':'Ожидает'}</span><span>{item.latencyMs!=null?`${item.latencyMs} мс`:'—'}</span><time>{item.lastCheckedAt?timeAgo(item.lastCheckedAt):'ещё не проверен'}</time></article>)}</div>:<div className="source-list">{sources.map(source=><article key={source.id}><div><b>{source.name}</b><small>{source.provider} · {source.defaultProtocol} · {source.license} · {formatNumber(source.lastItemCount)} адресов</small></div><div className="source-controls"><span className="source-kind">{source.isBuiltIn?'встроенный':'свой'}</span><span className={source.lastError?'source-error':'source-ok'} title={source.lastError}>{source.lastError?'ошибка':source.enabled?'активен':'пауза'}</span><button className="source-edit-button" onClick={()=>openEditor(source)}><Pencil/>Изменить</button></div></article>)}</div>}
       {!busy&&total===0&&<p className="empty-state">Записей пока нет. Запустите сбор активных VPN-источников.</p>}
       {total>0&&<ProxyPagination page={page} pageSize={pageSize} total={total} totalPages={totalPages} onPageChange={setPage} onPageSizeChange={size=>{setPageSize(size);setPage(1)}}/>}
     </section>

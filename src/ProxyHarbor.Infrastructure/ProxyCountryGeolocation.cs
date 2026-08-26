@@ -93,7 +93,7 @@ public sealed class ProxyCountryWorker(
             "Локальный справочник стран прокси готов: {DatabasePath}");
     private static readonly Action<ILogger, int, Exception?> BackfillCompleted =
         LoggerMessage.Define<int>(LogLevel.Information, new EventId(1602, "GeoIpBackfillCompleted"),
-            "Страна заполнена для {ProxyCount} прокси");
+            "Страна заполнена для {ProxyCount} proxy/VPN endpoint");
     private static readonly Action<ILogger, Exception?> RefreshFailed =
         LoggerMessage.Define(LogLevel.Warning, new EventId(1603, "GeoIpRefreshFailed"),
             "Не удалось обновить локальный справочник стран; работа прокси продолжается без геофильтра для неизвестных адресов");
@@ -191,6 +191,21 @@ public sealed class ProxyCountryWorker(
             var country = resolver.Resolve(proxy.ExitIp);
             if (country is null || string.Equals(proxy.CountryCode, country, StringComparison.Ordinal)) continue;
             proxy.CountryCode = country;
+            updated++;
+        }
+
+        // VPN использует ту же локальную GeoIP-базу. Никаких внешних запросов по
+        // каждому адресу нет; DNS-имена останутся без страны до появления IP.
+        var vpnCandidates = await db.VpnEndpoints
+            .Where(endpoint => endpoint.Status == VpnEndpointStatus.Reachable)
+            .OrderByDescending(endpoint => endpoint.LastCheckedAt)
+            .Take(options.Value.BackfillBatchSize)
+            .ToListAsync(token);
+        foreach (var endpoint in vpnCandidates)
+        {
+            var country = resolver.Resolve(endpoint.Host);
+            if (country is null || string.Equals(endpoint.CountryCode, country, StringComparison.Ordinal)) continue;
+            endpoint.CountryCode = country;
             updated++;
         }
         if (updated > 0) await db.SaveChangesAsync(token);

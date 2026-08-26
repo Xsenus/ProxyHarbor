@@ -555,7 +555,7 @@ public sealed class ProxyPublicationTests
     };
 
     [Fact]
-    public async Task FreeJsonExportReturnsTenMiddleRankedProxiesAndUpgradeMetadata()
+    public async Task FreeJsonExportReturnsFiveCountryDiverseProxiesAndUpgradeMetadata()
     {
         var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
             .UseInMemoryDatabase($"free-json-export-{Guid.NewGuid():N}").Options;
@@ -565,13 +565,14 @@ public sealed class ProxyPublicationTests
             {
                 var endpoint = Endpoint($"10.0.0.{index}", ProxyStatus.Alive, DateTimeOffset.UtcNow);
                 endpoint.LatencyMs = index * 10;
+                endpoint.CountryCode = new[] { "DE", "FR", "US", "SE", "JP" }[(index - 1) % 5];
                 seed.Proxies.Add(endpoint);
             }
             await seed.SaveChangesAsync();
         }
 
         var factory = new TestDbFactory(options);
-        var access = new FreeExportAccess(true, false, 10, DateTimeOffset.UtcNow.AddMinutes(10), "free");
+        var access = new FreeExportAccess(true, false, 5, DateTimeOffset.UtcNow.AddMinutes(10), "free");
         var controller = new ProxiesController(factory,
             Options.Create(new CollectorOptions { PublicFreshnessMinutes = 15 }), factory,
             new StubFreeExportAccessService(access));
@@ -590,10 +591,9 @@ public sealed class ProxyPublicationTests
             json.RootElement.GetProperty("access").GetProperty("message").GetString(),
             StringComparison.OrdinalIgnoreCase);
         var proxies = json.RootElement.GetProperty("proxies").EnumerateArray().ToArray();
-        Assert.Equal(10, proxies.Length);
-        Assert.Equal("10.0.0.11", proxies[0].GetProperty("host").GetString());
-        Assert.Equal("10.0.0.20", proxies[^1].GetProperty("host").GetString());
-        Assert.Equal("10", controller.Response.Headers["X-Export-Limit"].ToString());
+        Assert.Equal(5, proxies.Length);
+        Assert.Equal(5, proxies.Select(item => item.GetProperty("countryCode").GetString()).Distinct().Count());
+        Assert.Equal("5", controller.Response.Headers["X-Export-Limit"].ToString());
         Assert.Equal("free", controller.Response.Headers["X-Access-Tier"].ToString());
     }
 

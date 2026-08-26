@@ -9,7 +9,7 @@ using ProxyHarbor.Domain;
 
 namespace ProxyHarbor.Infrastructure;
 
-/// <summary>Собирает безопасные VPN-метаданные и проверяет доступность TCP endpoint.</summary>
+/// <summary>Собирает VPN endpoint, публичные URI подключения и проверяет доступность TCP endpoint.</summary>
 public sealed class VpnCatalogService(
     IDbContextFactory<ProxyHarborDbContext> dbFactory,
     IHttpClientFactory httpClientFactory,
@@ -20,7 +20,7 @@ public sealed class VpnCatalogService(
     private static readonly Action<ILogger, Guid, Exception?> SourceFailed =
         LoggerMessage.Define<Guid>(LogLevel.Warning, new EventId(1161, "VpnSourceFailed"), "VPN source {SourceId} failed");
 
-    /// <summary>Загружает все включённые feed и сохраняет только очищенные метаданные.</summary>
+    /// <summary>Загружает все включённые feed и сохраняет endpoint вместе с опубликованными URI.</summary>
     public async Task<VpnCollectionResult> CollectAsync(CancellationToken token = default)
     {
         await using var operationLock = await PostgresAdvisoryLock.TryAcquireAsync(dbFactory, PostgresAdvisoryLock.VpnCollectionKey, token);
@@ -64,6 +64,7 @@ public sealed class VpnCatalogService(
                         Port = candidate.Port,
                         Protocol = candidate.Protocol,
                         Transport = candidate.Transport,
+                        ConnectionUri = candidate.ConnectionUri,
                         FirstSourceId = source.Id,
                         FirstSeenAt = now,
                         LastSeenAt = now
@@ -72,7 +73,14 @@ public sealed class VpnCatalogService(
                     endpointsByKey.Add(key, endpoint);
                     added++;
                 }
-                else endpoint.LastSeenAt = now;
+                else
+                {
+                    endpoint.LastSeenAt = now;
+                    // Feed может исправить параметры существующего endpoint. Сохраняем
+                    // последнюю полноценную публичную ссылку, но не затираем её метаданными.
+                    if (!string.IsNullOrWhiteSpace(candidate.ConnectionUri))
+                        endpoint.ConnectionUri = candidate.ConnectionUri;
+                }
 
                 if (!linksByKey.TryGetValue((endpoint.Id, source.Id), out var link))
                 {
