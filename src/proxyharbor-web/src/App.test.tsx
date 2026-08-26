@@ -379,7 +379,9 @@ describe('ProxyHarbor UI', () => {
     })
 
     render(<App />)
-    expect(await screen.findByRole('heading', { name: heading, level: 1 })).toBeInTheDocument()
+    const pageHeading = await screen.findByRole('heading', { name: heading, level: 1 })
+    expect(pageHeading.closest('.admin-page-heading')).toBeInTheDocument()
+    expect(within(pageHeading.closest('.admin-page-heading')!).getByRole('link', { name: 'Панель управления' })).toHaveAttribute('href', '/admin')
     expect(screen.getByRole('link', { name: new RegExp(`^${heading}`) })).toHaveAttribute('aria-current', 'page')
   })
 
@@ -403,6 +405,7 @@ describe('ProxyHarbor UI', () => {
 
     render(<App/>)
     expect(await screen.findByText('Страница 1 из 4 · Найдено: 34')).toBeInTheDocument()
+    expect(screen.getByRole('heading',{name:'Пользователи'}).closest('.admin-page-heading')).toBeInTheDocument()
     expect(screen.getByRole('heading',{name:'Пользователи'}).closest('section')).toHaveClass('users-admin-section')
     expect(screen.getByRole('navigation',{name:'Быстрый переход по страницам'}).closest('section')).toHaveClass('users-registry')
     expect(screen.getByText('Последний вход')).toBeInTheDocument()

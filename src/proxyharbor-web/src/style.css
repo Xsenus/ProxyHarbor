@@ -151,3 +151,33 @@ body{font-size:14px;line-height:1.5}
 .language-switcher{display:inline-flex;align-items:center;gap:9px;color:var(--muted);font-size:13px}.language-switcher>.styled-select{min-width:148px}.language-switcher .styled-select-trigger{min-height:39px;border-color:#25463c;border-radius:10px;background:#0a1915;color:#c8ddd6;font-size:12px;font-weight:650}.language-switcher .styled-select-trigger:hover,.language-switcher .styled-select.open .styled-select-trigger{border-color:#4c947c;background:#10261f}.language-switcher .styled-select-menu{right:0;left:auto;width:max-content;min-width:100%;padding:7px}.language-switcher .styled-select-menu button{min-height:38px;padding:0 11px;font-size:12px;white-space:nowrap}.language-switcher.compact>span{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}.language-switcher.compact>.styled-select{min-width:132px}.login-page>.language-switcher{position:absolute;z-index:12;right:42px;top:40px}.admin-sidebar-foot>.language-switcher{width:100%;padding:0 12px}.admin-sidebar-foot>.language-switcher>.styled-select{width:100%}.account-page header .language-switcher>.styled-select{min-width:142px}.account-forms form>.language-switcher{width:100%}.account-forms form>.language-switcher>.styled-select{flex:1}
 
 @media(max-width:760px){header nav .language-switcher{display:none}.login-page>.language-switcher{right:20px;top:24px}.language-switcher.compact>.styled-select{min-width:124px}.account-page header .language-switcher{order:3;width:100%}.account-page header .language-switcher>.styled-select{width:100%}}
+
+/* Единый рабочий холст админки: компактная навигация вместо крупных hero-заголовков,
+   полная ширина и реестры, которые удерживают пагинацию у нижней границы окна. */
+.admin-content{display:flex;min-width:0;min-height:100vh;flex-direction:column}
+.admin-section{display:flex;flex-direction:column;width:100%;min-height:calc(100vh - 76px);padding:22px clamp(24px,2.5vw,44px) 18px;margin:0}
+.admin-page-heading{display:flex;align-items:center;justify-content:space-between;gap:20px;min-height:44px;margin-bottom:16px}
+.admin-breadcrumb{display:flex;align-items:center;gap:9px;min-width:0;color:#6f8c82;font-size:13px}
+.admin-breadcrumb a{color:#75aa98;white-space:nowrap}.admin-breadcrumb a:hover{color:var(--mint)}
+.admin-breadcrumb svg{flex:0 0 14px;width:14px;color:#42665a}
+.admin-breadcrumb h1{overflow:hidden;margin:0;color:#e2f0ec;font-size:14px;line-height:1.3;letter-spacing:0;text-overflow:ellipsis;white-space:nowrap}
+.admin-page-heading .admin-heading-actions{display:flex;align-items:center;gap:10px}
+.proxy-admin-section,.users-admin-section{width:100%;min-height:calc(100vh - 76px);padding:22px clamp(24px,2.5vw,44px) 18px}
+.source-catalog-card,.backup-registry,.proxy-inventory-card,.users-registry,.subscriptions-admin-section>.admin-registry,.invoice-registry,.site-visitors-card,.access-layout>.admin-registry{display:flex;min-height:0;flex:1;flex-direction:column}
+.source-catalog-card>.source-list,.backup-registry>.backup-list,.proxy-inventory-card>.admin-proxy-table,.users-registry>.users-table,.subscriptions-admin-section>.admin-registry>.subscriptions-table,.invoice-registry>.invoice-table,.site-visitors-card>.visitor-table,.access-layout>.admin-registry>.access-table{margin-bottom:16px}
+.source-catalog-card>.pagination,.backup-registry>.pagination,.proxy-inventory-card>.pagination,.users-registry>.pagination,.subscriptions-admin-section>.admin-registry>.pagination,.invoice-registry>.pagination,.site-visitors-card>.pagination,.access-layout>.admin-registry>.pagination{margin-top:auto;margin-bottom:-5px}
+.payment-settings,.subscriptions-admin-section,.access-admin-section{min-height:calc(100vh - 76px)}
+.payment-settings>.invoice-registry{flex:1}
+.access-admin-section>[role=tabpanel],.access-visitors-section{display:flex;min-height:0;flex:1;flex-direction:column}
+.access-layout{min-height:0;flex:1}.site-visitors-card{flex:1}
+.admin-subsection-heading{align-items:center;margin:0 0 14px}.admin-subsection-heading h2{margin:0;font-size:18px;letter-spacing:-.02em}.admin-subsection-heading .kicker,.admin-subsection-heading p{display:none}
+
+@media(max-width:900px){
+  .admin-section,.proxy-admin-section,.users-admin-section{min-height:calc(100vh - 63px);padding:18px 22px 14px}
+  .admin-page-heading{margin-bottom:14px}
+}
+@media(max-width:650px){
+  .admin-section,.proxy-admin-section,.users-admin-section{padding:14px 14px 12px}
+  .admin-page-heading{align-items:flex-start}.admin-breadcrumb{min-height:44px;font-size:12px}
+  .admin-breadcrumb h1{font-size:13px}.admin-page-heading .primary-admin-button{font-size:0}
+}
