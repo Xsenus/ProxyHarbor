@@ -878,6 +878,7 @@ jobs:
           grep --ignore-case '^Access-Control-Expose-Headers:.*X-Next-Offset' "$export_headers"
           grep --ignore-case '^Access-Control-Expose-Headers:.*X-Next-Cursor' "$export_headers"
           seek_page=$(curl --fail --silent \
+            --header "Cookie: ${admin_cookie}" \
             'http://127.0.0.1:5080/api/v1/proxies/seek?pageSize=1')
           echo "$seek_page" | jq --exit-status \
             '.items | length == 1 and .[0].host == "8.8.4.4"'

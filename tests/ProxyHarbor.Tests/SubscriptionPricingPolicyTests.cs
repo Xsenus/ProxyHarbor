@@ -97,4 +97,45 @@ public sealed class SubscriptionPricingPolicyTests
         Assert.Equal(3_700, normalized["unlimited-day"].AmountMinor);
         Assert.All(normalized.Values, product => Assert.Equal("RUB", product.Currency));
     }
+
+    [Fact]
+    public void NormalizeClampsLegacyDiscountAndInfersUnknownDuration()
+    {
+        var normalized = SubscriptionPricingPolicy.Normalize(new Dictionary<string, PaymentProductOptions>
+        {
+            ["legacy"] = new()
+            {
+                Enabled = true,
+                Name = "Legacy",
+                Plan = SubscriptionPlans.Pro,
+                DurationDays = 10,
+                AmountMinor = 8_000,
+                DiscountPercent = 25,
+                Currency = "USD"
+            }
+        });
+
+        Assert.Equal(1_000, normalized["unlimited-day"].AmountMinor);
+        Assert.All(normalized.Values, product => Assert.Equal("USD", product.Currency));
+    }
+
+    [Fact]
+    public void NormalizeFallsBackWhenLegacyDurationCannotYieldDailyPrice()
+    {
+        var normalized = SubscriptionPricingPolicy.Normalize(new Dictionary<string, PaymentProductOptions>
+        {
+            ["invalid-legacy"] = new()
+            {
+                Enabled = true,
+                Name = "Invalid legacy",
+                Plan = SubscriptionPlans.Unlimited,
+                DurationDays = 0,
+                AmountMinor = 10_000,
+                DiscountPercent = 20,
+                Currency = "EUR"
+            }
+        });
+
+        Assert.Equal(3_700, normalized["unlimited-day"].AmountMinor);
+    }
 }
