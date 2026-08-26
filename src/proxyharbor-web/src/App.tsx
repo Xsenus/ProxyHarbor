@@ -74,15 +74,26 @@ function isAbortError(reason: unknown) {
 
 /** Копирует готовую конфигурацию и сохраняет работу на браузерах без Clipboard API. */
 async function copyText(value: string) {
-  if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(value)
+  // Chromium и мобильные браузеры иногда предоставляют Clipboard API, но
+  // отклоняют запись из-за политики разрешений. В таком случае бесшовно
+  // используем совместимый запасной способ вместо неработающей кнопки.
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(value)
+      return
+    } catch {
+      // Продолжаем через скрытое поле ниже.
+    }
+  }
   const input = document.createElement('textarea')
   input.value = value
   input.style.position = 'fixed'
   input.style.opacity = '0'
   document.body.append(input)
   input.select()
-  document.execCommand('copy')
+  const copied = document.execCommand('copy')
   input.remove()
+  if (!copied) throw new Error('Browser rejected clipboard access')
 }
 
 /** Основная панель: публичный каталог и компактное администрирование в одном интерфейсе. */

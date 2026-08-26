@@ -89,6 +89,23 @@ describe('ProxyHarbor UI', () => {
     expect(within(vpnTable).getByText('Скопировано')).toBeInTheDocument()
   })
 
+  it('falls back to the compatible copy command when Clipboard API is denied', async () => {
+    const writeText = vi.fn().mockRejectedValue(new DOMException('Denied', 'NotAllowedError'))
+    let fallbackValue = ''
+    const execCommand = vi.fn().mockImplementation(() => {
+      fallbackValue = document.querySelector('textarea')?.value ?? ''
+      return true
+    })
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+    Object.defineProperty(document, 'execCommand', { configurable: true, value: execCommand })
+    render(<App />)
+    const vpnTable = await screen.findByRole('table', { name: 'Проверенные VPN-узлы' })
+    fireEvent.click(await within(vpnTable).findByRole('cell', { name: 'Скопировать готовую VPN-ссылку' }))
+    await waitFor(() => expect(execCommand).toHaveBeenCalledWith('copy'))
+    expect(fallbackValue).toBe('vless://public-id@vpn.example.net:443')
+    expect(within(vpnTable).getByText('Скопировано')).toBeInTheDocument()
+  })
+
   it('explains free proxy and VPN limits while preserving full catalog totals', async () => {
     vi.mocked(fetch).mockImplementation(async input => {
       const url = String(input)
