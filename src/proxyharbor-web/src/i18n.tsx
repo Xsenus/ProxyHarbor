@@ -4,6 +4,8 @@ export type Language = 'ru' | 'en' | 'de' | 'fr' | 'zh'
 type Variables = Record<string, string | number>
 type Dictionary = Record<string, string>
 
+// Справочник используется и компонентом, и чистыми функциями нормализации.
+// eslint-disable-next-line react-refresh/only-export-components
 export const languages: { code: Language; nativeName: string; shortName: string }[] = [
   { code: 'ru', nativeName: 'Русский', shortName: 'RU' },
   { code: 'en', nativeName: 'English', shortName: 'EN' },
@@ -59,7 +61,9 @@ function initialLanguage(): Language {
   return normalize(navigator.languages?.[0] ?? navigator.language)
 }
 
+// Форматтеры вне React-дерева читают то же устойчивое значение, что и provider.
 let activeLanguage: Language = 'ru'
+// eslint-disable-next-line react-refresh/only-export-components
 export function currentLocale() { return activeLanguage === 'zh' ? 'zh-CN' : `${activeLanguage}-${activeLanguage === 'en' ? 'US' : activeLanguage.toUpperCase()}` }
 
 type I18nContextValue = { language: Language; setLanguage: (language: Language) => void; t: (key: string, variables?: Variables) => string }
@@ -73,8 +77,8 @@ const fallbackValue: I18nContextValue = {
 
 export function I18nProvider({ children }: { children: React.ReactNode }) {
   const [language, setLanguageState] = useState<Language>(initialLanguage)
-  activeLanguage = language
   useEffect(() => {
+    activeLanguage = language
     document.documentElement.lang = language === 'zh' ? 'zh-CN' : language
     document.cookie = `ProxyHarbor.Language=${language}; Path=/; Max-Age=31536000; SameSite=Lax${location.protocol === 'https:' ? '; Secure' : ''}`
   }, [language])
@@ -89,6 +93,8 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
   return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>
 }
 
+// Hook экспортируется рядом с его provider, чтобы словари не дублировались между модулями.
+// eslint-disable-next-line react-refresh/only-export-components
 export function useI18n() {
   const value = useContext(I18nContext)
   // Компоненты остаются изолированно тестируемыми; приложение всегда подключает provider в main.tsx.
