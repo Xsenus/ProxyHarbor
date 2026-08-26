@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { Check, ChevronDown } from 'lucide-react'
 
-export type StyledSelectOption = readonly [value: string, label: string]
+export type StyledSelectOption = readonly [value: string, label: string, icon?: ReactNode]
 
 type StyledSelectProps = {
   value: string
@@ -53,7 +53,7 @@ export function StyledSelect({value,onChange,options,ariaLabel='Выбор зн�
   }
 
   return <div className={`styled-select${open?' open':''}${disabled?' disabled':''}`} ref={root}>
-    <button ref={trigger} type="button" className="styled-select-trigger" aria-label={ariaLabel} aria-haspopup="listbox" aria-controls={listboxId} aria-expanded={open} disabled={disabled} onKeyDown={onTriggerKeyDown} onClick={()=>setOpen(current=>!current)}>{leadingIcon&&<span className="styled-select-leading" aria-hidden="true">{leadingIcon}</span>}<span className="styled-select-value">{selected?.[1]??value}</span><ChevronDown className="styled-select-chevron"/></button>
-    {open&&<div id={listboxId} className="styled-select-menu" role="listbox" aria-label={ariaLabel}>{options.map(([key,label],index)=><button ref={element=>{optionRefs.current[index]=element}} key={key} type="button" role="option" aria-selected={key===value} onKeyDown={event=>onOptionKeyDown(event,index)} onClick={()=>choose(key)}><span>{label}</span>{key===value&&<Check/>}</button>)}</div>}
+    <button ref={trigger} type="button" className="styled-select-trigger" aria-label={ariaLabel} aria-haspopup="listbox" aria-controls={listboxId} aria-expanded={open} disabled={disabled} onKeyDown={onTriggerKeyDown} onClick={()=>setOpen(current=>!current)}>{leadingIcon&&<span className="styled-select-leading" aria-hidden="true">{leadingIcon}</span>}<span className="styled-select-value">{selected?.[2]}{selected?.[1]??value}</span><ChevronDown className="styled-select-chevron"/></button>
+    {open&&<div id={listboxId} className="styled-select-menu" role="listbox" aria-label={ariaLabel}>{options.map(([key,label,icon],index)=><button ref={element=>{optionRefs.current[index]=element}} key={key} type="button" role="option" aria-selected={key===value} onKeyDown={event=>onOptionKeyDown(event,index)} onClick={()=>choose(key)}><span>{icon}{label}</span>{key===value&&<Check/>}</button>)}</div>}
   </div>
 }

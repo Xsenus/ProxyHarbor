@@ -34,4 +34,13 @@ describe('StyledSelect', () => {
     expect(trigger).toHaveTextContent('Второй')
     await waitFor(()=>expect(trigger).toHaveFocus())
   })
+
+  it('renders an optional decorative icon in the value and options', () => {
+    const { container }=render(<StyledSelect ariaLabel="Страна" value="de" onChange={()=>undefined} options={[["","Все страны"],["de","Германия",<span className="test-flag" aria-hidden="true"/>]]}/>)
+    const trigger=screen.getByRole('button',{name:'Страна'})
+    expect(trigger.querySelector('.test-flag')).toBeInTheDocument()
+    fireEvent.click(trigger)
+    expect(container.querySelectorAll('.test-flag')).toHaveLength(2)
+    expect(screen.getByRole('option',{name:'Германия'})).toBeInTheDocument()
+  })
 })
