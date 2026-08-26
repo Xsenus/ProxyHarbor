@@ -1,4 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState } from 'react'
+import { Languages } from 'lucide-react'
+import { StyledSelect } from './components/StyledSelect'
 
 export type Language = 'ru' | 'en' | 'de' | 'fr' | 'zh'
 type Variables = Record<string, string | number>
@@ -103,10 +105,8 @@ export function useI18n() {
 
 export function LanguageSwitcher({ compact = false }: { compact?: boolean }) {
   const { language, setLanguage, t } = useI18n()
-  return <label className={`language-switcher${compact ? ' compact' : ''}`}>
+  return <div className={`language-switcher${compact ? ' compact' : ''}`}>
     <span>{compact ? languages.find(item => item.code === language)?.shortName : t('language')}</span>
-    <select aria-label={t('language')} value={language} onChange={event => setLanguage(event.target.value as Language)}>
-      {languages.map(item => <option key={item.code} value={item.code}>{item.nativeName}</option>)}
-    </select>
-  </label>
+    <StyledSelect ariaLabel={t('language')} value={language} onChange={value => setLanguage(value as Language)} options={languages.map(item=>[item.code,item.nativeName] as const)} leadingIcon={<Languages/>}/>
+  </div>
 }

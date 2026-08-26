@@ -12,10 +12,15 @@ describe('ProxyHarbor localization', () => {
 
   it('switches the UI immediately and persists the selected language', () => {
     render(<I18nProvider><Sample/></I18nProvider>)
-    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'de' } })
+    const language = screen.getByRole('button', { name: /Язык|Language/ })
+    fireEvent.click(language)
+    expect(screen.getByRole('listbox', { name: /Язык|Language/ })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('option', { name: 'Deutsch' }))
     expect(screen.getByRole('heading', { name: 'Die besten im Moment' })).toBeInTheDocument()
     expect(localStorage.getItem('proxyharbor.language')).toBe('de')
     expect(document.documentElement.lang).toBe('de')
+    expect(language).toHaveTextContent('Deutsch')
+    expect(screen.queryByRole('combobox')).not.toBeInTheDocument()
   })
 
   it('falls back to Russian for an unknown stored language', () => {
