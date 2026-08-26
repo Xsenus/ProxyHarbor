@@ -16,6 +16,13 @@ const proxies = Array.from({ length: 10 }, (_, index) => ({
   activeSince: new Date(Date.now() - 7_200_000).toISOString(), activeForSeconds: 7200,
 }))
 
+const vpnEndpoints = [{
+  id: '00000000-0000-0000-0000-000000000001', host: 'vpn.example.net', port: 443,
+  protocol: 'Vless', transport: 'tcp', status: 'Reachable', latencyMs: 84,
+  firstSeenAt: new Date(Date.now() - 86_400_000).toISOString(), lastSeenAt: new Date().toISOString(),
+  lastCheckedAt: new Date().toISOString(), successfulChecks: 14, failedChecks: 1,
+}]
+
 describe('ProxyHarbor UI', () => {
   beforeEach(() => {
     window.history.replaceState({}, '', '/')
@@ -23,6 +30,7 @@ describe('ProxyHarbor UI', () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
       if (url.includes('/api/v1/stats')) return jsonResponse(stats)
+      if (url.includes('/api/v1/vpn')) return jsonResponse({ items: vpnEndpoints, page: 1, pageSize: 10, total: 1 })
       if (url.includes('/api/v1/proxies/countries')) return jsonResponse([{ code: 'US', count: 70 }, { code: 'DE', count: 7 }])
       if (url.includes('/api/v1/proxies')) return jsonResponse({ items: proxies, page: 1, pageSize: 10, total: 77 })
       return jsonResponse({ title: 'Unexpected request' }, 500)
@@ -49,9 +57,23 @@ describe('ProxyHarbor UI', () => {
     await waitFor(()=>expect(container.querySelector('.country-cell .country-flag.flag-us')).toBeInTheDocument())
     expect(screen.getAllByText('2 ч 0 мин').length).toBeGreaterThan(0)
     expect(screen.getByText('Страница 1 из 8 · Найдено: 77')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Следующая страница' })).toBeEnabled()
-    expect(screen.getByRole('button', { name: '10' })).toHaveAttribute('aria-pressed', 'true')
-    expect(screen.getByRole('spinbutton', { name: 'Номер страницы' })).toBeInTheDocument()
+    const catalog = screen.getByRole('table', { name: 'Прокси' }).closest('section') as HTMLElement
+    expect(within(catalog).getByRole('button', { name: 'Следующая страница' })).toBeEnabled()
+    expect(within(catalog).getByRole('button', { name: '10' })).toHaveAttribute('aria-pressed', 'true')
+    expect(within(catalog).getByRole('spinbutton', { name: 'Номер страницы' })).toBeInTheDocument()
+  })
+
+  it('renders a public paginated VPN catalog without exposing its source', async () => {
+    render(<App />)
+    expect(await screen.findByRole('heading', { name: 'Проверенные VPN-узлы' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'VPN' })).toHaveAttribute('href', '#vpn-catalog')
+    expect(await screen.findByRole('cell', { name: /^vpn\.example\.net:443$/ })).toBeInTheDocument()
+    expect(screen.getByText('Vless')).toBeInTheDocument()
+    expect(screen.queryByText(/источник|feed/i)).not.toBeInTheDocument()
+    expect(vi.mocked(fetch).mock.calls.some(([input]) => {
+      const url = String(input)
+      return url.includes('/api/v1/vpn?') && url.includes('status=Reachable') && url.includes('pageSize=10')
+    })).toBe(true)
   })
 
   it('filters the catalog by countries through the styled multi-select', async () => {
@@ -105,7 +127,8 @@ describe('ProxyHarbor UI', () => {
   it('resets to page one when page size changes', async () => {
     render(<App />)
     await screen.findByText('Страница 1 из 8 · Найдено: 77')
-    fireEvent.click(screen.getByRole('button', { name: '50' }))
+    const catalog = screen.getByRole('table', { name: 'Прокси' }).closest('section') as HTMLElement
+    fireEvent.click(within(catalog).getByRole('button', { name: '50' }))
     await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([input]) => {
       const url = String(input)
       return url.includes('/api/v1/proxies?') && url.includes('page=1') && url.includes('pageSize=50')

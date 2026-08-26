@@ -22,6 +22,7 @@ describe('ProxyHarbor accessibility', () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
       if (url.includes('/api/v1/stats')) return jsonResponse(stats)
+      if (url.includes('/api/v1/vpn')) return jsonResponse({ items: [], page: 1, pageSize: 10, total: 0 })
       if (url.includes('/api/v1/proxies/countries')) return jsonResponse([])
       if (url.includes('/api/v1/proxies')) {
         return jsonResponse({ items: [], page: 1, pageSize: 25, total: 0 })
@@ -47,6 +48,7 @@ describe('ProxyHarbor accessibility', () => {
     vi.mocked(fetch).mockImplementation(async input => {
       const url = String(input)
       if (url.includes('/api/v1/stats')) return jsonResponse({ ...stats, alive: 1 })
+      if (url.includes('/api/v1/vpn')) return jsonResponse({ items: [], page: 1, pageSize: 10, total: 0 })
       if (url.includes('/api/v1/proxies')) {
         return jsonResponse({
           items: [{
