@@ -35,6 +35,8 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
     public DbSet<AccessBlockRule> AccessBlockRules => Set<AccessBlockRule>();
     /// <summary>Singleton runtime-настройка торгового Telegram-бота.</summary>
     public DbSet<TelegramBotConfiguration> TelegramBotConfigurations => Set<TelegramBotConfiguration>();
+    /// <summary>Singleton runtime-настройка резервного копирования.</summary>
+    public DbSet<BackupConfiguration> BackupConfigurations => Set<BackupConfiguration>();
     /// <summary>Telegram-диалоги и связанные аккаунты.</summary>
     public DbSet<TelegramChat> TelegramChats => Set<TelegramChat>();
     /// <summary>Идемпотентный журнал входящих update.</summary>
@@ -155,6 +157,12 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
         telegramConfiguration.Property(x => x.BotUsername).HasMaxLength(64);
         telegramConfiguration.ToTable(table => table.HasCheckConstraint(
             "CK_TelegramBotConfigurations_Singleton", "\"Id\" = 1"));
+
+        var backupConfiguration = builder.Entity<BackupConfiguration>();
+        backupConfiguration.Property(x => x.SettingsJson).HasColumnType("jsonb");
+        backupConfiguration.Property(x => x.ProtectedSecrets).HasMaxLength(65_536);
+        backupConfiguration.ToTable(table => table.HasCheckConstraint(
+            "CK_BackupConfigurations_Singleton", "\"Id\" = 1"));
 
         var telegramChat = builder.Entity<TelegramChat>();
         telegramChat.HasIndex(x => x.ChatId).IsUnique();

@@ -59,7 +59,8 @@ internal static class OperationalRetention
 public sealed class OperationalMaintenanceService(
     IDbContextFactory<ProxyHarborDbContext> dbFactory,
     IOptions<CollectorOptions> collectorOptions,
-    IOptions<BackupOptions> backupOptions)
+    IOptions<BackupOptions> backupOptions,
+    IBackupConfigurationStore? backupConfigurationStore = null)
 {
     private long _lastSuccessUnixSeconds;
     private long _lastFailureUnixSeconds;
@@ -99,8 +100,11 @@ public sealed class OperationalMaintenanceService(
                 db, now, collectorOptions.Value.DeadRetentionDays, token);
             var histories = await OperationalRetention.PruneRunHistoryAsync(
                 db, now, collectorOptions.Value.RunRetentionDays, token);
+            var currentBackupOptions = backupConfigurationStore is null
+                ? backupOptions.Value
+                : await backupConfigurationStore.GetAsync(token);
             var backups = await OperationalRetention.PruneBackupHistoryAsync(
-                db, now, backupOptions.Value.HistoryRetentionDays, token);
+                db, now, currentBackupOptions.HistoryRetentionDays, token);
             var result = new OperationalMaintenanceResult(
                 now,
                 proxies,

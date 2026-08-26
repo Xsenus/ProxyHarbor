@@ -45,6 +45,7 @@ public static class BackupArchiveValidator
             .Append("database/free-proxy-export-grants.json")
             .Append("database/access-block-rules.json")
             .Append("database/telegram-bot-configuration.json")
+            .Append("database/backup-configuration.json")
             .Append("database/telegram-chats.json")
             .Append("database/telegram-update-receipts.json")
             .Append("database/telegram-outbound-messages.json")

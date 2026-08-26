@@ -350,14 +350,17 @@ describe('ProxyHarbor UI', () => {
       const url = String(input)
       if (url.includes('/api/v1/admin/sources')) return jsonResponse({items:[],page:1,pageSize:10,total:0})
       if (url.includes('/api/v1/admin/diagnostics')) return jsonResponse({serverTime:new Date().toISOString(),databaseBytes:2048,validationQueue:{total:0,due:0},recentRuns:[],recentValidationRuns:[],recentBackups:[backup]})
+      if (url.endsWith('/api/v1/admin/backups/settings')) return jsonResponse({enabled:false,intervalHours:24,retentionDays:7,historyRetentionDays:365,maxTelegramFileSizeMb:49,sendToTelegram:true,telegramBotTokenConfigured:true,telegramChatId:'-1001234567890',encryptionConfigured:true,format:'PHB3 (.phbackup)'})
       if (url.includes('/api/v1/admin/backups?')) return jsonResponse({items:deleted?[]:[backup],page:1,pageSize:10,total:deleted?0:1})
       if (url.endsWith('/api/v1/admin/backups/backup-1') && options?.method === 'DELETE') { deleted = true; return new Response(null,{status:204}) }
       return jsonResponse({title:'Unexpected request'},500)
     })
 
     render(<App/>)
-    const download = await screen.findByRole('link',{name:'Скачать'})
+    const download = await screen.findByRole('link',{name:/Скачать proxyharbor/})
     expect(download).toHaveAttribute('href','/api/v1/admin/backups/backup-1/download')
+    expect(download).toHaveAttribute('data-tooltip','Скачать зашифрованный архив')
+    expect(screen.getByText('PHB3 (.phbackup) — зашифрованный полный снимок ProxyHarbor')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button',{name:/Удалить proxyharbor/}))
     const dialog = screen.getByRole('dialog',{name:'Удалить резервную копию?'})
     fireEvent.click(within(dialog).getByRole('button',{name:'Удалить навсегда'}))

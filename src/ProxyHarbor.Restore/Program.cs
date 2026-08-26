@@ -252,6 +252,7 @@ internal static class RestoreApplication
             await db.Sources.ExecuteDeleteAsync(token);
             var hasIdentitySnapshot = archive.GetEntry("database/users.json") is not null;
             var hasPaymentConfiguration = archive.GetEntry("database/payment-configuration.json") is not null;
+            var hasBackupConfiguration = archive.GetEntry("database/backup-configuration.json") is not null;
             var hasTelegramSnapshot = archive.GetEntry("database/telegram-chats.json") is not null;
             if (hasIdentitySnapshot)
             {
@@ -366,6 +367,12 @@ internal static class RestoreApplication
             if (hasPaymentConfiguration)
                 _ = await ImportIdentityAsync<PaymentConfiguration>(
                     archive, "database/payment-configuration.json", db, token);
+            if (hasBackupConfiguration)
+            {
+                await db.BackupConfigurations.ExecuteDeleteAsync(token);
+                _ = await ImportIdentityAsync<BackupConfiguration>(
+                    archive, "database/backup-configuration.json", db, token);
+            }
             hooks?.BeforeCommit?.Invoke();
             // Не начинаем COMMIT, если shutdown поступил после завершения всех COPY. Явная
             // граница исключает неоднозначный запуск подтверждения с уже отменённым token.

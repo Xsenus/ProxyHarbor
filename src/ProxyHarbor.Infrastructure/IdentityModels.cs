@@ -254,6 +254,23 @@ public sealed class TelegramBotConfiguration
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 
+/// <summary>
+/// Единственная runtime-конфигурация резервного копирования. Расписание и политика
+/// хранения лежат в JSONB, а Telegram-реквизиты — в Data Protection ciphertext.
+/// Каталог и ключ шифрования остаются deploy-секретами и из админки не меняются.
+/// </summary>
+public sealed class BackupConfiguration
+{
+    /// <summary>Фиксированный ключ singleton-записи.</summary>
+    public int Id { get; set; } = 1;
+    /// <summary>Несекретные параметры расписания и хранения.</summary>
+    public string SettingsJson { get; set; } = string.Empty;
+    /// <summary>Зашифрованный JSON с Telegram bot token и chat ID.</summary>
+    public string ProtectedSecrets { get; set; } = string.Empty;
+    /// <summary>Последнее административное изменение.</summary>
+    public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
 /// <summary>Приватный Telegram-диалог и связанный пользователь ProxyHarbor.</summary>
 public sealed class TelegramChat
 {
