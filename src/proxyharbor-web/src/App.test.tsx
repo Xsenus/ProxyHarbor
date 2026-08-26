@@ -283,13 +283,17 @@ describe('ProxyHarbor UI', () => {
     await waitFor(() => expect(addButton).toBeEnabled())
     fireEvent.click(addButton)
     const dialog = screen.getByRole('dialog', { name: 'Добавить источник' })
+    expect(within(dialog).queryByRole('combobox')).not.toBeInTheDocument()
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Протокол источника' }))
+    fireEvent.click(screen.getByRole('option', { name: 'HTTPS' }))
     fireEvent.change(within(dialog).getByLabelText('Название'), { target: { value: 'Новый feed' } })
     fireEvent.change(within(dialog).getByLabelText('HTTPS URL'), { target: { value: 'https://example.com/new.txt' } })
     fireEvent.click(within(dialog).getByRole('button', { name: 'Добавить источник' }))
 
     await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([input, options]) => {
       if (!String(input).endsWith('/api/v1/admin/sources') || options?.method !== 'POST') return false
-      return JSON.parse(String(options.body)).name === 'Новый feed'
+      const body=JSON.parse(String(options.body))
+      return body.name === 'Новый feed' && body.protocol === 'Https'
     })).toBe(true))
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
   })

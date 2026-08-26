@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Activity, ArrowDownToLine, ArrowRight, Ban, Bell, Bot, CalendarClock, Check, ChevronDown, Clock3, CreditCard, Database, Eye, EyeOff, Gauge, Globe2, HardDriveDownload, LayoutDashboard, LockKeyhole, LogOut, Mail, MessageCircle, MousePointerClick, Network, Pencil, Play, Plus, Radio, Receipt, RefreshCw, Search, Send, Server, Settings2, ShieldCheck, ShieldOff, Star, Trash2, User, Users, Wifi, Workflow, X } from 'lucide-react'
 import { currentLocale, LanguageSwitcher, type Language, useI18n } from './i18n'
+import { StyledSelect } from './components/StyledSelect'
 
 type Protocol = 'Http' | 'Https' | 'Socks4' | 'Socks5'
 type Proxy = { host: string; port: number; protocol: Protocol; url: string; latencyMs: number; successRate: number; exitIp?: string; countryCode?: string; lastCheckedAt: string; firstAliveAt?: string; lastAliveAt?: string; activeSince?: string; activeForSeconds?: number }
@@ -699,7 +700,7 @@ export default function App() {
         <form className="source-editor-form" onSubmit={saveSource}>
           <label>Название<input autoFocus required minLength={2} maxLength={120} disabled={editingSource?.isBuiltIn} value={sourceDraft.name} onChange={event => setSourceDraft({...sourceDraft, name:event.target.value})}/></label>
           <label>HTTPS URL<input required type="url" maxLength={2048} pattern="https://.*" disabled={editingSource?.isBuiltIn} placeholder="https://example.org/proxies.txt" value={sourceDraft.url} onChange={event => setSourceDraft({...sourceDraft, url:event.target.value})}/></label>
-          <div className="source-editor-grid"><label>Протокол<select disabled={editingSource?.isBuiltIn} value={sourceDraft.protocol} onChange={event => setSourceDraft({...sourceDraft, protocol:event.target.value as Protocol})}>{protocols.map(item => <option key={item} value={item}>{label(item)}</option>)}</select></label><label>Приоритет<input type="number" min={-10000} max={10000} disabled={editingSource?.isBuiltIn} value={sourceDraft.priority} onChange={event => setSourceDraft({...sourceDraft, priority:Number(event.target.value)})}/></label></div>
+          <div className="source-editor-grid"><label>Протокол<StyledSelect ariaLabel="Протокол источника" disabled={editingSource?.isBuiltIn} value={sourceDraft.protocol} onChange={protocol => setSourceDraft({...sourceDraft, protocol:protocol as Protocol})} options={protocols.map(item=>[item,label(item)] as const)}/></label><label>Приоритет<input type="number" min={-10000} max={10000} disabled={editingSource?.isBuiltIn} value={sourceDraft.priority} onChange={event => setSourceDraft({...sourceDraft, priority:Number(event.target.value)})}/></label></div>
           <label className="source-enabled"><input className="ui-checkbox-input" type="checkbox" checked={sourceDraft.enabled} onChange={event => setSourceDraft({...sourceDraft, enabled:event.target.checked})}/><CheckboxMark/><span className="source-enabled-copy"><b>Источник активен</b><small>Активные источники участвуют в очередном цикле сбора.</small></span></label>
           {sourceDeleteConfirm && editingSource && <div className="source-delete-confirm" role="alert"><div><b>{editingSource.isBuiltIn ? 'Отключить встроенный источник?' : 'Удалить источник безвозвратно?'}</b><p>{editingSource.isBuiltIn ? 'Он останется в каталоге и его можно будет включить позже.' : 'Запись источника будет удалена. Уже собранные прокси сохранятся в базе.'}</p></div><button type="button" onClick={() => setSourceDeleteConfirm(false)} disabled={!!sourceBusy}>Отмена</button><button type="button" className="danger" onClick={() => void removeSource(editingSource)} disabled={!!sourceBusy}>{sourceBusy ? 'Выполняем…' : editingSource.isBuiltIn ? 'Отключить' : 'Удалить'}</button></div>}
           <div className="source-editor-actions">{editingSource && !sourceDeleteConfirm && <button type="button" className="danger-link" onClick={() => setSourceDeleteConfirm(true)} disabled={!!sourceBusy}><Trash2/>{editingSource.isBuiltIn ? 'Отключить источник' : 'Удалить источник'}</button>}<span/><button type="button" className="secondary-admin-button" onClick={closeSourceEditor} disabled={!!sourceBusy}>Отмена</button><button type="submit" className="primary-admin-button" disabled={!adminAuthenticated || adminMutationBusy}>{sourceBusy ? 'Сохраняем…' : editingSource ? 'Сохранить изменения' : 'Добавить источник'}</button></div>
@@ -1170,26 +1171,6 @@ function CountryFilter({countries,selected,onChange}:{countries:ProxyCountry[];s
   </div>
 }
 
-/** Собственный список не наследует синие системные меню Chrome и остаётся доступным с клавиатуры. */
-function StyledSelect({value,onChange,options,ariaLabel='Выбор значения'}:{value:string;onChange:(value:string)=>void;options:[string,string][];ariaLabel?:string}){
-  const [open,setOpen]=useState(false)
-  const root=useRef<HTMLSpanElement>(null)
-  const trigger=useRef<HTMLButtonElement>(null)
-  const selected=options.find(([key])=>key===value)??options[0]
-  useEffect(()=>{
-    if(!open)return
-    const closeOnOutsideClick=(event:MouseEvent)=>{if(!root.current?.contains(event.target as Node))setOpen(false)}
-    const closeOnEscape=(event:KeyboardEvent)=>{if(event.key==='Escape'){setOpen(false);trigger.current?.focus()}}
-    document.addEventListener('mousedown',closeOnOutsideClick)
-    document.addEventListener('keydown',closeOnEscape)
-    return()=>{document.removeEventListener('mousedown',closeOnOutsideClick);document.removeEventListener('keydown',closeOnEscape)}
-  },[open])
-  const choose=(next:string)=>{onChange(next);setOpen(false);window.setTimeout(()=>trigger.current?.focus(),0)}
-  return <span className={`styled-select ${open?'open':''}`} ref={root}>
-    <button ref={trigger} type="button" className="styled-select-trigger" aria-label={ariaLabel} aria-haspopup="listbox" aria-expanded={open} onClick={()=>setOpen(current=>!current)}><span>{selected?.[1]??value}</span><ChevronDown/></button>
-    {open&&<span className="styled-select-menu" role="listbox" aria-label={ariaLabel}>{options.map(([key,label])=><button key={key} type="button" role="option" aria-selected={key===value} onClick={()=>choose(key)}><span>{label}</span>{key===value&&<Check/>}</button>)}</span>}
-  </span>
-}
 function AdminTabs({value,onChange,items}:{value:string;onChange:(value:string)=>void;items:[string,string][]}){return <nav className="admin-tabs" aria-label="Разделы страницы">{items.map(([key,label])=><button key={key} className={value===key?'active':''} onClick={()=>onChange(key)}>{label}</button>)}</nav>}
 
 function ProviderCards({providers,onOpen}:{providers:AdminPaymentProviderDraft[];onOpen:(code:string)=>void}){return <section className="provider-card-grid">{providers.map(provider=><article className="admin-card provider-card" key={provider.code}><div className="provider-card-icon"><CreditCard/></div><div><strong>{provider.name}</strong><small>{provider.ready?'Реквизиты заполнены':'Требуется настройка'}</small></div><span className={`state-pill ${provider.enabled&&provider.ready?'active':''}`}>{provider.enabled?'Включён':'Выключен'}</span><button onClick={()=>onOpen(provider.code)}><Settings2/>Открыть настройки</button></article>)}</section>}
