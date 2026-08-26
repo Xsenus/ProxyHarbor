@@ -13,6 +13,12 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
     public DbSet<ProxyEndpoint> Proxies => Set<ProxyEndpoint>();
     /// <summary>Встроенные и пользовательские proxy feed'ы.</summary>
     public DbSet<ProxySource> Sources => Set<ProxySource>();
+    /// <summary>Безопасные метаданные найденных VPN endpoint без credentials.</summary>
+    public DbSet<VpnEndpoint> VpnEndpoints => Set<VpnEndpoint>();
+    /// <summary>Разрешённые публичные VPN feed'ы.</summary>
+    public DbSet<VpnSource> VpnSources => Set<VpnSource>();
+    /// <summary>Происхождение каждого VPN endpoint.</summary>
+    public DbSet<VpnEndpointSource> VpnEndpointSources => Set<VpnEndpointSource>();
     /// <summary>История циклов сбора.</summary>
     public DbSet<CollectionRun> Runs => Set<CollectionRun>();
     /// <summary>История validation-партий.</summary>
@@ -290,6 +296,43 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
             table.HasCheckConstraint("CK_Sources_FetchTimeline", "\"LastSucceededAt\" IS NULL OR (\"LastFetchedAt\" IS NOT NULL AND \"LastSucceededAt\" <= \"LastFetchedAt\")");
             table.HasCheckConstraint("CK_Sources_ContentTimeline", "\"LastContentFetchedAt\" IS NULL OR (\"LastFetchedAt\" IS NOT NULL AND \"LastSucceededAt\" IS NOT NULL AND \"LastContentFetchedAt\" <= \"LastFetchedAt\" AND \"LastContentFetchedAt\" <= \"LastSucceededAt\")");
         });
+
+        var vpnSource = builder.Entity<VpnSource>();
+        vpnSource.HasIndex(x => x.Url).IsUnique();
+        vpnSource.HasIndex(x => new { x.Enabled, x.Priority });
+        vpnSource.Property(x => x.Name).HasMaxLength(120);
+        vpnSource.Property(x => x.Provider).HasMaxLength(120);
+        vpnSource.Property(x => x.Url).HasMaxLength(2048);
+        vpnSource.Property(x => x.License).HasMaxLength(80);
+        vpnSource.Property(x => x.LastError).HasMaxLength(500);
+        vpnSource.ToTable(table =>
+        {
+            table.HasCheckConstraint("CK_VpnSources_ProtocolPriority", "\"DefaultProtocol\" BETWEEN 0 AND 7 AND \"Priority\" BETWEEN -10000 AND 10000");
+            table.HasCheckConstraint("CK_VpnSources_Counters", "\"LastItemCount\" >= 0 AND \"ConsecutiveFailures\" >= 0");
+        });
+
+        var vpnEndpoint = builder.Entity<VpnEndpoint>();
+        vpnEndpoint.HasIndex(x => new { x.Host, x.Port, x.Protocol, x.Transport }).IsUnique();
+        vpnEndpoint.HasIndex(x => new { x.Status, x.NextCheckAt });
+        vpnEndpoint.HasIndex(x => x.LastSeenAt);
+        vpnEndpoint.Property(x => x.Host).HasMaxLength(255);
+        vpnEndpoint.Property(x => x.Transport).HasMaxLength(8);
+        vpnEndpoint.Property(x => x.LastError).HasMaxLength(500);
+        vpnEndpoint.HasOne(x => x.FirstSource).WithMany().HasForeignKey(x => x.FirstSourceId)
+            .OnDelete(DeleteBehavior.SetNull);
+        vpnEndpoint.ToTable(table =>
+        {
+            table.HasCheckConstraint("CK_VpnEndpoints_Identity", "\"Port\" BETWEEN 1 AND 65535 AND \"Protocol\" BETWEEN 0 AND 7 AND \"Status\" BETWEEN 0 AND 3 AND \"Transport\" IN ('tcp', 'udp')");
+            table.HasCheckConstraint("CK_VpnEndpoints_Counters", "\"SuccessfulChecks\" >= 0 AND \"FailedChecks\" >= 0");
+            table.HasCheckConstraint("CK_VpnEndpoints_Timeline", "\"LastSeenAt\" >= \"FirstSeenAt\"");
+        });
+
+        var vpnEndpointSource = builder.Entity<VpnEndpointSource>();
+        vpnEndpointSource.HasKey(x => new { x.VpnEndpointId, x.VpnSourceId });
+        vpnEndpointSource.HasOne(x => x.VpnEndpoint).WithMany(x => x.Sources).HasForeignKey(x => x.VpnEndpointId)
+            .OnDelete(DeleteBehavior.Cascade);
+        vpnEndpointSource.HasOne(x => x.VpnSource).WithMany(x => x.Endpoints).HasForeignKey(x => x.VpnSourceId)
+            .OnDelete(DeleteBehavior.Cascade);
 
         var collectionRun = builder.Entity<CollectionRun>();
         collectionRun.Property(x => x.Error).HasMaxLength(2000);

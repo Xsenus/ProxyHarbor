@@ -36,6 +36,7 @@ public static class BackupArchiveValidator
     private static readonly HashSet<string> AllowedEntries = new(
         RequiredDatabaseEntries
             .Concat(["database/backup-runs.json", "database/validation-runs.json"])
+            .Concat(["database/vpn-sources.json", "database/vpn-endpoints.json", "database/vpn-endpoint-sources.json"])
             .Concat(CurrentSettingsEntries)
             .Concat(IdentityEntries)
             .Append("database/payment-orders.json")

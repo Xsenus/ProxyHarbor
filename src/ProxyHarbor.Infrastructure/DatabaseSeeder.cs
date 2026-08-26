@@ -179,6 +179,30 @@ public static class DatabaseSeeder
             });
         }
 
+        var existingVpnSources = await db.VpnSources.ToDictionaryAsync(x => x.Url, StringComparer.Ordinal, cancellationToken);
+        for (var index = 0; index < BuiltInVpnSourceCatalog.Sources.Count; index++)
+        {
+            var definition = BuiltInVpnSourceCatalog.Sources[index];
+            if (existingVpnSources.TryGetValue(definition.Url, out var source))
+            {
+                source.Name = definition.Name;
+                source.Provider = definition.Provider;
+                source.DefaultProtocol = definition.Protocol;
+                source.License = definition.License;
+                source.Priority = (index + 1) * 10;
+                continue;
+            }
+            db.VpnSources.Add(new VpnSource
+            {
+                Name = definition.Name,
+                Provider = definition.Provider,
+                Url = definition.Url,
+                DefaultProtocol = definition.Protocol,
+                License = definition.License,
+                Priority = (index + 1) * 10
+            });
+        }
+
         await db.SaveChangesAsync(cancellationToken);
     }
 

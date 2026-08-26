@@ -28,7 +28,7 @@ type Diagnostics = {
 const API = import.meta.env.VITE_API_URL ?? ''
 const APP_VERSION = import.meta.env.VITE_APP_VERSION ?? '0.0.0-local'
 const protocols: Protocol[] = ['Http', 'Https', 'Socks4', 'Socks5']
-type AdminSection = 'overview' | 'operations' | 'proxies' | 'sources' | 'backups' | 'users' | 'payments' | 'telegram' | 'subscriptions' | 'access'
+type AdminSection = 'overview' | 'operations' | 'proxies' | 'vpn' | 'sources' | 'backups' | 'users' | 'payments' | 'telegram' | 'subscriptions' | 'access'
 type AdminProxyStatus = 'Pending' | 'Alive' | 'Dead'
 type AdminProxy = { id:string;host:string;port:number;protocol:Protocol;status:AdminProxyStatus;latencyMs?:number;exitIp?:string;countryCode?:string;isAnonymous:boolean;firstSeenAt:string;lastSeenAt:string;lastCheckedAt?:string;firstAliveAt?:string;lastAliveAt?:string;currentAliveSince?:string;activeForSeconds?:number;lastValidationAttemptAt?:string;lastValidationDeferred:boolean;nextCheckAt?:string;successfulChecks:number;failedChecks:number;consecutiveFailedChecks:number;successRate:number;lastError?:string }
 type AdminProxyPage = PagedResult<AdminProxy> & { summary:{total:number;alive:number;freshAlive:number;staleAlive:number;pending:number;dead:number;everAlive:number;averageAliveLatencyMs?:number;countries:number;longestActiveSeconds?:number};countries:ProxyCountry[] }
@@ -56,6 +56,10 @@ type SiteVisitPage = PagedResult<SiteVisit> & {retentionDays:number}
 type AdminUser = AccountProfile & { isActive: boolean }
 type UserAccessDraft = { isActive: boolean; administrator: boolean; subscriber: boolean; plan: string; status: string; expiresAt: string }
 type SourceDraft = { name: string; url: string; protocol: Protocol; priority: number; enabled: boolean }
+type VpnProtocol = 'OpenVpn'|'WireGuard'|'Vless'|'Vmess'|'Trojan'|'Shadowsocks'|'Hysteria2'|'Tuic'
+type VpnStatus = 'Pending'|'Reachable'|'Unreachable'|'UnsupportedTransport'
+type VpnEndpoint = {id:string;host:string;port:number;protocol:VpnProtocol;transport:'tcp'|'udp';status:VpnStatus;latencyMs?:number;firstSeenAt:string;lastSeenAt:string;lastCheckedAt?:string;successfulChecks:number;failedChecks:number;sourceName?:string;sourceUrl?:string}
+type VpnSource = {id:string;name:string;provider:string;url:string;defaultProtocol:VpnProtocol;enabled:boolean;priority:number;license:string;lastFetchedAt?:string;lastSucceededAt?:string;lastItemCount:number;consecutiveFailures:number;lastError?:string;isBuiltIn:boolean}
 type TelegramStats = { users:number;activeUsers30d:number;notificationsEnabled:number;blocked:number;paidOrders:number;starsRevenue:number;queued:number;failed:number }
 type TelegramSettings = { enabled:boolean;updateMode:'webhook'|'polling';name:string;description:string;shortDescription:string;supportText:string;proxyFileMaxItems:number;webhookMaxConnections:number;productStars:Record<string,number>;automaticProductCodes:string[];starsPerCurrencyUnit:number;starsRoundingStep:number;effectiveProductStars:Record<string,number>;tokenConfigured:boolean;botId?:number;botUsername?:string;provisionedAt?:string;updatedAt?:string;webhookUrl:string;avatarUrl:string;stats:TelegramStats }
 type TelegramChat = { id:string;chatId:number;telegramUserId:number;username?:string;displayName:string;languageCode?:string;notificationsEnabled:boolean;isBlocked:boolean;createdAt:string;lastInteractionAt:string;subscription:{plan:string;status:string;expiresAt?:string};messages:number }
@@ -89,6 +93,7 @@ export default function App() {
   const accountOpen = currentPath === '/account' || currentPath === '/account/profile'
   const adminOpen = currentPath === '/admin' || currentPath.startsWith('/admin/') && !loginPage
   const adminSection: AdminSection = currentPath === '/admin/proxies' ? 'proxies'
+    : currentPath === '/admin/vpn' ? 'vpn'
     : currentPath === '/admin/sources' ? 'sources'
     : currentPath === '/admin/operations' ? 'operations'
       : currentPath === '/admin/backups' ? 'backups'
@@ -631,6 +636,7 @@ export default function App() {
           <a className={adminSection === 'overview' ? 'active' : ''} aria-current={adminSection === 'overview' ? 'page' : undefined} href="/admin"><LayoutDashboard/>{t('overview')}</a>
           <a className={adminSection === 'operations' ? 'active' : ''} aria-current={adminSection === 'operations' ? 'page' : undefined} href="/admin/operations"><Workflow/>{t('operations')}</a>
           <a className={adminSection === 'proxies' ? 'active' : ''} aria-current={adminSection === 'proxies' ? 'page' : undefined} href="/admin/proxies"><Wifi/>{t('proxies')} <b>{diagnostics?.validationQueue?.total || '—'}</b></a>
+          <a className={adminSection === 'vpn' ? 'active' : ''} aria-current={adminSection === 'vpn' ? 'page' : undefined} href="/admin/vpn"><Radio/>VPN</a>
           <a className={adminSection === 'sources' ? 'active' : ''} aria-current={adminSection === 'sources' ? 'page' : undefined} href="/admin/sources"><Server/>{t('sources')} <b>{sourceTotal || '—'}</b></a>
           <a className={adminSection === 'backups' ? 'active' : ''} aria-current={adminSection === 'backups' ? 'page' : undefined} href="/admin/backups"><HardDriveDownload/>{t('backups')}</a>
           <a className={adminSection === 'users' ? 'active' : ''} aria-current={adminSection === 'users' ? 'page' : undefined} href="/admin/users"><Users/>{t('users')}</a>
@@ -676,6 +682,7 @@ export default function App() {
 
           {adminSection === 'sources' && <section className="admin-section" aria-labelledby="admin-sources-title">
             <AdminPageHeader id="admin-sources-title" title="Источники"><button className="primary-admin-button" onClick={openNewSource} disabled={!adminAuthenticated || adminMutationBusy}><Plus/>Добавить источник</button></AdminPageHeader>
+            <nav className="admin-tabs source-type-tabs" aria-label="Тип источников"><a className="active" aria-current="page" href="/admin/sources">Прокси</a><a href="/admin/vpn?tab=sources">VPN</a></nav>
             <section className="admin-card source-catalog-card"><div className="card-heading"><div><span className="kicker">ВСЕ ИСТОЧНИКИ</span><h2>Каталог <em>{sourceTotal}</em></h2></div><button className="icon-button" aria-label="Обновить источники" onClick={() => void loadAdminData()} disabled={adminLoading}><RefreshCw className={adminLoading ? 'spin' : ''}/></button></div><form className="source-search" role="search" onSubmit={event => { event.preventDefault(); const nextSearch = sourceSearchDraft.trim(); setSourceSearch(nextSearch); setSourcePage(1); void loadAdminData(false, 1, sourcePageSize, nextSearch) }}><Search aria-hidden="true"/><input type="search" aria-label="Поиск источников" maxLength={200} placeholder="Название, провайдер или адрес feed" value={sourceSearchDraft} onChange={event => setSourceSearchDraft(event.target.value)}/>{sourceSearchDraft && <button type="button" className="source-search-clear" aria-label="Очистить поиск" onClick={() => { setSourceSearchDraft(''); setSourceSearch(''); setSourcePage(1); void loadAdminData(false, 1, sourcePageSize, '') }}><X/></button>}<button type="submit" className="source-search-submit" disabled={adminLoading}>Найти</button></form><div className="source-list">{sources.length === 0 ? <div className="source-search-empty"><Search/>По вашему запросу источники не найдены.</div> : sources.map(source => <article key={source.id}>
               <div><b>{source.name}</b><small>{source.defaultProtocol} · {source.lastItemCount.toLocaleString('ru-RU')} адресов{source.lastContentFetchedAt ? ` · полный feed ${new Date(source.lastContentFetchedAt).toLocaleString('ru-RU')}` : ' · полный feed ещё не получен'}{source.lastResultTruncated ? ' · результат усечён' : ''}{source.consecutiveFailures > 0 ? ` · сбоев подряд: ${source.consecutiveFailures}` : ''}{source.nextFetchAt ? ` · повтор ${timeUntil(source.nextFetchAt)}` : ''}</small></div>
               <div className="source-controls"><span title={source.isBuiltIn ? `Встроенный источник · ${source.provider} · ${source.providerIdentity} · ранг ${source.catalogRank}` : 'Пользовательский источник'} className="source-kind">{source.isBuiltIn ? source.provider : 'свой'}</span><span title={source.lastError} className={source.lastError ? 'source-error' : 'source-ok'}>{source.lastError ? 'ошибка' : source.enabled ? 'активен' : 'пауза'}</span><button className="source-edit-button" disabled={adminMutationBusy} onClick={() => openSourceEditor(source)}><Pencil/>Изменить</button></div>
@@ -690,6 +697,7 @@ export default function App() {
           </section>}
           {adminSection === 'users' && <AdminUsersPage/>}
           {adminSection === 'proxies' && <AdminProxiesPage/>}
+          {adminSection === 'vpn' && <AdminVpnPage/>}
           {adminSection === 'payments' && <AdminPaymentsPage/>}
           {adminSection === 'telegram' && <AdminTelegramPage/>}
           {adminSection === 'subscriptions' && <AdminSubscriptionsPage/>}
@@ -898,6 +906,72 @@ function AccountPage() {
 }
 
 /** Полный административный реестр прокси с накопленной историей проверок. */
+/** Отдельный VPN-каталог: безопасные endpoint-метаданные и управляемые лицензированные feed'ы. */
+function AdminVpnPage() {
+  const protocols: VpnProtocol[] = ['OpenVpn','WireGuard','Vless','Vmess','Trojan','Shadowsocks','Hysteria2','Tuic']
+  const [tab,setTab] = useState<'endpoints'|'sources'>(() => new URLSearchParams(window.location.search).get('tab') === 'sources' ? 'sources' : 'endpoints')
+  const [endpoints,setEndpoints] = useState<VpnEndpoint[]>([])
+  const [sources,setSources] = useState<VpnSource[]>([])
+  const [page,setPage] = useState(1), [pageSize,setPageSize] = useState(10), [total,setTotal] = useState(0)
+  const [protocol,setProtocol] = useState<VpnProtocol|'All'>('All')
+  const [status,setStatus] = useState<VpnStatus|'All'>('All')
+  const [search,setSearch] = useState(''), [searchDraft,setSearchDraft] = useState('')
+  const [busy,setBusy] = useState(false), [error,setError] = useState('')
+  const [editor,setEditor] = useState<VpnSource|null|false>(false)
+  const [draft,setDraft] = useState({name:'',provider:'',url:'',protocol:'Vless' as VpnProtocol,priority:100,license:'Public repository',enabled:true})
+
+  const load = useCallback(async () => {
+    setBusy(true); setError('')
+    try {
+      const query = new URLSearchParams({page:String(page),pageSize:String(pageSize)})
+      if (tab === 'endpoints') { if (protocol !== 'All') query.set('protocol',protocol); if (status !== 'All') query.set('status',status) }
+      else if (search) query.set('search',search)
+      const response = await fetch(`${API}/api/v1/admin/vpn/${tab}?${query}`,{credentials:'include'})
+      if (!response.ok) throw new Error(await responseMessage(response,'Не удалось загрузить VPN-каталог'))
+      const data = await response.json() as PagedResult<VpnEndpoint|VpnSource>
+      if (tab === 'endpoints') { setEndpoints(data.items as VpnEndpoint[]); setSources([]) }
+      else { setSources(data.items as VpnSource[]); setEndpoints([]) }
+      setTotal(data.total)
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Не удалось загрузить VPN-каталог') }
+    finally { setBusy(false) }
+  },[page,pageSize,protocol,status,tab,search])
+  useEffect(()=>{ queueMicrotask(()=>void load()) },[load])
+
+  const selectTab = (next:'endpoints'|'sources') => { setTab(next); setPage(1); history.replaceState(null,'',`/admin/vpn${next === 'sources' ? '?tab=sources' : ''}`) }
+  const openEditor = (source?:VpnSource) => {
+    setEditor(source ?? null)
+    setDraft(source ? {name:source.name,provider:source.provider,url:source.url,protocol:source.defaultProtocol,priority:source.priority,license:source.license,enabled:source.enabled} : {name:'',provider:'',url:'',protocol:'Vless',priority:100,license:'Public repository',enabled:true})
+  }
+  const save = async (event:React.FormEvent) => {
+    event.preventDefault(); setBusy(true); setError('')
+    try {
+      const sourceId = editor && typeof editor === 'object' ? editor.id : ''
+      const response = await fetch(`${API}/api/v1/admin/vpn/sources${sourceId ? `/${sourceId}` : ''}`,{method:sourceId?'PUT':'POST',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify(draft)})
+      if (!response.ok) throw new Error(await responseMessage(response,'Не удалось сохранить VPN-источник'))
+      setEditor(false); await load()
+    } catch(reason) { setError(reason instanceof Error ? reason.message : 'Не удалось сохранить VPN-источник'); setBusy(false) }
+  }
+  const run = async (action:'collect'|'validate') => {
+    setBusy(true); setError('')
+    try { const response=await fetch(`${API}/api/v1/admin/vpn/${action}`,{method:'POST',credentials:'include'}); if(!response.ok) throw new Error(await responseMessage(response,'Операция VPN не выполнена')); await load() }
+    catch(reason){setError(reason instanceof Error?reason.message:'Операция VPN не выполнена');setBusy(false)}
+  }
+  const totalPages=Math.max(1,Math.ceil(total/pageSize))
+  return <section className="admin-section admin-wide-section" aria-labelledby="admin-vpn-title">
+    <AdminPageHeader id="admin-vpn-title" title="VPN-каталог"><div className="vpn-header-actions"><button className="secondary-admin-button" disabled={busy} onClick={()=>void run(tab==='sources'?'collect':'validate')}><RefreshCw className={busy?'spin':''}/>{tab==='sources'?'Собрать сейчас':'Проверить сейчас'}</button>{tab==='sources'&&<button className="primary-admin-button" onClick={()=>openEditor()}><Plus/>Добавить feed</button>}</div></AdminPageHeader>
+    <p className="admin-page-description">OpenVPN, WireGuard, VLESS, VMess и другие публичные конфигурации. UUID, пароли и приватные ключи не сохраняются и не публикуются.</p>
+    <nav className="admin-tabs" aria-label="Раздел VPN"><button className={tab==='endpoints'?'active':''} onClick={()=>selectTab('endpoints')}>VPN-узлы</button><button className={tab==='sources'?'active':''} onClick={()=>selectTab('sources')}>Источники VPN</button></nav>
+    {error&&<div className="admin-notice" role="alert"><X/>{error}</div>}
+    <section className="admin-card vpn-catalog-card">
+      <div className="vpn-toolbar">{tab==='endpoints'?<><StyledSelect ariaLabel="VPN протокол" value={protocol} onChange={value=>{setProtocol(value as VpnProtocol|'All');setPage(1)}} options={['All',...protocols].map(value=>[value,value==='All'?'Все протоколы':value] as const)}/><StyledSelect ariaLabel="Статус VPN" value={status} onChange={value=>{setStatus(value as VpnStatus|'All');setPage(1)}} options={([['All','Все статусы'],['Reachable','Доступен'],['Pending','Ожидает'],['Unreachable','Недоступен'],['UnsupportedTransport','UDP · без активной проверки']] as const)}/></>:<form className="source-search" onSubmit={event=>{event.preventDefault();setSearch(searchDraft.trim());setPage(1)}}><Search/><input aria-label="Поиск VPN-источников" type="search" placeholder="Название, провайдер или URL" value={searchDraft} onChange={event=>setSearchDraft(event.target.value)}/><button className="source-search-submit">Найти</button></form>}</div>
+      {tab==='endpoints'?<div className="admin-data-table vpn-table"><div className="admin-table-head"><span>АДРЕС / ИСТОЧНИК</span><span>ПРОТОКОЛ</span><span>ТРАНСПОРТ</span><span>СТАТУС</span><span>ЗАДЕРЖКА</span><span>ПОСЛЕДНЯЯ ПРОВЕРКА</span></div>{endpoints.map(item=><article key={item.id}><div><b>{item.host}:{item.port}</b><small>{item.sourceUrl?<a href={item.sourceUrl} target="_blank" rel="noreferrer">{item.sourceName??'Открыть исходный feed'}</a>:`впервые ${formatDateTime(item.firstSeenAt)}`}</small></div><strong>{item.protocol}</strong><span>{item.transport.toUpperCase()}</span><span className={`vpn-status ${item.status.toLowerCase()}`}>{item.status==='Reachable'?'Доступен':item.status==='Unreachable'?'Недоступен':item.status==='UnsupportedTransport'?'UDP · метаданные':'Ожидает'}</span><span>{item.latencyMs!=null?`${item.latencyMs} мс`:'—'}</span><time>{item.lastCheckedAt?timeAgo(item.lastCheckedAt):'ещё не проверен'}</time></article>)}</div>:<div className="source-list">{sources.map(source=><article key={source.id}><div><b>{source.name}</b><small>{source.provider} · {source.defaultProtocol} · {source.license} · {formatNumber(source.lastItemCount)} адресов</small></div><div className="source-controls"><span className="source-kind">{source.isBuiltIn?'встроенный':'свой'}</span><span className={source.lastError?'source-error':'source-ok'} title={source.lastError}>{source.lastError?'ошибка':source.enabled?'активен':'пауза'}</span><button className="source-edit-button" onClick={()=>openEditor(source)}><Pencil/>Изменить</button></div></article>)}</div>}
+      {!busy&&total===0&&<p className="empty-state">Записей пока нет. Запустите сбор активных VPN-источников.</p>}
+      {total>0&&<ProxyPagination page={page} pageSize={pageSize} total={total} totalPages={totalPages} onPageChange={setPage} onPageSizeChange={size=>{setPageSize(size);setPage(1)}}/>}
+    </section>
+    {editor!==false&&<div className="source-editor-backdrop" role="presentation" onMouseDown={event=>{if(event.target===event.currentTarget&&!busy)setEditor(false)}}><section className="source-editor-modal" role="dialog" aria-modal="true" aria-labelledby="vpn-source-editor-title"><div className="source-editor-heading"><div><span className="kicker">VPN FEED</span><h2 id="vpn-source-editor-title">{editor?'Изменить источник':'Добавить VPN-источник'}</h2><p>Добавляйте только явно опубликованные HTTPS-feed с разрешением на использование.</p></div><button className="icon-button" aria-label="Закрыть" onClick={()=>setEditor(false)}><X/></button></div><form className="source-editor-form" onSubmit={save}><div className="source-editor-grid"><label>Название<input required minLength={2} maxLength={120} disabled={!!editor?.isBuiltIn} value={draft.name} onChange={e=>setDraft({...draft,name:e.target.value})}/></label><label>Провайдер<input required minLength={2} maxLength={120} disabled={!!editor?.isBuiltIn} value={draft.provider} onChange={e=>setDraft({...draft,provider:e.target.value})}/></label></div><label>HTTPS URL<input required type="url" pattern="https://.*" disabled={!!editor?.isBuiltIn} value={draft.url} onChange={e=>setDraft({...draft,url:e.target.value})}/></label><div className="source-editor-grid"><label>Протокол<StyledSelect ariaLabel="Протокол VPN feed" disabled={!!editor?.isBuiltIn} value={draft.protocol} onChange={value=>setDraft({...draft,protocol:value as VpnProtocol})} options={protocols.map(value=>[value,value] as const)}/></label><label>Лицензия<input required maxLength={80} disabled={!!editor?.isBuiltIn} value={draft.license} onChange={e=>setDraft({...draft,license:e.target.value})}/></label></div><label className="source-enabled"><input className="ui-checkbox-input" type="checkbox" checked={draft.enabled} onChange={e=>setDraft({...draft,enabled:e.target.checked})}/><CheckboxMark/><span className="source-enabled-copy"><b>Источник активен</b><small>Будет участвовать в цикле сбора каждые 5 минут.</small></span></label><div className="source-editor-actions"><span/><button type="button" className="secondary-admin-button" onClick={()=>setEditor(false)}>Отмена</button><button className="primary-admin-button" disabled={busy}>{busy?'Сохраняем…':'Сохранить'}</button></div></form></section></div>}
+  </section>
+}
+
 function AdminProxiesPage() {
   const [data,setData]=useState<AdminProxyPage|null>(null)
   const [page,setPage]=useState(1)

@@ -278,6 +278,9 @@ public sealed class BackupService(
             {
                 await WriteJsonAsync(archive, "database/proxies.json", db.Proxies.AsNoTracking().AsAsyncEnumerable(), token);
                 await WriteJsonAsync(archive, "database/sources.json", db.Sources.AsNoTracking().AsAsyncEnumerable(), token);
+                await WriteJsonAsync(archive, "database/vpn-sources.json", db.VpnSources.AsNoTracking().AsAsyncEnumerable(), token);
+                await WriteJsonAsync(archive, "database/vpn-endpoints.json", db.VpnEndpoints.AsNoTracking().AsAsyncEnumerable(), token);
+                await WriteJsonAsync(archive, "database/vpn-endpoint-sources.json", db.VpnEndpointSources.AsNoTracking().AsAsyncEnumerable(), token);
                 await WriteJsonAsync(archive, "database/runs.json", db.Runs.AsNoTracking().AsAsyncEnumerable(), token);
                 await WriteJsonAsync(archive, "database/validation-runs.json",
                     db.ValidationRuns.AsNoTracking().AsAsyncEnumerable(), token);
