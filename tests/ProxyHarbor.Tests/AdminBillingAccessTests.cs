@@ -88,6 +88,9 @@ public sealed class AdminBillingAccessTests
         var json = System.Text.Json.JsonSerializer.Serialize(result.Value);
         Assert.Contains("\"requests\":20", json);
         Assert.Contains("\"proxyItems\":200", json);
+        foreach (var sort in new[] { "ip", "requests", "proxyItems", "bytesSent", "lastSeen" })
+        foreach (var order in new[] { "asc", "desc" })
+            Assert.IsType<OkObjectResult>(await controller.List(sort: sort, order: order, token: CancellationToken.None));
         Assert.IsType<BadRequestResult>(await controller.List(sort: "unknown", token: CancellationToken.None));
         Assert.IsType<BadRequestResult>(await controller.List(order: "sideways", token: CancellationToken.None));
     }
@@ -118,6 +121,11 @@ public sealed class AdminBillingAccessTests
         Assert.Contains("\"total\":1", visitorJson);
         Assert.Contains("\"PageViews\":5", visitorJson);
         Assert.Contains("member@example.test", visitorJson);
+        foreach (var sort in new[] { "ip", "pageViews", "pages", "firstSeen", "lastSeen" })
+        foreach (var order in new[] { "asc", "desc" })
+            Assert.IsType<OkObjectResult>(await controller.Visitors(sort: sort, order: order, token: CancellationToken.None));
+        Assert.IsType<BadRequestResult>(await controller.Visitors(sort: "unknown", token: CancellationToken.None));
+        Assert.IsType<BadRequestResult>(await controller.Visitors(order: "sideways", token: CancellationToken.None));
     }
 
     [Fact]
@@ -140,10 +148,21 @@ public sealed class AdminBillingAccessTests
         var historyJson = System.Text.Json.JsonSerializer.Serialize(history.Value);
         Assert.Contains("admin@example.test", historyJson);
         Assert.Contains("\"total\":2", historyJson);
+        foreach (var sort in new[] { "ip", "page", "visitedAt" })
+        foreach (var order in new[] { "asc", "desc" })
+            Assert.IsType<OkObjectResult>(await controller.VisitHistory(sort: sort, order: order, token: CancellationToken.None));
+        Assert.IsType<OkObjectResult>(await controller.VisitHistory(query: "admin-access", token: CancellationToken.None));
         Assert.IsType<BadRequestResult>(await controller.VisitHistory(sort: "wrong", token: CancellationToken.None));
+        Assert.IsType<BadRequestResult>(await controller.VisitHistory(order: "sideways", token: CancellationToken.None));
 
         var rules = Assert.IsType<OkObjectResult>(await controller.Rules(token: CancellationToken.None));
         Assert.Contains("198.51.100.9", System.Text.Json.JsonSerializer.Serialize(rules.Value));
+        foreach (var sort in new[] { "target", "createdAt", "expiresAt", "status" })
+        foreach (var order in new[] { "asc", "desc" })
+            Assert.IsType<OkObjectResult>(await controller.Rules(sort: sort, order: order, token: CancellationToken.None));
+        Assert.IsType<OkObjectResult>(await controller.Rules(query: "test rule", token: CancellationToken.None));
+        Assert.IsType<BadRequestResult>(await controller.Rules(sort: "wrong", token: CancellationToken.None));
+        Assert.IsType<BadRequestResult>(await controller.Rules(order: "sideways", token: CancellationToken.None));
     }
 
     [Theory]
@@ -152,6 +171,10 @@ public sealed class AdminBillingAccessTests
     [InlineData("2001:db8::1", "2001:db8::1")]
     public void ClientAddressesAreStoredCanonically(string raw, string expected) =>
         Assert.Equal(expected, ProxyAccessMonitor.NormalizeAddress(System.Net.IPAddress.Parse(raw)));
+
+    [Fact]
+    public void MissingClientAddressUsesStableSentinel() =>
+        Assert.Equal("unknown", ProxyAccessMonitor.NormalizeAddress(null));
 
     [Fact]
     public async Task VisitorRegistrySeparatesPageViewsFromProxyTraffic()
