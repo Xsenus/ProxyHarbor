@@ -89,6 +89,38 @@ public sealed class VpnControllerTests
     }
 
     [Fact]
+    public async Task FreeTxtExportKeepsReadyUriAndReportsAnUnrestrictedSmallCatalog()
+    {
+        var options = Options();
+        var source = Source("Catalog", "https://8.8.8.8/catalog.txt");
+        await SeedAsync(options, source,
+            Endpoint(source, "9.9.9.9", VpnProtocol.Vless, VpnEndpointStatus.Reachable,
+                90, "FR", "vless://public@9.9.9.9:443"));
+        var controller = new VpnController(new TestDbFactory(options), new FreeAccessService());
+        controller.ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() };
+
+        var result = Assert.IsType<FileContentResult>(await controller.Export(
+            "txt", country: ["fr"], token: CancellationToken.None));
+        var text = System.Text.Encoding.UTF8.GetString(result.FileContents);
+
+        Assert.Contains("# total: 1", text, StringComparison.Ordinal);
+        Assert.Contains("vless://public@9.9.9.9:443", text, StringComparison.Ordinal);
+        Assert.Equal("1", controller.Response.Headers["X-Catalog-Total"].ToString());
+    }
+
+    [Fact]
+    public async Task PublicVpnApiRejectsUnknownFormatAndMalformedCountryCodes()
+    {
+        var options = Options();
+        var controller = new VpnController(new TestDbFactory(options), new FreeAccessService());
+        controller.ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() };
+
+        Assert.IsType<BadRequestObjectResult>((await controller.Get(country: ["DEU"], token: CancellationToken.None)).Result);
+        Assert.IsType<ObjectResult>(await controller.Export("xml", token: CancellationToken.None));
+        Assert.IsType<BadRequestObjectResult>(await controller.Export("json", country: ["1!"], token: CancellationToken.None));
+    }
+
+    [Fact]
     public void PublicSourceSummaryDescribesAllSupportedProtocols()
     {
         var result = new VpnController(null!).Sources();

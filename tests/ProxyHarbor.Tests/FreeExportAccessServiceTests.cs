@@ -17,11 +17,13 @@ public sealed class FreeExportAccessServiceTests
 
         var first = await service.AcquireAsync(new ClaimsPrincipal(), "203.0.113.10", CancellationToken.None);
         var second = await service.AcquireAsync(new ClaimsPrincipal(), "203.0.113.10", CancellationToken.None);
+        var paid = await service.HasPaidAccessAsync(new ClaimsPrincipal(), CancellationToken.None);
 
         Assert.True(first.Allowed);
         Assert.False(first.IsPaid);
         Assert.Equal(5, first.Limit);
         Assert.False(second.Allowed);
+        Assert.False(paid);
         Assert.Equal(first.NextAllowedAt, second.NextAllowedAt);
     }
 
@@ -48,9 +50,11 @@ public sealed class FreeExportAccessServiceTests
         var service = new FreeExportAccessService(new TestFactory(options));
 
         var access = await service.AcquireAsync(new ClaimsPrincipal(identity), "203.0.113.11", CancellationToken.None);
+        var hasPaidAccess = await service.HasPaidAccessAsync(new ClaimsPrincipal(identity), CancellationToken.None);
 
         Assert.True(access.Allowed);
         Assert.True(access.IsPaid);
+        Assert.True(hasPaidAccess);
         Assert.Equal("paid", access.Tier);
         await using var verify = new ProxyHarborDbContext(options);
         Assert.Empty(await verify.FreeProxyExportGrants.ToListAsync());
