@@ -348,6 +348,8 @@ public sealed record ProxyCheckResult(
 /// <summary>Унифицированный ответ со страницей данных и сведениями о тарифном ограничении.</summary>
 public sealed record PagedResult<T>(IReadOnlyList<T> Items, int Page, int PageSize, int Total)
 {
+    /// <summary>Явное право текущего клиента обходить весь каталог страницами.</summary>
+    public bool FullAccess { get; init; } = true;
     /// <summary>Количество записей, доступных текущему тарифу; null означает отсутствие отдельного лимита.</summary>
     public int? Accessible { get; init; }
     /// <summary>Признак того, что Total больше доступной текущему клиенту выборки.</summary>

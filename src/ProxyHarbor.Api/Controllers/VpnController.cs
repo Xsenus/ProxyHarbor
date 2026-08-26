@@ -30,7 +30,7 @@ public sealed class VpnController(
     internal VpnController(IDbContextFactory<ProxyHarborDbContext> testDbFactory)
         : this(testDbFactory, AlwaysPaidAccessService.Instance) { }
 
-    /// <summary>Возвращает страницу VPN endpoint; бесплатный тариф получает центральные 10 записей.</summary>
+    /// <summary>Возвращает страницу VPN endpoint; бесплатный тариф получает смешанные 10 записей.</summary>
     [HttpGet]
     public async Task<ActionResult<PagedResult<VpnEndpointResponse>>> Get(
         [FromQuery] int page = 1, [FromQuery] int pageSize = 10,
@@ -57,12 +57,30 @@ public sealed class VpnController(
         var paid = await accessService.HasPaidAccessAsync(CurrentUser, token);
         var effectivePage = paid ? page : 1;
         var effectivePageSize = paid ? pageSize : FreeExportAccessService.FreeVpnLimit;
-        var skip = paid ? (page - 1) * pageSize : Math.Max(0, (total - effectivePageSize) / 2);
-        var items = await Ordered(query).Skip(skip).Take(effectivePageSize).Select(ToResponse()).ToArrayAsync(token);
+        VpnEndpointResponse[] items;
+        if (paid)
+        {
+            items = await Ordered(query).Skip((page - 1) * pageSize).Take(pageSize)
+                .Select(ToResponse()).ToArrayAsync(token);
+        }
+        else
+        {
+            var candidates = await Ordered(query).Take(FreeCatalogSelector.CandidatePoolSize).ToArrayAsync(token);
+            items = FreeCatalogSelector.Select(candidates,
+                    x => $"{x.Protocol}:{x.Host}:{x.Port}", x => x.CountryCode,
+                    FreeExportAccessService.FreeVpnLimit, DateTimeOffset.UtcNow)
+                .OrderBy(x => x.LatencyMs == null).ThenBy(x => x.LatencyMs)
+                .ThenByDescending(x => x.SuccessfulChecks)
+                .Select(x => new VpnEndpointResponse(x.Id, x.Host, x.Port, x.CountryCode, x.Protocol,
+                    x.Transport, x.Status, x.LatencyMs, x.FirstSeenAt, x.LastSeenAt, x.LastCheckedAt,
+                    x.SuccessfulChecks, x.FailedChecks, x.ConnectionUri))
+                .ToArray();
+        }
         return Ok(new PagedResult<VpnEndpointResponse>(items, effectivePage, effectivePageSize, total)
         {
+            FullAccess = paid,
             Accessible = paid ? null : Math.Min(total, FreeExportAccessService.FreeVpnLimit),
-            Limited = !paid && total > FreeExportAccessService.FreeVpnLimit,
+            Limited = !paid,
             Message = paid ? null : FreeExportAccessService.GetVpnUpgradeMessage(Language, total),
             UpgradeUrl = paid ? null : "/account"
         });

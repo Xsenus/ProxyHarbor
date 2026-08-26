@@ -6,7 +6,8 @@ import { StyledSelect } from './components/StyledSelect'
 type Protocol = 'Http' | 'Https' | 'Socks4' | 'Socks5'
 type Proxy = { host: string; port: number; protocol: Protocol; url: string; latencyMs: number; successRate: number; exitIp?: string; countryCode?: string; lastCheckedAt: string; firstAliveAt?: string; lastAliveAt?: string; activeSince?: string; activeForSeconds?: number }
 type ProxyCountry = { code: string; count: number }
-type PagedResult<T> = { items: T[]; page: number; pageSize: number; total: number; accessible?:number; limited?:boolean; message?:string; upgradeUrl?:string }
+type PagedResult<T> = { items: T[]; page: number; pageSize: number; total: number; fullAccess?:boolean; accessible?:number; limited?:boolean; message?:string; upgradeUrl?:string }
+type CommerceAvailability = { available:boolean;showOffer:boolean;fullAccess:boolean;paymentProviders:number;telegram:boolean;accountUrl:string }
 type Stats = { alive: number; staleAlive: number; pending: number; dead: number; dueForCheck: number; checksInProgress: number; scheduledChecks: number; averageLatencyMs: number | null; sources: number; failingSources: number; repeatedlyFailingSources: number; truncatedSources: number; byProtocol: { protocol: Protocol; count: number }[]; lastRun?: { startedAt: string; candidatesFound: number; newProxies: number; sourcesTruncated: number; candidateLimitReached: boolean; status: string } }
 type Source = { id: string; name: string; url: string; defaultProtocol: Protocol; enabled: boolean; priority: number; lastItemCount: number; lastResultTruncated: boolean; lastFetchedAt?: string; lastSucceededAt?: string; lastContentFetchedAt?: string; nextFetchAt?: string; consecutiveFailures: number; lastError?: string; isBuiltIn: boolean; provider?: string; providerIdentity?: string; catalogRank?: number }
 type CollectionRun = { id: string; startedAt: string; finishedAt?: string; sourcesProcessed: number; sourcesSucceeded: number; sourcesFailed: number; sourcesSkipped: number; sourcesTruncated: number; candidatesFound: number; candidateLimitReached: boolean; newProxies: number; status: string; error?: string }
@@ -109,7 +110,8 @@ export default function App() {
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(10)
   const [total, setTotal] = useState(0)
-  const [catalogAccess, setCatalogAccess] = useState<{limited:boolean;message?:string;accessible?:number;upgradeUrl?:string}>({limited:false})
+  const [catalogAccess, setCatalogAccess] = useState<{fullAccess:boolean;limited:boolean;message?:string;accessible?:number;upgradeUrl?:string}>({fullAccess:false,limited:false})
+  const [commerce, setCommerce] = useState<CommerceAvailability | null>(null)
   const [apiError, setApiError] = useState('')
   const currentPath = window.location.pathname.replace(/\/+$/, '') || '/'
   const loginPage = currentPath === '/admin/login' || currentPath === '/login'
@@ -192,7 +194,7 @@ export default function App() {
       selectedCountries.forEach(country => query.append('country', country))
       const [statsResponse, proxyResponse, countriesResponse] = await Promise.all([
         fetch(`${API}/api/v1/stats`, { signal: controller.signal }),
-        includeCatalog ? fetch(`${API}/api/v1/proxies?${query}`, { signal: controller.signal, headers:{'Accept-Language':currentLocale()} }) : Promise.resolve(null),
+        includeCatalog ? fetch(`${API}/api/v1/proxies?${query}`, { signal: controller.signal, credentials:'include', headers:{'Accept-Language':currentLocale()} }) : Promise.resolve(null),
         includeCatalog ? fetch(`${API}/api/v1/proxies/countries`, { signal: controller.signal }) : Promise.resolve(null),
       ])
       if (!statsResponse.ok || (proxyResponse && !proxyResponse.ok) || (countriesResponse && !countriesResponse.ok)) throw new Error('API пока недоступен')
@@ -203,7 +205,7 @@ export default function App() {
         const snapshot = await proxyResponse.json() as PagedResult<Proxy>
         setProxies(snapshot.items)
         setTotal(snapshot.total)
-        setCatalogAccess({limited:Boolean(snapshot.limited),message:snapshot.message,accessible:snapshot.accessible,upgradeUrl:snapshot.upgradeUrl})
+        setCatalogAccess({fullAccess:snapshot.fullAccess??!snapshot.limited,limited:Boolean(snapshot.limited),message:snapshot.message,accessible:snapshot.accessible,upgradeUrl:snapshot.upgradeUrl})
         if (snapshot.limited) {
           if (page !== 1) setPage(1)
         } else {
@@ -228,6 +230,16 @@ export default function App() {
       }
     }
   }, [protocol, maxLatency, page, pageSize, selectedCountries])
+
+  useEffect(() => {
+    if (currentPath !== '/') return
+    const controller = new AbortController()
+    void fetch(`${API}/api/v1/commerce/availability`, {credentials:'include',signal:controller.signal})
+      .then(response => response.ok ? response.json() as Promise<CommerceAvailability> : null)
+      .then(snapshot => { if (snapshot && !controller.signal.aborted) setCommerce(snapshot) })
+      .catch(reason => { if (!isAbortError(reason)) setCommerce(null) })
+    return () => controller.abort()
+  }, [currentPath])
 
   useEffect(() => {
     // Смена фильтра начинает новый обход; старые ответы больше не могут заменить его результаты.
@@ -638,6 +650,8 @@ export default function App() {
         <Metric icon={<Clock3/>} label={t('readyForCheck')} value={formatNumber(stats?.dueForCheck)} note={t('queuedChecks',{running:formatNumber(stats?.checksInProgress),scheduled:formatNumber(stats?.scheduledChecks)})}/>
       </section>
 
+      {commerce?.showOffer&&<SubscriptionOffer availability={commerce}/>}
+
       <section id="catalog" className="catalog">
         <div className="section-heading"><div><span className="kicker">LIVE CATALOG</span><h2>{t('liveCatalog')}</h2></div><p>{t('serverSelection',{count:formatNumber(total)})}</p></div>
         <div className="filters"><div className="tabs" aria-label={t('protocol')}><button aria-pressed={protocol === 'All'} className={protocol === 'All' ? 'active' : ''} onClick={() => changeProtocol('All')}>{t('all')}</button>{protocols.map(x => <button key={x} aria-pressed={protocol === x} className={protocol === x ? 'active' : ''} onClick={() => changeProtocol(x)}>{label(x)}</button>)}</div><div className="filter-tools"><CountryFilter countries={countries} selected={selectedCountries} onChange={changeCountries}/><label>{t('upTo')} <b>{maxLatency} ms</b><input type="range" min="200" max="5000" step="100" value={maxLatency} onChange={e => changeMaxLatency(Number(e.target.value))}/></label></div></div>
@@ -649,7 +663,7 @@ export default function App() {
           </div>
         </div>
         {!loading&&catalogAccess.limited&&<AccessLimitNotice message={catalogAccess.message} accessible={catalogAccess.accessible} total={total} upgradeUrl={catalogAccess.upgradeUrl}/>}
-        {!loading && total > 0 && !catalogAccess.limited && <ProxyPagination
+        {!loading && total > 0 && catalogAccess.fullAccess && <ProxyPagination
           page={page} pageSize={pageSize} total={total} totalPages={totalPages}
           onPageChange={next => { setLoading(true); setPage(next); document.getElementById('catalog')?.scrollIntoView?.({ behavior: 'smooth' }) }}
           onPageSizeChange={size => { setLoading(true); setPageSize(size); setPage(1) }}/>
@@ -769,7 +783,7 @@ function PublicVpnCatalog() {
   const [page,setPage] = useState(1)
   const [pageSize,setPageSize] = useState(10)
   const [total,setTotal] = useState(0)
-  const [access,setAccess] = useState<{limited:boolean;message?:string;accessible?:number;upgradeUrl?:string}>({limited:false})
+  const [access,setAccess] = useState<{fullAccess:boolean;limited:boolean;message?:string;accessible?:number;upgradeUrl?:string}>({fullAccess:false,limited:false})
   const [copied,setCopied] = useState('')
   const [loading,setLoading] = useState(true)
   const [error,setError] = useState('')
@@ -781,7 +795,7 @@ function PublicVpnCatalog() {
       if (protocol !== 'All') query.set('protocol',protocol)
       selectedCountries.forEach(country=>query.append('country',country))
       const [response,countriesResponse] = await Promise.all([
-        fetch(`${API}/api/v1/vpn?${query}`,{signal,headers:{'Accept-Language':currentLocale()}}),
+        fetch(`${API}/api/v1/vpn?${query}`,{signal,credentials:'include',headers:{'Accept-Language':currentLocale()}}),
         fetch(`${API}/api/v1/vpn/countries`,{signal})
       ])
       if (!response.ok||!countriesResponse.ok) throw new Error(await responseMessage(response,t('vpnCatalogUnavailable')))
@@ -793,7 +807,7 @@ function PublicVpnCatalog() {
       setItems(snapshot.items)
       setTotal(snapshot.total)
       setCountries(countrySnapshot)
-      setAccess({limited:Boolean(snapshot.limited),message:snapshot.message,accessible:snapshot.accessible,upgradeUrl:snapshot.upgradeUrl})
+      setAccess({fullAccess:snapshot.fullAccess??!snapshot.limited,limited:Boolean(snapshot.limited),message:snapshot.message,accessible:snapshot.accessible,upgradeUrl:snapshot.upgradeUrl})
       if (snapshot.limited) {
         if (page!==1) setPage(1)
       } else {
@@ -824,7 +838,17 @@ function PublicVpnCatalog() {
       <div role="rowgroup">{loading?<div role="row"><div className="empty" role="cell" aria-live="polite"><RefreshCw className="spin"/> {t('loadingVpnCatalog')}</div></div>:items.length===0?<div role="row"><div className="empty" role="cell" aria-live="polite"><Radio/> {t('emptyVpnCatalog')}</div></div>:items.map(item=><div className="vpn-public-row" role="row" key={item.id}><code role="cell">{item.host}<i>:</i>{item.port}</code><span role="cell" className="country-cell" title={item.countryCode?countryName(item.countryCode):t('countryPending')}>{item.countryCode?<><CountryFlag code={item.countryCode}/><b>{countryName(item.countryCode)}</b></>:<em>—</em>}</span><span role="cell" className="vpn-protocol-badge">{item.protocol}</span><span role="cell" className="latency"><i className={item.latencyMs!=null&&item.latencyMs<800?'fast':item.latencyMs!=null&&item.latencyMs<1800?'medium':'slow'}/>{item.latencyMs!=null?`${item.latencyMs} ms`:'—'}</span><time role="cell" dateTime={item.lastCheckedAt}>{item.lastCheckedAt?timeAgo(item.lastCheckedAt):'—'}</time><button role="cell" className="vpn-copy-button" disabled={!item.connectionUri} data-tooltip={item.connectionUri?t('copyVpn'):t('vpnLinkUnavailable')} aria-label={item.connectionUri?t('copyVpn'):t('vpnLinkUnavailable')} onClick={()=>{if(!item.connectionUri)return;void copyText(item.connectionUri).then(()=>{setCopied(item.id);window.setTimeout(()=>setCopied(current=>current===item.id?'':current),1800)})}}>{copied===item.id?<Check/>:<Copy/>}<span>{copied===item.id?t('copied'):t('copy')}</span></button></div>)}</div>
     </div>
     {!loading&&access.limited&&<AccessLimitNotice message={access.message} accessible={access.accessible} total={total} upgradeUrl={access.upgradeUrl}/>}
-    {!loading&&total>0&&!access.limited&&<ProxyPagination page={page} pageSize={pageSize} total={total} totalPages={totalPages} onPageChange={next=>{setPage(next);document.getElementById('vpn-catalog')?.scrollIntoView?.({behavior:'smooth'})}} onPageSizeChange={size=>{setPageSize(size);setPage(1)}}/>}
+    {!loading&&total>0&&access.fullAccess&&<ProxyPagination page={page} pageSize={pageSize} total={total} totalPages={totalPages} onPageChange={next=>{setPage(next);document.getElementById('vpn-catalog')?.scrollIntoView?.({behavior:'smooth'})}} onPageSizeChange={size=>{setPageSize(size);setPage(1)}}/>}
+  </section>
+}
+
+/** Коммерческое предложение появляется только когда сервер подтвердил готовый способ оплаты. */
+function SubscriptionOffer({availability}:{availability:CommerceAvailability}) {
+  const {t}=useI18n()
+  return <section className="subscription-offer" aria-labelledby="subscription-offer-title">
+    <div className="subscription-offer-icon"><Star/></div>
+    <div><span className="kicker">PREMIUM ACCESS</span><h2 id="subscription-offer-title">{t('subscriptionOfferTitle')}</h2><p>{t('subscriptionOfferText')}</p><ul><li><Check/>{t('subscriptionBenefitCatalog')}</li><li><Check/>{t('subscriptionBenefitExports')}</li><li><Check/>{t('subscriptionBenefitCountries')}</li></ul></div>
+    <div className="subscription-offer-action"><small>{availability.telegram&&availability.paymentProviders>0?t('paymentWebAndTelegram'):availability.telegram?t('paymentTelegram'):t('paymentWeb')}</small><a className="primary" href={availability.accountUrl}><CreditCard/>{t('getSubscription')}</a></div>
   </section>
 }
 

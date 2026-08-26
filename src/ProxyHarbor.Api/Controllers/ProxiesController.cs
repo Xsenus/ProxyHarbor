@@ -104,15 +104,19 @@ public sealed class ProxiesController(
             if (paid)
             {
                 var entities = await OrderForPublication(query).Skip(skip).Take(pageSize).ToListAsync(token);
-                return new PagedResult<ProxyDto>(entities.Select(ProxyDto.From).ToList(), page, pageSize, total);
+                return new PagedResult<ProxyDto>(entities.Select(ProxyDto.From).ToList(), page, pageSize, total)
+                {
+                    FullAccess = true
+                };
             }
 
-            var freeEntities = await SelectDiversifiedFreeProxiesAsync(query, total, token);
+            var freeEntities = await SelectDiversifiedFreeProxiesAsync(query, token);
             return new PagedResult<ProxyDto>(freeEntities.Select(ProxyDto.From).ToList(), 1,
                 FreeExportAccessService.FreeLimit, total)
             {
+                FullAccess = false,
                 Accessible = Math.Min(total, FreeExportAccessService.FreeLimit),
-                Limited = total > FreeExportAccessService.FreeLimit,
+                Limited = true,
                 Message = FreeExportAccessService.GetProxyCatalogUpgradeMessage(
                     CultureInfo.CurrentUICulture.TwoLetterISOLanguageName, total),
                 UpgradeUrl = "/account"
@@ -124,39 +128,19 @@ public sealed class ProxiesController(
     }
 
     /// <summary>
-    /// Выбирает медианный по качеству адрес для каждой из самых представленных стран,
-    /// затем заполняет остаток центральной частью общего рейтинга. Так бесплатный набор
-    /// остаётся полезным и географически разнообразным, но не забирает premium-верхушку.
+    /// Выбирает до двух адресов из быстрого диапазона и заполняет набор средним
+    /// диапазоном. Состав меняется раз в десять минут и предпочитает разные страны.
     /// </summary>
     private static async Task<List<ProxyEndpoint>> SelectDiversifiedFreeProxiesAsync(
-        IQueryable<ProxyEndpoint> query, int total, CancellationToken token)
+        IQueryable<ProxyEndpoint> query, CancellationToken token)
     {
-        var limit = FreeExportAccessService.FreeLimit;
-        var countryCodes = await query.Where(x => x.CountryCode != null)
-            .GroupBy(x => x.CountryCode!)
-            .OrderByDescending(group => group.Count())
-            .ThenBy(group => group.Key)
-            .Select(group => group.Key)
-            .Take(limit)
-            .ToArrayAsync(token);
-        var selected = new List<ProxyEndpoint>(limit);
-        foreach (var countryCode in countryCodes)
-        {
-            var countryQuery = query.Where(x => x.CountryCode == countryCode);
-            var countryTotal = await countryQuery.CountAsync(token);
-            var representative = await OrderForPublication(countryQuery)
-                .Skip(Math.Max(0, (countryTotal - 1) / 2)).FirstOrDefaultAsync(token);
-            if (representative is not null) selected.Add(representative);
-        }
-        if (selected.Count < limit)
-        {
-            var selectedIds = selected.Select(x => x.Id).ToArray();
-            var middle = Math.Max(0, (total - limit * 8) / 2);
-            var candidates = await OrderForPublication(query).Skip(middle).Take(limit * 16).ToListAsync(token);
-            selected.AddRange(candidates.Where(x => !selectedIds.Contains(x.Id)).Take(limit - selected.Count));
-        }
-        return selected.OrderBy(x => x.LatencyMs == null).ThenBy(x => x.LatencyMs)
-            .ThenByDescending(x => x.SuccessfulChecks).Take(limit).ToList();
+        var candidates = await OrderForPublication(query)
+            .Take(FreeCatalogSelector.CandidatePoolSize)
+            .ToListAsync(token);
+        return FreeCatalogSelector.Select(candidates, x => x.Key, x => x.CountryCode,
+                FreeExportAccessService.FreeLimit, DateTimeOffset.UtcNow)
+            .OrderBy(x => x.LatencyMs == null).ThenBy(x => x.LatencyMs)
+            .ThenByDescending(x => x.SuccessfulChecks).ToList();
     }
 
     /// <summary>Совместимый вызов для provider-agnostic unit-тестов без country-фильтра.</summary>
@@ -174,7 +158,6 @@ public sealed class ProxiesController(
     /// Следующий запрос передаёт непрозрачный NextCursor в параметре after.
     /// </summary>
     [HttpGet("proxies/seek")]
-    [OutputCache(PolicyName = PublicOutputCachePolicies.SeekFirstPage)]
     public async Task<ActionResult<CursorPagedResult<ProxyDto>>> Seek(
         [FromQuery, EnumDataType(typeof(ProxyProtocol))] ProxyProtocol? protocol,
         [FromQuery, Range(1, int.MaxValue)] int? maxLatencyMs,
@@ -184,6 +167,16 @@ public sealed class ProxiesController(
         [FromQuery] int pageSize = 100,
         CancellationToken cancellationToken = default)
     {
+        if (!await freeExportAccess.HasPaidAccessAsync(
+                ControllerContext.HttpContext?.User ?? new System.Security.Claims.ClaimsPrincipal(), cancellationToken))
+            return StatusCode(StatusCodes.Status403Forbidden, new ProblemDetails
+            {
+                Title = "Требуется подписка",
+                Detail = FreeExportAccessService.GetProxyCatalogUpgradeMessage(
+                    CultureInfo.CurrentUICulture.TwoLetterISOLanguageName, FreeExportAccessService.FreeLimit),
+                Status = StatusCodes.Status403Forbidden,
+                Extensions = { ["upgradeUrl"] = "/account" }
+            });
         if (!TryNormalizeCountries(country, out var countries)) return InvalidCountries();
         pageSize = Math.Clamp(pageSize, 1, 1000);
         var fingerprint = PublicationCursor.FilterFingerprint(protocol, maxLatencyMs, minSuccessRate, countries);

@@ -114,6 +114,7 @@ describe('ProxyHarbor UI', () => {
       if (url.includes('/api/v1/vpn')) return jsonResponse({ items: vpnEndpoints, page: 1, pageSize: 10, total: 418, limited: true, accessible: 10, message: 'Доступно 10 VPN из 418. Подписка откроет весь каталог.', upgradeUrl: '/account' })
       if (url.includes('/api/v1/proxies/countries')) return jsonResponse([{ code: 'US', count: 77 }])
       if (url.includes('/api/v1/proxies')) return jsonResponse({ items: proxies, page: 1, pageSize: 10, total: 77, limited: true, accessible: 10, message: 'Доступно 10 прокси из 77. Подписка откроет весь каталог.', upgradeUrl: '/account' })
+      if (url.includes('/api/v1/commerce/availability')) return jsonResponse({available:true,showOffer:true,fullAccess:false,paymentProviders:1,telegram:true,accountUrl:'/account'})
       return jsonResponse({ title: 'Unexpected request' }, 500)
     })
     render(<App />)
@@ -121,6 +122,26 @@ describe('ProxyHarbor UI', () => {
     expect(await screen.findByText('Доступно 10 VPN из 418. Подписка откроет весь каталог.')).toBeInTheDocument()
     expect(screen.getByText('Сейчас доступно: 10 из 77')).toBeInTheDocument()
     expect(screen.getByText('Сейчас доступно: 10 из 418')).toBeInTheDocument()
+    expect(screen.getByRole('heading',{name:'Весь каталог без ограничений'})).toBeInTheDocument()
+    expect(screen.getByText('Оплата на сайте или через Telegram')).toBeInTheDocument()
+    expect(screen.queryByText('Страница 1 из 8 · Найдено: 77')).not.toBeInTheDocument()
+  })
+
+  it('does not advertise a subscription until a payment method is really ready', async () => {
+    vi.mocked(fetch).mockImplementation(async input => {
+      const url=String(input)
+      if(url.includes('/api/v1/commerce/availability'))return jsonResponse({available:false,showOffer:false,fullAccess:false,paymentProviders:0,telegram:false,accountUrl:'/account'})
+      if(url.includes('/api/v1/stats'))return jsonResponse(stats)
+      if(url.includes('/api/v1/vpn/countries'))return jsonResponse([])
+      if(url.includes('/api/v1/vpn'))return jsonResponse({items:[],page:1,pageSize:10,total:0,fullAccess:false,limited:true})
+      if(url.includes('/api/v1/proxies/countries'))return jsonResponse([])
+      if(url.includes('/api/v1/proxies'))return jsonResponse({items:proxies,page:1,pageSize:10,total:77,fullAccess:false,limited:true,accessible:10})
+      return jsonResponse({title:'Unexpected request'},500)
+    })
+    render(<App/>)
+    await screen.findByRole('table',{name:'Прокси'})
+    await waitFor(()=>expect(vi.mocked(fetch).mock.calls.some(([input])=>String(input).includes('/api/v1/commerce/availability'))).toBe(true))
+    expect(screen.queryByRole('heading',{name:'Весь каталог без ограничений'})).not.toBeInTheDocument()
   })
 
   it('filters the catalog by countries through the styled multi-select', async () => {

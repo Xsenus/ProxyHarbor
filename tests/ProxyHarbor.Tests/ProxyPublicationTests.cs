@@ -618,6 +618,26 @@ public sealed class ProxyPublicationTests
         Assert.True(int.Parse(controller.Response.Headers.RetryAfter.ToString(), CultureInfo.InvariantCulture) > 0);
     }
 
+    [Fact]
+    public async Task FreeClientCannotBypassCatalogLimitThroughSeekPagination()
+    {
+        var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+            .UseInMemoryDatabase($"free-seek-{Guid.NewGuid():N}").Options;
+        var factory = new TestDbFactory(options);
+        var controller = new ProxiesController(factory,
+            Options.Create(new CollectorOptions { PublicFreshnessMinutes = 15 }), factory,
+            new StubFreeExportAccessService(new(true, false, 10, null, "free")));
+        controller.ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() };
+
+        var action = await controller.Seek(
+            null, null, null, null, null, 100, CancellationToken.None);
+        var result = Assert.IsType<ObjectResult>(action.Result);
+
+        Assert.Equal(StatusCodes.Status403Forbidden, result.StatusCode);
+        var problem = Assert.IsType<ProblemDetails>(result.Value);
+        Assert.Equal("/account", problem.Extensions["upgradeUrl"]);
+    }
+
     private static ProxiesController Controller(
         DbContextOptions<ProxyHarborDbContext> options,
         out AsyncOnlyMemoryStream output)
