@@ -34,7 +34,12 @@ public sealed class PaymentConfigurationStore(
     {
         var entity = await db.PaymentConfigurations.AsNoTracking()
             .SingleOrDefaultAsync(x => x.Id == SingletonId, token);
-        if (entity is null) return Clone(configured.Value);
+        if (entity is null)
+        {
+            var defaults = Clone(configured.Value);
+            defaults.Products = SubscriptionPricingPolicy.Normalize(defaults.Products);
+            return defaults;
+        }
 
         try
         {
@@ -62,6 +67,7 @@ public sealed class PaymentConfigurationStore(
                         SecondarySecret = secrets.GetValueOrDefault(pair.Key)?.SecondarySecret ?? string.Empty
                     }, StringComparer.OrdinalIgnoreCase)
             };
+            result.Products = SubscriptionPricingPolicy.Normalize(result.Products);
             return result;
         }
         catch (Exception exception) when (exception is JsonException or System.Security.Cryptography.CryptographicException)
@@ -111,6 +117,7 @@ public sealed class PaymentConfigurationStore(
             Plan = pair.Value.Plan,
             DurationDays = pair.Value.DurationDays,
             AmountMinor = pair.Value.AmountMinor,
+            DiscountPercent = pair.Value.DiscountPercent,
             Currency = pair.Value.Currency,
             Description = pair.Value.Description
         }, StringComparer.OrdinalIgnoreCase),

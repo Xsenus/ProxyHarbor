@@ -92,14 +92,13 @@ public sealed class AdminPaymentSettingsTests
     private static UpdatePaymentSettingsRequest Request(bool enabled, string? secret) => new()
     {
         Enabled = enabled,
-        Products =
-        [
-            new UpdatePaymentProductRequest
-            {
-                Code = "pro-monthly", Enabled = true, Name = "Pro", Plan = SubscriptionPlans.Pro,
-                DurationDays = 30, AmountMinor = 49_900, Currency = "RUB", Description = "Pro access"
-            }
-        ],
+        Products = SubscriptionPricingPolicy.Build(3_700, "RUB").Select(pair => new UpdatePaymentProductRequest
+        {
+            Code = pair.Key, Enabled = pair.Value.Enabled, Name = pair.Value.Name,
+            Plan = pair.Value.Plan, DurationDays = pair.Value.DurationDays,
+            AmountMinor = pair.Value.AmountMinor, DiscountPercent = pair.Value.DiscountPercent,
+            Currency = pair.Value.Currency, Description = pair.Value.Description
+        }).ToList(),
         Providers = PaymentProviderConfiguration.Codes.Select(code => new UpdatePaymentProviderRequest
         {
             Code = code,

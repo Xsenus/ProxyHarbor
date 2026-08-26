@@ -125,6 +125,7 @@ builder.Services.AddHostedService<TelegramPollingWorker>();
 builder.Services.AddHostedService<TelegramSubscriptionReminderWorker>();
 builder.Services.AddSingleton<ProxyAccessMonitor>();
 builder.Services.AddScoped<IFreeExportAccessService, FreeExportAccessService>();
+builder.Services.AddScoped<IUserApiTokenService, UserApiTokenService>();
 builder.Services.AddHostedService(services => services.GetRequiredService<ProxyAccessMonitor>());
 builder.Services.AddControllers().AddJsonOptions(x =>
     x.JsonSerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter()));
@@ -147,6 +148,13 @@ builder.Services.AddOpenApi(options =>
             In = ParameterLocation.Cookie,
             Name = "ProxyHarbor.Session",
             Description = "HttpOnly cookie-сессия, выдаваемая POST /api/v1/auth/login."
+        };
+        document.Components.SecuritySchemes["UserApiToken"] = new OpenApiSecurityScheme
+        {
+            Type = SecuritySchemeType.Http,
+            Scheme = "bearer",
+            BearerFormat = "ProxyHarbor API token",
+            Description = "Персональный токен из профиля. Действует только вместе с активной подпиской."
         };
         return Task.CompletedTask;
     });
@@ -342,6 +350,9 @@ app.UseResponseCompression();
 app.UseRouting();
 app.UseCors("frontend");
 app.UseAuthentication();
+// Пользовательский bearer-токен формирует обычный principal, но только если его
+// владелец активен и подписка ещё действует. Полный токен в базе не хранится.
+app.UseMiddleware<UserApiTokenMiddleware>();
 // API key должен сформировать административный principal до выбора partition
 // rate limiter; cookie-аутентификация уже выполнена предыдущим middleware.
 app.UseMiddleware<AdminApiKeyMiddleware>();

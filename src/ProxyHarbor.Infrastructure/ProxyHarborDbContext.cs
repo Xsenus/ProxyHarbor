@@ -27,6 +27,8 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
     public DbSet<BackupRun> BackupRuns => Set<BackupRun>();
     /// <summary>Текущие тарифы пользователей, отделённые от Identity-ролей.</summary>
     public DbSet<UserSubscription> Subscriptions => Set<UserSubscription>();
+    /// <summary>Хеши персональных пользовательских API-токенов.</summary>
+    public DbSet<UserApiToken> UserApiTokens => Set<UserApiToken>();
     /// <summary>Аудируемые заказы на оплату без платёжных реквизитов.</summary>
     public DbSet<PaymentOrder> PaymentOrders => Set<PaymentOrder>();
     /// <summary>Singleton runtime-настройка платежей с защищёнными секретами.</summary>
@@ -83,6 +85,20 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
             table.HasCheckConstraint("CK_Subscriptions_Plan", "\"Plan\" IN ('free', 'pro', 'unlimited')");
             table.HasCheckConstraint("CK_Subscriptions_Status", "\"Status\" IN ('active', 'trialing', 'past_due', 'canceled', 'expired', 'suspended')");
             table.HasCheckConstraint("CK_Subscriptions_Timeline", "\"ExpiresAt\" IS NULL OR \"ExpiresAt\" >= \"StartedAt\"");
+        });
+
+        var apiToken = builder.Entity<UserApiToken>();
+        apiToken.HasIndex(x => new { x.UserId, x.RevokedAt });
+        apiToken.Property(x => x.Name).HasMaxLength(80);
+        apiToken.Property(x => x.SecretHash).HasMaxLength(32);
+        apiToken.Property(x => x.DisplaySuffix).HasMaxLength(8);
+        apiToken.Property(x => x.Scopes).HasMaxLength(200);
+        apiToken.HasOne(x => x.User).WithMany(x => x.ApiTokens).HasForeignKey(x => x.UserId)
+            .OnDelete(DeleteBehavior.Cascade);
+        apiToken.ToTable(table =>
+        {
+            table.HasCheckConstraint("CK_UserApiTokens_Hash", "octet_length(\"SecretHash\") = 32");
+            table.HasCheckConstraint("CK_UserApiTokens_Timeline", "\"LastUsedAt\" IS NULL OR \"LastUsedAt\" >= \"CreatedAt\"");
         });
 
         var payment = builder.Entity<PaymentOrder>();

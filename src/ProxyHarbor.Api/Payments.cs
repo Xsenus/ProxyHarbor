@@ -39,6 +39,8 @@ public sealed class PaymentProductOptions
     public int DurationDays { get; set; } = 30;
     /// <summary>Цена в минимальных единицах валюты.</summary>
     public long AmountMinor { get; set; }
+    /// <summary>Скидка относительно покупки каждого дня отдельно.</summary>
+    public decimal DiscountPercent { get; set; }
     /// <summary>Код валюты ISO 4217.</summary>
     public string Currency { get; set; } = "RUB";
     /// <summary>Краткое описание тарифа.</summary>

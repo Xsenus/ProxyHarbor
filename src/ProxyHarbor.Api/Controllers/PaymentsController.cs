@@ -37,13 +37,20 @@ public sealed class PaymentsController(
     public async Task<IActionResult> Catalog(CancellationToken token = default)
     {
         var options = await configurations.GetAsync(token);
+        // Старые/тестовые конфигурации могли содержать только месячный продукт.
+        // Публичный каталог остаётся совместимым, а runtime-store постепенно
+        // нормализует реальную конфигурацию до полной сетки из шести периодов.
+        var dailyPrice = options.Products.Values.FirstOrDefault(x => x.DurationDays == 1)?.AmountMinor;
         return Ok(new
         {
             enabled = options.Enabled,
             products = options.Products.Where(x => x.Value.Enabled).Select(x => new
             {
                 code = x.Key, x.Value.Name, x.Value.Plan, x.Value.DurationDays,
-                x.Value.AmountMinor, currency = x.Value.Currency.ToUpperInvariant(), x.Value.Description
+                x.Value.AmountMinor, x.Value.DiscountPercent,
+                fullDailyPriceMinor = dailyPrice is null ? x.Value.AmountMinor : checked(dailyPrice.Value * x.Value.DurationDays),
+                savingsMinor = dailyPrice is null ? 0 : Math.Max(0, checked(dailyPrice.Value * x.Value.DurationDays) - x.Value.AmountMinor),
+                currency = x.Value.Currency.ToUpperInvariant(), x.Value.Description
             }),
             providers = PaymentProviderConfiguration.Codes.Select(code => new
             {

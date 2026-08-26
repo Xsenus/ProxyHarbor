@@ -19,6 +19,36 @@ public sealed class ApplicationUser : IdentityUser<Guid>
     public UserSubscription? Subscription { get; set; }
     /// <summary>Привязанный личный кабинет Telegram, если пользователь запускал торгового бота.</summary>
     public TelegramChat? TelegramChat { get; set; }
+    /// <summary>Отзываемые персональные токены для API и безопасного обмена на web-сессию.</summary>
+    public ICollection<UserApiToken> ApiTokens { get; set; } = [];
+}
+
+/// <summary>
+/// Персональный bearer-токен. В базе хранится только SHA-256 хеш случайного секрета;
+/// полный токен можно увидеть исключительно в ответе на создание или ротацию.
+/// </summary>
+public sealed class UserApiToken
+{
+    /// <summary>Публичная часть токена и первичный ключ записи.</summary>
+    public Guid Id { get; set; } = Guid.NewGuid();
+    /// <summary>Владелец токена.</summary>
+    public Guid UserId { get; set; }
+    /// <summary>Навигация к владельцу.</summary>
+    public ApplicationUser User { get; set; } = null!;
+    /// <summary>Пользовательское название устройства или интеграции.</summary>
+    public string Name { get; set; } = "Основной API-токен";
+    /// <summary>SHA-256 хеш 256-битного случайного секрета.</summary>
+    public byte[] SecretHash { get; set; } = [];
+    /// <summary>Безопасный фрагмент для распознавания токена в кабинете.</summary>
+    public string DisplaySuffix { get; set; } = string.Empty;
+    /// <summary>Разрешения токена; сейчас выдаётся только catalog:read.</summary>
+    public string Scopes { get; set; } = "catalog:read";
+    /// <summary>Момент выпуска.</summary>
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+    /// <summary>Последнее успешное применение, обновляемое с ограничением частоты записи.</summary>
+    public DateTimeOffset? LastUsedAt { get; set; }
+    /// <summary>Момент отзыва; отозванный токен больше никогда не принимается.</summary>
+    public DateTimeOffset? RevokedAt { get; set; }
 }
 
 /// <summary>Тариф пользователя, отделённый от роли для будущего биллинга.</summary>

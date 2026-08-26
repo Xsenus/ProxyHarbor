@@ -17,7 +17,8 @@ namespace ProxyHarbor.Api.Controllers;
 public sealed class AccountController(
     UserManager<ApplicationUser> users,
     SignInManager<ApplicationUser> signIn,
-    ProxyHarborDbContext db) : ControllerBase
+    ProxyHarborDbContext db,
+    IUserApiTokenService apiTokens) : ControllerBase
 {
     /// <summary>Возвращает данные профиля и текущего тарифа.</summary>
     [HttpGet("profile")]
@@ -27,6 +28,8 @@ public sealed class AccountController(
         if (user is null || !user.IsActive) return Unauthorized();
         var roles = await users.GetRolesAsync(user);
         var subscription = await db.Subscriptions.AsNoTracking().SingleOrDefaultAsync(x => x.UserId == user.Id);
+        var paidAccess = UserApiTokenService.HasPaidAccess(subscription, roles, DateTimeOffset.UtcNow);
+        var tokens = await apiTokens.ListAsync(user.Id, HttpContext.RequestAborted);
         return Ok(new
         {
             user.Id,
@@ -43,8 +46,37 @@ public sealed class AccountController(
                 subscription.Status,
                 subscription.StartedAt,
                 subscription.ExpiresAt
-            }
+            },
+            entitlements = new { unlimitedProxyAccess = paidAccess, apiTokens = paidAccess },
+            apiTokens = tokens.Select(x => new
+            {
+                x.Id, x.Name, x.DisplaySuffix, scopes = x.Scopes.Split(' ', StringSplitOptions.RemoveEmptyEntries),
+                x.CreatedAt, x.LastUsedAt, x.RevokedAt, active = x.RevokedAt is null && paidAccess
+            })
         });
+    }
+
+    /// <summary>Выпускает токен и показывает полный секрет ровно один раз.</summary>
+    [HttpPost("api-tokens")]
+    public async Task<IActionResult> IssueApiToken([FromBody] IssueApiTokenRequest request, CancellationToken token)
+    {
+        var user = await users.GetUserAsync(User);
+        if (user is null || !user.IsActive) return Unauthorized();
+        try { return StatusCode(StatusCodes.Status201Created, await apiTokens.IssueAsync(user.Id, request.Name, token)); }
+        catch (UnauthorizedAccessException exception)
+        { return Problem(title: exception.Message, statusCode: StatusCodes.Status403Forbidden); }
+        catch (InvalidOperationException exception)
+        { return Problem(title: exception.Message, statusCode: StatusCodes.Status409Conflict); }
+    }
+
+    /// <summary>Необратимо отзывает выбранный токен; повторный вызов идемпотентен.</summary>
+    [HttpDelete("api-tokens/{tokenId:guid}")]
+    public async Task<IActionResult> RevokeApiToken(Guid tokenId, CancellationToken token)
+    {
+        var user = await users.GetUserAsync(User);
+        if (user is null || !user.IsActive) return Unauthorized();
+        await apiTokens.RevokeAsync(user.Id, tokenId, token);
+        return NoContent();
     }
 
     /// <summary>Меняет безопасные отображаемые данные без изменения email и прав.</summary>
@@ -69,6 +101,9 @@ public sealed class AccountController(
         if (user is null || !user.IsActive) return Unauthorized();
         var result = await users.ChangePasswordAsync(user, request.CurrentPassword, request.NewPassword);
         if (!result.Succeeded) return IdentityProblem(result);
+        var activeTokens = await db.UserApiTokens.Where(x => x.UserId == user.Id && x.RevokedAt == null).ToListAsync();
+        foreach (var apiToken in activeTokens) apiToken.RevokedAt = DateTimeOffset.UtcNow;
+        await db.SaveChangesAsync();
         // ChangePasswordAsync отзывает старый security stamp. Обновляем только текущую
         // cookie, чтобы остальные браузеры завершили сессии при ближайшей проверке.
         await signIn.RefreshSignInAsync(user);
@@ -97,4 +132,11 @@ public sealed class ChangePasswordRequest
     [Required, StringLength(256, MinimumLength = 1)] public string CurrentPassword { get; set; } = string.Empty;
     /// <summary>Новый пароль, проходящий серверную Identity policy.</summary>
     [Required, StringLength(256, MinimumLength = 12)] public string NewPassword { get; set; } = string.Empty;
+}
+
+/// <summary>Название новой интеграции, показываемое рядом с безопасным суффиксом.</summary>
+public sealed class IssueApiTokenRequest
+{
+    /// <summary>Например «Рабочий сервер» или «Мой скрипт».</summary>
+    [StringLength(80)] public string Name { get; set; } = "Основной API-токен";
 }

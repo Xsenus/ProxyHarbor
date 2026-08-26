@@ -275,6 +275,9 @@ Readiness не кэшируется и выполняет zero-row probe все�
 | `POST /api/v1/auth/forgot-password` | Отправить нейтральный reset-response без account enumeration |
 | `POST /api/v1/auth/reset-password` | Применить одноразовый Identity token |
 | `GET /api/v1/account/profile` | Получить профиль, роли и подписку |
+| `POST /api/v1/account/api-tokens` | Выпустить токен; полный секрет присутствует только в этом ответе |
+| `DELETE /api/v1/account/api-tokens/{id}` | Необратимо отозвать токен владельца |
+| `POST /api/v1/auth/token-login` | Обменять действующий платный токен на защищённую cookie-сессию |
 | `PUT /api/v1/account/profile` | Изменить отображаемое имя |
 | `POST /api/v1/account/change-password` | Сменить пароль с проверкой текущего |
 

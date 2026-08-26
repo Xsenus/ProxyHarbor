@@ -17,6 +17,7 @@ public sealed class AuthController(
     SignInManager<ApplicationUser> signIn,
     ProxyHarborDbContext db,
     IAccountEmailSender emailSender,
+    IUserApiTokenService apiTokens,
     ILogger<AuthController> logger) : ControllerBase
 {
     private static readonly Action<ILogger, Guid, Exception?> RecoveryEmailFailed = LoggerMessage.Define<Guid>(
@@ -36,6 +37,22 @@ public sealed class AuthController(
         user.LastLoginAt = DateTimeOffset.UtcNow;
         await users.UpdateAsync(user);
         return Ok(await CreateSessionAsync(user));
+    }
+
+    /// <summary>
+    /// Обменивает персональный API-токен на HttpOnly cookie. Токен не переносится в URL,
+    /// localStorage или последующие браузерные запросы.
+    /// </summary>
+    [HttpPost("token-login")]
+    [EnableRateLimiting("account-login")]
+    public async Task<IActionResult> TokenLogin([FromBody] TokenLoginRequest request, CancellationToken token)
+    {
+        var authentication = await apiTokens.AuthenticateAsync(request.Token.Trim(), token);
+        if (authentication is null) return InvalidToken();
+        await signIn.SignInAsync(authentication.User, isPersistent: false);
+        authentication.User.LastLoginAt = DateTimeOffset.UtcNow;
+        await users.UpdateAsync(authentication.User);
+        return Ok(await CreateSessionAsync(authentication.User));
     }
 
     /// <summary>Создаёт бесплатный аккаунт и сразу открывает пользовательскую сессию.</summary>
@@ -111,6 +128,11 @@ public sealed class AuthController(
             user.EmailConfirmed = true;
             await users.UpdateAsync(user);
         }
+        // Восстановление пароля считается событием компрометации учётных данных:
+        // вместе с cookie отзываются и все ранее выданные интеграционные токены.
+        var activeTokens = await db.UserApiTokens.Where(x => x.UserId == user.Id && x.RevokedAt == null).ToListAsync();
+        foreach (var apiToken in activeTokens) apiToken.RevokedAt = DateTimeOffset.UtcNow;
+        await db.SaveChangesAsync();
         await users.UpdateSecurityStampAsync(user);
         return NoContent();
     }
@@ -173,6 +195,9 @@ public sealed class AuthController(
     private UnauthorizedObjectResult InvalidCredentials() =>
         Unauthorized(new ProblemDetails { Title = "Неверный логин, email или пароль", Status = 401 });
 
+    private UnauthorizedObjectResult InvalidToken() =>
+        Unauthorized(new ProblemDetails { Title = "Токен недействителен, отозван или подписка закончилась", Status = 401 });
+
     private static BadRequestObjectResult IdentityProblem(IdentityResult result, string title) =>
         new(new ValidationProblemDetails(result.Errors.GroupBy(x => x.Code, StringComparer.Ordinal)
             .ToDictionary(x => x.Key, x => x.Select(error => error.Description).ToArray(), StringComparer.Ordinal))
@@ -186,6 +211,13 @@ public sealed class AccountLoginRequest
     [Required, StringLength(254, MinimumLength = 3)] public string Username { get; set; } = string.Empty;
     /// <summary>Текущий пароль.</summary>
     [Required, StringLength(256, MinimumLength = 1)] public string Password { get; set; } = string.Empty;
+}
+
+/// <summary>API-токен передаётся только в JSON-теле защищённого POST-запроса.</summary>
+public sealed class TokenLoginRequest
+{
+    /// <summary>Полный токен формата ph_live_…</summary>
+    [Required, StringLength(160, MinimumLength = 80)] public string Token { get; set; } = string.Empty;
 }
 
 /// <summary>Данные регистрации бесплатного аккаунта.</summary>

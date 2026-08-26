@@ -179,6 +179,35 @@ public sealed class IdentityAccountIntegrationTests
     }
 
     [Fact]
+    public async Task PaidUserCanIssueAuthenticateAndRevokeOneTimeApiToken()
+    {
+        await using var fixture = CreateFixture();
+        await fixture.CreateRolesAsync();
+        var users = fixture.Get<UserManager<ApplicationUser>>();
+        var db = fixture.Get<ProxyHarborDbContext>();
+        var user = new ApplicationUser { UserName = "api-client", Email = "api-client@example.test", IsActive = true };
+        Assert.True((await users.CreateAsync(user, "Initial-user-42!")).Succeeded);
+        Assert.True((await users.AddToRolesAsync(user, [UserRoles.User, UserRoles.Subscriber])).Succeeded);
+        db.Subscriptions.Add(new UserSubscription
+        {
+            UserId = user.Id, Plan = SubscriptionPlans.Unlimited,
+            Status = SubscriptionStatuses.Active, ExpiresAt = DateTimeOffset.UtcNow.AddDays(7)
+        });
+        await db.SaveChangesAsync();
+        var service = new UserApiTokenService(db, users);
+
+        var issued = await service.IssueAsync(user.Id, "CI", CancellationToken.None);
+        Assert.StartsWith($"ph_live_{issued.Id:N}.", issued.Token, StringComparison.Ordinal);
+        var stored = await db.UserApiTokens.AsNoTracking().SingleAsync();
+        Assert.Equal(32, stored.SecretHash.Length);
+        Assert.DoesNotContain(issued.Token, Convert.ToHexString(stored.SecretHash), StringComparison.Ordinal);
+        Assert.NotNull(await service.AuthenticateAsync(issued.Token, CancellationToken.None));
+        Assert.Null(await service.AuthenticateAsync(issued.Token + "x", CancellationToken.None));
+        Assert.True(await service.RevokeAsync(user.Id, issued.Id, CancellationToken.None));
+        Assert.Null(await service.AuthenticateAsync(issued.Token, CancellationToken.None));
+    }
+
+    [Fact]
     public async Task AdministratorManagesUsersButCannotDisableLastAdministrator()
     {
         await using var fixture = CreateFixture();
@@ -395,10 +424,13 @@ public sealed class IdentityAccountIntegrationTests
 
         public AuthController AuthController(IAccountEmailSender sender) => WithContext(new AuthController(
             Get<UserManager<ApplicationUser>>(), Get<SignInManager<ApplicationUser>>(),
-            Get<ProxyHarborDbContext>(), sender, Get<ILogger<AuthController>>()));
+            Get<ProxyHarborDbContext>(), sender,
+            new UserApiTokenService(Get<ProxyHarborDbContext>(), Get<UserManager<ApplicationUser>>()),
+            Get<ILogger<AuthController>>()));
 
         public AccountController AccountController() => WithContext(new AccountController(
-            Get<UserManager<ApplicationUser>>(), Get<SignInManager<ApplicationUser>>(), Get<ProxyHarborDbContext>()));
+            Get<UserManager<ApplicationUser>>(), Get<SignInManager<ApplicationUser>>(), Get<ProxyHarborDbContext>(),
+            new UserApiTokenService(Get<ProxyHarborDbContext>(), Get<UserManager<ApplicationUser>>() )));
 
         public AdminUsersController AdminUsersController() => WithContext(new AdminUsersController(
             Get<UserManager<ApplicationUser>>(), Get<ProxyHarborDbContext>()));

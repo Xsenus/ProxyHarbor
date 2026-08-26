@@ -34,11 +34,9 @@ public sealed class PublicOutputCachePolicyTests
     }
 
     [Fact]
-    public void SeekEndpointUsesBoundedFirstPagePolicy()
+    public void EntitlementAwareSeekEndpointIsNeverSharedThroughOutputCache()
     {
         var method = typeof(ProxiesController).GetMethod(nameof(ProxiesController.Seek));
-        var attribute = Assert.Single(method!.GetCustomAttributes<OutputCacheAttribute>());
-
-        Assert.Equal(PublicOutputCachePolicies.SeekFirstPage, attribute.PolicyName);
+        Assert.Empty(method!.GetCustomAttributes<OutputCacheAttribute>());
     }
 }
