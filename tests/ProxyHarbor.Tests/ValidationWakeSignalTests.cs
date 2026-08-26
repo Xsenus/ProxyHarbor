@@ -38,7 +38,9 @@ public sealed class ValidationWakeSignalTests
         var signal = new ValidationWakeSignal();
 
         await signal.WaitAsync(TimeSpan.FromMilliseconds(20), CancellationToken.None)
-            .WaitAsync(TimeSpan.FromSeconds(1));
+            // Coverage instrumentation and busy shared CI runners can delay a 20 ms
+            // timer well beyond one second even though the signal itself is correct.
+            .WaitAsync(TimeSpan.FromSeconds(5));
     }
 
     [Fact]
