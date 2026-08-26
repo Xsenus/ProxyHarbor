@@ -26,4 +26,12 @@ describe('responsive accessibility stylesheet', () => {
     expect(stylesheet).toContain('-webkit-text-fill-color:#e9f6f2!important')
     expect(stylesheet).toContain('0 0 0 1000px #091410 inset!important')
   })
+
+  it('uses a full-width, full-height admin workspace with bottom-aligned registries', () => {
+    expect(stylesheet).toContain('.admin-section{display:flex;flex-direction:column;width:100%;min-height:calc(100vh - 76px)')
+    expect(stylesheet).toContain('.admin-page-heading{display:flex;align-items:center;justify-content:space-between')
+    expect(stylesheet).toContain('.admin-breadcrumb h1{overflow:hidden;margin:0')
+    expect(stylesheet).toContain('.proxy-inventory-card>.pagination,.users-registry>.pagination')
+    expect(stylesheet).toContain('margin-top:auto;margin-bottom:-5px')
+  })
 })
