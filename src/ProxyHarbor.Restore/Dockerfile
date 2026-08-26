@@ -18,7 +18,8 @@ RUN dotnet publish "src/ProxyHarbor.Restore/ProxyHarbor.Restore.csproj" -c Relea
 FROM mcr.microsoft.com/dotnet/aspnet:10.0.10-alpine3.23@sha256:27b6b84beeede74fd16886177d360799c8e4299ceadfbd64eef57bafead7878a AS runtime
 # Restore работает без root. Отдельная точка монтирования получает временный
 # расшифрованный ZIP и удаляется вместе с одноразовым контейнером.
-RUN addgroup -S proxyharbor && adduser -S proxyharbor -G proxyharbor && \
+RUN apk add --no-cache krb5-libs && \
+    addgroup -S proxyharbor && adduser -S proxyharbor -G proxyharbor && \
     mkdir -p /app/backups /restore-temp && chown -R proxyharbor:proxyharbor /app /restore-temp
 WORKDIR /app
 COPY --from=build --chown=proxyharbor:proxyharbor /app .

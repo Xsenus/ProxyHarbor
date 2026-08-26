@@ -17,7 +17,9 @@ RUN dotnet publish "src/ProxyHarbor.Api/ProxyHarbor.Api.csproj" -c Release -o /a
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0.10-alpine3.23@sha256:27b6b84beeede74fd16886177d360799c8e4299ceadfbd64eef57bafead7878a AS runtime
 # ICU нужен RequestLocalization и корректному форматированию ru/en/de/fr/zh в Alpine.
-RUN apk add --no-cache icu-libs && addgroup -S proxyharbor && adduser -S proxyharbor -G proxyharbor && mkdir -p /app/backups /app/data-protection /app/geo-data && chown -R proxyharbor:proxyharbor /app
+# krb5-libs содержит libgssapi_krb5, которую Npgsql загружает при потоковом чтении
+# PostgreSQL во время создания резервной копии (даже без Kerberos-аутентификации).
+RUN apk add --no-cache icu-libs krb5-libs && addgroup -S proxyharbor && adduser -S proxyharbor -G proxyharbor && mkdir -p /app/backups /app/data-protection /app/geo-data && chown -R proxyharbor:proxyharbor /app
 WORKDIR /app
 COPY --from=build --chown=proxyharbor:proxyharbor /app .
 USER proxyharbor
