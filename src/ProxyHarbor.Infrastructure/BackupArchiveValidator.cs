@@ -42,6 +42,7 @@ public static class BackupArchiveValidator
             .Append("database/payment-configuration.json")
             .Append("database/subscription-admin-actions.json")
             .Append("database/proxy-access-buckets.json")
+            .Append("database/site-visit-logs.json")
             .Append("database/free-proxy-export-grants.json")
             .Append("database/access-block-rules.json")
             .Append("database/telegram-bot-configuration.json")

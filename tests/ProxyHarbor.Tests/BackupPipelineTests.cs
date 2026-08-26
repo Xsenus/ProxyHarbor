@@ -125,6 +125,7 @@ public sealed class BackupPipelineTests
                     "database/proxy-access-buckets.json",
                     "database/roles.json",
                     "database/runs.json",
+                    "database/site-visit-logs.json",
                     "database/sources.json",
                     "database/subscription-admin-actions.json",
                     "database/subscriptions.json",

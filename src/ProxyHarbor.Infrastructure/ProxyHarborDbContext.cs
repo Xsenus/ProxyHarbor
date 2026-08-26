@@ -29,6 +29,8 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
     public DbSet<SubscriptionAdminAction> SubscriptionAdminActions => Set<SubscriptionAdminAction>();
     /// <summary>Агрегированная статистика выдачи адресов и посещений сайта.</summary>
     public DbSet<ProxyAccessBucket> ProxyAccessBuckets => Set<ProxyAccessBucket>();
+    /// <summary>Постраничный журнал first-party посещений.</summary>
+    public DbSet<SiteVisitLog> SiteVisitLogs => Set<SiteVisitLog>();
     /// <summary>Серверные интервалы бесплатной выгрузки по аккаунту или IP.</summary>
     public DbSet<FreeProxyExportGrant> FreeProxyExportGrants => Set<FreeProxyExportGrant>();
     /// <summary>Правила блокировки клиентов выдачи.</summary>
@@ -130,6 +132,15 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
         accessBucket.ToTable(table => table.HasCheckConstraint(
             "CK_ProxyAccessBuckets_Counters",
             "\"Requests\" >= 0 AND \"BlockedRequests\" >= 0 AND \"ProxyItems\" >= 0 AND \"BytesSent\" >= 0"));
+
+        var siteVisit = builder.Entity<SiteVisitLog>();
+        siteVisit.HasIndex(x => x.VisitedAt);
+        siteVisit.HasIndex(x => new { x.IpAddress, x.VisitedAt });
+        siteVisit.HasIndex(x => new { x.UserId, x.VisitedAt });
+        siteVisit.Property(x => x.IpAddress).HasMaxLength(45);
+        siteVisit.Property(x => x.Page).HasMaxLength(32);
+        siteVisit.HasOne(x => x.User).WithMany().HasForeignKey(x => x.UserId)
+            .OnDelete(DeleteBehavior.SetNull);
 
         var freeExportGrant = builder.Entity<FreeProxyExportGrant>();
         freeExportGrant.HasKey(x => x.ClientKey);
