@@ -18,6 +18,7 @@ type SourceCatalogSnapshot = { lastAuditedOn: string; expectedSources: number; p
 type Diagnostics = {
   serverTime: string
   databaseBytes: number
+  vpnEndpoints: number
   validationQueue?: { total: number; everAlive: number; historicalDead: number; leased: number; neverChecked: number; neverAttempted: number; due: number; scheduled: number; repeatedlyFailing: number; staleUnseen: number; attemptsLastFiveMinutes: number; checkedLastFiveMinutes: number; aliveLastFiveMinutes: number; deferredLastFiveMinutes: number; failedRunsLastFiveMinutes: number; activeRuns: number; concurrencyLimit: number; batchSize: number; checksPerSecond: number; estimatedDrainSeconds?: number; lastAttemptAt?: string }
   sourceCatalog?: SourceCatalogSnapshot
   recentRuns: CollectionRun[]
@@ -636,7 +637,7 @@ export default function App() {
           <a className={adminSection === 'overview' ? 'active' : ''} aria-current={adminSection === 'overview' ? 'page' : undefined} href="/admin"><LayoutDashboard/>{t('overview')}</a>
           <a className={adminSection === 'operations' ? 'active' : ''} aria-current={adminSection === 'operations' ? 'page' : undefined} href="/admin/operations"><Workflow/>{t('operations')}</a>
           <a className={adminSection === 'proxies' ? 'active' : ''} aria-current={adminSection === 'proxies' ? 'page' : undefined} href="/admin/proxies"><Wifi/>{t('proxies')} <b>{diagnostics?.validationQueue?.total || '—'}</b></a>
-          <a className={adminSection === 'vpn' ? 'active' : ''} aria-current={adminSection === 'vpn' ? 'page' : undefined} href="/admin/vpn"><Radio/>VPN</a>
+          <a className={adminSection === 'vpn' ? 'active' : ''} aria-current={adminSection === 'vpn' ? 'page' : undefined} href="/admin/vpn"><Radio/>VPN <b>{formatNumber(diagnostics?.vpnEndpoints)}</b></a>
           <a className={adminSection === 'sources' ? 'active' : ''} aria-current={adminSection === 'sources' ? 'page' : undefined} href="/admin/sources"><Server/>{t('sources')} <b>{sourceTotal || '—'}</b></a>
           <a className={adminSection === 'backups' ? 'active' : ''} aria-current={adminSection === 'backups' ? 'page' : undefined} href="/admin/backups"><HardDriveDownload/>{t('backups')}</a>
           <a className={adminSection === 'users' ? 'active' : ''} aria-current={adminSection === 'users' ? 'page' : undefined} href="/admin/users"><Users/>{t('users')}</a>
