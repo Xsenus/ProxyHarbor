@@ -290,6 +290,17 @@ internal static class RestoreApplication
             // PostgreSQL binary COPY сохраняет потоковый характер restore и на больших снимках
             // на порядки быстрее отдельных INSERT, создаваемых ChangeTracker/SaveChanges.
             var connection = (NpgsqlConnection)db.Database.GetDbConnection();
+            if (archive.GetEntry("database/vpn-sources.json") is not null)
+            {
+                await db.VpnEndpointSources.ExecuteDeleteAsync(token);
+                await db.VpnEndpoints.ExecuteDeleteAsync(token);
+                await db.VpnSources.ExecuteDeleteAsync(token);
+                _ = await ImportIdentityAsync<VpnSource>(archive, "database/vpn-sources.json", db, token);
+                if (archive.GetEntry("database/vpn-endpoints.json") is not null)
+                    _ = await ImportIdentityAsync<VpnEndpoint>(archive, "database/vpn-endpoints.json", db, token);
+                if (archive.GetEntry("database/vpn-endpoint-sources.json") is not null)
+                    _ = await ImportIdentityAsync<VpnEndpointSource>(archive, "database/vpn-endpoint-sources.json", db, token);
+            }
             var proxyCount = await ImportAsync<ProxyEndpoint>(
                 archive,
                 "database/proxies.json",

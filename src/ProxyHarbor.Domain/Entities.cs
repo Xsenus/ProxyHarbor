@@ -24,6 +24,127 @@ public enum ProxyStatus
     Dead
 }
 
+/// <summary>Поддерживаемые форматы явно опубликованных бесплатных VPN-конфигураций.</summary>
+public enum VpnProtocol
+{
+    /// <summary>Конфигурация OpenVPN.</summary>
+    OpenVpn,
+    /// <summary>Конфигурация WireGuard.</summary>
+    WireGuard,
+    /// <summary>URI протокола VLESS.</summary>
+    Vless,
+    /// <summary>Base64-конфигурация VMess.</summary>
+    Vmess,
+    /// <summary>URI протокола Trojan.</summary>
+    Trojan,
+    /// <summary>URI протокола Shadowsocks.</summary>
+    Shadowsocks,
+    /// <summary>URI протокола Hysteria 2.</summary>
+    Hysteria2,
+    /// <summary>URI протокола TUIC.</summary>
+    Tuic
+}
+
+/// <summary>Результат безопасной проверки доступности VPN endpoint без использования опубликованных credentials.</summary>
+public enum VpnEndpointStatus
+{
+    /// <summary>Endpoint ещё не проверен.</summary>
+    Pending,
+    /// <summary>TCP endpoint доступен.</summary>
+    Reachable,
+    /// <summary>TCP endpoint недоступен.</summary>
+    Unreachable,
+    /// <summary>Транспорт нельзя безопасно проверить без credentials.</summary>
+    UnsupportedTransport
+}
+
+/// <summary>Публичный адрес VPN, очищенный от UUID, паролей, ключей и иных секретов.</summary>
+public sealed class VpnEndpoint
+{
+    /// <summary>Стабильный идентификатор.</summary>
+    public Guid Id { get; set; } = Guid.NewGuid();
+    /// <summary>Публичный IP или каноническое DNS-имя.</summary>
+    public required string Host { get; set; }
+    /// <summary>Порт VPN endpoint.</summary>
+    public int Port { get; set; }
+    /// <summary>Формат VPN-конфигурации.</summary>
+    public VpnProtocol Protocol { get; set; }
+    /// <summary>TCP либо UDP; только TCP проверяется активным подключением в первой версии.</summary>
+    public string Transport { get; set; } = "tcp";
+    /// <summary>Текущее состояние доступности.</summary>
+    public VpnEndpointStatus Status { get; set; } = VpnEndpointStatus.Pending;
+    /// <summary>Задержка установления TCP-соединения.</summary>
+    public int? LatencyMs { get; set; }
+    /// <summary>Первое обнаружение.</summary>
+    public DateTimeOffset FirstSeenAt { get; set; } = DateTimeOffset.UtcNow;
+    /// <summary>Последнее обнаружение в feed.</summary>
+    public DateTimeOffset LastSeenAt { get; set; } = DateTimeOffset.UtcNow;
+    /// <summary>Последняя проверка доступности.</summary>
+    public DateTimeOffset? LastCheckedAt { get; set; }
+    /// <summary>План следующей проверки.</summary>
+    public DateTimeOffset? NextCheckAt { get; set; }
+    /// <summary>Число успешных TCP-проверок.</summary>
+    public int SuccessfulChecks { get; set; }
+    /// <summary>Число неуспешных TCP-проверок.</summary>
+    public int FailedChecks { get; set; }
+    /// <summary>Безопасная диагностика без секретов.</summary>
+    public string? LastError { get; set; }
+    /// <summary>Источник-первооткрыватель. Полный provenance сохраняется отдельными связями.</summary>
+    public Guid? FirstSourceId { get; set; }
+    /// <summary>Навигация к первому источнику.</summary>
+    public VpnSource? FirstSource { get; set; }
+    /// <summary>Все provenance-связи.</summary>
+    public ICollection<VpnEndpointSource> Sources { get; set; } = [];
+}
+
+/// <summary>Разрешённый HTTPS feed публичных VPN-конфигураций.</summary>
+public sealed class VpnSource
+{
+    /// <summary>Стабильный идентификатор.</summary>
+    public Guid Id { get; set; } = Guid.NewGuid();
+    /// <summary>Отображаемое имя feed.</summary>
+    public required string Name { get; set; }
+    /// <summary>Владелец или автор feed.</summary>
+    public required string Provider { get; set; }
+    /// <summary>Публичный HTTPS URL.</summary>
+    public required string Url { get; set; }
+    /// <summary>Протокол строк без явной схемы.</summary>
+    public VpnProtocol DefaultProtocol { get; set; }
+    /// <summary>Участвует ли источник в сборе.</summary>
+    public bool Enabled { get; set; } = true;
+    /// <summary>Порядок обработки.</summary>
+    public int Priority { get; set; } = 100;
+    /// <summary>Идентификатор лицензии либо пояснение условий публикации.</summary>
+    public required string License { get; set; }
+    /// <summary>Последняя попытка загрузки.</summary>
+    public DateTimeOffset? LastFetchedAt { get; set; }
+    /// <summary>Последняя успешная загрузка.</summary>
+    public DateTimeOffset? LastSucceededAt { get; set; }
+    /// <summary>Число безопасно разобранных endpoint.</summary>
+    public int LastItemCount { get; set; }
+    /// <summary>Число последовательных ошибок.</summary>
+    public int ConsecutiveFailures { get; set; }
+    /// <summary>Bounded-диагностика последней ошибки.</summary>
+    public string? LastError { get; set; }
+    /// <summary>Связи с найденными endpoint.</summary>
+    public ICollection<VpnEndpointSource> Endpoints { get; set; } = [];
+}
+
+/// <summary>Provenance-связь VPN endpoint с каждым feed, где он был замечен.</summary>
+public sealed class VpnEndpointSource
+{
+    /// <summary>Идентификатор VPN endpoint.</summary>
+    public Guid VpnEndpointId { get; set; }
+    /// <summary>Навигация к VPN endpoint.</summary>
+    public VpnEndpoint? VpnEndpoint { get; set; }
+    /// <summary>Идентификатор источника.</summary>
+    public Guid VpnSourceId { get; set; }
+    /// <summary>Навигация к источнику.</summary>
+    public VpnSource? VpnSource { get; set; }
+    /// <summary>Последнее подтверждение связи.</summary>
+    public DateTimeOffset LastSeenAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
 /// <summary>Публичный прокси-сервер и накопленная статистика его качества.</summary>
 public sealed class ProxyEndpoint
 {

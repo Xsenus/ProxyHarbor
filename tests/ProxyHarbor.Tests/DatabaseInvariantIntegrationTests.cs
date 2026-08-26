@@ -56,7 +56,12 @@ public sealed class DatabaseInvariantIntegrationTests
         "CK_TelegramOutboundMessages_Attempts",
         "CK_TelegramOutboundMessages_Kind",
         "CK_TelegramOutboundMessages_Status",
-        "CK_TelegramUpdateReceipts_Transport"
+        "CK_TelegramUpdateReceipts_Transport",
+        "CK_VpnEndpoints_Counters",
+        "CK_VpnEndpoints_Identity",
+        "CK_VpnEndpoints_Timeline",
+        "CK_VpnSources_Counters",
+        "CK_VpnSources_ProtocolPriority"
     ];
 
     [Fact]

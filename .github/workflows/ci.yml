@@ -406,7 +406,7 @@ jobs:
           # чтобы проверить mounts; перед реальным backup они очищаются ниже.
           echo "$metrics" | grep 'proxyharbor_backup_telegram_configured 1'
           echo "$metrics" | grep 'proxyharbor_advisory_lock_cleanup_failures_total 0'
-          openapi_document=$(curl --fail --silent http://127.0.0.1:8080/openapi/v1.json)
+          openapi_document=$(curl --fail-with-body --silent --show-error http://127.0.0.1:8080/openapi/v1.json)
           echo "$openapi_document" | jq --exit-status \
             '.components.securitySchemes.AdminApiKey.type == "apiKey" and
              (.paths["/api/v1/admin/sources"].get.security[0] | has("AdminApiKey")) and
@@ -716,6 +716,7 @@ jobs:
           dotnet run --no-build -c Release --no-launch-profile --project src/ProxyHarbor.Api/ProxyHarbor.Api.csproj > api.log 2>&1 &
           api_pid=$!
           trap 'kill $api_pid || true; cat api.log' EXIT
+          trap 'echo "API smoke test failed at script line ${LINENO}."' ERR
           for _ in {1..60}; do
             curl --fail --silent http://127.0.0.1:5080/health/ready && break
             sleep 1
@@ -771,7 +772,7 @@ jobs:
           stats=$(curl --fail --silent http://127.0.0.1:5080/api/v1/stats)
           echo "$stats" | jq --exit-status \
             '(.alive | type) == "number" and (.byProtocol | type) == "array" and has("lastRun")'
-          openapi=$(curl --fail --silent http://127.0.0.1:5080/openapi/v1.json)
+          openapi=$(curl --fail-with-body --silent --show-error http://127.0.0.1:5080/openapi/v1.json)
           echo "$openapi" | jq --exit-status '
             .components.securitySchemes.AdminApiKey.type == "apiKey" and
             .components.securitySchemes.AdminApiKey.name == "X-Admin-Key" and

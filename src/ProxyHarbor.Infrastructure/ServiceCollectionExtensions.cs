@@ -116,6 +116,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<OriginIpProvider>();
         services.AddSingleton<ValidationWakeSignal>();
         services.AddSingleton<ProxyValidator>();
+        services.AddSingleton<VpnCatalogService>();
         services.AddSingleton<IBackupConfigurationStore, BackupConfigurationStore>();
         services.AddSingleton<BackupService>();
         services.AddSingleton<DatabaseReadinessProbe>();
@@ -123,6 +124,8 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ProxyCountryResolver>();
         services.AddHostedService<CollectorWorker>();
         services.AddHostedService<ValidatorWorker>();
+        services.AddHostedService<VpnCollectorWorker>();
+        services.AddHostedService<VpnValidatorWorker>();
         services.AddHostedService<BackupWorker>();
         services.AddHostedService<OperationalMaintenanceWorker>();
         services.AddHostedService<ProxyCountryWorker>();
