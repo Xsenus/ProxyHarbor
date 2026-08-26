@@ -58,7 +58,11 @@ describe('ProxyHarbor UI', () => {
     const trigger = await screen.findByRole('button', { name: 'Страны' })
     fireEvent.click(trigger)
     expect(screen.getByRole('dialog', { name: 'Фильтр по странам' })).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('checkbox', { name: /Германия/ }))
+    const germany = screen.getByRole('checkbox', { name: /Германия/ })
+    expect(germany).toHaveClass('ui-checkbox-input')
+    expect(germany.nextElementSibling).toHaveClass('ui-checkbox-mark')
+    fireEvent.click(germany)
+    expect(germany).toBeChecked()
     await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([input]) => {
       const url = String(input)
       return url.includes('/api/v1/proxies?') && url.includes('country=DE')
