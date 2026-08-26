@@ -41,7 +41,11 @@ public sealed class VpnController(
         if (!TryNormalizeCountries(country, out var countries)) return InvalidCountries();
         page = Math.Clamp(page, 1, 100_000); pageSize = Math.Clamp(pageSize, 10, 100);
         await using var db = await dbFactory.CreateDbContextAsync(token);
-        var query = db.VpnEndpoints.AsNoTracking();
+        // Публичный каталог обязан быть непосредственно пригоден для использования:
+        // каждая строка имеет готовый импортируемый URI и уже определённую страну.
+        // Неполные/необогащённые endpoint остаются доступны только администратору.
+        var query = db.VpnEndpoints.AsNoTracking()
+            .Where(x => x.ConnectionUri != null && x.CountryCode != null);
         if (protocol.HasValue) query = query.Where(x => x.Protocol == protocol.Value);
         // Не задаём enum как optional-значение параметра: Microsoft.AspNetCore.OpenApi 10
         // пытается сериализовать boxed int как Nullable<VpnEndpointStatus> и роняет
@@ -70,7 +74,7 @@ public sealed class VpnController(
     {
         await using var db = await dbFactory.CreateDbContextAsync(token);
         var rows = await db.VpnEndpoints.AsNoTracking()
-            .Where(x => x.Status == VpnEndpointStatus.Reachable && x.CountryCode != null)
+            .Where(x => x.Status == VpnEndpointStatus.Reachable && x.CountryCode != null && x.ConnectionUri != null)
             .GroupBy(x => x.CountryCode!)
             .Select(group => new ProxyCountryDto(group.Key, group.Count()))
             .ToArrayAsync(token);
@@ -94,7 +98,7 @@ public sealed class VpnController(
         limit = Math.Clamp(limit, 1, 5_000);
         await using var db = await dbFactory.CreateDbContextAsync(token);
         var query = db.VpnEndpoints.AsNoTracking().Where(x =>
-            x.Status == VpnEndpointStatus.Reachable && x.ConnectionUri != null);
+            x.Status == VpnEndpointStatus.Reachable && x.ConnectionUri != null && x.CountryCode != null);
         if (protocol.HasValue) query = query.Where(x => x.Protocol == protocol.Value);
         if (countries.Length > 0) query = query.Where(x => x.CountryCode != null && countries.Contains(x.CountryCode));
         var total = await query.CountAsync(token);

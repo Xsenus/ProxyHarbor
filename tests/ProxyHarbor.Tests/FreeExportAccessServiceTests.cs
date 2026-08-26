@@ -21,7 +21,7 @@ public sealed class FreeExportAccessServiceTests
 
         Assert.True(first.Allowed);
         Assert.False(first.IsPaid);
-        Assert.Equal(5, first.Limit);
+        Assert.Equal(10, first.Limit);
         Assert.False(second.Allowed);
         Assert.False(paid);
         Assert.Equal(first.NextAllowedAt, second.NextAllowedAt);

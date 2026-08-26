@@ -12,12 +12,13 @@ namespace ProxyHarbor.Tests;
 public sealed class VpnControllerTests
 {
     [Fact]
-    public async Task PublicCatalogDefaultsToReachableAndSupportsExplicitFilters()
+    public async Task PublicCatalogDefaultsToReachableAndExcludesIncompleteEndpoints()
     {
         var options = Options();
         var source = Source("Catalog", "https://8.8.8.8/catalog.txt");
         await SeedAsync(options, source,
-            Endpoint(source, "1.1.1.1", VpnProtocol.Vless, VpnEndpointStatus.Reachable, 120),
+            Endpoint(source, "1.1.1.1", VpnProtocol.Vless, VpnEndpointStatus.Reachable, 120,
+                "US", "vless://public@1.1.1.1:443"),
             Endpoint(source, "8.8.8.8", VpnProtocol.WireGuard, VpnEndpointStatus.UnsupportedTransport, null));
         var controller = new VpnController(new TestDbFactory(options));
 
@@ -27,9 +28,9 @@ public sealed class VpnControllerTests
             token: CancellationToken.None));
 
         Assert.Single(defaultPage.Items);
-        Assert.Null(defaultPage.Items[0].ConnectionUri);
-        Assert.Null(defaultPage.Items[0].CountryCode);
-        Assert.Single(wireGuardPage.Items);
+        Assert.Equal("US", defaultPage.Items[0].CountryCode);
+        Assert.Equal("vless://public@1.1.1.1:443", defaultPage.Items[0].ConnectionUri);
+        Assert.Empty(wireGuardPage.Items);
         Assert.Equal(100, wireGuardPage.PageSize);
         Assert.Equal(1, wireGuardPage.Page);
     }
@@ -253,7 +254,7 @@ public sealed class VpnControllerTests
     private sealed class FreeAccessService : IFreeExportAccessService
     {
         public Task<FreeExportAccess> AcquireAsync(System.Security.Claims.ClaimsPrincipal principal, string? remoteIp,
-            CancellationToken cancellationToken) => Task.FromResult(new FreeExportAccess(true, false, 5, null, "free"));
+            CancellationToken cancellationToken) => Task.FromResult(new FreeExportAccess(true, false, 10, null, "free"));
         public Task<bool> HasPaidAccessAsync(System.Security.Claims.ClaimsPrincipal principal,
             CancellationToken cancellationToken) => Task.FromResult(false);
     }
