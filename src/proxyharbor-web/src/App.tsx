@@ -583,7 +583,7 @@ export default function App() {
   return <div className="app-shell">
     {!adminOpen && <><header>
       <a className="brand" href="#top" aria-label="ProxyHarbor"><span className="brand-mark"><Network size={20}/></span><span>Proxy<span>Harbor</span></span></a>
-      <nav><a href="#catalog">{t('proxies')}</a><a href="#api">API</a><LanguageSwitcher compact/><a className="admin-link" href="/login"><LockKeyhole size={15}/> {t('signIn')}</a></nav>
+      <nav><a href="#catalog">{t('proxies')}</a><a href="#vpn-catalog">{t('vpn')}</a><a href="#api">API</a><LanguageSwitcher compact/><a className="admin-link" href="/login"><LockKeyhole size={15}/> {t('signIn')}</a></nav>
       <a className="mobile-admin" aria-label={t('signIn')} href="/login"><LockKeyhole size={17}/></a>
       <div className={`live-pill ${apiError ? 'offline' : ''}`} aria-live="polite"><span/> {loading ? t('systemChecking') : apiError ? t('systemOffline') : t('systemActive')}</div>
     </header>
@@ -624,6 +624,8 @@ export default function App() {
           onPageSizeChange={size => { setLoading(true); setPageSize(size); setPage(1) }}/>
         }
       </section>
+
+      <PublicVpnCatalog/>
 
       <section id="api" className="api-panel"><div><span className="kicker">ONE-CLICK EXPORT</span><h2>{t('exportTitle')}</h2><p>{t('exportText')}</p><small className="geo-attribution">IP geolocation: <a href="https://db-ip.com" target="_blank" rel="noreferrer">DB-IP</a></small></div><div className="export-grid">{['json','xml','txt','csv'].map(format => <a key={format} href={`${API}/api/v1/export/${format}?${exportQuery}`}><span>.{format}</span><ArrowDownToLine size={18}/></a>)}</div><div className="endpoint"><span>GET</span><code>/api/v1/proxies/seek?protocol=Socks5&amp;maxLatencyMs=1000&amp;country=DE</code></div></section>
     </main>
@@ -723,6 +725,58 @@ export default function App() {
     </div>}
     {backupDeleteTarget && <div className="source-editor-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget && !backupBusy) setBackupDeleteTarget(null) }}><section className="source-editor-modal backup-delete-modal" role="dialog" aria-modal="true" aria-labelledby="backup-delete-title"><div className="source-editor-heading"><div><span className="kicker">ОПАСНОЕ ДЕЙСТВИЕ</span><h2 id="backup-delete-title">Удалить резервную копию?</h2><p>Файл <b>{backupDeleteTarget.fileName ?? 'без имени'}</b> и его запись в истории будут удалены без возможности восстановления.</p></div><button className="icon-button" aria-label="Отмена" onClick={() => setBackupDeleteTarget(null)} disabled={!!backupBusy}><X/></button></div><div className="source-editor-actions"><span/><button className="secondary-admin-button" onClick={() => setBackupDeleteTarget(null)} disabled={!!backupBusy}>Отмена</button><button className="danger-link" onClick={() => void deleteBackup()} disabled={!!backupBusy}><Trash2/>{backupBusy ? 'Удаляем…' : 'Удалить навсегда'}</button></div></section></div>}
   </div>
+}
+
+/** Публичный VPN-каталог использует отдельную серверную пагинацию и никогда не раскрывает feed или секреты конфигураций. */
+function PublicVpnCatalog() {
+  const { t } = useI18n()
+  const protocols: VpnProtocol[] = ['OpenVpn','WireGuard','Vless','Vmess','Trojan','Shadowsocks','Hysteria2','Tuic']
+  const [items,setItems] = useState<VpnEndpoint[]>([])
+  const [protocol,setProtocol] = useState<VpnProtocol|'All'>('All')
+  const [page,setPage] = useState(1)
+  const [pageSize,setPageSize] = useState(10)
+  const [total,setTotal] = useState(0)
+  const [loading,setLoading] = useState(true)
+  const [error,setError] = useState('')
+
+  const load = useCallback(async (signal?:AbortSignal) => {
+    setLoading(true)
+    try {
+      const query = new URLSearchParams({page:String(page),pageSize:String(pageSize),status:'Reachable'})
+      if (protocol !== 'All') query.set('protocol',protocol)
+      const response = await fetch(`${API}/api/v1/vpn?${query}`,{signal})
+      if (!response.ok) throw new Error(await responseMessage(response,t('vpnCatalogUnavailable')))
+      const snapshot = await response.json() as PagedResult<VpnEndpoint>
+      if (signal?.aborted) return
+      setItems(snapshot.items)
+      setTotal(snapshot.total)
+      const availablePages = Math.max(1,Math.ceil(snapshot.total/pageSize))
+      if (page > availablePages) setPage(availablePages)
+      setError('')
+    } catch(reason) {
+      if (!isAbortError(reason)) setError(reason instanceof Error ? reason.message : t('vpnCatalogUnavailable'))
+    } finally {
+      if (!signal?.aborted) setLoading(false)
+    }
+  },[page,pageSize,protocol,t])
+
+  useEffect(()=>{
+    const controller = new AbortController()
+    const timer = window.setTimeout(()=>void load(controller.signal),0)
+    return()=>{window.clearTimeout(timer);controller.abort()}
+  },[load])
+
+  const totalPages = Math.max(1,Math.ceil(total/pageSize))
+  return <section id="vpn-catalog" className="catalog public-vpn-catalog" aria-labelledby="vpn-catalog-title">
+    <div className="section-heading"><div><span className="kicker">VPN CATALOG</span><h2 id="vpn-catalog-title">{t('vpnCatalog')}</h2><p className="vpn-catalog-description">{t('vpnCatalogText')}</p></div><p>{t('vpnServerSelection',{count:formatNumber(total)})}</p></div>
+    <div className="vpn-public-toolbar"><StyledSelect ariaLabel={t('vpnProtocolFilter')} value={protocol} onChange={value=>{setProtocol(value as VpnProtocol|'All');setPage(1)}} options={[['All',t('allVpnProtocols')],...protocols.map(value=>[value,value] as [string,string])]}/><span className="vpn-safe-status"><ShieldCheck/>{t('available')}</span></div>
+    {error&&<div className="error-banner" role="alert"><X size={17}/>{error}<button onClick={()=>void load()}>{t('retry')}</button></div>}
+    <div className="public-vpn-table" role="table" aria-label={t('vpnCatalog')} aria-busy={loading}>
+      <div role="rowgroup"><div className="vpn-public-row vpn-public-head" role="row"><span role="columnheader">{t('address')}</span><span role="columnheader">{t('protocol')}</span><span role="columnheader">{t('transport')}</span><span role="columnheader">{t('status')}</span><span role="columnheader">{t('latency')}</span><span role="columnheader">{t('checked')}</span></div></div>
+      <div role="rowgroup">{loading?<div role="row"><div className="empty" role="cell" aria-live="polite"><RefreshCw className="spin"/> {t('loadingVpnCatalog')}</div></div>:items.length===0?<div role="row"><div className="empty" role="cell" aria-live="polite"><Radio/> {t('emptyVpnCatalog')}</div></div>:items.map(item=><div className="vpn-public-row" role="row" key={item.id}><code role="cell">{item.host}<i>:</i>{item.port}</code><span role="cell" className="vpn-protocol-badge">{item.protocol}</span><span role="cell">{item.transport.toUpperCase()}</span><span role="cell" className="vpn-public-status"><i/>{t('available')}</span><span role="cell" className="latency"><i className={item.latencyMs!=null&&item.latencyMs<800?'fast':item.latencyMs!=null&&item.latencyMs<1800?'medium':'slow'}/>{item.latencyMs!=null?`${item.latencyMs} ms`:'—'}</span><time role="cell" dateTime={item.lastCheckedAt}>{item.lastCheckedAt?timeAgo(item.lastCheckedAt):'—'}</time></div>)}</div>
+    </div>
+    {!loading&&total>0&&<ProxyPagination page={page} pageSize={pageSize} total={total} totalPages={totalPages} onPageChange={next=>{setPage(next);document.getElementById('vpn-catalog')?.scrollIntoView?.({behavior:'smooth'})}} onPageSizeChange={size=>{setPageSize(size);setPage(1)}}/>}
+  </section>
 }
 
 /** Компактная строка последней административной активности. */
