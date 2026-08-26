@@ -398,8 +398,7 @@ public sealed class ProxiesController(
             {
                 // Бесплатная выдача берёт медианные адреса из разных стран. Это полезнее
                 // пяти почти одинаковых соседних строк и не раскрывает premium-верхушку.
-                var available = await query.CountAsync(exportToken);
-                freeSelection = await SelectDiversifiedFreeProxiesAsync(query, available, exportToken);
+                freeSelection = await SelectDiversifiedFreeProxiesAsync(query, exportToken);
                 legacyOffset = 0;
             }
             var nextOffset = (long)legacyOffset + effectiveLimit;
