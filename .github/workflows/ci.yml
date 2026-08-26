@@ -716,6 +716,7 @@ jobs:
           dotnet run --no-build -c Release --no-launch-profile --project src/ProxyHarbor.Api/ProxyHarbor.Api.csproj > api.log 2>&1 &
           api_pid=$!
           trap 'kill $api_pid || true; cat api.log' EXIT
+          trap 'echo "API smoke test failed at script line ${LINENO}."' ERR
           for _ in {1..60}; do
             curl --fail --silent http://127.0.0.1:5080/health/ready && break
             sleep 1
