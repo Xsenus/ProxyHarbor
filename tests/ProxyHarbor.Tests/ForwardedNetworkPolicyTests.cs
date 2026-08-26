@@ -48,4 +48,16 @@ public sealed class ForwardedNetworkPolicyTests
         Assert.False(ForwardedNetworkPolicy.TryParse(tooMany, out _));
         Assert.False(ForwardedNetworkPolicy.TryParse([new string('1', 65)], out _));
     }
+
+    [Fact]
+    public void RuntimeTrustIncludesEquivalentIpv4MappedNetwork()
+    {
+        Assert.True(ForwardedNetworkPolicy.TryParse(["172.31.40.0/24", "2001:db8::/32"], out var configured));
+
+        var runtime = ForwardedNetworkPolicy.ExpandForRuntime(configured).ToArray();
+
+        Assert.Equal(3, runtime.Length);
+        Assert.Contains(runtime, network => network.Contains(System.Net.IPAddress.Parse("::ffff:172.31.40.1")));
+        Assert.DoesNotContain(runtime, network => network.Contains(System.Net.IPAddress.Parse("::ffff:172.31.41.1")));
+    }
 }

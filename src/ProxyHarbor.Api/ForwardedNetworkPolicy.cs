@@ -49,6 +49,21 @@ internal static class ForwardedNetworkPolicy
         return true;
     }
 
+    /// <summary>
+    /// ASP.NET Core может получить адрес Docker-шлюза как IPv4-mapped IPv6. Для каждой
+    /// явно доверенной IPv4-сети добавляем строго эквивалентную mapped-сеть, не расширяя
+    /// заданную администратором границу доверия.
+    /// </summary>
+    internal static IEnumerable<IPNetwork> ExpandForRuntime(IEnumerable<IPNetwork> networks)
+    {
+        foreach (var network in networks)
+        {
+            yield return network;
+            if (network.BaseAddress.AddressFamily == AddressFamily.InterNetwork)
+                yield return new IPNetwork(network.BaseAddress.MapToIPv6(), network.PrefixLength + 96);
+        }
+    }
+
     private static bool Fail(out IPNetwork[] networks)
     {
         networks = [];
