@@ -29,7 +29,7 @@ describe('responsive accessibility stylesheet', () => {
 
   it('uses a full-width, full-height admin workspace with bottom-aligned registries', () => {
     expect(stylesheet).toContain('.admin-section{display:flex;flex-direction:column;width:100%;min-height:calc(100vh - 76px)')
-    expect(stylesheet).toContain('.admin-page-heading{display:flex;align-items:center;justify-content:space-between')
+    expect(stylesheet).toContain('.admin-page-heading{display:flex;align-items:center;justify-content:space-between;gap:20px;width:100%;height:auto;min-height:44px;max-width:none;padding:0;margin:0 0 16px;border:0}')
     expect(stylesheet).toContain('.admin-breadcrumb h1{overflow:hidden;margin:0')
     expect(stylesheet).toContain('.proxy-inventory-card>.pagination,.users-registry>.pagination')
     expect(stylesheet).toContain('margin-top:auto;margin-bottom:-5px')
