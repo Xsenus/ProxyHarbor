@@ -772,7 +772,7 @@ jobs:
           stats=$(curl --fail --silent http://127.0.0.1:5080/api/v1/stats)
           echo "$stats" | jq --exit-status \
             '(.alive | type) == "number" and (.byProtocol | type) == "array" and has("lastRun")'
-          openapi=$(curl --fail --silent http://127.0.0.1:5080/openapi/v1.json)
+          openapi=$(curl --fail-with-body --silent --show-error http://127.0.0.1:5080/openapi/v1.json)
           echo "$openapi" | jq --exit-status '
             .components.securitySchemes.AdminApiKey.type == "apiKey" and
             .components.securitySchemes.AdminApiKey.name == "X-Admin-Key" and
