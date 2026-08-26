@@ -33,5 +33,6 @@ describe('responsive accessibility stylesheet', () => {
     expect(stylesheet).toContain('.admin-breadcrumb h1{overflow:hidden;margin:0')
     expect(stylesheet).toContain('.proxy-inventory-card>.pagination,.users-registry>.pagination')
     expect(stylesheet).toContain('margin-top:auto;margin-bottom:-5px')
+    expect(stylesheet).toContain('.users-table .user-identity>span{display:block;flex:1 1 auto;min-width:0;height:auto;border-radius:0;background:transparent;color:inherit}')
   })
 })
