@@ -20,6 +20,10 @@ public sealed class VpnCatalogService(
     // Лимит 32 MiB оставляет небольшой запас, но по-прежнему жёстко ограничивает
     // память при загрузке недоверенного внешнего содержимого.
     private const int MaximumFeedBytes = 32 * 1024 * 1024;
+    // Один источник не должен монополизировать память и весь каталог. Даже при общем
+    // proxy-лимите 500k для VPN сохраняем до 10k уникальных endpoint с каждого feed;
+    // источники обновляются часто, поэтому выборка остаётся широкой и актуальной.
+    private const int MaximumCandidatesPerVpnSource = 10_000;
     private static readonly Action<ILogger, Guid, Exception?> SourceFailed =
         LoggerMessage.Define<Guid>(LogLevel.Warning, new EventId(1161, "VpnSourceFailed"), "VPN source {SourceId} failed");
 
@@ -168,7 +172,8 @@ public sealed class VpnCatalogService(
                     using var memory = new MemoryStream();
                     await CopyBoundedAsync(stream, memory, timeout.Token);
                     var content = System.Text.Encoding.UTF8.GetString(memory.GetBuffer(), 0, checked((int)memory.Length));
-                    results.Add(new(source, VpnFeedParser.Parse(content, source.DefaultProtocol), null));
+                    var maximumCandidates = Math.Min(options.Value.MaxProxiesPerSource, MaximumCandidatesPerVpnSource);
+                    results.Add(new(source, VpnFeedParser.Parse(content, source.DefaultProtocol, maximumCandidates), null));
                 }
                 catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
                 {

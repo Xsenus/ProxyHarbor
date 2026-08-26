@@ -8,6 +8,17 @@ namespace ProxyHarbor.Tests;
 public sealed class VpnFeedParserTests
 {
     [Fact]
+    public void ParseStopsAtConfiguredResultLimit()
+    {
+        var content = string.Join('\n', Enumerable.Range(1, 100)
+            .Select(index => $"vless://id@8.8.8.{index % 250 + 1}:443?tag={index}"));
+
+        var candidates = VpnFeedParser.Parse(content, VpnProtocol.Vless, 7);
+
+        Assert.Equal(7, candidates.Count);
+    }
+
+    [Fact]
     public void ParsesUrisAndPreservesReadyConnectionLinks()
     {
         const string content = "vless://secret-uuid@1.1.1.1:443?security=tls#name\n" +

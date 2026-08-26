@@ -9,27 +9,44 @@ namespace ProxyHarbor.Infrastructure;
 public static class VpnFeedParser
 {
     private const int MaxDecodedLength = 8 * 1024 * 1024;
+    private const int DefaultMaximumResults = 50_000;
 
     /// <summary>Разбирает bounded feed и возвращает дедуплицированные endpoint.</summary>
-    public static IReadOnlyList<VpnCandidate> Parse(string content, VpnProtocol fallback)
+    public static IReadOnlyList<VpnCandidate> Parse(
+        string content,
+        VpnProtocol fallback,
+        int maxResults = DefaultMaximumResults)
     {
         if (string.IsNullOrWhiteSpace(content)) return [];
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxResults, 1);
         var result = new Dictionary<string, VpnCandidate>(StringComparer.OrdinalIgnoreCase);
-        ParseText(content, fallback, result);
+        ParseText(content, fallback, result, maxResults);
         if (result.Count == 0 && TryDecodeBase64(content.Trim(), out var decoded))
-            ParseText(decoded, fallback, result);
+            ParseText(decoded, fallback, result, maxResults);
         return result.Values.ToArray();
     }
 
-    private static void ParseText(string content, VpnProtocol fallback, Dictionary<string, VpnCandidate> result)
+    private static void ParseText(
+        string content,
+        VpnProtocol fallback,
+        Dictionary<string, VpnCandidate> result,
+        int maxResults)
     {
         // OpenVPN-конфигурации и WireGuard INI могут занимать несколько строк.
         if (fallback == VpnProtocol.OpenVpn) ParseOpenVpn(content, result);
         if (fallback == VpnProtocol.WireGuard) ParseWireGuardConfig(content, result);
 
-        foreach (var raw in content.Split(['\r', '\n', ',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        // Не используем string.Split: крупный публичный feed создавал массив из сотен
+        // тысяч строк и кратковременно удваивал расход памяти контейнера. Здесь в памяти
+        // существует только текущий сегмент, а разбор останавливается после bounded-лимита.
+        for (var start = 0; start <= content.Length && result.Count < maxResults;)
         {
-            var line = raw.Trim().Trim('"');
+            var end = start;
+            while (end < content.Length && content[end] is not ('\r' or '\n' or ',' or ';')) end++;
+            var lineSpan = content.AsSpan(start, end - start).Trim().Trim('"');
+            start = end + 1;
+            if (lineSpan.Length is 0 or > 16_384 || lineSpan[0] == '#') continue;
+            var line = lineSpan.ToString();
             if (line.Length is 0 or > 16_384 || line[0] == '#') continue;
             if (line.StartsWith("vmess://", StringComparison.OrdinalIgnoreCase)) ParseVmess(line, result);
             else if (TryProtocolUri(line, fallback, out var candidate)) Add(candidate, result);
