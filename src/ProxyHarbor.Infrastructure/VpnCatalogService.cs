@@ -2,9 +2,9 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using Microsoft.Extensions.Hosting;
 using ProxyHarbor.Domain;
 
 namespace ProxyHarbor.Infrastructure;
@@ -30,11 +30,18 @@ public sealed class VpnCatalogService(
             .OrderBy(x => x.Priority).ToArrayAsync(token);
         var results = await ParallelFetchAsync(sources, token);
         await using var db = await dbFactory.CreateDbContextAsync(token);
+        // Каталог и provenance загружаются одним проходом. Это устраняет два SQL-запроса
+        // на каждый адрес — на больших публичных feed разница составляет десятки тысяч round-trip.
+        var trackedSources = await db.VpnSources.ToDictionaryAsync(x => x.Id, token);
+        var endpointsByKey = await db.VpnEndpoints.ToDictionaryAsync(
+            x => new { x.Host, x.Port, x.Protocol, x.Transport }, token);
+        var linksByKey = (await db.VpnEndpointSources.ToArrayAsync(token))
+            .ToDictionary(x => (x.VpnEndpointId, x.VpnSourceId));
         var now = DateTimeOffset.UtcNow;
         var added = 0;
         foreach (var result in results)
         {
-            var source = await db.VpnSources.SingleAsync(x => x.Id == result.Source.Id, token);
+            if (!trackedSources.TryGetValue(result.Source.Id, out var source)) continue;
             source.LastFetchedAt = now;
             if (result.Error is not null)
             {
@@ -48,28 +55,36 @@ public sealed class VpnCatalogService(
             source.LastError = null;
             foreach (var candidate in result.Candidates.Take(options.Value.MaxProxiesPerSource))
             {
-                var endpoint = await db.VpnEndpoints.SingleOrDefaultAsync(x =>
-                    x.Host == candidate.Host && x.Port == candidate.Port && x.Protocol == candidate.Protocol && x.Transport == candidate.Transport, token);
-                if (endpoint is null)
+                var key = new { candidate.Host, candidate.Port, candidate.Protocol, candidate.Transport };
+                if (!endpointsByKey.TryGetValue(key, out var endpoint))
                 {
                     endpoint = new VpnEndpoint
                     {
-                        Host = candidate.Host, Port = candidate.Port, Protocol = candidate.Protocol,
-                        Transport = candidate.Transport, FirstSourceId = source.Id,
-                        FirstSeenAt = now, LastSeenAt = now
+                        Host = candidate.Host,
+                        Port = candidate.Port,
+                        Protocol = candidate.Protocol,
+                        Transport = candidate.Transport,
+                        FirstSourceId = source.Id,
+                        FirstSeenAt = now,
+                        LastSeenAt = now
                     };
                     db.VpnEndpoints.Add(endpoint);
+                    endpointsByKey.Add(key, endpoint);
                     added++;
                 }
                 else endpoint.LastSeenAt = now;
 
-                var link = await db.VpnEndpointSources.FindAsync([endpoint.Id, source.Id], token);
-                if (link is null) db.VpnEndpointSources.Add(new VpnEndpointSource
-                    { VpnEndpointId = endpoint.Id, VpnSourceId = source.Id, LastSeenAt = now });
+                if (!linksByKey.TryGetValue((endpoint.Id, source.Id), out var link))
+                {
+                    link = new VpnEndpointSource
+                    { VpnEndpointId = endpoint.Id, VpnSourceId = source.Id, LastSeenAt = now };
+                    db.VpnEndpointSources.Add(link);
+                    linksByKey.Add((endpoint.Id, source.Id), link);
+                }
                 else link.LastSeenAt = now;
             }
-            await db.SaveChangesAsync(token);
         }
+        await db.SaveChangesAsync(token);
         return new(sources.Length, results.Count(x => x.Error is null), results.Sum(x => x.Candidates.Count), added);
     }
 
@@ -107,9 +122,10 @@ public sealed class VpnCatalogService(
             }
         });
 
+        var endpointsById = endpoints.ToDictionary(x => x.Id);
         foreach (var result in results)
         {
-            var endpoint = endpoints.First(x => x.Id == result.Id);
+            var endpoint = endpointsById[result.Id];
             endpoint.LastCheckedAt = now;
             endpoint.NextCheckAt = now.AddMinutes(result.Reachable == false ? 15 : options.Value.ValidationIntervalMinutes);
             endpoint.LatencyMs = result.Latency;
@@ -216,8 +232,8 @@ public sealed record VpnValidationResult
     public int UnsupportedTransport { get; }
 }
 
-/// <summary>Запускает VPN сбор и безопасную проверку по тем же интервалам, что и proxy pipeline.</summary>
-public sealed class VpnCatalogWorker(VpnCatalogService service, IOptions<CollectorOptions> options, ILogger<VpnCatalogWorker> logger) : BackgroundService
+/// <summary>Запускает сбор VPN feed независимо от более частой проверки endpoint.</summary>
+public sealed class VpnCollectorWorker(VpnCatalogService service, IOptions<CollectorOptions> options, ILogger<VpnCollectorWorker> logger) : BackgroundService
 {
     private static readonly Action<ILogger, Exception?> CycleFailed =
         LoggerMessage.Define(LogLevel.Error, new EventId(1162, "VpnCycleFailed"), "VPN catalog cycle failed");
@@ -231,13 +247,35 @@ public sealed class VpnCatalogWorker(VpnCatalogService service, IOptions<Collect
             try
             {
                 await service.CollectAsync(stoppingToken);
-                await service.ValidateAsync(stoppingToken);
             }
             catch (Exception exception) when (!stoppingToken.IsCancellationRequested)
             {
                 OperationalLogBoundary.Write(() => CycleFailed(logger, exception));
             }
             await Task.Delay(TimeSpan.FromMinutes(options.Value.CollectionIntervalMinutes), stoppingToken);
+        }
+    }
+}
+
+/// <summary>Проверяет очередную VPN-партию с интервалом валидатора, не ожидая следующего сбора.</summary>
+public sealed class VpnValidatorWorker(VpnCatalogService service, IOptions<CollectorOptions> options, ILogger<VpnValidatorWorker> logger) : BackgroundService
+{
+    private static readonly Action<ILogger, Exception?> CycleFailed =
+        LoggerMessage.Define(LogLevel.Error, new EventId(1163, "VpnValidationCycleFailed"), "VPN validation cycle failed");
+
+    /// <inheritdoc />
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        if (!options.Value.BackgroundWorkersEnabled) return;
+        await Task.Delay(TimeSpan.FromSeconds(30), stoppingToken);
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            try { await service.ValidateAsync(stoppingToken); }
+            catch (Exception exception) when (!stoppingToken.IsCancellationRequested)
+            {
+                OperationalLogBoundary.Write(() => CycleFailed(logger, exception));
+            }
+            await Task.Delay(TimeSpan.FromMinutes(options.Value.ValidationIntervalMinutes), stoppingToken);
         }
     }
 }

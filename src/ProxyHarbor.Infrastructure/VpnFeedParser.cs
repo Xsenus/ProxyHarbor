@@ -116,8 +116,12 @@ public static class VpnFeedParser
     private static bool IsSafe(VpnCandidate candidate)
     {
         if (candidate.Port is < 1 or > 65_535 || candidate.Host.Length is 0 or > 253) return false;
-        if (IPAddress.TryParse(candidate.Host.Trim('[', ']'), out var address)) return NetworkSafety.IsPublicAddress(address);
-        return NetworkSafety.IsCanonicalDnsName(candidate.Host);
+        var host = candidate.Host.Trim('[', ']');
+        if (IPAddress.TryParse(host, out var address)) return NetworkSafety.IsPublicAddress(address);
+        if (host.Equals("localhost", StringComparison.OrdinalIgnoreCase) ||
+            host.EndsWith(".localhost", StringComparison.OrdinalIgnoreCase) ||
+            host.EndsWith(".local", StringComparison.OrdinalIgnoreCase)) return false;
+        return NetworkSafety.IsCanonicalDnsName(host);
     }
 
     private static bool TryDecodeBase64(string value, out string decoded)

@@ -124,7 +124,8 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ProxyCountryResolver>();
         services.AddHostedService<CollectorWorker>();
         services.AddHostedService<ValidatorWorker>();
-        services.AddHostedService<VpnCatalogWorker>();
+        services.AddHostedService<VpnCollectorWorker>();
+        services.AddHostedService<VpnValidatorWorker>();
         services.AddHostedService<BackupWorker>();
         services.AddHostedService<OperationalMaintenanceWorker>();
         services.AddHostedService<ProxyCountryWorker>();
