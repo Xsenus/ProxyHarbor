@@ -33,6 +33,7 @@ public sealed class AccountController(
             user.UserName,
             user.Email,
             user.DisplayName,
+            user.PreferredLanguage,
             user.CreatedAt,
             user.LastLoginAt,
             roles,
@@ -53,6 +54,9 @@ public sealed class AccountController(
         var user = await users.GetUserAsync(User);
         if (user is null || !user.IsActive) return Unauthorized();
         user.DisplayName = string.IsNullOrWhiteSpace(request.DisplayName) ? null : request.DisplayName.Trim();
+        if (!SupportedLanguages.IsSupported(request.PreferredLanguage))
+            return BadRequest(new ProblemDetails { Title = "Unsupported language", Detail = "Use ru, en, de, fr or zh.", Status = 400 });
+        user.PreferredLanguage = SupportedLanguages.Normalize(request.PreferredLanguage);
         var result = await users.UpdateAsync(user);
         return result.Succeeded ? NoContent() : IdentityProblem(result);
     }
@@ -82,6 +86,8 @@ public sealed class UpdateProfileRequest
 {
     /// <summary>Отображаемое имя или null для очистки.</summary>
     [StringLength(120)] public string? DisplayName { get; set; }
+    /// <summary>Двухбуквенный код одного из языков, поддерживаемых продуктом.</summary>
+    [Required, StringLength(2, MinimumLength = 2)] public string PreferredLanguage { get; set; } = SupportedLanguages.Default;
 }
 
 /// <summary>Подтверждённая смена пароля из личного кабинета.</summary>

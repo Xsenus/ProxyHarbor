@@ -1,0 +1,112 @@
+import { createContext, useContext, useEffect, useMemo, useState } from 'react'
+
+export type Language = 'ru' | 'en' | 'de' | 'fr' | 'zh'
+type Variables = Record<string, string | number>
+type Dictionary = Record<string, string>
+
+// Справочник используется и компонентом, и чистыми функциями нормализации.
+// eslint-disable-next-line react-refresh/only-export-components
+export const languages: { code: Language; nativeName: string; shortName: string }[] = [
+  { code: 'ru', nativeName: 'Русский', shortName: 'RU' },
+  { code: 'en', nativeName: 'English', shortName: 'EN' },
+  { code: 'de', nativeName: 'Deutsch', shortName: 'DE' },
+  { code: 'fr', nativeName: 'Français', shortName: 'FR' },
+  { code: 'zh', nativeName: '简体中文', shortName: '中文' },
+]
+
+const ru: Dictionary = {
+  language: 'Язык', proxies: 'Прокси', signIn: 'Войти', account: 'Личный кабинет', admin: 'Админ-панель', logout: 'Выйти', home: 'На главную',
+  systemChecking: 'проверка…', systemOffline: 'API недоступен', systemActive: 'система активна', verifiedRealtime: 'Проверено в реальном времени',
+  heroTitle: 'Чистый поток', heroAccent: 'рабочих прокси.', heroText: 'ProxyHarbor непрерывно собирает открытые адреса, проверяет реальным HTTPS-запросом и отдаёт только те, которым можно доверять прямо сейчас.',
+  openCatalog: 'Открыть каталог', export: 'Экспортировать', networkState: 'Состояние сети', alive: 'живых', aliveAddresses: 'Живых адресов', freshCheck: 'прошли свежую проверку', hiddenStale: '{count} скрыто как устаревшие',
+  averageLatency: 'Средняя задержка', controlHttps: 'до контрольного HTTPS', dataFlow: 'Поток данных', continuousCollection: 'непрерывный автоматический сбор', readyForCheck: 'Готовы к проверке',
+  queuedChecks: '{running} выполняется · {scheduled} запланировано позже', liveCatalog: 'Лучшие прямо сейчас', serverSelection: 'Серверная выборка · {count} найдено', all: 'Все', upTo: 'до', retry: 'повторить',
+  address: 'Адрес', country: 'Страна', protocol: 'Протокол', latency: 'Задержка', reliability: 'Надёжность', active: 'Активен', checked: 'Проверен', loadingCatalog: 'Загружаем свежий каталог…', emptyCatalog: 'По выбранным фильтрам живых прокси пока нет.', countryPending: 'Страна пока определяется',
+  exportTitle: 'Забирайте как удобно', exportText: 'Фильтруйте через API или скачивайте готовый список. Экспорт содержит только свежие Alive-прокси; большие наборы обходятся последовательными cursor-страницами без замедляющего OFFSET.', responsible: 'Используйте публичные прокси ответственно и в рамках закона.',
+  panel: 'Панель управления', management: 'Управление', overview: 'Обзор', operations: 'Операции', sources: 'Источники', backups: 'Резервные копии', users: 'Пользователи', payments: 'Оплата', telegramBot: 'Telegram-бот', subscriptions: 'Подписки', accessIp: 'Доступ и IP', profile: 'Профиль', administrator: 'Администратор', secureSession: 'Защищённая сессия',
+  authLoginTitle: 'Вход в ProxyHarbor', authLoginText: 'Используйте логин или email и пароль. После входа браузер получит защищённую сессию.', loginOrEmail: 'Логин или email', password: 'Пароль', forgotPassword: 'Забыли пароль?', noAccount: 'Нет аккаунта?', register: 'Зарегистрироваться', signingIn: 'Входим…',
+  registerTitle:'Создать аккаунт', registerText:'Бесплатный аккаунт уже готов к будущим тарифам и персональным лимитам.', yourName:'Как к вам обращаться', optionalName:'Имя (необязательно)', username:'Логин', passwordHint:'Не менее 12 символов', repeatPassword:'Повторите пароль', creating:'Создаём…', createAccount:'Создать аккаунт', alreadyAccount:'Уже есть аккаунт', passwordsMismatch:'Пароли не совпадают', accountCreateFailed:'Не удалось создать аккаунт', recoveryTitle:'Восстановить пароль', recoveryText:'Укажите email аккаунта — мы отправим одноразовую защищённую ссылку.', sendLink:'Отправить ссылку', recoverySent:'Если аккаунт существует, ссылка уже отправлена на указанную почту.', emailSendFailed:'Не удалось отправить письмо', backToLogin:'Вернуться ко входу', newPassword:'Новый пароль', recoveryFor:'Восстановление для {email}', incompleteRecoveryLink:'Проверьте полноту ссылки из письма.', linkIncomplete:'Ссылка восстановления неполная', linkInvalid:'Ссылка недействительна или устарела', passwordChanged:'Пароль изменён. Теперь можно войти в аккаунт.', changePassword:'Изменить пароль', goToLogin:'Перейти ко входу',
+  profileText: 'Учётные данные, безопасность и параметры подписки.', displayName: 'Отображаемое имя', save: 'Сохранить', saving: 'Сохраняем…', preferredLanguage: 'Язык интерфейса и сообщений', languageHint: 'Используется на сайте, в письмах и привязанном Telegram-боте.', profileSaved: 'Профиль сохранён',
+  page: 'Страница {page} из {pages} · Найдено: {total}', show: 'Показывать:', previousPage: 'Предыдущая страница', nextPage: 'Следующая страница', pageNumber: 'Номер страницы', quickJump: 'Быстрый переход по страницам', goToPage: 'Перейти на страницу',
+}
+
+const en: Dictionary = {
+  language:'Language', proxies:'Proxies', signIn:'Sign in', account:'Account', admin:'Admin panel', logout:'Sign out', home:'Home', systemChecking:'checking…', systemOffline:'API unavailable', systemActive:'system online', verifiedRealtime:'Verified in real time', heroTitle:'A clean stream of', heroAccent:'working proxies.', heroText:'ProxyHarbor continuously collects public endpoints, validates them with real HTTPS requests, and serves only those you can trust right now.', openCatalog:'Open catalog', export:'Export', networkState:'Network status', alive:'alive', aliveAddresses:'Live addresses', freshCheck:'passed a recent check', hiddenStale:'{count} hidden as stale', averageLatency:'Average latency', controlHttps:'to the HTTPS control endpoint', dataFlow:'Data flow', continuousCollection:'continuous automated collection', readyForCheck:'Ready to validate', queuedChecks:'{running} running · {scheduled} scheduled', liveCatalog:'Best right now', serverSelection:'Server-side result · {count} found', all:'All', upTo:'up to', retry:'retry', address:'Address', country:'Country', protocol:'Protocol', latency:'Latency', reliability:'Reliability', active:'Active', checked:'Checked', loadingCatalog:'Loading the latest catalog…', emptyCatalog:'No live proxies match the selected filters yet.', countryPending:'Country is being resolved', exportTitle:'Use it your way', exportText:'Filter through the API or download a ready-made list. Exports contain only fresh Alive proxies and use sequential cursor pages for large result sets.', responsible:'Use public proxies responsibly and in accordance with the law.', panel:'Control panel', management:'Management', overview:'Overview', operations:'Operations', sources:'Sources', backups:'Backups', users:'Users', payments:'Payments', telegramBot:'Telegram bot', subscriptions:'Subscriptions', accessIp:'Access & IP', profile:'Profile', administrator:'Administrator', secureSession:'Secure session', authLoginTitle:'Sign in', authLoginText:'Use your username or email and password. Your browser will receive a secure session after sign-in.', loginOrEmail:'Username or email', password:'Password', forgotPassword:'Forgot password?', noAccount:'No account?', register:'Create one', signingIn:'Signing in…', profileText:'Account details, security, and subscription preferences.', displayName:'Display name', save:'Save', saving:'Saving…', preferredLanguage:'Interface and message language', languageHint:'Used on the website, in emails, and by the linked Telegram bot.', profileSaved:'Profile saved', page:'Page {page} of {pages} · Found: {total}', show:'Show:', previousPage:'Previous page', nextPage:'Next page', pageNumber:'Page number', quickJump:'Quick page navigation', goToPage:'Go to page',
+  registerTitle:'Create an account', registerText:'Your free account is ready for future plans and personal limits.', yourName:'How should we address you?', optionalName:'Name (optional)', username:'Username', passwordHint:'At least 12 characters', repeatPassword:'Repeat password', creating:'Creating…', createAccount:'Create account', alreadyAccount:'Already have an account?', passwordsMismatch:'Passwords do not match', accountCreateFailed:'Could not create the account', recoveryTitle:'Reset password', recoveryText:'Enter your account email and we will send a secure one-time link.', sendLink:'Send link', recoverySent:'If the account exists, a link has been sent to that email.', emailSendFailed:'Could not send the email', backToLogin:'Back to sign in', newPassword:'New password', recoveryFor:'Password reset for {email}', incompleteRecoveryLink:'Check that the link from the email is complete.', linkIncomplete:'The password reset link is incomplete', linkInvalid:'The link is invalid or has expired', passwordChanged:'Password changed. You can now sign in.', changePassword:'Change password', goToLogin:'Go to sign in',
+}
+
+const de: Dictionary = {
+  ...en, language:'Sprache', proxies:'Proxys', signIn:'Anmelden', account:'Konto', admin:'Adminbereich', logout:'Abmelden', home:'Startseite', systemChecking:'Prüfung…', systemOffline:'API nicht verfügbar', systemActive:'System aktiv', verifiedRealtime:'In Echtzeit geprüft', heroTitle:'Ein sauberer Strom', heroAccent:'funktionierender Proxys.', heroText:'ProxyHarbor sammelt laufend öffentliche Adressen, prüft sie mit echten HTTPS-Anfragen und liefert nur aktuell vertrauenswürdige Proxys.', openCatalog:'Katalog öffnen', networkState:'Netzwerkstatus', alive:'aktiv', aliveAddresses:'Aktive Adressen', freshCheck:'kürzlich erfolgreich geprüft', averageLatency:'Durchschnittliche Latenz', dataFlow:'Datenfluss', continuousCollection:'kontinuierliche automatische Sammlung', readyForCheck:'Zur Prüfung bereit', liveCatalog:'Die besten im Moment', serverSelection:'Serverauswahl · {count} gefunden', all:'Alle', upTo:'bis', retry:'erneut versuchen', address:'Adresse', country:'Land', protocol:'Protokoll', latency:'Latenz', reliability:'Zuverlässigkeit', active:'Aktiv', checked:'Geprüft', loadingCatalog:'Aktueller Katalog wird geladen…', emptyCatalog:'Für diese Filter wurden noch keine aktiven Proxys gefunden.', exportTitle:'Flexibel abrufen', responsible:'Öffentliche Proxys verantwortungsvoll und gesetzeskonform verwenden.', panel:'Verwaltung', management:'Verwaltung', overview:'Übersicht', operations:'Vorgänge', sources:'Quellen', backups:'Sicherungen', users:'Benutzer', payments:'Zahlungen', telegramBot:'Telegram-Bot', subscriptions:'Abonnements', accessIp:'Zugriff & IP', profile:'Profil', administrator:'Administrator', secureSession:'Geschützte Sitzung', authLoginTitle:'Anmelden', authLoginText:'Benutzername oder E-Mail und Passwort verwenden. Danach erhält der Browser eine geschützte Sitzung.', loginOrEmail:'Benutzername oder E-Mail', password:'Passwort', forgotPassword:'Passwort vergessen?', noAccount:'Noch kein Konto?', register:'Registrieren', signingIn:'Anmeldung…', profileText:'Kontodaten, Sicherheit und Abonnement.', displayName:'Anzeigename', save:'Speichern', saving:'Speichern…', preferredLanguage:'Sprache für Oberfläche und Nachrichten', languageHint:'Wird auf der Website, in E-Mails und im verknüpften Telegram-Bot verwendet.', profileSaved:'Profil gespeichert', show:'Anzeigen:', previousPage:'Vorherige Seite', nextPage:'Nächste Seite', pageNumber:'Seitennummer', quickJump:'Schnelle Seitennavigation', registerTitle:'Konto erstellen', registerText:'Das kostenlose Konto ist für künftige Tarife und persönliche Limits vorbereitet.', yourName:'Wie dürfen wir Sie ansprechen?', optionalName:'Name (optional)', username:'Benutzername', passwordHint:'Mindestens 12 Zeichen', repeatPassword:'Passwort wiederholen', creating:'Wird erstellt…', createAccount:'Konto erstellen', alreadyAccount:'Bereits registriert?', passwordsMismatch:'Passwörter stimmen nicht überein', accountCreateFailed:'Konto konnte nicht erstellt werden', recoveryTitle:'Passwort zurücksetzen', recoveryText:'E-Mail-Adresse eingeben; wir senden einen sicheren Einmal-Link.', sendLink:'Link senden', recoverySent:'Falls das Konto existiert, wurde der Link an diese E-Mail gesendet.', emailSendFailed:'E-Mail konnte nicht gesendet werden', backToLogin:'Zurück zur Anmeldung', newPassword:'Neues Passwort', recoveryFor:'Passwort zurücksetzen für {email}', incompleteRecoveryLink:'Bitte den vollständigen Link aus der E-Mail öffnen.', linkIncomplete:'Der Link zum Zurücksetzen ist unvollständig', linkInvalid:'Der Link ist ungültig oder abgelaufen', passwordChanged:'Passwort geändert. Sie können sich jetzt anmelden.', changePassword:'Passwort ändern', goToLogin:'Zur Anmeldung',
+}
+
+const fr: Dictionary = {
+  ...en, language:'Langue', proxies:'Proxys', signIn:'Se connecter', account:'Compte', admin:'Administration', logout:'Se déconnecter', home:'Accueil', systemChecking:'vérification…', systemOffline:'API indisponible', systemActive:'système actif', verifiedRealtime:'Vérifiés en temps réel', heroTitle:'Un flux propre de', heroAccent:'proxys fonctionnels.', heroText:'ProxyHarbor collecte en continu des adresses publiques, les valide par de vraies requêtes HTTPS et ne fournit que celles qui sont fiables maintenant.', openCatalog:'Ouvrir le catalogue', networkState:'État du réseau', alive:'actifs', aliveAddresses:'Adresses actives', freshCheck:'validation récente réussie', averageLatency:'Latence moyenne', dataFlow:'Flux de données', continuousCollection:'collecte automatique continue', readyForCheck:'Prêts à vérifier', liveCatalog:'Les meilleurs maintenant', serverSelection:'Sélection serveur · {count} trouvés', all:'Tous', upTo:"jusqu'à", retry:'réessayer', address:'Adresse', country:'Pays', protocol:'Protocole', latency:'Latence', reliability:'Fiabilité', active:'Actif', checked:'Vérifié', loadingCatalog:'Chargement du catalogue récent…', emptyCatalog:'Aucun proxy actif pour ces filtres.', exportTitle:'Récupérez-les à votre façon', responsible:'Utilisez les proxys publics de façon responsable et légale.', panel:'Panneau de contrôle', management:'Gestion', overview:"Vue d'ensemble", operations:'Opérations', sources:'Sources', backups:'Sauvegardes', users:'Utilisateurs', payments:'Paiements', telegramBot:'Bot Telegram', subscriptions:'Abonnements', accessIp:'Accès et IP', profile:'Profil', administrator:'Administrateur', secureSession:'Session sécurisée', authLoginTitle:'Connexion', authLoginText:'Utilisez votre identifiant ou e-mail et votre mot de passe. Le navigateur recevra ensuite une session sécurisée.', loginOrEmail:'Identifiant ou e-mail', password:'Mot de passe', forgotPassword:'Mot de passe oublié ?', noAccount:'Pas de compte ?', register:"S'inscrire", signingIn:'Connexion…', profileText:'Coordonnées du compte, sécurité et abonnement.', displayName:"Nom d'affichage", save:'Enregistrer', saving:'Enregistrement…', preferredLanguage:"Langue de l'interface et des messages", languageHint:'Utilisée sur le site, dans les e-mails et par le bot Telegram associé.', profileSaved:'Profil enregistré', show:'Afficher :', previousPage:'Page précédente', nextPage:'Page suivante', pageNumber:'Numéro de page', quickJump:'Navigation rapide', registerTitle:'Créer un compte', registerText:'Le compte gratuit est prêt pour les futures offres et limites personnelles.', yourName:'Comment vous appeler ?', optionalName:'Nom (facultatif)', username:'Identifiant', passwordHint:'12 caractères minimum', repeatPassword:'Répétez le mot de passe', creating:'Création…', createAccount:'Créer le compte', alreadyAccount:'Vous avez déjà un compte ?', passwordsMismatch:'Les mots de passe ne correspondent pas', accountCreateFailed:'Impossible de créer le compte', recoveryTitle:'Réinitialiser le mot de passe', recoveryText:'Saisissez votre e-mail ; nous enverrons un lien sécurisé à usage unique.', sendLink:'Envoyer le lien', recoverySent:"Si le compte existe, un lien a été envoyé à cette adresse.", emailSendFailed:"Impossible d'envoyer l'e-mail", backToLogin:'Retour à la connexion', newPassword:'Nouveau mot de passe', recoveryFor:'Réinitialisation pour {email}', incompleteRecoveryLink:"Vérifiez que le lien de l'e-mail est complet.", linkIncomplete:'Le lien de réinitialisation est incomplet', linkInvalid:'Le lien est invalide ou a expiré', passwordChanged:'Mot de passe modifié. Vous pouvez vous connecter.', changePassword:'Modifier le mot de passe', goToLogin:'Aller à la connexion',
+}
+
+const zh: Dictionary = {
+  ...en, language:'语言', proxies:'代理', signIn:'登录', account:'个人中心', admin:'管理后台', logout:'退出', home:'首页', systemChecking:'检查中…', systemOffline:'API 不可用', systemActive:'系统正常', verifiedRealtime:'实时验证', heroTitle:'持续提供', heroAccent:'可用代理。', heroText:'ProxyHarbor 持续收集公开地址，通过真实 HTTPS 请求进行验证，只提供当前可信的代理。', openCatalog:'打开目录', export:'导出', networkState:'网络状态', alive:'可用', aliveAddresses:'可用地址', freshCheck:'已通过最新检查', hiddenStale:'已隐藏 {count} 个过期项', averageLatency:'平均延迟', controlHttps:'到 HTTPS 检测端点', dataFlow:'数据流', continuousCollection:'全天自动采集', readyForCheck:'等待检查', queuedChecks:'{running} 个执行中 · {scheduled} 个已计划', liveCatalog:'当前最佳', serverSelection:'服务器筛选 · 找到 {count} 个', all:'全部', upTo:'不超过', retry:'重试', address:'地址', country:'国家/地区', protocol:'协议', latency:'延迟', reliability:'可靠性', active:'存活时间', checked:'检查时间', loadingCatalog:'正在加载最新目录…', emptyCatalog:'当前筛选条件下暂无可用代理。', countryPending:'正在识别国家/地区', exportTitle:'按需获取', exportText:'可通过 API 筛选或下载现成列表。导出仅包含最新的 Alive 代理，大型结果集使用连续游标分页。', responsible:'请依法并负责任地使用公开代理。', panel:'控制面板', management:'管理', overview:'概览', operations:'任务', sources:'来源', backups:'备份', users:'用户', payments:'支付', telegramBot:'Telegram 机器人', subscriptions:'订阅', accessIp:'访问与 IP', profile:'个人资料', administrator:'管理员', secureSession:'安全会话', authLoginTitle:'登录', authLoginText:'请输入用户名或邮箱及密码。登录后浏览器将获得安全会话。', loginOrEmail:'用户名或邮箱', password:'密码', forgotPassword:'忘记密码？', noAccount:'还没有账户？', register:'注册', signingIn:'登录中…', profileText:'账户信息、安全与订阅设置。', displayName:'显示名称', save:'保存', saving:'保存中…', preferredLanguage:'界面与消息语言', languageHint:'用于网站、邮件和已关联的 Telegram 机器人。', profileSaved:'资料已保存', page:'第 {page}/{pages} 页 · 共 {total} 条', show:'每页：', previousPage:'上一页', nextPage:'下一页', pageNumber:'页码', quickJump:'快速跳页', registerTitle:'创建账户', registerText:'免费账户已为未来套餐和个人限额做好准备。', yourName:'如何称呼您？', optionalName:'姓名（可选）', username:'用户名', passwordHint:'至少 12 个字符', repeatPassword:'再次输入密码', creating:'创建中…', createAccount:'创建账户', alreadyAccount:'已有账户？', passwordsMismatch:'两次输入的密码不一致', accountCreateFailed:'无法创建账户', recoveryTitle:'重置密码', recoveryText:'输入账户邮箱，我们将发送安全的一次性链接。', sendLink:'发送链接', recoverySent:'如果账户存在，链接已发送到该邮箱。', emailSendFailed:'无法发送邮件', backToLogin:'返回登录', newPassword:'新密码', recoveryFor:'为 {email} 重置密码', incompleteRecoveryLink:'请检查邮件中的链接是否完整。', linkIncomplete:'密码重置链接不完整', linkInvalid:'链接无效或已过期', passwordChanged:'密码已修改，现在可以登录。', changePassword:'修改密码', goToLogin:'前往登录',
+}
+
+const dictionaries: Record<Language, Dictionary> = { ru, en, de, fr, zh }
+const storageKey = 'proxyharbor.language'
+
+function normalize(value?: string | null): Language {
+  const code = value?.trim().toLowerCase().split(/[-_]/)[0]
+  return languages.some(item => item.code === code) ? code as Language : 'ru'
+}
+
+function initialLanguage(): Language {
+  const saved = localStorage.getItem(storageKey)
+  if (saved) return normalize(saved)
+  return normalize(navigator.languages?.[0] ?? navigator.language)
+}
+
+// Форматтеры вне React-дерева читают то же устойчивое значение, что и provider.
+let activeLanguage: Language = 'ru'
+// eslint-disable-next-line react-refresh/only-export-components
+export function currentLocale() { return activeLanguage === 'zh' ? 'zh-CN' : `${activeLanguage}-${activeLanguage === 'en' ? 'US' : activeLanguage.toUpperCase()}` }
+
+type I18nContextValue = { language: Language; setLanguage: (language: Language) => void; t: (key: string, variables?: Variables) => string }
+const I18nContext = createContext<I18nContextValue | null>(null)
+const fallbackValue: I18nContextValue = {
+  language: 'ru',
+  setLanguage: () => undefined,
+  t: (key, variables = {}) => Object.entries(variables).reduce(
+    (text, [name, replacement]) => text.replaceAll(`{${name}}`, String(replacement)), ru[key] ?? key),
+}
+
+export function I18nProvider({ children }: { children: React.ReactNode }) {
+  const [language, setLanguageState] = useState<Language>(initialLanguage)
+  useEffect(() => {
+    activeLanguage = language
+    document.documentElement.lang = language === 'zh' ? 'zh-CN' : language
+    document.cookie = `ProxyHarbor.Language=${language}; Path=/; Max-Age=31536000; SameSite=Lax${location.protocol === 'https:' ? '; Secure' : ''}`
+  }, [language])
+  const value = useMemo<I18nContextValue>(() => ({
+    language,
+    setLanguage: next => { activeLanguage = next; localStorage.setItem(storageKey, next); setLanguageState(next) },
+    t: (key, variables = {}) => {
+      const template = dictionaries[language][key] ?? ru[key] ?? key
+      return Object.entries(variables).reduce((text, [name, replacement]) => text.replaceAll(`{${name}}`, String(replacement)), template)
+    },
+  }), [language])
+  return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>
+}
+
+// Hook экспортируется рядом с его provider, чтобы словари не дублировались между модулями.
+// eslint-disable-next-line react-refresh/only-export-components
+export function useI18n() {
+  const value = useContext(I18nContext)
+  // Компоненты остаются изолированно тестируемыми; приложение всегда подключает provider в main.tsx.
+  return value ?? fallbackValue
+}
+
+export function LanguageSwitcher({ compact = false }: { compact?: boolean }) {
+  const { language, setLanguage, t } = useI18n()
+  return <label className={`language-switcher${compact ? ' compact' : ''}`}>
+    <span>{compact ? languages.find(item => item.code === language)?.shortName : t('language')}</span>
+    <select aria-label={t('language')} value={language} onChange={event => setLanguage(event.target.value as Language)}>
+      {languages.map(item => <option key={item.code} value={item.code}>{item.nativeName}</option>)}
+    </select>
+  </label>
+}

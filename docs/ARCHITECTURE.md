@@ -164,7 +164,7 @@ API lease удерживается owning PostgreSQL session от startup до s
 1. External feeds — полностью недоверенные body/headers/DNS.
 2. Proxy servers — недоверенный transport до системно проверяемого TLS.
 3. Control endpoint — доверенный HTTPS origin, но bounded parser всё равно обязателен.
-4. Browser/account session — ASP.NET Identity хранит пользователей, роли, lockout, password hashes и reset tokens; вход принимает логин или email, а браузер получает HttpOnly Secure SameSite=Strict cookie и не хранит исходные credentials.
+4. Browser/account session — ASP.NET Identity хранит пользователей, роли, lockout, password hashes, reset tokens и стабильный `PreferredLanguage`; вход принимает логин или email, а браузер получает HttpOnly Secure SameSite=Strict cookie и не хранит исходные credentials. Один языковой профиль применяется к UI, API culture, письмам и Telegram; неизвестный код безопасно откатывается к русскому.
 5. Subscription entitlement — роль отвечает за доступ к функциям, а отдельная `UserSubscription` хранит тариф и жизненный цикл будущего billing provider; публичные лимиты пока не включены.
 6. Telegram — внешний API; response/exception sanitizing не допускает token/chat ID в audit.
 7. Backup archive — аутентифицируется PHB3 и строго валидируется до destructive restore.

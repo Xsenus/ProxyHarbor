@@ -38,6 +38,15 @@ public sealed class FreeExportAccessService(IDbContextFactory<ProxyHarborDbConte
     /// <summary>Единый текст ограничения и перехода к подписке.</summary>
     public const string UpgradeMessage =
         "Бесплатный доступ: 10 прокси среднего качества раз в 10 минут. Для неограниченного доступа купите подписку.";
+    /// <summary>Возвращает ограничение бесплатного тарифа на языке текущего клиента.</summary>
+    public static string GetUpgradeMessage(string? language) => SupportedLanguages.Normalize(language) switch
+    {
+        "en" => "Free access: 10 medium-quality proxies once every 10 minutes. Buy a subscription for unlimited access.",
+        "de" => "Kostenloser Zugang: 10 Proxys mittlerer Qualität alle 10 Minuten. Für unbegrenzten Zugriff ist ein Abonnement erforderlich.",
+        "fr" => "Accès gratuit : 10 proxys de qualité moyenne toutes les 10 minutes. Achetez un abonnement pour un accès illimité.",
+        "zh" => "免费访问：每 10 分钟可获取 10 个中等质量代理。购买订阅即可无限制访问。",
+        _ => UpgradeMessage
+    };
     private static readonly TimeSpan Cooldown = TimeSpan.FromSeconds(CooldownSeconds);
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _inMemoryLocks = new(StringComparer.Ordinal);
 

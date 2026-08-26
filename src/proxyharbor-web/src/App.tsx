@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Activity, ArrowDownToLine, ArrowRight, Ban, Bell, Bot, CalendarClock, Check, ChevronDown, Clock3, CreditCard, Database, Eye, EyeOff, Gauge, Globe2, HardDriveDownload, LayoutDashboard, LockKeyhole, LogOut, Mail, MessageCircle, MousePointerClick, Network, Pencil, Play, Plus, Radio, Receipt, RefreshCw, Search, Send, Server, Settings2, ShieldCheck, ShieldOff, Star, Trash2, User, Users, Wifi, Workflow, X } from 'lucide-react'
+import { currentLocale, LanguageSwitcher, type Language, useI18n } from './i18n'
 
 type Protocol = 'Http' | 'Https' | 'Socks4' | 'Socks5'
 type Proxy = { host: string; port: number; protocol: Protocol; url: string; latencyMs: number; successRate: number; exitIp?: string; countryCode?: string; lastCheckedAt: string; firstAliveAt?: string; lastAliveAt?: string; activeSince?: string; activeForSeconds?: number }
@@ -29,7 +30,7 @@ type AdminSection = 'overview' | 'operations' | 'proxies' | 'sources' | 'backups
 type AdminProxyStatus = 'Pending' | 'Alive' | 'Dead'
 type AdminProxy = { id:string;host:string;port:number;protocol:Protocol;status:AdminProxyStatus;latencyMs?:number;exitIp?:string;countryCode?:string;isAnonymous:boolean;firstSeenAt:string;lastSeenAt:string;lastCheckedAt?:string;firstAliveAt?:string;lastAliveAt?:string;currentAliveSince?:string;activeForSeconds?:number;lastValidationAttemptAt?:string;lastValidationDeferred:boolean;nextCheckAt?:string;successfulChecks:number;failedChecks:number;consecutiveFailedChecks:number;successRate:number;lastError?:string }
 type AdminProxyPage = PagedResult<AdminProxy> & { summary:{total:number;alive:number;freshAlive:number;staleAlive:number;pending:number;dead:number;everAlive:number;averageAliveLatencyMs?:number;countries:number;longestActiveSeconds?:number};countries:ProxyCountry[] }
-type AccountProfile = { id: string; userName: string; email: string; displayName?: string; createdAt: string; lastLoginAt?: string; roles: string[]; subscription?: { plan: string; status: string; startedAt: string; expiresAt?: string } }
+type AccountProfile = { id: string; userName: string; email: string; displayName?: string; preferredLanguage: Language; createdAt: string; lastLoginAt?: string; roles: string[]; subscription?: { plan: string; status: string; startedAt: string; expiresAt?: string } }
 type PaymentCatalog = { enabled: boolean; products: PaymentProduct[]; providers: PaymentProvider[] }
 type PaymentProduct = { code: string; name: string; plan: string; durationDays: number; amountMinor: number; currency: string; description: string }
 type PaymentProvider = { code: string; name: string; available: boolean }
@@ -63,6 +64,7 @@ function isAbortError(reason: unknown) {
 
 /** Основная панель: публичный каталог и компактное администрирование в одном интерфейсе. */
 export default function App() {
+  const { t } = useI18n()
   const [stats, setStats] = useState<Stats | null>(null)
   const [proxies, setProxies] = useState<Proxy[]>([])
   const [protocol, setProtocol] = useState<Protocol | 'All'>('All')
@@ -552,7 +554,7 @@ export default function App() {
     selectedCountries.forEach(country => query.append('country', country))
     return query.toString()
   }, [protocol, maxLatency, selectedCountries])
-  const freshness = stats?.lastRun?.startedAt ? timeAgo(stats.lastRun.startedAt) : 'ожидается'
+  const freshness = stats?.lastRun?.startedAt ? timeAgo(stats.lastRun.startedAt) : '—'
   const latestCollection = diagnostics?.recentRuns[0]
   const latestValidation = diagnostics?.recentValidationRuns?.[0]
   const latestBackup = diagnostics?.recentBackups[0]
@@ -569,40 +571,40 @@ export default function App() {
 
   return <div className="app-shell">
     {!adminOpen && <><header>
-      <a className="brand" href="#top" aria-label="ProxyHarbor — наверх"><span className="brand-mark"><Network size={20}/></span><span>Proxy<span>Harbor</span></span></a>
-      <nav><a href="#catalog">Прокси</a><a href="#api">API</a><a className="admin-link" href="/login"><LockKeyhole size={15}/> Войти</a></nav>
-      <a className="mobile-admin" aria-label="Войти в аккаунт" href="/login"><LockKeyhole size={17}/></a>
-      <div className={`live-pill ${apiError ? 'offline' : ''}`} aria-live="polite"><span/> {loading ? 'проверка…' : apiError ? 'API недоступен' : 'система активна'}</div>
+      <a className="brand" href="#top" aria-label="ProxyHarbor"><span className="brand-mark"><Network size={20}/></span><span>Proxy<span>Harbor</span></span></a>
+      <nav><a href="#catalog">{t('proxies')}</a><a href="#api">API</a><LanguageSwitcher compact/><a className="admin-link" href="/login"><LockKeyhole size={15}/> {t('signIn')}</a></nav>
+      <a className="mobile-admin" aria-label={t('signIn')} href="/login"><LockKeyhole size={17}/></a>
+      <div className={`live-pill ${apiError ? 'offline' : ''}`} aria-live="polite"><span/> {loading ? t('systemChecking') : apiError ? t('systemOffline') : t('systemActive')}</div>
     </header>
 
     <main id="top">
       <section className="hero">
-        <div className="eyebrow"><ShieldCheck size={15}/> Проверено в реальном времени</div>
-        <h1>Чистый поток<br/><em>рабочих прокси.</em></h1>
-        <p>ProxyHarbor непрерывно собирает открытые адреса, проверяет реальным HTTPS-запросом и отдаёт только те, которым можно доверять прямо сейчас.</p>
-        <div className="hero-actions"><a className="primary" href="#catalog"><Wifi size={18}/> Открыть каталог</a><a className="secondary" href="#api"><ArrowDownToLine size={18}/> Экспортировать</a></div>
+        <div className="eyebrow"><ShieldCheck size={15}/> {t('verifiedRealtime')}</div>
+        <h1>{t('heroTitle')}<br/><em>{t('heroAccent')}</em></h1>
+        <p>{t('heroText')}</p>
+        <div className="hero-actions"><a className="primary" href="#catalog"><Wifi size={18}/> {t('openCatalog')}</a><a className="secondary" href="#api"><ArrowDownToLine size={18}/> {t('export')}</a></div>
         <div className="pulse-card">
-          <div className="pulse-head"><span>Состояние сети</span><span className="updated"><RefreshCw size={13}/> {freshness}</span></div>
-          <div className="pulse-number">{formatNumber(stats?.alive)}<small> живых</small></div>
+          <div className="pulse-head"><span>{t('networkState')}</span><span className="updated"><RefreshCw size={13}/> {freshness}</span></div>
+          <div className="pulse-number">{formatNumber(stats?.alive)}<small> {t('alive')}</small></div>
           <div className="protocol-strip">{protocols.map((item, index) => <div key={item} style={{'--share': `${Math.max(7, ((protocolCounts[item] ?? 0) / Math.max(1, stats?.alive ?? 1)) * 100)}%`, '--delay': `${index * 70}ms`} as React.CSSProperties}><span>{label(item)}</span><b>{formatNumber(protocolCounts[item] ?? 0)}</b></div>)}</div>
         </div>
       </section>
 
-      <section className="metrics" aria-label="Главные показатели">
-        <Metric icon={<Activity/>} label="Живых адресов" value={formatNumber(stats?.alive)} note={stats?.staleAlive ? `${formatNumber(stats.staleAlive)} скрыто как устаревшие` : 'прошли свежую проверку'}/>
-        <Metric icon={<Gauge/>} label="Средняя задержка" value={stats?.averageLatencyMs ? `${Math.round(stats.averageLatencyMs)} мс` : '—'} note="до контрольного HTTPS"/>
-        <Metric icon={<Database/>} label="Поток данных" value="24 / 7" note="непрерывный автоматический сбор"/>
-        <Metric icon={<Clock3/>} label="Готовы к проверке" value={formatNumber(stats?.dueForCheck)} note={`${formatNumber(stats?.checksInProgress)} выполняется · ${formatNumber(stats?.scheduledChecks)} запланировано позже`}/>
+      <section className="metrics" aria-label={t('networkState')}>
+        <Metric icon={<Activity/>} label={t('aliveAddresses')} value={formatNumber(stats?.alive)} note={stats?.staleAlive ? t('hiddenStale',{count:formatNumber(stats.staleAlive)}) : t('freshCheck')}/>
+        <Metric icon={<Gauge/>} label={t('averageLatency')} value={stats?.averageLatencyMs ? `${Math.round(stats.averageLatencyMs)} ms` : '—'} note={t('controlHttps')}/>
+        <Metric icon={<Database/>} label={t('dataFlow')} value="24 / 7" note={t('continuousCollection')}/>
+        <Metric icon={<Clock3/>} label={t('readyForCheck')} value={formatNumber(stats?.dueForCheck)} note={t('queuedChecks',{running:formatNumber(stats?.checksInProgress),scheduled:formatNumber(stats?.scheduledChecks)})}/>
       </section>
 
       <section id="catalog" className="catalog">
-        <div className="section-heading"><div><span className="kicker">LIVE CATALOG</span><h2>Лучшие прямо сейчас</h2></div><p>Серверная выборка · {formatNumber(total)} найдено</p></div>
-        <div className="filters"><div className="tabs" aria-label="Фильтр по протоколу"><button aria-pressed={protocol === 'All'} className={protocol === 'All' ? 'active' : ''} onClick={() => changeProtocol('All')}>Все</button>{protocols.map(x => <button key={x} aria-pressed={protocol === x} className={protocol === x ? 'active' : ''} onClick={() => changeProtocol(x)}>{label(x)}</button>)}</div><div className="filter-tools"><CountryFilter countries={countries} selected={selectedCountries} onChange={changeCountries}/><label>до <b>{maxLatency} мс</b><input type="range" min="200" max="5000" step="100" value={maxLatency} onChange={e => changeMaxLatency(Number(e.target.value))}/></label></div></div>
-        {apiError && <div className="error-banner" role="alert"><X size={17}/>{apiError}<button onClick={() => { setApiError(''); setLoading(true); void load() }}>повторить</button></div>}
-        <div className="proxy-table" role="table" aria-label="Проверенные прокси" aria-busy={loading}>
-          <div role="rowgroup"><div className="table-row table-head" role="row"><span role="columnheader">Адрес</span><span role="columnheader">Страна</span><span role="columnheader">Протокол</span><span role="columnheader">Задержка</span><span role="columnheader">Надёжность</span><span role="columnheader">Активен</span><span role="columnheader">Проверен</span></div></div>
+        <div className="section-heading"><div><span className="kicker">LIVE CATALOG</span><h2>{t('liveCatalog')}</h2></div><p>{t('serverSelection',{count:formatNumber(total)})}</p></div>
+        <div className="filters"><div className="tabs" aria-label={t('protocol')}><button aria-pressed={protocol === 'All'} className={protocol === 'All' ? 'active' : ''} onClick={() => changeProtocol('All')}>{t('all')}</button>{protocols.map(x => <button key={x} aria-pressed={protocol === x} className={protocol === x ? 'active' : ''} onClick={() => changeProtocol(x)}>{label(x)}</button>)}</div><div className="filter-tools"><CountryFilter countries={countries} selected={selectedCountries} onChange={changeCountries}/><label>{t('upTo')} <b>{maxLatency} ms</b><input type="range" min="200" max="5000" step="100" value={maxLatency} onChange={e => changeMaxLatency(Number(e.target.value))}/></label></div></div>
+        {apiError && <div className="error-banner" role="alert"><X size={17}/>{apiError}<button onClick={() => { setApiError(''); setLoading(true); void load() }}>{t('retry')}</button></div>}
+        <div className="proxy-table" role="table" aria-label={t('proxies')} aria-busy={loading}>
+          <div role="rowgroup"><div className="table-row table-head" role="row"><span role="columnheader">{t('address')}</span><span role="columnheader">{t('country')}</span><span role="columnheader">{t('protocol')}</span><span role="columnheader">{t('latency')}</span><span role="columnheader">{t('reliability')}</span><span role="columnheader">{t('active')}</span><span role="columnheader">{t('checked')}</span></div></div>
           <div role="rowgroup">
-            {loading ? <div role="row"><div className="empty" role="cell" aria-live="polite" aria-label="Состояние каталога прокси"><RefreshCw className="spin"/> Загружаем свежий каталог…</div></div> : proxies.length === 0 ? <div role="row"><div className="empty" role="cell" aria-live="polite" aria-label="Состояние каталога прокси"><Server/> По выбранным фильтрам живых прокси пока нет.</div></div> : proxies.map(proxy => <div className="table-row" role="row" key={proxy.url}><code role="cell">{proxy.host}<i>:</i>{proxy.port}</code><span role="cell" className="country-cell" title={proxy.countryCode ? countryName(proxy.countryCode) : 'Страна пока определяется'}>{proxy.countryCode ? <><i>{countryFlag(proxy.countryCode)}</i><b>{countryName(proxy.countryCode)}</b></> : <em>—</em>}</span><span role="cell" className={`badge ${proxy.protocol.toLowerCase()}`}>{label(proxy.protocol)}</span><span role="cell" className="latency"><i className={proxy.latencyMs < 800 ? 'fast' : proxy.latencyMs < 1800 ? 'medium' : 'slow'}/>{proxy.latencyMs} мс</span><span role="cell">{proxy.successRate}%</span><span role="cell" title={proxy.activeSince ? `С ${new Date(proxy.activeSince).toLocaleString('ru-RU')}` : undefined}>{formatActiveDuration(proxy.activeForSeconds)}</span><span role="cell">{timeAgo(proxy.lastCheckedAt)}</span></div>)}
+            {loading ? <div role="row"><div className="empty" role="cell" aria-live="polite"><RefreshCw className="spin"/> {t('loadingCatalog')}</div></div> : proxies.length === 0 ? <div role="row"><div className="empty" role="cell" aria-live="polite"><Server/> {t('emptyCatalog')}</div></div> : proxies.map(proxy => <div className="table-row" role="row" key={proxy.url}><code role="cell">{proxy.host}<i>:</i>{proxy.port}</code><span role="cell" className="country-cell" title={proxy.countryCode ? countryName(proxy.countryCode) : t('countryPending')}>{proxy.countryCode ? <><i>{countryFlag(proxy.countryCode)}</i><b>{countryName(proxy.countryCode)}</b></> : <em>—</em>}</span><span role="cell" className={`badge ${proxy.protocol.toLowerCase()}`}>{label(proxy.protocol)}</span><span role="cell" className="latency"><i className={proxy.latencyMs < 800 ? 'fast' : proxy.latencyMs < 1800 ? 'medium' : 'slow'}/>{proxy.latencyMs} ms</span><span role="cell">{proxy.successRate}%</span><span role="cell">{formatActiveDuration(proxy.activeForSeconds)}</span><span role="cell">{timeAgo(proxy.lastCheckedAt)}</span></div>)}
           </div>
         </div>
         {!loading && total > 0 && <ProxyPagination
@@ -612,31 +614,31 @@ export default function App() {
         }
       </section>
 
-      <section id="api" className="api-panel"><div><span className="kicker">ONE-CLICK EXPORT</span><h2>Забирайте как удобно</h2><p>Фильтруйте через API или скачивайте готовый список. Экспорт содержит только свежие Alive-прокси; большие наборы обходятся последовательными cursor-страницами без замедляющего OFFSET.</p><small className="geo-attribution">Геолокация IP: <a href="https://db-ip.com" target="_blank" rel="noreferrer">DB-IP</a></small></div><div className="export-grid">{['json','xml','txt','csv'].map(format => <a key={format} href={`${API}/api/v1/export/${format}?${exportQuery}`}><span>.{format}</span><ArrowDownToLine size={18}/></a>)}</div><div className="endpoint"><span>GET</span><code>/api/v1/proxies/seek?protocol=Socks5&amp;maxLatencyMs=1000&amp;country=DE</code></div></section>
+      <section id="api" className="api-panel"><div><span className="kicker">ONE-CLICK EXPORT</span><h2>{t('exportTitle')}</h2><p>{t('exportText')}</p><small className="geo-attribution">IP geolocation: <a href="https://db-ip.com" target="_blank" rel="noreferrer">DB-IP</a></small></div><div className="export-grid">{['json','xml','txt','csv'].map(format => <a key={format} href={`${API}/api/v1/export/${format}?${exportQuery}`}><span>.{format}</span><ArrowDownToLine size={18}/></a>)}</div><div className="endpoint"><span>GET</span><code>/api/v1/proxies/seek?protocol=Socks5&amp;maxLatencyMs=1000&amp;country=DE</code></div></section>
     </main>
 
-    <footer><div className="brand"><span className="brand-mark"><Network size={18}/></span><span>Proxy<span>Harbor</span></span></div><p>Используйте публичные прокси ответственно и в рамках закона.</p><span>v{APP_VERSION} · © {new Date().getFullYear()}</span></footer></>}
+    <footer><div className="brand"><span className="brand-mark"><Network size={18}/></span><span>Proxy<span>Harbor</span></span></div><p>{t('responsible')}</p><span>v{APP_VERSION} · © {new Date().getFullYear()}</span></footer></>}
 
     {adminOpen && <main className="admin-workspace">
       <aside className="admin-sidebar" aria-label="Навигация по панели управления">
         <a className="brand admin-brand" href="/"><span className="brand-mark"><Network size={20}/></span><span>Proxy<span>Harbor</span></span></a>
-        <nav className="admin-nav-group" aria-label="Разделы админ-панели"><span>Управление</span>
-          <a className={adminSection === 'overview' ? 'active' : ''} aria-current={adminSection === 'overview' ? 'page' : undefined} href="/admin"><LayoutDashboard/>Обзор</a>
-          <a className={adminSection === 'operations' ? 'active' : ''} aria-current={adminSection === 'operations' ? 'page' : undefined} href="/admin/operations"><Workflow/>Операции</a>
-          <a className={adminSection === 'proxies' ? 'active' : ''} aria-current={adminSection === 'proxies' ? 'page' : undefined} href="/admin/proxies"><Wifi/>Прокси <b>{diagnostics?.validationQueue?.total || '—'}</b></a>
-          <a className={adminSection === 'sources' ? 'active' : ''} aria-current={adminSection === 'sources' ? 'page' : undefined} href="/admin/sources"><Server/>Источники <b>{sourceTotal || '—'}</b></a>
-          <a className={adminSection === 'backups' ? 'active' : ''} aria-current={adminSection === 'backups' ? 'page' : undefined} href="/admin/backups"><HardDriveDownload/>Резервные копии</a>
-          <a className={adminSection === 'users' ? 'active' : ''} aria-current={adminSection === 'users' ? 'page' : undefined} href="/admin/users"><Users/>Пользователи</a>
-          <a className={adminSection === 'payments' ? 'active' : ''} aria-current={adminSection === 'payments' ? 'page' : undefined} href="/admin/payments"><CreditCard/>Оплата</a>
-          <a className={adminSection === 'telegram' ? 'active' : ''} aria-current={adminSection === 'telegram' ? 'page' : undefined} href="/admin/telegram"><Bot/>Telegram-бот</a>
-          <a className={adminSection === 'subscriptions' ? 'active' : ''} aria-current={adminSection === 'subscriptions' ? 'page' : undefined} href="/admin/subscriptions"><CalendarClock/>Подписки</a>
-          <a className={adminSection === 'access' ? 'active' : ''} aria-current={adminSection === 'access' ? 'page' : undefined} href="/admin/access"><ShieldOff/>Доступ и IP</a>
+        <nav className="admin-nav-group" aria-label="Разделы админ-панели"><span>{t('management')}</span>
+          <a className={adminSection === 'overview' ? 'active' : ''} aria-current={adminSection === 'overview' ? 'page' : undefined} href="/admin"><LayoutDashboard/>{t('overview')}</a>
+          <a className={adminSection === 'operations' ? 'active' : ''} aria-current={adminSection === 'operations' ? 'page' : undefined} href="/admin/operations"><Workflow/>{t('operations')}</a>
+          <a className={adminSection === 'proxies' ? 'active' : ''} aria-current={adminSection === 'proxies' ? 'page' : undefined} href="/admin/proxies"><Wifi/>{t('proxies')} <b>{diagnostics?.validationQueue?.total || '—'}</b></a>
+          <a className={adminSection === 'sources' ? 'active' : ''} aria-current={adminSection === 'sources' ? 'page' : undefined} href="/admin/sources"><Server/>{t('sources')} <b>{sourceTotal || '—'}</b></a>
+          <a className={adminSection === 'backups' ? 'active' : ''} aria-current={adminSection === 'backups' ? 'page' : undefined} href="/admin/backups"><HardDriveDownload/>{t('backups')}</a>
+          <a className={adminSection === 'users' ? 'active' : ''} aria-current={adminSection === 'users' ? 'page' : undefined} href="/admin/users"><Users/>{t('users')}</a>
+          <a className={adminSection === 'payments' ? 'active' : ''} aria-current={adminSection === 'payments' ? 'page' : undefined} href="/admin/payments"><CreditCard/>{t('payments')}</a>
+          <a className={adminSection === 'telegram' ? 'active' : ''} aria-current={adminSection === 'telegram' ? 'page' : undefined} href="/admin/telegram"><Bot/>{t('telegramBot')}</a>
+          <a className={adminSection === 'subscriptions' ? 'active' : ''} aria-current={adminSection === 'subscriptions' ? 'page' : undefined} href="/admin/subscriptions"><CalendarClock/>{t('subscriptions')}</a>
+          <a className={adminSection === 'access' ? 'active' : ''} aria-current={adminSection === 'access' ? 'page' : undefined} href="/admin/access"><ShieldOff/>{t('accessIp')}</a>
         </nav>
-        <div className="admin-sidebar-foot"><a href="/account"><User/>Профиль</a><a href="/"><ArrowRight/>На главную</a><button onClick={logoutAdmin}><LogOut/>Выйти</button></div>
+        <div className="admin-sidebar-foot"><LanguageSwitcher/><a href="/account"><User/>{t('profile')}</a><a href="/"><ArrowRight/>{t('home')}</a><button onClick={logoutAdmin}><LogOut/>{t('logout')}</button></div>
       </aside>
 
       <section className="admin-content">
-        <header className="admin-content-header"><div><span className="kicker">ADMIN CONSOLE</span><strong>Панель управления</strong></div><div className="admin-session"><span/><div><b>Администратор</b><small>Защищённая сессия</small></div></div></header>
+        <header className="admin-content-header"><div><span className="kicker">ADMIN CONSOLE</span><strong>{t('panel')}</strong></div><div className="admin-session"><span/><div><b>{t('administrator')}</b><small>{t('secureSession')}</small></div></div></header>
         {adminError && <div className="admin-notice admin-page-notice" role="alert"><X size={16}/>{adminError}</div>}
         {adminLoading && !adminAuthenticated ? <div className="admin-initial-loading"><RefreshCw className="spin"/><span>Загружаем панель…</span></div> : <>
           {adminSection === 'overview' && <section className="admin-section" aria-labelledby="admin-overview-title">
@@ -726,6 +728,7 @@ function HistoryRow({status, title, detail, time}: {status?: string; title: stri
 
 /** Общая страница входа для администраторов и будущих клиентов. */
 function AccountLoginPage() {
+  const { t } = useI18n()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
@@ -754,72 +757,75 @@ function AccountLoginPage() {
   }
 
   return <main className="login-page">
-    <a className="brand" href="/"><span className="brand-mark"><Network size={20}/></span><span>Proxy<span>Harbor</span></span></a>
+    <a className="brand" href="/"><span className="brand-mark"><Network size={20}/></span><span>Proxy<span>Harbor</span></span></a><LanguageSwitcher compact/>
     <section className="login-card" aria-labelledby="login-title">
       <span className="kicker">ACCOUNT ACCESS</span>
-      <h1 id="login-title">Вход в ProxyHarbor</h1>
-      <p>Используйте логин или email. Одна защищённая сессия открывает личный кабинет в соответствии с вашими правами.</p>
+      <h1 id="login-title">{t('authLoginTitle')}</h1>
+      <p>{t('authLoginText')}</p>
       <form className="login-form" onSubmit={submit}>
-        <label htmlFor="account-identifier">Логин или email</label>
+        <label htmlFor="account-identifier">{t('loginOrEmail')}</label>
         <div className="login-field"><User size={18}/><input id="account-identifier" autoFocus required type="text" placeholder="login или name@example.com" autoComplete="username" autoCapitalize="none" spellCheck={false} minLength={3} maxLength={254} value={username} onChange={event => setUsername(event.target.value)}/></div>
-        <label htmlFor="admin-password">Пароль</label>
-        <div className="login-field"><LockKeyhole size={18}/><input id="admin-password" required type={showPassword ? 'text' : 'password'} placeholder="Пароль" autoComplete="current-password" maxLength={256} value={password} onChange={event => setPassword(event.target.value)}/><button className="password-toggle" type="button" aria-label={showPassword ? 'Скрыть пароль' : 'Показать пароль'} onClick={() => setShowPassword(value => !value)}>{showPassword ? <EyeOff/> : <Eye/>}</button></div>
-        <a className="forgot-link" href="/forgot-password">Забыли пароль?</a>
-        <button className="login-submit" type="submit" disabled={busy || !username || !password}>{busy ? 'Проверяем…' : 'Войти'}</button>
+        <label htmlFor="admin-password">{t('password')}</label>
+        <div className="login-field"><LockKeyhole size={18}/><input id="admin-password" required type={showPassword ? 'text' : 'password'} placeholder={t('password')} autoComplete="current-password" maxLength={256} value={password} onChange={event => setPassword(event.target.value)}/><button className="password-toggle" type="button" aria-label={showPassword ? 'Скрыть пароль' : 'Показать пароль'} onClick={() => setShowPassword(value => !value)}>{showPassword ? <EyeOff/> : <Eye/>}</button></div>
+        <a className="forgot-link" href="/forgot-password">{t('forgotPassword')}</a>
+        <button className="login-submit" type="submit" disabled={busy || !username || !password}>{busy ? t('signingIn') : t('signIn')}</button>
       </form>
       {error && <div className="admin-notice" role="alert"><X size={16}/>{error}</div>}
-      <div className="account-auth-footer"><span>Ещё нет аккаунта?</span><a href="/register">Зарегистрироваться</a></div>
-      <a className="back-link" href="/">← Вернуться на главную</a>
+      <div className="account-auth-footer"><span>{t('noAccount')}</span><a href="/register">{t('register')}</a></div>
+      <a className="back-link" href="/">← {t('home')}</a>
     </section>
   </main>
 }
 
 /** Самостоятельная регистрация создаёт только безопасную базовую роль User и free-подписку. */
 function RegisterPage() {
+  const { language, t } = useI18n()
   const [form, setForm] = useState({ username: '', email: '', displayName: '', password: '', confirm: '' })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const submit = async (event: React.FormEvent) => {
     event.preventDefault()
-    if (form.password !== form.confirm) { setError('Пароли не совпадают'); return }
+    if (form.password !== form.confirm) { setError(t('passwordsMismatch')); return }
     setBusy(true); setError('')
     try {
-      const response = await fetch(`${API}/api/v1/auth/register`, { method: 'POST', credentials: 'include', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(form) })
-      if (!response.ok) throw new Error(await responseMessage(response, 'Не удалось создать аккаунт'))
+      const response = await fetch(`${API}/api/v1/auth/register`, { method: 'POST', credentials: 'include', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({...form, preferredLanguage: language}) })
+      if (!response.ok) throw new Error(await responseMessage(response, t('accountCreateFailed')))
       window.location.assign('/account')
-    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Не удалось создать аккаунт'); setBusy(false) }
+    } catch (reason) { setError(reason instanceof Error ? reason.message : t('accountCreateFailed')); setBusy(false) }
   }
-  return <AuthLayout title="Создать аккаунт" kicker="FREE ACCOUNT" description="Бесплатный аккаунт уже готов к будущим тарифам и персональным лимитам.">
+  return <AuthLayout title={t('registerTitle')} kicker="FREE ACCOUNT" description={t('registerText')}>
     <form className="login-form registration-form" onSubmit={submit}>
-      <label htmlFor="register-name">Как к вам обращаться</label><div className="login-field"><User/><input id="register-name" maxLength={120} autoComplete="name" placeholder="Имя (необязательно)" value={form.displayName} onChange={event => setForm({...form, displayName: event.target.value})}/></div>
-      <label htmlFor="register-username">Логин</label><div className="login-field"><User/><input id="register-username" required minLength={3} maxLength={64} pattern="[A-Za-z0-9._-]+" autoComplete="username" placeholder="proxy.user" value={form.username} onChange={event => setForm({...form, username: event.target.value})}/></div>
+      <label htmlFor="register-name">{t('yourName')}</label><div className="login-field"><User/><input id="register-name" maxLength={120} autoComplete="name" placeholder={t('optionalName')} value={form.displayName} onChange={event => setForm({...form, displayName: event.target.value})}/></div>
+      <label htmlFor="register-username">{t('username')}</label><div className="login-field"><User/><input id="register-username" required minLength={3} maxLength={64} pattern="[A-Za-z0-9._-]+" autoComplete="username" placeholder="proxy.user" value={form.username} onChange={event => setForm({...form, username: event.target.value})}/></div>
       <label htmlFor="register-email">Email</label><div className="login-field"><Mail/><input id="register-email" required type="email" maxLength={254} autoComplete="email" placeholder="name@example.com" value={form.email} onChange={event => setForm({...form, email: event.target.value})}/></div>
-      <label htmlFor="register-password">Пароль</label><div className="login-field"><LockKeyhole/><input id="register-password" required minLength={12} maxLength={256} type="password" autoComplete="new-password" placeholder="Не менее 12 символов" value={form.password} onChange={event => setForm({...form, password: event.target.value})}/></div>
-      <label htmlFor="register-confirm">Повторите пароль</label><div className="login-field"><ShieldCheck/><input id="register-confirm" required type="password" autoComplete="new-password" placeholder="Повторите пароль" value={form.confirm} onChange={event => setForm({...form, confirm: event.target.value})}/></div>
-      <button className="login-submit" disabled={busy}>{busy ? 'Создаём…' : 'Создать аккаунт'}</button>
-    </form>{error && <div className="admin-notice" role="alert"><X/>{error}</div>}<a className="back-link" href="/login">← Уже есть аккаунт</a>
+      <label htmlFor="register-password">{t('password')}</label><div className="login-field"><LockKeyhole/><input id="register-password" required minLength={12} maxLength={256} type="password" autoComplete="new-password" placeholder={t('passwordHint')} value={form.password} onChange={event => setForm({...form, password: event.target.value})}/></div>
+      <label htmlFor="register-confirm">{t('repeatPassword')}</label><div className="login-field"><ShieldCheck/><input id="register-confirm" required type="password" autoComplete="new-password" placeholder={t('repeatPassword')} value={form.confirm} onChange={event => setForm({...form, confirm: event.target.value})}/></div>
+      <button className="login-submit" disabled={busy}>{busy ? t('creating') : t('createAccount')}</button>
+    </form>{error && <div className="admin-notice" role="alert"><X/>{error}</div>}<a className="back-link" href="/login">← {t('alreadyAccount')}</a>
   </AuthLayout>
 }
 
 /** Запрос восстановления всегда показывает нейтральный результат без раскрытия аккаунта. */
 function ForgotPasswordPage() {
+  const { t } = useI18n()
   const [email, setEmail] = useState('')
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
   const submit = async (event: React.FormEvent) => {
     event.preventDefault(); setError(''); setMessage('')
     const response = await fetch(`${API}/api/v1/auth/forgot-password`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({email}) })
-    if (!response.ok) { setError(await responseMessage(response, 'Не удалось отправить письмо')); return }
-    setMessage('Если аккаунт существует, ссылка уже отправлена на указанную почту.')
+    if (!response.ok) { setError(await responseMessage(response, t('emailSendFailed'))); return }
+    setMessage(t('recoverySent'))
   }
-  return <AuthLayout title="Восстановить пароль" kicker="ACCOUNT RECOVERY" description="Укажите email аккаунта — мы отправим одноразовую защищённую ссылку.">
-    <form className="login-form" onSubmit={submit}><label htmlFor="recovery-email">Email</label><div className="login-field"><Mail/><input id="recovery-email" required type="email" autoComplete="email" placeholder="name@example.com" value={email} onChange={event => setEmail(event.target.value)}/></div><button className="login-submit">Отправить ссылку</button></form>
-    {message && <div className="account-success" role="status"><Check/>{message}</div>}{error && <div className="admin-notice" role="alert"><X/>{error}</div>}<a className="back-link" href="/login">← Вернуться ко входу</a>
+  return <AuthLayout title={t('recoveryTitle')} kicker="ACCOUNT RECOVERY" description={t('recoveryText')}>
+    <form className="login-form" onSubmit={submit}><label htmlFor="recovery-email">Email</label><div className="login-field"><Mail/><input id="recovery-email" required type="email" autoComplete="email" placeholder="name@example.com" value={email} onChange={event => setEmail(event.target.value)}/></div><button className="login-submit">{t('sendLink')}</button></form>
+    {message && <div className="account-success" role="status"><Check/>{message}</div>}{error && <div className="admin-notice" role="alert"><X/>{error}</div>}<a className="back-link" href="/login">← {t('backToLogin')}</a>
   </AuthLayout>
 }
 
 /** Применяет email и token только из ссылки, а новый пароль вводится дважды. */
 function ResetPasswordPage() {
+  const { t } = useI18n()
   const query = new URLSearchParams(window.location.search)
   const email = query.get('email') ?? ''
   const token = query.get('token') ?? ''
@@ -829,25 +835,26 @@ function ResetPasswordPage() {
   const [error, setError] = useState('')
   const submit = async (event: React.FormEvent) => {
     event.preventDefault(); setError('')
-    if (!email || !token) { setError('Ссылка восстановления неполная'); return }
-    if (password !== confirm) { setError('Пароли не совпадают'); return }
+    if (!email || !token) { setError(t('linkIncomplete')); return }
+    if (password !== confirm) { setError(t('passwordsMismatch')); return }
     const response = await fetch(`${API}/api/v1/auth/reset-password`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({email, token, newPassword: password}) })
-    if (!response.ok) { setError(await responseMessage(response, 'Ссылка недействительна или устарела')); return }
-    setMessage('Пароль изменён. Теперь можно войти в аккаунт.')
+    if (!response.ok) { setError(await responseMessage(response, t('linkInvalid'))); return }
+    setMessage(t('passwordChanged'))
   }
-  return <AuthLayout title="Новый пароль" kicker="SECURE RESET" description={email ? `Восстановление для ${email}` : 'Проверьте полноту ссылки из письма.'}>
-    {!message && <form className="login-form" onSubmit={submit}><label htmlFor="reset-password">Новый пароль</label><div className="login-field"><LockKeyhole/><input id="reset-password" required minLength={12} type="password" autoComplete="new-password" value={password} onChange={event => setPassword(event.target.value)}/></div><label htmlFor="reset-confirm">Повторите пароль</label><div className="login-field"><ShieldCheck/><input id="reset-confirm" required type="password" autoComplete="new-password" value={confirm} onChange={event => setConfirm(event.target.value)}/></div><button className="login-submit">Изменить пароль</button></form>}
-    {message && <div className="account-success"><Check/>{message}</div>}{error && <div className="admin-notice" role="alert"><X/>{error}</div>}<a className="back-link" href="/login">← Перейти ко входу</a>
+  return <AuthLayout title={t('newPassword')} kicker="SECURE RESET" description={email ? t('recoveryFor', {email}) : t('incompleteRecoveryLink')}>
+    {!message && <form className="login-form" onSubmit={submit}><label htmlFor="reset-password">{t('newPassword')}</label><div className="login-field"><LockKeyhole/><input id="reset-password" required minLength={12} type="password" autoComplete="new-password" value={password} onChange={event => setPassword(event.target.value)}/></div><label htmlFor="reset-confirm">{t('repeatPassword')}</label><div className="login-field"><ShieldCheck/><input id="reset-confirm" required type="password" autoComplete="new-password" value={confirm} onChange={event => setConfirm(event.target.value)}/></div><button className="login-submit">{t('changePassword')}</button></form>}
+    {message && <div className="account-success"><Check/>{message}</div>}{error && <div className="admin-notice" role="alert"><X/>{error}</div>}<a className="back-link" href="/login">← {t('goToLogin')}</a>
   </AuthLayout>
 }
 
 /** Единая оболочка auth-экранов сохраняет визуальный ритм и семантику заголовков. */
 function AuthLayout({title, kicker, description, children}: {title: string; kicker: string; description: string; children: React.ReactNode}) {
-  return <main className="login-page"><a className="brand" href="/"><span className="brand-mark"><Network size={20}/></span><span>Proxy<span>Harbor</span></span></a><section className="login-card account-auth-card" aria-labelledby="auth-title"><span className="kicker">{kicker}</span><h1 id="auth-title">{title}</h1><p>{description}</p>{children}</section></main>
+  return <main className="login-page"><a className="brand" href="/"><span className="brand-mark"><Network size={20}/></span><span>Proxy<span>Harbor</span></span></a><LanguageSwitcher compact/><section className="login-card account-auth-card" aria-labelledby="auth-title"><span className="kicker">{kicker}</span><h1 id="auth-title">{title}</h1><p>{description}</p>{children}</section></main>
 }
 
 /** Личный кабинет работает для любой роли и не запрашивает административные API. */
 function AccountPage() {
+  const { language, setLanguage, t } = useI18n()
   const [profile, setProfile] = useState<AccountProfile | null>(null)
   const [displayName, setDisplayName] = useState('')
   const [passwords, setPasswords] = useState({currentPassword: '', newPassword: ''})
@@ -864,18 +871,18 @@ function AccountPage() {
     ])
     if (response.status === 401) { window.location.replace('/login'); return }
     if (!response.ok) { setError(await responseMessage(response, 'Профиль недоступен')); return }
-    const data = await response.json() as AccountProfile; setProfile(data); setDisplayName(data.displayName ?? '')
+    const data = await response.json() as AccountProfile; setProfile(data); setDisplayName(data.displayName ?? ''); setLanguage(data.preferredLanguage)
     if (catalogResponse.ok) setPayments(await catalogResponse.json() as PaymentCatalog)
     if (ordersResponse.ok) setOrders(await ordersResponse.json() as PaymentOrder[])
-  }, [])
+  }, [setLanguage])
   useEffect(() => { const initial = window.setTimeout(() => void loadProfile(), 0); return () => window.clearTimeout(initial) }, [loadProfile])
-  const saveProfile = async (event: React.FormEvent) => { event.preventDefault(); setError(''); const response = await fetch(`${API}/api/v1/account/profile`, {method:'PUT', credentials:'include', headers:{'Content-Type':'application/json'}, body:JSON.stringify({displayName})}); if (!response.ok) {setError(await responseMessage(response,'Не удалось сохранить профиль'));return} setNotice('Профиль сохранён'); await loadProfile() }
+  const saveProfile = async (event: React.FormEvent) => { event.preventDefault(); setError(''); const response = await fetch(`${API}/api/v1/account/profile`, {method:'PUT', credentials:'include', headers:{'Content-Type':'application/json'}, body:JSON.stringify({displayName,preferredLanguage:language})}); if (!response.ok) {setError(await responseMessage(response,'Не удалось сохранить профиль'));return} setNotice(t('profileSaved')); await loadProfile() }
   const changePassword = async (event: React.FormEvent) => { event.preventDefault(); setError(''); const response = await fetch(`${API}/api/v1/account/change-password`, {method:'POST',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify(passwords)}); if(!response.ok){setError(await responseMessage(response,'Не удалось изменить пароль'));return} setPasswords({currentPassword:'',newPassword:''});setNotice('Пароль изменён. Другие сессии будут отозваны.') }
   const logout = async () => { await fetch(`${API}/api/v1/auth/logout`, {method:'POST',credentials:'include'}); window.location.replace('/login') }
   const checkout = async (productCode:string, provider:string) => { const key=`${productCode}:${provider}`;setCheckoutBusy(key);setError('');const response=await fetch(`${API}/api/v1/payments/checkout`,{method:'POST',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({productCode,provider})});if(!response.ok){setError(await responseMessage(response,'Не удалось открыть оплату'));setCheckoutBusy('');return}const result=await response.json() as {checkoutUrl:string};window.location.assign(result.checkoutUrl) }
-  return <main className="account-page"><header><a className="brand" href="/"><span className="brand-mark"><Network/></span><span>Proxy<span>Harbor</span></span></a><div><a href="/">На главную</a>{profile?.roles.includes('Administrator') && <a href="/admin">Админ-панель</a>}<button onClick={logout}><LogOut/>Выйти</button></div></header><section className="account-container"><div className="admin-section-heading"><div><span className="kicker">PERSONAL ACCOUNT</span><h1>Профиль</h1><p>Учётные данные, безопасность и параметры подписки.</p></div></div>{error && <div className="admin-notice"><X/>{error}</div>}{notice && <div className="account-success"><Check/>{notice}</div>}
+  return <main className="account-page"><header><a className="brand" href="/"><span className="brand-mark"><Network/></span><span>Proxy<span>Harbor</span></span></a><div><LanguageSwitcher compact/><a href="/">{t('home')}</a>{profile?.roles.includes('Administrator') && <a href="/admin">{t('admin')}</a>}<button onClick={logout}><LogOut/>{t('logout')}</button></div></header><section className="account-container"><div className="admin-section-heading"><div><span className="kicker">PERSONAL ACCOUNT</span><h1>{t('profile')}</h1><p>{t('profileText')}</p></div></div>{error && <div className="admin-notice"><X/>{error}</div>}{notice && <div className="account-success"><Check/>{notice}</div>}
     <div className="account-profile-grid"><section className="admin-card profile-card"><div className="profile-avatar"><User/></div><h2>{profile?.displayName || profile?.userName || 'Загрузка…'}</h2><p>{profile?.email}</p><div className="role-badges">{profile?.roles.map(role => <span key={role}>{role}</span>)}</div></section><section className="admin-card subscription-card"><span className="kicker">ПОДПИСКА</span><CreditCard/><strong>{planLabel(profile?.subscription?.plan)}</strong><p>{profile?.subscription ? `Статус: ${profile.subscription.status}` : 'Данные загружаются'}</p></section></div>
-    <div className="account-forms"><section className="admin-card"><h2>Данные профиля</h2><form onSubmit={saveProfile}><label htmlFor="profile-login">Логин</label><input id="profile-login" disabled value={profile?.userName ?? ''}/><label htmlFor="profile-email">Email</label><input id="profile-email" disabled value={profile?.email ?? ''}/><label htmlFor="profile-name">Отображаемое имя</label><input id="profile-name" maxLength={120} value={displayName} onChange={event=>setDisplayName(event.target.value)}/><button>Сохранить</button></form></section><section className="admin-card"><h2>Сменить пароль</h2><form onSubmit={changePassword}><label htmlFor="current-password">Текущий пароль</label><input id="current-password" required type="password" autoComplete="current-password" value={passwords.currentPassword} onChange={event=>setPasswords({...passwords,currentPassword:event.target.value})}/><label htmlFor="new-password">Новый пароль</label><input id="new-password" required minLength={12} type="password" autoComplete="new-password" value={passwords.newPassword} onChange={event=>setPasswords({...passwords,newPassword:event.target.value})}/><button>Изменить пароль</button></form></section></div>
+    <div className="account-forms"><section className="admin-card"><h2>{t('profile')}</h2><form onSubmit={saveProfile}><label htmlFor="profile-login">Login</label><input id="profile-login" disabled value={profile?.userName ?? ''}/><label htmlFor="profile-email">Email</label><input id="profile-email" disabled value={profile?.email ?? ''}/><label htmlFor="profile-name">{t('displayName')}</label><input id="profile-name" maxLength={120} value={displayName} onChange={event=>setDisplayName(event.target.value)}/><label>{t('preferredLanguage')}<LanguageSwitcher/></label><small>{t('languageHint')}</small><button>{t('save')}</button></form></section><section className="admin-card"><h2>Security</h2><form onSubmit={changePassword}><label htmlFor="current-password">{t('password')}</label><input id="current-password" required type="password" autoComplete="current-password" value={passwords.currentPassword} onChange={event=>setPasswords({...passwords,currentPassword:event.target.value})}/><label htmlFor="new-password">New password</label><input id="new-password" required minLength={12} type="password" autoComplete="new-password" value={passwords.newPassword} onChange={event=>setPasswords({...passwords,newPassword:event.target.value})}/><button>Change password</button></form></section></div>
     <section className="admin-card billing-card"><span className="kicker">BILLING</span><h2>Тарифы и оплата</h2><p>Оплата проходит на защищённой странице выбранного сервиса. ProxyHarbor не получает и не хранит реквизиты карты.</p>
       <div className="payment-products">{payments?.products.map(product=><article key={product.code}><div><strong>{product.name}</strong><p>{product.description}</p><b>{money(product.amountMinor,product.currency)}</b></div><div className="payment-providers">{payments.providers.map(provider=><button key={provider.code} disabled={!provider.available||!!checkoutBusy} title={provider.available?'Перейти к защищённой оплате':'Провайдер ещё не подключён'} onClick={()=>void checkout(product.code,provider.code)}>{checkoutBusy===`${product.code}:${provider.code}`?'Открываем…':provider.name}</button>)}</div></article>)}</div>
       {!payments?.enabled&&<div className="billing-pending"><Clock3/>Приём платежей подготовлен, но merchant-аккаунты ещё не подключены.</div>}
@@ -1238,15 +1245,16 @@ function AdminSiteVisitorsPage(){
 
 /** Пагинация повторяет серверный UX RMS: размер, страницы, быстрый переход и итог. */
 function ProxyPagination({page, pageSize, total, totalPages, onPageChange, onPageSizeChange}: {page: number; pageSize: number; total: number; totalPages: number; onPageChange: (page: number) => void; onPageSizeChange: (size: number) => void}) {
+  const { t } = useI18n()
   const [jump, setJump] = useState('')
   const pages = paginationWindow(page, totalPages)
   const go = (next: number) => onPageChange(Math.min(totalPages, Math.max(1, next)))
   const showQuickJump = totalPages > 7
-  return <nav className={`pagination${showQuickJump ? '' : ' pagination-compact'}`} aria-label="Пагинация каталога">
-    <div className="page-sizes"><span>Показывать:</span>{[10, 25, 50, 100].map(size => <button key={size} className={pageSize === size ? 'active' : ''} aria-pressed={pageSize === size} onClick={() => onPageSizeChange(size)}>{size}</button>)}</div>
-    <div className="page-controls"><button aria-label="Предыдущая страница" disabled={page === 1} onClick={() => go(page - 1)}>←</button>{pages.map((item, index) => item === '…' ? <span key={`ellipsis-${index}`}>…</span> : <button key={item} className={item === page ? 'active' : ''} aria-current={item === page ? 'page' : undefined} onClick={() => go(item)}>{item}</button>)}<button aria-label="Следующая страница" disabled={page === totalPages} onClick={() => go(page + 1)}>→</button></div>
-    {showQuickJump && <form className="page-jump" aria-label="Быстрый переход по страницам" onSubmit={event => { event.preventDefault(); const value = Number(jump); if (Number.isInteger(value) && value > 0) { go(value); setJump('') } }}><input aria-label="Номер страницы" inputMode="numeric" min={1} max={totalPages} type="number" placeholder="Стр." value={jump} onChange={event => setJump(event.target.value)}/><span aria-hidden="true">/ {totalPages}</span><button type="submit" aria-label="Перейти на страницу"><ArrowRight size={14}/></button></form>}
-    <p>Страница {page} из {totalPages} · Найдено: {formatNumber(total)}</p>
+  return <nav className={`pagination${showQuickJump ? '' : ' pagination-compact'}`} aria-label={t('quickJump')}>
+    <div className="page-sizes"><span>{t('show')}</span>{[10, 25, 50, 100].map(size => <button key={size} className={pageSize === size ? 'active' : ''} aria-pressed={pageSize === size} onClick={() => onPageSizeChange(size)}>{size}</button>)}</div>
+    <div className="page-controls"><button aria-label={t('previousPage')} disabled={page === 1} onClick={() => go(page - 1)}>←</button>{pages.map((item, index) => item === '…' ? <span key={`ellipsis-${index}`}>…</span> : <button key={item} className={item === page ? 'active' : ''} aria-current={item === page ? 'page' : undefined} onClick={() => go(item)}>{item}</button>)}<button aria-label={t('nextPage')} disabled={page === totalPages} onClick={() => go(page + 1)}>→</button></div>
+    {showQuickJump && <form className="page-jump" aria-label={t('quickJump')} onSubmit={event => { event.preventDefault(); const value = Number(jump); if (Number.isInteger(value) && value > 0) { go(value); setJump('') } }}><input aria-label={t('pageNumber')} inputMode="numeric" min={1} max={totalPages} type="number" placeholder="Стр." value={jump} onChange={event => setJump(event.target.value)}/><span aria-hidden="true">/ {totalPages}</span><button type="submit" aria-label={t('goToPage')}><ArrowRight size={14}/></button></form>}
+    <p>{t('page',{page,pages:totalPages,total:formatNumber(total)})}</p>
   </nav>
 }
 
@@ -1258,13 +1266,13 @@ function paginationWindow(page: number, totalPages: number): (number | '…')[] 
 }
 
 function Metric({icon, label, value, note}: {icon: React.ReactNode; label: string; value: string; note: string}) { return <article className="metric"><div className="metric-icon">{icon}</div><div><span>{label}</span><strong>{value}</strong><small>{note}</small></div></article> }
-function formatNumber(value?: number) { return value === undefined ? '—' : value.toLocaleString('ru-RU') }
+function formatNumber(value?: number) { return value === undefined ? '—' : value.toLocaleString(currentLocale()) }
 function formatBytes(value?: number) {
   if (value === undefined) return '—'
   if (value < 1024) return `${value} Б`
-  if (value < 1024 ** 2) return `${(value / 1024).toLocaleString('ru-RU', { maximumFractionDigits: 1 })} КБ`
-  if (value < 1024 ** 3) return `${(value / 1024 ** 2).toLocaleString('ru-RU', { maximumFractionDigits: 1 })} МБ`
-  return `${(value / 1024 ** 3).toLocaleString('ru-RU', { maximumFractionDigits: 1 })} ГБ`
+  if (value < 1024 ** 2) return `${(value / 1024).toLocaleString(currentLocale(), { maximumFractionDigits: 1 })} KB`
+  if (value < 1024 ** 3) return `${(value / 1024 ** 2).toLocaleString(currentLocale(), { maximumFractionDigits: 1 })} MB`
+  return `${(value / 1024 ** 3).toLocaleString(currentLocale(), { maximumFractionDigits: 1 })} GB`
 }
 function formatRate(value?: number) { return value === undefined || value <= 0 ? 'скорость неизвестна' : `${value.toLocaleString('ru-RU', { maximumFractionDigits: 1 })}/с` }
 function formatDuration(value?: number) { if (value === undefined || value <= 0) return '—'; if (value < 60) return `${Math.ceil(value)} сек`; const minutes = Math.ceil(value / 60); if (minutes < 60) return `${minutes} мин`; return `${Math.floor(minutes / 60)} ч ${minutes % 60} мин` }
@@ -1282,16 +1290,15 @@ function catalogStatusClass(catalog?: SourceCatalogSnapshot) { return !catalog ?
 function statusLabel(status?: string) { return status === 'completed' ? 'успешно' : status === 'failed' ? 'ошибка' : status === 'running' ? 'выполняется' : 'нет данных' }
 function backupDelivery(run: BackupRun) { return run.sentToTelegram ? 'доставлен в Telegram' : run.telegramConfigured ? 'Telegram не доставлен' : 'только локально' }
 function planLabel(plan?: string) { return plan === 'unlimited' ? 'Unlimited' : plan === 'pro' ? 'Pro' : 'Free' }
-function money(minor:number,currency:string){return new Intl.NumberFormat('ru-RU',{style:'currency',currency}).format(minor/100)}
+function money(minor:number,currency:string){return new Intl.NumberFormat(currentLocale(),{style:'currency',currency}).format(minor/100)}
 function providerLabel(provider:string){return ({yookassa:'ЮKassa',yoomoney:'ЮMoney',cloudpayments:'CloudPayments',robokassa:'Robokassa',tbank:'Т-Банк',stripe:'Stripe',cryptomus:'Cryptomus',nowpayments:'NOWPayments'} as Record<string,string>)[provider]??provider}
 function paymentStatusLabel(status:string){return ({pending:'Ожидает оплаты',paid:'Оплачен',failed:'Ошибка',canceled:'Отменён',refunded:'Возвращён'} as Record<string,string>)[status]??status}
 function subscriptionStatusLabel(status:string){return ({active:'Активна',trialing:'Пробная',past_due:'Просрочена',canceled:'Отменена',expired:'Истекла',suspended:'Приостановлена'} as Record<string,string>)[status]??status}
 function adminProxyStatusLabel(status:AdminProxyStatus){return ({Alive:'Рабочий',Pending:'Ожидает',Dead:'Нерабочий'} as Record<AdminProxyStatus,string>)[status]}
 function label(protocol: Protocol) { return ({Http: 'HTTP', Https: 'HTTPS', Socks4: 'SOCKS4', Socks5: 'SOCKS5'})[protocol] }
-const regionNames = new Intl.DisplayNames(['ru'], { type: 'region' })
-function countryName(code:string){return regionNames.of(code.toUpperCase())??code.toUpperCase()}
+function countryName(code:string){return new Intl.DisplayNames([currentLocale()], { type: 'region' }).of(code.toUpperCase())??code.toUpperCase()}
 function countryFlag(code:string){return String.fromCodePoint(...code.toUpperCase().split('').map(character=>127397+character.charCodeAt(0)))}
-function timeAgo(value: string) { const sec = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 1000)); if (sec < 10) return 'только что'; if (sec < 60) return `${sec} сек назад`; if (sec < 3600) return `${Math.floor(sec / 60)} мин назад`; return `${Math.floor(sec / 3600)} ч назад` }
+function timeAgo(value: string) { const sec = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 1000)); const formatter=new Intl.RelativeTimeFormat(currentLocale(),{numeric:'auto'}); if(sec<60)return formatter.format(-sec,'second');if(sec<3600)return formatter.format(-Math.floor(sec/60),'minute');if(sec<86400)return formatter.format(-Math.floor(sec/3600),'hour');return formatter.format(-Math.floor(sec/86400),'day') }
 function timeUntil(value: string) { const sec = Math.max(0, Math.ceil((new Date(value).getTime() - Date.now()) / 1000)); if (sec < 60) return `через ${sec} сек`; if (sec < 3600) return `через ${Math.ceil(sec / 60)} мин`; return `через ${Math.ceil(sec / 3600)} ч` }
 
 async function responseMessage(response: Response, fallback: string) {

@@ -93,7 +93,7 @@ public sealed class AdminUsersController(
             subscriptions.TryGetValue(user.Id, out var subscription);
             rolesByUser.TryGetValue(user.Id, out var roles);
             result.Add(new AdminUserResponse(user.Id, user.UserName ?? string.Empty,
-                user.Email ?? string.Empty, user.DisplayName, user.IsActive, user.CreatedAt,
+                user.Email ?? string.Empty, user.DisplayName, user.PreferredLanguage, user.IsActive, user.CreatedAt,
                 user.LastLoginAt, roles ?? [], subscription is null ? null :
                     new AdminUserSubscriptionResponse(subscription.Plan, subscription.Status,
                         subscription.StartedAt, subscription.ExpiresAt)));
@@ -168,7 +168,7 @@ public sealed class AdminUsersController(
 
 /// <summary>Безопасная строка административного реестра пользователей.</summary>
 public sealed record AdminUserResponse(Guid Id, string UserName, string Email, string? DisplayName,
-    bool IsActive, DateTimeOffset CreatedAt, DateTimeOffset? LastLoginAt, string[] Roles,
+    string PreferredLanguage, bool IsActive, DateTimeOffset CreatedAt, DateTimeOffset? LastLoginAt, string[] Roles,
     AdminUserSubscriptionResponse? Subscription);
 
 /// <summary>Коммерческий доступ пользователя без платёжных реквизитов.</summary>

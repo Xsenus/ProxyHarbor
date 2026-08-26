@@ -217,7 +217,8 @@ public sealed class TelegramUpdateProcessor(
             case "/buy": await SendProductsAsync(chat, options, token); break;
             case "/proxies": await RequestProxyFileAsync(chat, options, token); break;
             case "/notifications": await ToggleNotificationsAsync(chat, token); break;
-            case "/support": await ReplyAsync(chat, options.SupportText, $"support:{chat.Id:N}:{Guid.NewGuid():N}", token); break;
+            case "/language": await SendLanguageMenuAsync(chat, token); break;
+            case "/support": await ReplyAsync(chat, TelegramLocalization.Get("supportForwarded", Language(chat), ("support", options.SupportText)), $"support:{chat.Id:N}:{Guid.NewGuid():N}", token); break;
             case "/help": await SendHelpAsync(chat, token); break;
             default: await AnswerFaqAsync(chat, text, options, token); break;
         }
@@ -229,7 +230,7 @@ public sealed class TelegramUpdateProcessor(
         if (!callback.TryGetProperty("from", out var from) || !callback.TryGetProperty("message", out var message) ||
             !message.TryGetProperty("chat", out var chatElement))
         {
-            await api.AnswerCallbackAsync(options.BotToken, queryId, "Команда устарела.", token);
+            await api.AnswerCallbackAsync(options.BotToken, queryId, "Command expired.", token);
             return;
         }
         var chat = await EnsureChatAsync(chatElement, from, token);
@@ -240,6 +241,8 @@ public sealed class TelegramUpdateProcessor(
         else if (data == "products") await SendProductsAsync(chat, options, token);
         else if (data == "proxies") await RequestProxyFileAsync(chat, options, token);
         else if (data == "notifications") await ToggleNotificationsAsync(chat, token);
+        else if (data == "language") await SendLanguageMenuAsync(chat, token);
+        else if (data.StartsWith("language:", StringComparison.Ordinal)) await ChangeLanguageAsync(chat, data[9..], token);
         else await SendMainMenuAsync(chat, token);
         await api.AnswerCallbackAsync(options.BotToken, queryId, null, token);
     }
@@ -309,9 +312,8 @@ public sealed class TelegramUpdateProcessor(
             await users.AddToRoleAsync(account, UserRoles.Subscriber);
         await db.SaveChangesAsync(token);
         await transaction.CommitAsync(token);
-        await ReplyAsync(chat,
-            $"✅ Оплата подтверждена. Тариф <b>{WebUtility.HtmlEncode(order.Plan)}</b> действует до " +
-            $"<b>{subscription.ExpiresAt:dd.MM.yyyy HH:mm} UTC</b>. Файл доступен через /proxies.",
+        await ReplyAsync(chat, TelegramLocalization.Get("paymentConfirmed", Language(chat),
+                ("plan", WebUtility.HtmlEncode(order.Plan)), ("expires", $"{subscription.ExpiresAt:yyyy-MM-dd HH:mm} UTC")),
             $"paid:{order.Id:N}", token);
     }
 
@@ -323,7 +325,7 @@ public sealed class TelegramUpdateProcessor(
         if (!catalog.Enabled || !catalog.Products.TryGetValue(productCode, out var product) || !product.Enabled ||
             !TelegramStarsPricing.TryResolve(bot, productCode, product, out var stars))
         {
-            await ReplyAsync(chat, "Этот тариф сейчас недоступен для оплаты в Telegram.", $"unavailable:{Guid.NewGuid():N}", token);
+            await ReplyAsync(chat, TelegramLocalization.Get("productUnavailable", Language(chat)), $"unavailable:{Guid.NewGuid():N}", token);
             return;
         }
         var order = new PaymentOrder
@@ -351,7 +353,7 @@ public sealed class TelegramUpdateProcessor(
             .OrderBy(x => x.Value.DurationDays).ToArray();
         if (!catalog.Enabled || products.Length == 0)
         {
-            await ReplyAsync(chat, "Продажи через Telegram временно приостановлены.", $"products-empty:{Guid.NewGuid():N}", token);
+            await ReplyAsync(chat, TelegramLocalization.Get("productsEmpty", Language(chat)), $"products-empty:{Guid.NewGuid():N}", token);
             return;
         }
         var rows = products.Select(x => new[]
@@ -363,7 +365,7 @@ public sealed class TelegramUpdateProcessor(
             }
         }).ToArray();
         await queue.EnqueueTextAsync(chat,
-            "<b>Выберите подписку</b>\nЦена окончательная и списывается в Telegram Stars только после подтверждения.",
+            TelegramLocalization.Get("products", Language(chat)),
             $"products:{chat.Id:N}:{Guid.NewGuid():N}", replyMarkup: new { inline_keyboard = rows }, token: token);
     }
 
@@ -385,17 +387,17 @@ public sealed class TelegramUpdateProcessor(
             x.Status == TelegramOutboundStatuses.Sent, token);
         var active = subscription.Status == SubscriptionStatuses.Active &&
             (subscription.ExpiresAt is null || subscription.ExpiresAt > DateTimeOffset.UtcNow);
-        var expires = subscription.ExpiresAt is null ? "без срока" :
-            subscription.ExpiresAt.Value.ToString("dd.MM.yyyy HH:mm 'UTC'", CultureInfo.InvariantCulture);
+        var language = Language(chat);
+        var expires = subscription.ExpiresAt is null ? TelegramLocalization.Get("noExpiry", language) :
+            subscription.ExpiresAt.Value.ToString("yyyy-MM-dd HH:mm 'UTC'", CultureInfo.InvariantCulture);
         var paidStars = paidOrders.Sum(x => x.AmountMinor);
         var lastPayment = paidOrders.MaxBy(x => x.PaidAt)?.PaidAt?.ToString("dd.MM.yyyy", CultureInfo.InvariantCulture) ?? "—";
-        await queue.EnqueueTextAsync(chat,
-            $"<b>Личный кабинет</b>\nСтатус: {(active ? "✅ активна" : "⛔ нет активной подписки")}\n" +
-            $"Тариф: <b>{WebUtility.HtmlEncode(subscription.Plan)}</b>\nДействует до: <b>{expires}</b>\n" +
-            $"\n<b>Статистика</b>\nОплат через Stars: <b>{paidOrders.Length}</b> · всего <b>{paidStars} ⭐</b>\n" +
-            $"Последняя оплата: <b>{lastPayment}</b>\nПолучено файлов: <b>{deliveredFiles}</b>\n" +
-            $"Уведомления: {(chat.NotificationsEnabled ? "включены" : "выключены")}",
-            $"account:{chat.Id:N}:{Guid.NewGuid():N}", replyMarkup: MainKeyboard(), token: token);
+        await queue.EnqueueTextAsync(chat, TelegramLocalization.Get("account", language,
+                ("status", TelegramLocalization.Get(active ? "activeSubscription" : "inactiveSubscription", language)),
+                ("plan", WebUtility.HtmlEncode(subscription.Plan)), ("expires", expires),
+                ("payments", paidOrders.Length), ("stars", paidStars), ("last", lastPayment),
+                ("files", deliveredFiles), ("notifications", TelegramLocalization.Get(chat.NotificationsEnabled ? "enabled" : "disabled", language))),
+            $"account:{chat.Id:N}:{Guid.NewGuid():N}", replyMarkup: MainKeyboard(language), token: token);
     }
 
     private async Task RequestProxyFileAsync(TelegramChat chat, TelegramBotOptions options, CancellationToken token)
@@ -404,13 +406,13 @@ public sealed class TelegramUpdateProcessor(
         if (subscription.Status != SubscriptionStatuses.Active ||
             subscription.ExpiresAt is { } expires && expires <= DateTimeOffset.UtcNow)
         {
-            await queue.EnqueueTextAsync(chat, "Для выгрузки нужна активная подписка. Выберите тариф через /buy.",
-                $"proxy-denied:{chat.Id:N}:{Guid.NewGuid():N}", replyMarkup: BuyKeyboard(), token: token);
+            await queue.EnqueueTextAsync(chat, TelegramLocalization.Get("proxyDenied", Language(chat)),
+                $"proxy-denied:{chat.Id:N}:{Guid.NewGuid():N}", replyMarkup: BuyKeyboard(Language(chat)), token: token);
             return;
         }
         await queue.EnqueueProxyFileAsync(chat, options.ProxyFileMaxItems,
             $"proxy-file:{chat.Id:N}:{DateTimeOffset.UtcNow:yyyyMMddHHmmss}:{Guid.NewGuid():N}", token);
-        await ReplyAsync(chat, "Файл поставлен в очередь и придёт отдельным сообщением.",
+        await ReplyAsync(chat, TelegramLocalization.Get("proxyQueued", Language(chat)),
             $"proxy-queued:{Guid.NewGuid():N}", token);
     }
 
@@ -418,39 +420,38 @@ public sealed class TelegramUpdateProcessor(
     {
         chat.NotificationsEnabled = !chat.NotificationsEnabled;
         await db.SaveChangesAsync(token);
-        await ReplyAsync(chat, chat.NotificationsEnabled
-            ? "🔔 Уведомления о подписке и важных изменениях включены."
-            : "🔕 Информационные уведомления отключены. Чеки и ответы поддержки продолжат приходить.",
+        await ReplyAsync(chat, TelegramLocalization.Get(chat.NotificationsEnabled ? "notificationsOn" : "notificationsOff", Language(chat)),
             $"notifications:{chat.Id:N}:{Guid.NewGuid():N}", token);
     }
 
     private async Task SendMainMenuAsync(TelegramChat chat, CancellationToken token) =>
         await queue.EnqueueTextAsync(chat,
-            "<b>ProxyHarbor</b>\nПроверенные публичные прокси, покупка подписки и выгрузка файлов прямо в Telegram.",
-            $"start:{chat.Id:N}:{Guid.NewGuid():N}", replyMarkup: MainKeyboard(), token: token);
+            TelegramLocalization.Get("main", Language(chat)),
+            $"start:{chat.Id:N}:{Guid.NewGuid():N}", replyMarkup: MainKeyboard(Language(chat)), token: token);
 
     private async Task SendHelpAsync(TelegramChat chat, CancellationToken token) =>
         await queue.EnqueueTextAsync(chat,
-            "<b>Помощь</b>\n/account — подписка\n/buy — оплата Stars\n/proxies — TXT-файл\n" +
-            "/notifications — включить или отключить напоминания\n/support — связь с оператором\n\n" +
-            "Прокси регулярно перепроверяются; файл формируется только из адресов, которые сейчас имеют статус Alive.",
-            $"help:{chat.Id:N}:{Guid.NewGuid():N}", replyMarkup: MainKeyboard(), token: token);
+            TelegramLocalization.Get("help", Language(chat)),
+            $"help:{chat.Id:N}:{Guid.NewGuid():N}", replyMarkup: MainKeyboard(Language(chat)), token: token);
 
     private async Task AnswerFaqAsync(
         TelegramChat chat, string text, TelegramBotOptions options, CancellationToken token)
     {
         var lower = text.ToLowerInvariant();
-        var answer = lower.Contains("оплат", StringComparison.Ordinal) || lower.Contains("звезд", StringComparison.Ordinal) || lower.Contains("stars", StringComparison.Ordinal)
-            ? "Оплата выполняется встроенным счётом Telegram Stars. Нажмите /buy, выберите тариф и подтвердите списание."
-            : lower.Contains("прокс", StringComparison.Ordinal) || lower.Contains("файл", StringComparison.Ordinal)
-                ? "При активной подписке команда /proxies создаёт свежий TXT-файл с проверенными HTTP, HTTPS, SOCKS4 и SOCKS5 адресами."
-                : lower.Contains("скорост", StringComparison.Ordinal) || lower.Contains("провер", StringComparison.Ordinal)
-                    ? "ProxyHarbor регулярно перепроверяет доступность и задержку. В файл попадают только прокси с подтверждённым статусом Alive."
-                    : lower.Contains("подпис", StringComparison.Ordinal) || lower.Contains("срок", StringComparison.Ordinal)
-                        ? "Срок и тариф показаны в /account. Перед окончанием бот напомнит о продлении, если уведомления включены."
-                        : $"Я передал сообщение в CRM. {options.SupportText}";
+        var answer = ContainsAny(lower, "оплат", "звезд", "stars", "payment", "pay", "zahlung", "paiement", "支付", "付款")
+            ? TelegramLocalization.Get("faqPayment", Language(chat))
+            : ContainsAny(lower, "прокс", "файл", "proxy", "file", "datei", "fichier", "代理", "文件")
+                ? TelegramLocalization.Get("faqProxy", Language(chat))
+                : ContainsAny(lower, "скорост", "провер", "speed", "latency", "check", "geschwindigkeit", "latenz", "vitesse", "延迟", "速度")
+                    ? TelegramLocalization.Get("faqSpeed", Language(chat))
+                    : ContainsAny(lower, "подпис", "срок", "subscription", "expiry", "abo", "abonnement", "订阅", "到期")
+                        ? TelegramLocalization.Get("faqSubscription", Language(chat))
+                        : TelegramLocalization.Get("supportForwarded", Language(chat), ("support", options.SupportText));
         await ReplyAsync(chat, answer, $"faq:{chat.Id:N}:{Guid.NewGuid():N}", token);
     }
+
+    private static bool ContainsAny(string value, params string[] fragments) =>
+        fragments.Any(fragment => value.Contains(fragment, StringComparison.Ordinal));
 
     private async Task<TelegramChat> EnsureChatAsync(
         JsonElement chatElement, JsonElement from, CancellationToken token)
@@ -470,6 +471,7 @@ public sealed class TelegramUpdateProcessor(
             {
                 UserName = $"tg.{telegramUserId}",
                 DisplayName = displayName.Length == 0 ? $"Telegram {telegramUserId}" : TelegramDispatchService.Limit(displayName, 120),
+                PreferredLanguage = SupportedLanguages.Normalize(from.TryGetProperty("language_code", out var initialLanguage) ? initialLanguage.GetString() : null),
                 EmailConfirmed = false,
                 IsActive = true
             };
@@ -513,19 +515,48 @@ public sealed class TelegramUpdateProcessor(
     private Task<Guid> ReplyAsync(TelegramChat chat, string text, string key, CancellationToken token) =>
         queue.EnqueueTextAsync(chat, text, key, token: token);
 
-    private static object MainKeyboard() => new
+    private async Task SendLanguageMenuAsync(TelegramChat chat, CancellationToken token) =>
+        await queue.EnqueueTextAsync(chat, TelegramLocalization.Get("chooseLanguage", Language(chat)),
+            $"language-menu:{chat.Id:N}:{Guid.NewGuid():N}", replyMarkup: LanguageKeyboard(), token: token);
+
+    private async Task ChangeLanguageAsync(TelegramChat chat, string language, CancellationToken token)
+    {
+        if (!SupportedLanguages.IsSupported(language))
+        {
+            await SendLanguageMenuAsync(chat, token);
+            return;
+        }
+        chat.User.PreferredLanguage = SupportedLanguages.Normalize(language);
+        await db.SaveChangesAsync(token);
+        await queue.EnqueueTextAsync(chat, TelegramLocalization.Get("languageSaved", chat.User.PreferredLanguage),
+            $"language-saved:{chat.Id:N}:{Guid.NewGuid():N}", replyMarkup: MainKeyboard(chat.User.PreferredLanguage), token: token);
+    }
+
+    private static string Language(TelegramChat chat) => SupportedLanguages.Normalize(chat.User.PreferredLanguage);
+
+    private static object MainKeyboard(string language) => new
     {
         inline_keyboard = new object[]
         {
-            new[] { new { text = "👤 Личный кабинет", callback_data = "account" }, new { text = "⭐ Купить", callback_data = "products" } },
-            new[] { new { text = "📄 Получить прокси", callback_data = "proxies" } },
-            new[] { new { text = "🔔 Уведомления", callback_data = "notifications" } }
+            new[] { new { text = TelegramLocalization.Get("accountButton", language), callback_data = "account" }, new { text = TelegramLocalization.Get("buyButton", language), callback_data = "products" } },
+            new[] { new { text = TelegramLocalization.Get("proxyButton", language), callback_data = "proxies" } },
+            new[] { new { text = TelegramLocalization.Get("notificationsButton", language), callback_data = "notifications" }, new { text = TelegramLocalization.Get("languageButton", language), callback_data = "language" } }
         }
     };
 
-    private static object BuyKeyboard() => new
+    private static object BuyKeyboard(string language) => new
     {
-        inline_keyboard = new[] { new[] { new { text = "⭐ Выбрать тариф", callback_data = "products" } } }
+        inline_keyboard = new[] { new[] { new { text = TelegramLocalization.Get("choosePlanButton", language), callback_data = "products" } } }
+    };
+
+    private static object LanguageKeyboard() => new
+    {
+        inline_keyboard = new[]
+        {
+            new[] { new { text = "Русский", callback_data = "language:ru" }, new { text = "English", callback_data = "language:en" } },
+            new[] { new { text = "Deutsch", callback_data = "language:de" }, new { text = "Français", callback_data = "language:fr" } },
+            new[] { new { text = "简体中文", callback_data = "language:zh" } }
+        }
     };
 
     private static string Cut(string value, int maximum)

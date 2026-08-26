@@ -2,8 +2,9 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import App from './App'
 import './style.css'
+import { I18nProvider } from './i18n'
 
 // StrictMode помогает обнаруживать небезопасные побочные эффекты ещё при разработке.
 createRoot(document.getElementById('root')!).render(
-  <StrictMode><App /></StrictMode>,
+  <StrictMode><I18nProvider><App /></I18nProvider></StrictMode>,
 )

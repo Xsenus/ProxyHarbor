@@ -299,7 +299,7 @@ public sealed class ProxiesController(
             var problem = new ProblemDetails
             {
                 Title = "Лимит бесплатной выгрузки",
-                Detail = FreeExportAccessService.UpgradeMessage,
+                Detail = FreeExportAccessService.GetUpgradeMessage(CultureInfo.CurrentUICulture.TwoLetterISOLanguageName),
                 Status = StatusCodes.Status429TooManyRequests
             };
             problem.Extensions["limit"] = FreeExportAccessService.FreeLimit;
@@ -460,7 +460,7 @@ public sealed class ProxiesController(
             limit = FreeExportAccessService.FreeLimit,
             cooldownSeconds = FreeExportAccessService.CooldownSeconds,
             nextAllowedAt = access.NextAllowedAt,
-            message = FreeExportAccessService.UpgradeMessage,
+            message = FreeExportAccessService.GetUpgradeMessage(CultureInfo.CurrentUICulture.TwoLetterISOLanguageName),
             upgradeUrl = "/account"
         }, ExportJsonOptions);
         await output.WriteAsync(Encoding.UTF8.GetBytes($"{{\"access\":{metadata},\"proxies\":"), token);
