@@ -36,5 +36,6 @@ describe('responsive accessibility stylesheet', () => {
     expect(stylesheet).toContain('.users-table .user-identity>span{display:block;flex:1 1 auto;min-width:0;height:auto;border-radius:0;background:transparent;color:inherit}')
     expect(stylesheet).toContain('.users-table,.admin-proxy-table{scrollbar-width:thin;scrollbar-color:#315e50 #091510}')
     expect(stylesheet).toContain('.admin-sidebar-foot{flex:0 0 42px;width:42px}.admin-sidebar-foot>.language-switcher{display:none}')
+    expect(stylesheet).toContain('@media(max-width:470px){.admin-nav-group a,.admin-sidebar-foot button{font-size:0}}')
   })
 })

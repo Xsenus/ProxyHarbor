@@ -187,3 +187,4 @@ body{font-size:14px;line-height:1.5}
   .admin-page-heading{align-items:flex-start}.admin-breadcrumb{min-height:44px;font-size:12px}
   .admin-breadcrumb h1{font-size:13px}.admin-page-heading .primary-admin-button{font-size:0}
 }
+@media(max-width:470px){.admin-nav-group a,.admin-sidebar-foot button{font-size:0}}
