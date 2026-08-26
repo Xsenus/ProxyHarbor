@@ -52,6 +52,17 @@ public sealed class BackupService(
             await using var clusterLock = await PostgresAdvisoryLock.TryAcquireAsync(
                 dbFactory, PostgresAdvisoryLock.BackupKey, cancellationToken)
                 ?? throw new OperationAlreadyRunningException("резервное копирование");
+            // Большие proxy/VPN feed кратковременно занимают существенную часть памяти.
+            // Backup также проходит весь каталог потоково, поэтому одновременный запуск
+            // на небольшом VPS способен превысить лимит контейнера. Эти два cluster-wide
+            // барьера не дают новым циклам сбора стартовать до публикации архива и вместо
+            // OOM возвращают контролируемый busy-ответ, если сбор уже выполняется.
+            await using var proxyCollectionLock = await PostgresAdvisoryLock.TryAcquireAsync(
+                dbFactory, PostgresAdvisoryLock.CollectionKey, cancellationToken)
+                ?? throw new OperationAlreadyRunningException("сбор proxy-источников");
+            await using var vpnCollectionLock = await PostgresAdvisoryLock.TryAcquireAsync(
+                dbFactory, PostgresAdvisoryLock.VpnCollectionKey, cancellationToken)
+                ?? throw new OperationAlreadyRunningException("сбор VPN-источников");
             // Runtime-настройки перечитываются перед каждым запуском. Изменение
             // расписания/retention/Telegram в админке не требует рестарта контейнера.
             var options = backupConfigurationStore is null
