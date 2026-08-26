@@ -209,6 +209,9 @@ public sealed class AdminController(
         var unseenRetentionCutoff = now.AddDays(-Math.Max(1, collectorOptions.Value.DeadRetentionDays));
         var databaseBytes = await db.Database.SqlQueryRaw<long>("SELECT pg_database_size(current_database()) AS \"Value\"")
             .SingleAsync(token);
+        // VPN-узлы считаются в том же согласованном snapshot, что и прокси,
+        // чтобы боковая панель не показывала число из отдельного, более старого запроса.
+        var vpnEndpoints = await db.VpnEndpoints.AsNoTracking().CountAsync(token);
         var queue = await db.Proxies.AsNoTracking().GroupBy(_ => 1).Select(x => new
         {
             total = x.Count(),
@@ -267,6 +270,7 @@ public sealed class AdminController(
         return Ok(new DiagnosticsResponse(
             now,
             databaseBytes,
+            vpnEndpoints,
             validationQueue,
             sourceCatalog,
             recentRuns,
@@ -551,6 +555,7 @@ public sealed record ValidationQueueResponse(
 public sealed record DiagnosticsResponse(
     DateTimeOffset ServerTime,
     long DatabaseBytes,
+    int VpnEndpoints,
     ValidationQueueResponse? ValidationQueue,
     SourceCatalogSnapshot SourceCatalog,
     IReadOnlyList<CollectionRun> RecentRuns,

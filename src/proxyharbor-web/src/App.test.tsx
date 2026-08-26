@@ -156,7 +156,7 @@ describe('ProxyHarbor UI', () => {
       if (url.includes('/api/v1/admin/sources')) return jsonResponse({ items: [], page: 1, pageSize: 10, total: 0 })
       if (url.includes('/api/v1/admin/diagnostics')) return jsonResponse({
         serverTime: new Date().toISOString(), databaseBytes: 0,
-        validationQueue: { total: 0, due: 0 }, recentRuns: [], recentValidationRuns: [], recentBackups: [],
+        vpnEndpoints: 20243, validationQueue: { total: 0, due: 0 }, recentRuns: [], recentValidationRuns: [], recentBackups: [],
       })
       return jsonResponse({ title: 'Unexpected request' }, 500)
     })
