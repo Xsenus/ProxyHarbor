@@ -400,6 +400,8 @@ describe('ProxyHarbor UI', () => {
 
     render(<App/>)
     expect(await screen.findByText('Страница 1 из 4 · Найдено: 34')).toBeInTheDocument()
+    expect(screen.getByRole('heading',{name:'Пользователи'}).closest('section')).toHaveClass('users-admin-section')
+    expect(screen.getByRole('navigation',{name:'Быстрый переход по страницам'}).closest('section')).toHaveClass('users-registry')
     expect(screen.getByText('Последний вход')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button',{name:'Следующая страница'}))
     await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).includes('/api/v1/admin/users?') && String(input).includes('page=2'))).toBe(true))
