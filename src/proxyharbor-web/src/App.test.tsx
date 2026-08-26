@@ -261,6 +261,11 @@ describe('ProxyHarbor UI', () => {
     const { container }=render(<App />)
     expect(await screen.findByRole('heading', { name:'Прокси', level:1 })).toBeInTheDocument()
     expect(await screen.findByText('203.0.113.10:8080')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name:'Статус прокси' })).toHaveTextContent('Рабочие')
+    expect(vi.mocked(fetch).mock.calls.some(([input]) => {
+      const url = new URL(String(input), 'https://example.test')
+      return url.pathname.endsWith('/api/v1/admin/proxies') && url.searchParams.get('status') === 'Alive'
+    })).toBe(true)
     expect(screen.getAllByText('1 д 2 ч').length).toBeGreaterThan(0)
     expect(screen.getByText('Страница 1 из 3 · Найдено: 21')).toBeInTheDocument()
     expect(screen.getByRole('link', { name:/^Прокси/ })).toHaveAttribute('aria-current','page')

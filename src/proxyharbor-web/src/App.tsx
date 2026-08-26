@@ -897,7 +897,7 @@ function AdminProxiesPage() {
   const [data,setData]=useState<AdminProxyPage|null>(null)
   const [page,setPage]=useState(1)
   const [pageSize,setPageSize]=useState(10)
-  const [status,setStatus]=useState('')
+  const [status,setStatus]=useState('Alive')
   const [protocol,setProtocol]=useState('')
   const [country,setCountry]=useState('')
   const [sort,setSort]=useState('lastChecked')
