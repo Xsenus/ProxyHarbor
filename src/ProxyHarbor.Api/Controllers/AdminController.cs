@@ -21,7 +21,8 @@ public sealed class AdminController(
     BackupService backup,
     ISourceCatalogMutationCoordinator sourceMutationCoordinator,
     IOptions<BackupOptions> backupOptions,
-    IOptions<CollectorOptions> collectorOptions) : ControllerBase
+    IOptions<CollectorOptions> collectorOptions,
+    IBackupConfigurationStore? backupConfigurationStore = null) : ControllerBase
 {
     /// <summary>Возвращает стабильную bounded-страницу источников и их runtime-состояние.</summary>
     [HttpGet("sources")]
@@ -314,9 +315,73 @@ public sealed class AdminController(
         {
             return Conflict(new ProblemDetails { Title = exception.Message, Status = 409 });
         }
-        var sent = !string.IsNullOrWhiteSpace(backupOptions.Value.TelegramBotToken) &&
-            !string.IsNullOrWhiteSpace(backupOptions.Value.TelegramChatId);
+        var current = await GetBackupOptionsAsync(token);
+        var sent = !string.IsNullOrWhiteSpace(current.TelegramBotToken) &&
+            !string.IsNullOrWhiteSpace(current.TelegramChatId);
         return Ok(new BackupTriggerResponse(Path.GetFileName(path), sent));
+    }
+
+    /// <summary>Возвращает управляемое расписание без раскрытия bot token и PHB3-ключа.</summary>
+    [HttpGet("backups/settings")]
+    [ProducesResponseType<BackupSettingsResponse>(StatusCodes.Status200OK)]
+    public async Task<ActionResult<BackupSettingsResponse>> BackupSettings(CancellationToken token)
+    {
+        var current = await GetBackupOptionsAsync(token);
+        return Ok(BackupSettingsResponse.From(current));
+    }
+
+    /// <summary>Сохраняет расписание, retention и защищённую Telegram-доставку.</summary>
+    [HttpPut("backups/settings")]
+    [ProducesResponseType<BackupSettingsResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status400BadRequest)]
+    public async Task<ActionResult<BackupSettingsResponse>> UpdateBackupSettings(
+        [FromBody] BackupSettingsRequest request,
+        CancellationToken token)
+    {
+        if (backupConfigurationStore is null)
+            return Problem("Runtime-настройки резервного копирования недоступны.", statusCode: 503);
+        if (request.IntervalHours is < 1 or > 8_760 ||
+            request.RetentionDays is < 1 or > 3_650 ||
+            request.HistoryRetentionDays is < 1 or > 3_650 ||
+            request.MaxTelegramFileSizeMb is < 1 or > 49)
+            return Problem("Проверьте границы интервала, сроков хранения и размера Telegram-файла.", statusCode: 400);
+
+        var current = await backupConfigurationStore.GetAsync(token);
+        var tokenValue = request.ClearTelegramCredentials
+            ? null
+            : string.IsNullOrWhiteSpace(request.TelegramBotToken)
+                ? current.TelegramBotToken
+                : request.TelegramBotToken.Trim();
+        var chatId = request.ClearTelegramCredentials
+            ? null
+            : string.IsNullOrWhiteSpace(request.TelegramChatId)
+                ? current.TelegramChatId
+                : request.TelegramChatId.Trim();
+        if (!request.SendToTelegram)
+        {
+            tokenValue = null;
+            chatId = null;
+        }
+        if (request.SendToTelegram &&
+            (!BackupOptions.IsTelegramBotTokenValid(tokenValue) || !BackupOptions.IsTelegramChatIdValid(chatId)))
+            return Problem("Для Telegram-доставки задайте корректные BotFather token и числовой chat ID.", statusCode: 400);
+        if (request.Enabled && !request.SendToTelegram)
+            return Problem("Для плановых резервных копий доставка администратору в Telegram обязательна.", statusCode: 400);
+
+        var updated = new BackupOptions
+        {
+            Enabled = request.Enabled,
+            IntervalHours = request.IntervalHours,
+            RetentionDays = request.RetentionDays,
+            HistoryRetentionDays = request.HistoryRetentionDays,
+            MaxTelegramFileSizeMb = request.MaxTelegramFileSizeMb,
+            Directory = current.Directory,
+            EncryptionKey = current.EncryptionKey,
+            TelegramBotToken = tokenValue,
+            TelegramChatId = chatId
+        };
+        await backupConfigurationStore.SaveAsync(updated, token);
+        return Ok(BackupSettingsResponse.From(updated));
     }
 
     /// <summary>Возвращает страницу истории и актуальную доступность локальных encrypted-файлов.</summary>
@@ -329,13 +394,14 @@ public sealed class AdminController(
     {
         page = Math.Clamp(page, 1, 100_000);
         pageSize = Math.Clamp(pageSize, 10, 100);
+        var current = await GetBackupOptionsAsync(token);
         await using var db = await dbFactory.CreateDbContextAsync(token);
         var total = await db.BackupRuns.CountAsync(token);
         var runs = await db.BackupRuns.AsNoTracking()
             .OrderByDescending(run => run.StartedAt).ThenByDescending(run => run.Id)
             .Skip((page - 1) * pageSize).Take(pageSize).ToListAsync(token);
         var items = runs.Select(run => BackupFileResponse.From(
-            run, TryGetBackupPath(run, out var path) && System.IO.File.Exists(path))).ToArray();
+            run, TryGetBackupPath(run, current.Directory, out var path) && System.IO.File.Exists(path))).ToArray();
         return Ok(new PagedResult<BackupFileResponse>(items, page, pageSize, total));
     }
 
@@ -345,9 +411,10 @@ public sealed class AdminController(
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> DownloadBackup(Guid id, CancellationToken token)
     {
+        var current = await GetBackupOptionsAsync(token);
         await using var db = await dbFactory.CreateDbContextAsync(token);
         var run = await db.BackupRuns.AsNoTracking().SingleOrDefaultAsync(item => item.Id == id, token);
-        if (run is null || !TryGetBackupPath(run, out var path) || !System.IO.File.Exists(path)) return NotFound();
+        if (run is null || !TryGetBackupPath(run, current.Directory, out var path) || !System.IO.File.Exists(path)) return NotFound();
 
         // Асинхронный поток не загружает многомегабайтный архив в память API и поддерживает range-запросы.
         var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete,
@@ -362,26 +429,34 @@ public sealed class AdminController(
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]
     public async Task<IActionResult> DeleteBackup(Guid id, CancellationToken token)
     {
+        var current = await GetBackupOptionsAsync(token);
         await using var db = await dbFactory.CreateDbContextAsync(token);
         var run = await db.BackupRuns.SingleOrDefaultAsync(item => item.Id == id, token);
         if (run is null) return NotFound();
         if (string.Equals(run.Status, "running", StringComparison.OrdinalIgnoreCase))
             return Conflict(new ProblemDetails { Title = "Нельзя удалить выполняющуюся резервную копию", Status = 409 });
-        if (!string.IsNullOrWhiteSpace(run.FileName) && !TryGetBackupPath(run, out _))
+        if (!string.IsNullOrWhiteSpace(run.FileName) && !TryGetBackupPath(run, current.Directory, out _))
             return Conflict(new ProblemDetails { Title = "Имя файла резервной копии не прошло проверку безопасности", Status = 409 });
 
-        if (TryGetBackupPath(run, out var path) && System.IO.File.Exists(path)) System.IO.File.Delete(path);
+        // Удаляется именно опубликованный архив в смонтированном server volume,
+        // после чего — его audit row. Для уже очищенного retention файла удаляется история.
+        if (TryGetBackupPath(run, current.Directory, out var path) && System.IO.File.Exists(path)) System.IO.File.Delete(path);
         db.BackupRuns.Remove(run);
         await db.SaveChangesAsync(token);
         return NoContent();
     }
 
-    private bool TryGetBackupPath(BackupRun run, out string path)
+    private static bool TryGetBackupPath(BackupRun run, string directory, out string path)
     {
         path = string.Empty;
         return !string.Equals(run.Status, "running", StringComparison.OrdinalIgnoreCase) &&
-            BackupService.TryResolvePublishedBackupPath(backupOptions.Value.Directory, run.FileName, out path);
+            BackupService.TryResolvePublishedBackupPath(directory, run.FileName, out path);
     }
+
+    private Task<BackupOptions> GetBackupOptionsAsync(CancellationToken token) =>
+        backupConfigurationStore is null
+            ? Task.FromResult(backupOptions.Value)
+            : backupConfigurationStore.GetAsync(token);
 }
 
 /// <summary>Результат одного ручного validation batch.</summary>
@@ -389,6 +464,45 @@ public sealed record ValidationTriggerResponse(int Checked, int Alive, int Defer
 
 /// <summary>Результат ручного создания и опциональной Telegram-доставки backup.</summary>
 public sealed record BackupTriggerResponse(string Created, bool SentToTelegram);
+
+/// <summary>Редактируемые поля backup; пустой token сохраняет уже защищённое значение.</summary>
+public sealed record BackupSettingsRequest(
+    bool Enabled,
+    int IntervalHours,
+    int RetentionDays,
+    int HistoryRetentionDays,
+    int MaxTelegramFileSizeMb,
+    bool SendToTelegram,
+    string? TelegramBotToken,
+    string? TelegramChatId,
+    bool ClearTelegramCredentials = false);
+
+/// <summary>Безопасная проекция runtime-настроек для панели администратора.</summary>
+public sealed record BackupSettingsResponse(
+    bool Enabled,
+    int IntervalHours,
+    int RetentionDays,
+    int HistoryRetentionDays,
+    int MaxTelegramFileSizeMb,
+    bool SendToTelegram,
+    bool TelegramBotTokenConfigured,
+    string? TelegramChatId,
+    bool EncryptionConfigured,
+    string Format)
+{
+    /// <summary>Секреты заменяются только признаками наличия.</summary>
+    public static BackupSettingsResponse From(BackupOptions options) => new(
+        options.Enabled,
+        options.IntervalHours,
+        options.RetentionDays,
+        options.HistoryRetentionDays,
+        options.MaxTelegramFileSizeMb,
+        !string.IsNullOrWhiteSpace(options.TelegramBotToken) && !string.IsNullOrWhiteSpace(options.TelegramChatId),
+        !string.IsNullOrWhiteSpace(options.TelegramBotToken),
+        options.TelegramChatId,
+        BackupOptions.IsNewEncryptionKeyValid(options.EncryptionKey),
+        "PHB3 (.phbackup)");
+}
 
 /// <summary>Запись истории backup с вычисленной доступностью файла в локальном volume.</summary>
 public sealed record BackupFileResponse(

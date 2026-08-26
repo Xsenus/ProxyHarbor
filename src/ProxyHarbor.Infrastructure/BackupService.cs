@@ -19,7 +19,8 @@ public sealed class BackupService(
     IOptions<BackupOptions> backupOptions,
     IOptions<CollectorOptions> collectorOptions,
     IConfiguration configuration,
-    ILogger<BackupService> logger) : IDisposable
+    ILogger<BackupService> logger,
+    IBackupConfigurationStore? backupConfigurationStore = null) : IDisposable
 {
     internal const string PipeCompletionFailureDataKey = "ProxyHarbor.BackupPipeCompletionFailure";
     private const string PublishedBackupPrefix = "proxyharbor-";
@@ -51,7 +52,11 @@ public sealed class BackupService(
             await using var clusterLock = await PostgresAdvisoryLock.TryAcquireAsync(
                 dbFactory, PostgresAdvisoryLock.BackupKey, cancellationToken)
                 ?? throw new OperationAlreadyRunningException("резервное копирование");
-            var options = backupOptions.Value;
+            // Runtime-настройки перечитываются перед каждым запуском. Изменение
+            // расписания/retention/Telegram в админке не требует рестарта контейнера.
+            var options = backupConfigurationStore is null
+                ? backupOptions.Value
+                : await backupConfigurationStore.GetAsync(cancellationToken);
             if (!BackupOptions.IsNewEncryptionKeyValid(options.EncryptionKey))
                 throw new InvalidOperationException(
                     $"Backup__EncryptionKey должен содержать {BackupOptions.MinimumEncryptionKeyLength}..{BackupOptions.MaximumEncryptionKeyLength} символов с корректной Unicode-кодировкой без управляющих знаков.");
@@ -300,6 +305,10 @@ public sealed class BackupService(
                 // повторных оплат, рассылок или потери истории переписки.
                 await WriteJsonAsync(archive, "database/telegram-bot-configuration.json",
                     db.TelegramBotConfigurations.AsNoTracking().AsAsyncEnumerable(), token);
+                // Runtime backup-настройка сама входит в зашифрованный PHB3-снимок;
+                // Telegram-реквизиты внутри неё дополнительно защищены Data Protection.
+                await WriteJsonAsync(archive, "database/backup-configuration.json",
+                    db.BackupConfigurations.AsNoTracking().AsAsyncEnumerable(), token);
                 await WriteJsonAsync(archive, "database/telegram-chats.json",
                     db.TelegramChats.AsNoTracking().AsAsyncEnumerable(), token);
                 await WriteJsonAsync(archive, "database/telegram-update-receipts.json",
@@ -751,10 +760,12 @@ public sealed class BackupWorker(
     BackupService backup,
     IDbContextFactory<ProxyHarborDbContext> dbFactory,
     IOptions<BackupOptions> options,
-    ILogger<BackupWorker> logger) : Microsoft.Extensions.Hosting.BackgroundService
+    ILogger<BackupWorker> logger,
+    IBackupConfigurationStore? backupConfigurationStore = null) : Microsoft.Extensions.Hosting.BackgroundService
 {
     internal enum CycleOutcome { Succeeded, PeerOwned, Failed, DeliveryPolicyRejected }
     private static readonly TimeSpan FailureRetryDelay = TimeSpan.FromMinutes(15);
+    private static readonly TimeSpan SettingsRefreshDelay = TimeSpan.FromMinutes(1);
     private static readonly TimeSpan MaximumScheduleWaitChunk = TimeSpan.FromDays(1);
     private static readonly Action<ILogger, Exception?> BackupFailed =
         LoggerMessage.Define(LogLevel.Error, new EventId(1202, "BackupFailed"), "Не удалось создать резервную копию.");
@@ -767,10 +778,19 @@ public sealed class BackupWorker(
     /// <inheritdoc />
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        if (!options.Value.Enabled) return;
         while (!stoppingToken.IsCancellationRequested)
         {
+            var current = await GetOptionsAsync(stoppingToken);
+            if (!current.Enabled)
+            {
+                // Worker не завершается: администратор может включить расписание без
+                // перезапуска приложения. Минутный poll не создаёт нагрузки на БД.
+                await Task.Delay(SettingsRefreshDelay, stoppingToken);
+                continue;
+            }
             await WaitUntilDueAsync(stoppingToken);
+            current = await GetOptionsAsync(stoppingToken);
+            if (!current.Enabled) continue;
             var outcome = CycleOutcome.Failed;
             try
             {
@@ -792,7 +812,17 @@ public sealed class BackupWorker(
                 OperationalLogBoundary.Write(() => BackupFailed(logger, ex));
             }
 
-            await Task.Delay(WaitChunk(NextDelay(options.Value.IntervalHours, outcome)), stoppingToken);
+            var cooldown = NextDelay(current.IntervalHours, outcome);
+            // Длительный интервал разбиваем на короткие части, чтобы изменения
+            // расписания и выключение worker применялись максимум за минуту.
+            while (cooldown > TimeSpan.Zero && !stoppingToken.IsCancellationRequested)
+            {
+                var chunk = cooldown <= SettingsRefreshDelay ? cooldown : SettingsRefreshDelay;
+                await Task.Delay(chunk, stoppingToken);
+                cooldown -= chunk;
+                var refreshed = await GetOptionsAsync(stoppingToken);
+                if (!refreshed.Enabled || refreshed.IntervalHours != current.IntervalHours) break;
+            }
         }
     }
 
@@ -806,10 +836,12 @@ public sealed class BackupWorker(
         {
             try
             {
+                var current = await GetOptionsAsync(token);
+                if (!current.Enabled) return;
                 var scheduleAnchorAt = await ReadLastScheduleAnchorAtAsync(dbFactory, token);
-                var delay = InitialDelay(options.Value.IntervalHours, scheduleAnchorAt, DateTimeOffset.UtcNow);
+                var delay = InitialDelay(current.IntervalHours, scheduleAnchorAt, DateTimeOffset.UtcNow);
                 if (delay == TimeSpan.Zero) return;
-                await Task.Delay(WaitChunk(delay), token);
+                await Task.Delay(delay <= SettingsRefreshDelay ? delay : SettingsRefreshDelay, token);
             }
             catch (Exception exception) when (!token.IsCancellationRequested)
             {
@@ -820,6 +852,11 @@ public sealed class BackupWorker(
             }
         }
     }
+
+    private Task<BackupOptions> GetOptionsAsync(CancellationToken token) =>
+        backupConfigurationStore is null
+            ? Task.FromResult(options.Value)
+            : backupConfigurationStore.GetAsync(token);
 
     /// <summary>Читает только подтверждённый completed audit; failed/running не сдвигают RPO.</summary>
     internal static async Task<DateTimeOffset?> ReadLastCompletedAtAsync(
