@@ -44,8 +44,9 @@ describe('ProxyHarbor UI', () => {
   })
 
   it('renders active duration and server pagination metadata', async () => {
-    render(<App />)
+    const { container }=render(<App />)
     expect(await screen.findByRole('cell', { name: /^203\.0\.113\.1:8000$/ })).toBeInTheDocument()
+    await waitFor(()=>expect(container.querySelector('.country-cell .country-flag.flag-us')).toBeInTheDocument())
     expect(screen.getAllByText('2 ч 0 мин').length).toBeGreaterThan(0)
     expect(screen.getByText('Страница 1 из 8 · Найдено: 77')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Следующая страница' })).toBeEnabled()
@@ -61,6 +62,7 @@ describe('ProxyHarbor UI', () => {
     const germany = screen.getByRole('checkbox', { name: /Германия/ })
     expect(germany).toHaveClass('ui-checkbox-input')
     expect(germany.nextElementSibling).toHaveClass('ui-checkbox-mark')
+    expect(germany.parentElement?.querySelector('.country-flag.flag-de')).toBeInTheDocument()
     fireEvent.click(germany)
     expect(germany).toBeChecked()
     await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([input]) => {
@@ -256,13 +258,14 @@ describe('ProxyHarbor UI', () => {
       return jsonResponse({ title: 'Unexpected request' }, 500)
     })
 
-    render(<App />)
+    const { container }=render(<App />)
     expect(await screen.findByRole('heading', { name:'Прокси', level:1 })).toBeInTheDocument()
     expect(await screen.findByText('203.0.113.10:8080')).toBeInTheDocument()
     expect(screen.getAllByText('1 д 2 ч').length).toBeGreaterThan(0)
     expect(screen.getByText('Страница 1 из 3 · Найдено: 21')).toBeInTheDocument()
     expect(screen.getByRole('link', { name:/^Прокси/ })).toHaveAttribute('aria-current','page')
     expect(screen.getByLabelText('Страна прокси')).toBeInTheDocument()
+    expect(container.querySelector('.admin-proxy-address .country-flag.flag-de')).toBeInTheDocument()
   })
 
   it('creates sources in a modal editor', async () => {
