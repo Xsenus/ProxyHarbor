@@ -54,6 +54,7 @@ public sealed class AuthController(
                 UserName = request.Username.Trim(),
                 Email = request.Email.Trim(),
                 DisplayName = request.DisplayName?.Trim(),
+                PreferredLanguage = SupportedLanguages.Normalize(request.PreferredLanguage),
                 IsActive = true
             };
             var created = await users.CreateAsync(user, request.Password);
@@ -83,7 +84,7 @@ public sealed class AuthController(
             try
             {
                 var token = await users.GeneratePasswordResetTokenAsync(user);
-                await emailSender.SendPasswordResetAsync(user.Email!, token, cancellationToken);
+                await emailSender.SendPasswordResetAsync(user.Email!, token, user.PreferredLanguage, cancellationToken);
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
@@ -156,6 +157,7 @@ public sealed class AuthController(
             username = user.UserName,
             email = user.Email,
             displayName = user.DisplayName,
+            preferredLanguage = user.PreferredLanguage,
             roles,
             subscription = subscription is null ? null : new
             {
@@ -197,6 +199,8 @@ public sealed class RegisterAccountRequest
     [StringLength(120)] public string? DisplayName { get; set; }
     /// <summary>Пароль, дополнительно проверяемый Identity policy.</summary>
     [Required, StringLength(256, MinimumLength = 12)] public string Password { get; set; } = string.Empty;
+    /// <summary>Язык сайта, писем и привязанного Telegram-бота.</summary>
+    [Required, StringLength(2, MinimumLength = 2)] public string PreferredLanguage { get; set; } = SupportedLanguages.Default;
 }
 
 /// <summary>Запрос ссылки восстановления без account enumeration.</summary>

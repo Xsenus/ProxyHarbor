@@ -7,6 +7,8 @@ public sealed class ApplicationUser : IdentityUser<Guid>
 {
     /// <summary>Имя, показываемое в кабинете независимо от логина.</summary>
     public string? DisplayName { get; set; }
+    /// <summary>Язык сайта, API, писем и привязанного Telegram-бота.</summary>
+    public string PreferredLanguage { get; set; } = SupportedLanguages.Default;
     /// <summary>Момент создания учётной записи в UTC.</summary>
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     /// <summary>Последний успешный вход; используется для аудита аккаунта.</summary>

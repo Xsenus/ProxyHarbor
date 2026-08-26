@@ -4,6 +4,7 @@ using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.Localization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.ResponseCompression;
 using Microsoft.EntityFrameworkCore;
@@ -293,6 +294,20 @@ builder.Services.AddRateLimiter(x =>
         }));
 });
 builder.Services.Configure<ApiBehaviorOptions>(x => x.SuppressMapClientErrors = false);
+var supportedCultures = SupportedLanguages.All.Select(language => CultureInfo.GetCultureInfo(SupportedLanguages.CultureName(language))).ToArray();
+builder.Services.Configure<RequestLocalizationOptions>(options =>
+{
+    options.DefaultRequestCulture = new RequestCulture("ru-RU");
+    options.SupportedCultures = supportedCultures;
+    options.SupportedUICultures = supportedCultures;
+    // UI хранит простой стабильный код; Accept-Language остаётся запасным источником.
+    options.AddInitialRequestCultureProvider(new CustomRequestCultureProvider(context =>
+    {
+        var raw = context.Request.Cookies["ProxyHarbor.Language"];
+        if (string.IsNullOrWhiteSpace(raw)) return Task.FromResult<ProviderCultureResult?>(null);
+        return Task.FromResult<ProviderCultureResult?>(new ProviderCultureResult(SupportedLanguages.CultureName(raw)));
+    }));
+});
 if (!ForwardedNetworkPolicy.TryParse(
     builder.Configuration.GetSection("ForwardedHeaders:KnownNetworks").Get<string[]>(),
     out var knownProxyNetworks))
@@ -308,6 +323,16 @@ var forwardedHeaders = new ForwardedHeadersOptions
 };
 foreach (var network in knownProxyNetworks) forwardedHeaders.KnownIPNetworks.Add(network);
 app.UseForwardedHeaders(forwardedHeaders);
+app.UseRequestLocalization();
+app.Use(async (context, next) =>
+{
+    context.Response.OnStarting(() =>
+    {
+        context.Response.Headers.ContentLanguage = CultureInfo.CurrentUICulture.Name;
+        return Task.CompletedTask;
+    });
+    await next();
+});
 app.UseMiddleware<SecurityHeadersMiddleware>();
 // Middleware стоит снаружи exception handler: обработанный 500 уже виден в итоговом SLI.
 app.UseMiddleware<HttpRequestTelemetryMiddleware>();

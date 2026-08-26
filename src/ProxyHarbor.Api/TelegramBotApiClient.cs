@@ -27,17 +27,10 @@ public sealed class TelegramBotApiClient(IHttpClientFactory clients)
         _ = await CallAsync(options.BotToken, "setMyName", new { name = options.Name }, token);
         _ = await CallAsync(options.BotToken, "setMyDescription", new { description = options.Description }, token);
         _ = await CallAsync(options.BotToken, "setMyShortDescription", new { short_description = options.ShortDescription }, token);
-        var commands = new[]
-        {
-            new { command = "start", description = "Открыть главное меню" },
-            new { command = "account", description = "Личный кабинет и подписка" },
-            new { command = "buy", description = "Купить или продлить подписку" },
-            new { command = "proxies", description = "Получить файл с прокси" },
-            new { command = "notifications", description = "Настроить уведомления" },
-            new { command = "support", description = "Написать в поддержку" },
-            new { command = "help", description = "Помощь и ответы на вопросы" }
-        };
-        _ = await CallAsync(options.BotToken, "setMyCommands", new { commands }, token);
+        var commands = LocalizedCommands().ToArray();
+        _ = await CallAsync(options.BotToken, "setMyCommands", new { commands = commands[0].Commands }, token);
+        foreach (var localized in commands)
+            _ = await CallAsync(options.BotToken, "setMyCommands", new { commands = localized.Commands, language_code = localized.Language }, token);
         _ = await CallAsync(options.BotToken, "setChatMenuButton", new { menu_button = new { type = "commands" } }, token);
         await SetEmbeddedAvatarAsync(options.BotToken, token);
 
@@ -57,6 +50,23 @@ public sealed class TelegramBotApiClient(IHttpClientFactory clients)
             _ = await CallAsync(options.BotToken, "deleteWebhook", new { drop_pending_updates = false }, token);
         }
     }
+
+    private static IEnumerable<(string Language, object[] Commands)> LocalizedCommands()
+    {
+        yield return ("ru", Commands("Открыть главное меню", "Личный кабинет и подписка", "Купить или продлить подписку", "Получить файл с прокси", "Настроить уведомления", "Выбрать язык", "Написать в поддержку", "Помощь и ответы"));
+        yield return ("en", Commands("Open the main menu", "Account and subscription", "Buy or renew a subscription", "Get a proxy file", "Configure notifications", "Choose language", "Contact support", "Help and answers"));
+        yield return ("de", Commands("Hauptmenü öffnen", "Konto und Abonnement", "Abonnement kaufen oder verlängern", "Proxy-Datei abrufen", "Benachrichtigungen einstellen", "Sprache auswählen", "Support kontaktieren", "Hilfe und Antworten"));
+        yield return ("fr", Commands("Ouvrir le menu principal", "Compte et abonnement", "Acheter ou renouveler", "Obtenir un fichier de proxys", "Configurer les notifications", "Choisir la langue", "Contacter l'assistance", "Aide et réponses"));
+        yield return ("zh", Commands("打开主菜单", "账户与订阅", "购买或续订", "获取代理文件", "设置通知", "选择语言", "联系客服", "帮助与解答"));
+    }
+
+    private static object[] Commands(string start, string account, string buy, string proxies, string notifications, string language, string support, string help) =>
+    [
+        new { command = "start", description = start }, new { command = "account", description = account },
+        new { command = "buy", description = buy }, new { command = "proxies", description = proxies },
+        new { command = "notifications", description = notifications }, new { command = "language", description = language },
+        new { command = "support", description = support }, new { command = "help", description = help }
+    ];
 
     /// <summary>Получает update long polling; вызывается только polling worker.</summary>
     public async Task<JsonElement[]> GetUpdatesAsync(

@@ -271,7 +271,7 @@ public sealed class IdentityAccountIntegrationTests
     {
         public bool IsConfigured { get; set; } = true;
         public string? Token { get; private set; }
-        public Task SendPasswordResetAsync(string email, string token, CancellationToken cancellationToken)
+        public Task SendPasswordResetAsync(string email, string token, string language, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             Assert.Equal("user@example.com", email);

@@ -51,10 +51,13 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
 
         var user = builder.Entity<ApplicationUser>();
         user.Property(x => x.DisplayName).HasMaxLength(120);
+        user.Property(x => x.PreferredLanguage).HasMaxLength(2).HasDefaultValue(SupportedLanguages.Default);
         user.HasIndex(x => x.CreatedAt);
-        user.ToTable(table => table.HasCheckConstraint(
-            "CK_AspNetUsers_ActiveTimeline",
-            "\"LastLoginAt\" IS NULL OR \"LastLoginAt\" >= \"CreatedAt\""));
+        user.ToTable(table =>
+        {
+            table.HasCheckConstraint("CK_AspNetUsers_ActiveTimeline", "\"LastLoginAt\" IS NULL OR \"LastLoginAt\" >= \"CreatedAt\"");
+            table.HasCheckConstraint("CK_AspNetUsers_PreferredLanguage", "\"PreferredLanguage\" IN ('ru', 'en', 'de', 'fr', 'zh')");
+        });
 
         var subscription = builder.Entity<UserSubscription>();
         subscription.HasIndex(x => x.UserId).IsUnique();
