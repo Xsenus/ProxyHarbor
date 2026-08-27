@@ -58,7 +58,7 @@ public sealed class CheckerAgentWorker(
         if (token.Length < 32) throw new InvalidOperationException("Checker agent token is missing or invalid.");
         // Недоступность control plane в момент старта не должна завершать контейнер:
         // основной цикл сам продолжит переподключение с bounded backoff.
-        await SendHeartbeatBestEffortAsync("agent starting", stoppingToken);
+        await SendHeartbeatBestEffortAsync(null, stoppingToken);
         while (!stoppingToken.IsCancellationRequested)
         {
             try
@@ -212,9 +212,9 @@ public sealed class CheckerAgentWorker(
         response.EnsureSuccessStatusCode();
     }
 
-    private async Task SendHeartbeatBestEffortAsync(string error, CancellationToken token)
+    private async Task SendHeartbeatBestEffortAsync(string? error, CancellationToken token)
     {
-        try { await SendHeartbeatAsync(error[..Math.Min(500, error.Length)], token); }
+        try { await SendHeartbeatAsync(error is null ? null : error[..Math.Min(500, error.Length)], token); }
         catch (Exception exception) { StatusHeartbeatFailed(logger, exception); }
     }
 
