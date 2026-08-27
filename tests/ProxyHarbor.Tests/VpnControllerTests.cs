@@ -151,8 +151,11 @@ public sealed class VpnControllerTests
         Assert.Equal(1, endpointPage.Summary.Reachable);
         Assert.Equal(2, endpointPage.Countries.Count);
         Assert.Equal("US", endpointPage.Items[0].CountryCode);
+        Assert.Equal(400, Assert.IsType<ObjectResult>((await controller.Endpoints(transport: "icmp", token: CancellationToken.None)).Result).StatusCode);
         Assert.Equal(400, Assert.IsType<ObjectResult>((await controller.Endpoints(country: "USA", token: CancellationToken.None)).Result).StatusCode);
+        Assert.Equal(400, Assert.IsType<ObjectResult>((await controller.Endpoints(query: new string('x', 129), token: CancellationToken.None)).Result).StatusCode);
         Assert.Equal(400, Assert.IsType<ObjectResult>((await controller.Endpoints(sort: "unknown", token: CancellationToken.None)).Result).StatusCode);
+        Assert.Equal(400, Assert.IsType<ObjectResult>((await controller.Endpoints(order: "sideways", token: CancellationToken.None)).Result).StatusCode);
     }
 
     [Fact]
