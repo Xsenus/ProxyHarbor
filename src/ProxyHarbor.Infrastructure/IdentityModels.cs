@@ -110,6 +110,40 @@ public sealed class UserApiToken
     public DateTimeOffset? LastUsedAt { get; set; }
     /// <summary>Момент отзыва; отозванный токен больше никогда не принимается.</summary>
     public DateTimeOffset? RevokedAt { get; set; }
+    /// <summary>Неизменяемый журнал успешных запросов, выполненных этим токеном.</summary>
+    public ICollection<UserApiTokenRequest> Requests { get; set; } = [];
+}
+
+/// <summary>
+/// Аудит одного HTTP-запроса, авторизованного персональным API-токеном. Секрет токена,
+/// заголовки авторизации и чувствительные query-параметры здесь никогда не сохраняются.
+/// </summary>
+public sealed class UserApiTokenRequest
+{
+    /// <summary>Идентификатор записи аудита.</summary>
+    public long Id { get; set; }
+    /// <summary>Токен, которым был подписан запрос.</summary>
+    public Guid UserApiTokenId { get; set; }
+    /// <summary>Навигация к безопасным метаданным токена.</summary>
+    public UserApiToken UserApiToken { get; set; } = null!;
+    /// <summary>Владелец токена на момент запроса для эффективной выборки истории.</summary>
+    public Guid UserId { get; set; }
+    /// <summary>Канонический адрес клиента после доверенной обработки forwarded headers.</summary>
+    public string IpAddress { get; set; } = "unknown";
+    /// <summary>HTTP-метод.</summary>
+    public string Method { get; set; } = "GET";
+    /// <summary>Маршрут API без домена.</summary>
+    public string Path { get; set; } = string.Empty;
+    /// <summary>Безопасные параметры фильтрации без секретов.</summary>
+    public string? Query { get; set; }
+    /// <summary>Итоговый HTTP-код ответа.</summary>
+    public int StatusCode { get; set; }
+    /// <summary>Количество элементов, отданных каталогом, если контроллер его сообщил.</summary>
+    public int? ItemCount { get; set; }
+    /// <summary>Продолжительность обработки на сервере.</summary>
+    public int DurationMs { get; set; }
+    /// <summary>Точное время начала запроса.</summary>
+    public DateTimeOffset RequestedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 
 /// <summary>Тариф пользователя, отделённый от роли для будущего биллинга.</summary>

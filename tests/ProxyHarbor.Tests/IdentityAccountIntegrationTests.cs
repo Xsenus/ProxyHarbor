@@ -286,7 +286,35 @@ public sealed class IdentityAccountIntegrationTests
         Assert.DoesNotContain(issued.Token, Convert.ToHexString(stored.SecretHash), StringComparison.Ordinal);
         Assert.NotNull(await service.AuthenticateAsync(issued.Token, CancellationToken.None));
         Assert.Null(await service.AuthenticateAsync(issued.Token + "x", CancellationToken.None));
+
+        var requestContext = new DefaultHttpContext();
+        requestContext.Request.Method = HttpMethods.Get;
+        requestContext.Request.Path = "/api/v1/proxies";
+        requestContext.Request.QueryString = new QueryString("?protocol=Http&apiKey=must-not-be-stored");
+        requestContext.Request.Headers.Authorization = $"Bearer {issued.Token}";
+        requestContext.Connection.RemoteIpAddress = System.Net.IPAddress.Parse("203.0.113.42");
+        var middleware = new UserApiTokenMiddleware(context =>
+        {
+            context.Response.StatusCode = StatusCodes.Status200OK;
+            context.Items["ProxyHarbor.ProxyItems"] = 17;
+            return Task.CompletedTask;
+        });
+        await middleware.InvokeAsync(requestContext, service, db, fixture.Get<ILogger<UserApiTokenMiddleware>>());
+        db.ChangeTracker.Clear();
+        var audit = await db.UserApiTokenRequests.AsNoTracking().SingleAsync();
+        Assert.Equal(issued.Id, audit.UserApiTokenId);
+        Assert.Equal(user.Id, audit.UserId);
+        Assert.Equal("203.0.113.42", audit.IpAddress);
+        Assert.Equal("GET", audit.Method);
+        Assert.Equal("/api/v1/proxies", audit.Path);
+        Assert.Contains("protocol=Http", audit.Query, StringComparison.Ordinal);
+        Assert.Contains("apiKey=%5Bhidden%5D", audit.Query, StringComparison.Ordinal);
+        Assert.DoesNotContain("must-not-be-stored", audit.Query, StringComparison.Ordinal);
+        Assert.Equal(17, audit.ItemCount);
+        Assert.Equal(StatusCodes.Status200OK, audit.StatusCode);
+
         Assert.True(await service.RevokeAsync(user.Id, issued.Id, CancellationToken.None));
+        Assert.Empty(await service.ListAsync(user.Id, CancellationToken.None));
         Assert.Null(await service.AuthenticateAsync(issued.Token, CancellationToken.None));
     }
 

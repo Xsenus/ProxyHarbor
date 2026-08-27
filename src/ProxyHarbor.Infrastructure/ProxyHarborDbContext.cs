@@ -29,6 +29,8 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
     public DbSet<UserSubscription> Subscriptions => Set<UserSubscription>();
     /// <summary>Хеши персональных пользовательских API-токенов.</summary>
     public DbSet<UserApiToken> UserApiTokens => Set<UserApiToken>();
+    /// <summary>Постраничный аудит запросов, авторизованных пользовательскими токенами.</summary>
+    public DbSet<UserApiTokenRequest> UserApiTokenRequests => Set<UserApiTokenRequest>();
     /// <summary>Реферальные регистрации с неизменяемым владельцем.</summary>
     public DbSet<ReferralRelationship> ReferralRelationships => Set<ReferralRelationship>();
     /// <summary>Идемпотентные начисления дней подписки за рефералов.</summary>
@@ -105,6 +107,24 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
         {
             table.HasCheckConstraint("CK_UserApiTokens_Hash", "octet_length(\"SecretHash\") = 32");
             table.HasCheckConstraint("CK_UserApiTokens_Timeline", "\"LastUsedAt\" IS NULL OR \"LastUsedAt\" >= \"CreatedAt\"");
+        });
+
+        var apiTokenRequest = builder.Entity<UserApiTokenRequest>();
+        apiTokenRequest.HasIndex(x => new { x.UserId, x.RequestedAt });
+        apiTokenRequest.HasIndex(x => new { x.UserApiTokenId, x.RequestedAt });
+        apiTokenRequest.Property(x => x.IpAddress).HasMaxLength(45);
+        apiTokenRequest.Property(x => x.Method).HasMaxLength(10);
+        apiTokenRequest.Property(x => x.Path).HasMaxLength(500);
+        apiTokenRequest.Property(x => x.Query).HasMaxLength(1000);
+        apiTokenRequest.HasOne(x => x.UserApiToken).WithMany(x => x.Requests)
+            .HasForeignKey(x => x.UserApiTokenId).OnDelete(DeleteBehavior.Cascade);
+        apiTokenRequest.HasOne<ApplicationUser>().WithMany().HasForeignKey(x => x.UserId)
+            .OnDelete(DeleteBehavior.Cascade);
+        apiTokenRequest.ToTable(table =>
+        {
+            table.HasCheckConstraint("CK_UserApiTokenRequests_Status", "\"StatusCode\" BETWEEN 100 AND 599");
+            table.HasCheckConstraint("CK_UserApiTokenRequests_Duration", "\"DurationMs\" >= 0");
+            table.HasCheckConstraint("CK_UserApiTokenRequests_ItemCount", "\"ItemCount\" IS NULL OR \"ItemCount\" >= 0");
         });
 
         var referral = builder.Entity<ReferralRelationship>();

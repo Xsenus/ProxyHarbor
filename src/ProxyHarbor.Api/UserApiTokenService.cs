@@ -95,8 +95,8 @@ public sealed class UserApiTokenService(
 
     /// <inheritdoc />
     public async Task<IReadOnlyList<UserApiToken>> ListAsync(Guid userId, CancellationToken token) =>
-        await db.UserApiTokens.AsNoTracking().Where(x => x.UserId == userId)
-            .OrderBy(x => x.RevokedAt != null).ThenByDescending(x => x.CreatedAt).ToListAsync(token);
+        await db.UserApiTokens.AsNoTracking().Where(x => x.UserId == userId && x.RevokedAt == null)
+            .OrderByDescending(x => x.CreatedAt).ToListAsync(token);
 
     /// <inheritdoc />
     public async Task<bool> RevokeAsync(Guid userId, Guid tokenId, CancellationToken token)

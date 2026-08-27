@@ -122,6 +122,8 @@ public sealed class ProxyAccessMonitor(
             .ExecuteDeleteAsync(token);
         await db.SiteVisitLogs.Where(x => x.VisitedAt < cutoff)
             .ExecuteDeleteAsync(token);
+        await db.UserApiTokenRequests.Where(x => x.RequestedAt < cutoff)
+            .ExecuteDeleteAsync(token);
         await db.FreeProxyExportGrants.Where(x => x.NextAllowedAt < cutoff)
             .ExecuteDeleteAsync(token);
     }

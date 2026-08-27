@@ -127,6 +127,45 @@ public sealed class AccountController(
         return NoContent();
     }
 
+    /// <summary>
+    /// Возвращает постраничную историю запросов владельца. Отозванные токены не
+    /// показываются в списке активных, но их аудит остаётся доступен здесь.
+    /// </summary>
+    [HttpGet("api-tokens/history")]
+    public async Task<IActionResult> ApiTokenHistory(
+        [FromQuery, Range(1, 100_000)] int page = 1,
+        [FromQuery, Range(1, 100)] int pageSize = 10,
+        [FromQuery] Guid? tokenId = null,
+        CancellationToken token = default)
+    {
+        var user = await users.GetUserAsync(User);
+        if (user is null || !user.IsActive) return Unauthorized();
+        var query = db.UserApiTokenRequests.AsNoTracking().Where(x => x.UserId == user.Id);
+        if (tokenId.HasValue)
+        {
+            if (!await db.UserApiTokens.AsNoTracking().AnyAsync(x => x.Id == tokenId && x.UserId == user.Id, token))
+                return NotFound();
+            query = query.Where(x => x.UserApiTokenId == tokenId.Value);
+        }
+        var total = await query.CountAsync(token);
+        var items = await query.OrderByDescending(x => x.RequestedAt).ThenByDescending(x => x.Id)
+            .Skip((page - 1) * pageSize).Take(pageSize)
+            .Select(x => new
+            {
+                x.Id,
+                token = new { x.UserApiTokenId, x.UserApiToken.Name, x.UserApiToken.DisplaySuffix, x.UserApiToken.RevokedAt },
+                x.IpAddress,
+                x.Method,
+                x.Path,
+                x.Query,
+                x.StatusCode,
+                x.ItemCount,
+                x.DurationMs,
+                x.RequestedAt
+            }).ToArrayAsync(token);
+        return Ok(new { items, page, pageSize, total });
+    }
+
     /// <summary>Меняет безопасные отображаемые данные без изменения email и прав.</summary>
     [HttpPut("profile")]
     public async Task<IActionResult> UpdateProfile([FromBody] UpdateProfileRequest request)
