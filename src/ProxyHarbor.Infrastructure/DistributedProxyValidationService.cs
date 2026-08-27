@@ -211,6 +211,7 @@ public sealed class DistributedProxyValidationService(
             .SetProperty(x => x.LastHeartbeatAt, now)
             .SetProperty(x => x.AgentVersion, Bounded(heartbeat.Version, 80))
             .SetProperty(x => x.RemoteAddress, Bounded(remoteAddress, 64))
+            .SetProperty(x => x.DeploymentStatus, "online")
             .SetProperty(x => x.LastError, Bounded(heartbeat.Error, 1000)), token);
     }
 

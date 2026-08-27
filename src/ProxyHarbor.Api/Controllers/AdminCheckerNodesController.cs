@@ -48,7 +48,12 @@ public sealed class AdminCheckerNodesController(
             Online = x.Enabled && x.LastHeartbeatAt >= now.AddMinutes(-2),
             Busy = x.CurrentLeaseId != null && x.CurrentLeaseUntil >= now
         }).ToListAsync(token);
-        return Ok(new { image = deployment.Value.Image, items = nodes });
+        return Ok(new
+        {
+            image = deployment.Value.Image,
+            nativeAssetBaseUrl = deployment.Value.NativeAssetBaseUrl,
+            items = nodes
+        });
     }
 
     /// <summary>Registers a node and installs its agent through a one-time SSH connection.</summary>
@@ -82,7 +87,13 @@ public sealed class AdminCheckerNodesController(
             node.LastError = null;
             node.UpdatedAt = DateTimeOffset.UtcNow;
             await db.SaveChangesAsync(token);
-            return Created($"/api/v1/admin/checker-nodes/{node.Id}", new { node.Id, node.Name, node.DeploymentStatus });
+            return Created($"/api/v1/admin/checker-nodes/{node.Id}", new
+            {
+                node.Id,
+                node.Name,
+                node.DeploymentStatus,
+                result.DeploymentMode
+            });
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
@@ -130,7 +141,7 @@ public sealed class AdminCheckerNodesController(
             node.LastError = null;
             node.UpdatedAt = DateTimeOffset.UtcNow;
             await db.SaveChangesAsync(token);
-            return Accepted(new { node.Id, node.DeploymentStatus });
+            return Accepted(new { node.Id, node.DeploymentStatus, result.DeploymentMode });
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {

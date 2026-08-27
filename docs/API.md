@@ -430,15 +430,15 @@ Host должен быть публичным IP. Пароль не сохран
 
 ### POST `/api/v1/admin/checker-nodes/{id}/deploy`
 
-Повторно проверяет SSH fingerprint, заменяет checker-контейнер и только после успешного запуска ротирует agent token. Тело содержит только transient `password`.
+Повторно проверяет SSH fingerprint, атомарно заменяет Docker-контейнер либо systemd-агент и только после успешного запуска ротирует agent token. Тело содержит только transient `password`.
 
 ### DELETE `/api/v1/admin/checker-nodes/{id}`
 
-Сначала удаляет именованный контейнер и token-файл с VPS, затем удаляет центральную запись. Если VPS недоступен, возвращает `502`, а запись сохраняется.
+Сначала удаляет именованный контейнер либо systemd-службу, файлы агента/runtime и token с VPS, затем удаляет центральную запись. Если VPS недоступен, возвращает `502`, а запись сохраняется.
 
 ### Agent API
 
-Маршруты `/api/v1/checker-agent/heartbeat`, `/lease`, `/lease/{leaseId}/renew` и `/lease/{leaseId}/results` предназначены только для checker-контейнера. Аутентификация требует одновременно UUID в `X-Checker-Node` и Bearer token. Lease выдаётся атомарно, продлевается heartbeat и принимается только с полным набором результатов. Эти маршруты не являются пользовательским API.
+Маршруты `/api/v1/checker-agent/heartbeat`, `/lease`, `/lease/{leaseId}/renew` и `/lease/{leaseId}/results` предназначены только для checker-агента. Аутентификация требует одновременно UUID в `X-Checker-Node` и Bearer token. Lease выдаётся атомарно, продлевается heartbeat и принимается только с полным набором результатов. Эти маршруты не являются пользовательским API.
 
 ## POST `/api/v1/admin/backup`
 

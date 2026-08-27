@@ -178,6 +178,9 @@ DB-IP Lite имеет пониженную относительно коммер
 |---|---|---|
 | `CheckerAgentDeployment__PublicBaseUrl` | `https://proxy.blagodaty.ru` | Корневой публичный HTTPS origin control plane без path/query/fragment |
 | `CheckerAgentDeployment__Image` / `CHECKER_AGENT_IMAGE` | `ghcr.io/xsenus/proxyharbor-checker-agent:latest` | Образ, который административный установщик запускает на внешних VPS |
+| `CheckerAgentDeployment__NativeAssetBaseUrl` | GitHub Releases `latest/download` | HTTPS-каталог архива нативного агента и его `.sha256` для VPS без Docker |
+| `CheckerAgentDeployment__NativeRuntimeVersion` | `10.0.11` | Закреплённая версия приватного .NET runtime; архив проверяется встроенным SHA-512 для каждой архитектуры |
+| `CheckerAgentDeployment__NativeMinimumFreeMegabytes` | `300` | Минимум свободного места под атомарную systemd-установку; допустимо 200..10240 |
 
 SSH IP, порт, пользователь, concurrency и размер партии сохраняются через админку. SSH-пароль принимается только для текущей установки/удаления и никогда не сохраняется. Agent token автоматически создаётся и ротируется; в центральной БД хранится только его hash. Полный runbook — [DISTRIBUTED_CHECKERS.md](DISTRIBUTED_CHECKERS.md).
 

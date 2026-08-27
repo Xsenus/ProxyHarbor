@@ -224,9 +224,46 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  native-agent:
+    name: Publish native checker-agent asset
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with: { dotnet-version: '10.0.302' }
+      - name: Validate release tag and derive immutable metadata
+        id: release
+        shell: pwsh
+        run: ./tools/Get-ReleaseMetadata.ps1 -Tag $env:GITHUB_REF_NAME -RepositoryOwner $env:GITHUB_REPOSITORY_OWNER -OutputFile $env:GITHUB_OUTPUT
+      - name: Build framework-dependent checker-agent archive
+        shell: bash
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+          REVISION: ${{ github.sha }}
+        run: |
+          dotnet restore src/ProxyHarbor.CheckerAgent/ProxyHarbor.CheckerAgent.csproj --locked-mode
+          dotnet publish src/ProxyHarbor.CheckerAgent/ProxyHarbor.CheckerAgent.csproj \
+            --configuration Release --no-restore --output native-agent/publish \
+            -p:Version="$VERSION" -p:InformationalVersion="$VERSION+$REVISION" \
+            -p:ContinuousIntegrationBuild=true
+          mkdir -p release-assets
+          tar --create --gzip --file release-assets/proxyharbor-checker-agent.tar.gz \
+            --directory native-agent/publish .
+          (cd release-assets && sha256sum proxyharbor-checker-agent.tar.gz \
+            > proxyharbor-checker-agent.tar.gz.sha256)
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-native-agent
+          path: release-assets/*
+          if-no-files-found: error
+          retention-days: 30
+
   release:
     name: Publish GitHub release manifest
-    needs: publish
+    needs: [publish, native-agent]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -241,6 +278,10 @@ jobs:
           pattern: release-metadata-*
           path: release-metadata
           merge-multiple: true
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-native-agent
+          path: release-assets
       - name: Assemble digest manifest and publish idempotent GitHub release
         shell: bash
         env:
@@ -258,7 +299,9 @@ jobs:
             -Version "$VERSION" -OutputSectionFile release-notes.md
           release_args=(--verify-tag --title "ProxyHarbor $VERSION")
           if [[ "$IS_PRERELEASE" == 'true' ]]; then release_args+=(--prerelease); fi
-          assets=(proxyharbor-release.json CHANGELOG.md docker-compose.yml docker-compose.release.yml docker-compose.production.yml .env.example)
+          assets=(proxyharbor-release.json CHANGELOG.md docker-compose.yml docker-compose.release.yml docker-compose.production.yml .env.example
+            release-assets/proxyharbor-checker-agent.tar.gz
+            release-assets/proxyharbor-checker-agent.tar.gz.sha256)
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" "${assets[@]}" --clobber
             gh release edit "$TAG" --title "ProxyHarbor $VERSION" --notes-file release-notes.md
