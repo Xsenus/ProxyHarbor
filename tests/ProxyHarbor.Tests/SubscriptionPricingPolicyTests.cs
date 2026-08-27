@@ -6,16 +6,17 @@ namespace ProxyHarbor.Tests;
 public sealed class SubscriptionPricingPolicyTests
 {
     [Fact]
-    public void BuildsSixMonotonicPeriodsWithTwentyPercentAnnualDiscount()
+    public void BuildsSixAffordablePeriodsWithProgressiveLongTermDiscount()
     {
-        var products = SubscriptionPricingPolicy.Build(3_700, "rub").Values
+        var products = SubscriptionPricingPolicy.Build(9_900, "rub").Values
             .OrderBy(product => product.DurationDays).ToArray();
 
         Assert.Equal([1, 7, 30, 90, 180, 365], products.Select(x => x.DurationDays));
         Assert.Equal(0m, products[0].DiscountPercent);
-        Assert.Equal(20m, products[^1].DiscountPercent);
-        Assert.Equal(1_080_400, products[^1].AmountMinor);
-        Assert.True(products[^1].AmountMinor < 3_700 * 365);
+        Assert.Equal(83.425m, products[^1].DiscountPercent);
+        Assert.Equal([9_900L, 35_000L, 69_000L, 189_000L, 339_000L, 599_000L],
+            products.Select(x => x.AmountMinor));
+        Assert.True(products[^1].AmountMinor < 9_900 * 365);
         Assert.True(products.Select(x => x.DiscountPercent).SequenceEqual(
             products.Select(x => x.DiscountPercent).OrderBy(x => x)));
     }
@@ -34,7 +35,7 @@ public sealed class SubscriptionPricingPolicyTests
 
         Assert.Equal(6, normalized.Count);
         Assert.Equal(99_900, normalized["unlimited-month"].AmountMinor);
-        Assert.Equal(20m, normalized["unlimited-year"].DiscountPercent);
+        Assert.Equal(83.425m, normalized["unlimited-year"].DiscountPercent);
     }
 
     [Fact]
@@ -70,7 +71,7 @@ public sealed class SubscriptionPricingPolicyTests
 
     [Theory]
     [InlineData(-1)]
-    [InlineData(21)]
+    [InlineData(100)]
     public void BuildRejectsDiscountsOutsideSupportedRange(int discount)
     {
         var discounts = new Dictionary<int, decimal> { [365] = discount };
@@ -83,7 +84,7 @@ public sealed class SubscriptionPricingPolicyTests
     [InlineData(0, 1, 0)]
     [InlineData(100, 0, 0)]
     [InlineData(100, 1, -1)]
-    [InlineData(100, 1, 21)]
+    [InlineData(100, 1, 100)]
     public void CalculateReturnsZeroForInvalidArguments(long daily, int days, decimal discount)
     {
         Assert.Equal(0, SubscriptionPricingPolicy.Calculate(daily, days, discount));
@@ -94,7 +95,7 @@ public sealed class SubscriptionPricingPolicyTests
     {
         var normalized = SubscriptionPricingPolicy.Normalize(new Dictionary<string, PaymentProductOptions>());
 
-        Assert.Equal(3_700, normalized["unlimited-day"].AmountMinor);
+        Assert.Equal(9_900, normalized["unlimited-day"].AmountMinor);
         Assert.All(normalized.Values, product => Assert.Equal("RUB", product.Currency));
     }
 
@@ -115,7 +116,7 @@ public sealed class SubscriptionPricingPolicyTests
             }
         });
 
-        Assert.Equal(1_000, normalized["unlimited-day"].AmountMinor);
+        Assert.Equal(1_100, normalized["unlimited-day"].AmountMinor);
         Assert.All(normalized.Values, product => Assert.Equal("USD", product.Currency));
     }
 
@@ -136,6 +137,28 @@ public sealed class SubscriptionPricingPolicyTests
             }
         });
 
-        Assert.Equal(3_700, normalized["unlimited-day"].AmountMinor);
+        Assert.Equal(9_900, normalized["unlimited-day"].AmountMinor);
+    }
+
+    [Fact]
+    public void LegacyHighPriceDefaultsAreMigratedToAffordableCatalog()
+    {
+        var legacy = new Dictionary<string, PaymentProductOptions>();
+        var amounts = new long[] { 3_700, 24_700, 99_900, 289_800, 559_500, 1_080_400 };
+        for (var index = 0; index < SubscriptionPricingPolicy.Periods.Count; index++)
+        {
+            var period = SubscriptionPricingPolicy.Periods[index];
+            legacy[$"unlimited-{period.Code}"] = new PaymentProductOptions
+            {
+                Enabled = true, Name = period.RussianName, Plan = SubscriptionPlans.Unlimited,
+                DurationDays = period.Days, AmountMinor = amounts[index], Currency = "RUB"
+            };
+        }
+
+        var normalized = SubscriptionPricingPolicy.Normalize(legacy);
+
+        Assert.Equal(9_900, normalized["unlimited-day"].AmountMinor);
+        Assert.Equal(69_000, normalized["unlimited-month"].AmountMinor);
+        Assert.Equal(599_000, normalized["unlimited-year"].AmountMinor);
     }
 }

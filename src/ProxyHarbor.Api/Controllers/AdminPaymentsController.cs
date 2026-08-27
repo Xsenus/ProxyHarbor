@@ -31,10 +31,11 @@ public sealed class AdminPaymentsController(IPaymentConfigurationStore configura
         var expectedDurations = SubscriptionPricingPolicy.Periods.Select(x => x.Days).ToHashSet();
         if (!request.Products.Select(x => x.DurationDays).ToHashSet().SetEquals(expectedDurations))
             return Invalid("Допустимые сроки: 1, 7, 30, 90, 180 и 365 дней — каждый ровно один раз.");
-        if (request.Products.Any(x => x.Plan != SubscriptionPlans.Unlimited || x.DiscountPercent is < 0 or > 20) ||
+        var annualDiscount = SubscriptionPricingPolicy.Periods.Single(x => x.Days == 365).DefaultDiscountPercent;
+        if (request.Products.Any(x => x.Plan != SubscriptionPlans.Unlimited || x.DiscountPercent is < 0 or >= 100) ||
             request.Products.Single(x => x.DurationDays == 1).DiscountPercent != 0 ||
-            request.Products.Single(x => x.DurationDays == 365).DiscountPercent != 20)
-            return Invalid("Тарифы должны давать Unlimited-доступ; скидка дня — 0%, года — 20%, остальные — от 0% до 20%.");
+            request.Products.Single(x => x.DurationDays == 365).DiscountPercent != annualDiscount)
+            return Invalid($"Тарифы должны давать Unlimited-доступ; скидка дня — 0%, года — {annualDiscount:0.###}%, остальные — от 0% до 99%.");
         var orderedDiscounts = request.Products.OrderBy(x => x.DurationDays).Select(x => x.DiscountPercent).ToArray();
         if (!orderedDiscounts.SequenceEqual(orderedDiscounts.OrderBy(x => x)))
             return Invalid("Скидка не должна уменьшаться при увеличении срока подписки.");
@@ -178,7 +179,7 @@ public sealed class UpdatePaymentProductRequest
     /// <summary>Цена в копейках/центах.</summary>
     [Range(1, 1_000_000_000)] public long AmountMinor { get; set; }
     /// <summary>Скидка относительно последовательной покупки каждого дня.</summary>
-    [Range(typeof(decimal), "0", "20")] public decimal DiscountPercent { get; set; }
+    [Range(typeof(decimal), "0", "99.99")] public decimal DiscountPercent { get; set; }
     /// <summary>Трёхбуквенная валюта ISO 4217.</summary>
     [Required, StringLength(3, MinimumLength = 3)] public string Currency { get; set; } = "RUB";
     /// <summary>Короткое описание возможностей.</summary>

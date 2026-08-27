@@ -4,7 +4,7 @@ namespace ProxyHarbor.Api;
 
 /// <summary>
 /// Единая ценовая политика сайта, платёжных шлюзов и Telegram Stars. Базой служит
-/// цена одного дня, а длинные периоды получают возрастающую скидку до 20% за год.
+/// цена одного дня, а длинные периоды получают существенно более низкую цену за день.
 /// </summary>
 public static class SubscriptionPricingPolicy
 {
@@ -12,11 +12,11 @@ public static class SubscriptionPricingPolicy
     public static readonly IReadOnlyList<SubscriptionPeriod> Periods =
     [
         new("day", 1, 0m, "1 день"),
-        new("week", 7, 5m, "1 неделя"),
-        new("month", 30, 10m, "1 месяц"),
-        new("quarter", 90, 13m, "3 месяца"),
-        new("half-year", 180, 16m, "6 месяцев"),
-        new("year", 365, 20m, "1 год")
+        new("week", 7, 49.5m, "1 неделя"),
+        new("month", 30, 76.77m, "1 месяц"),
+        new("quarter", 90, 78.79m, "3 месяца"),
+        new("half-year", 180, 80.98m, "6 месяцев"),
+        new("year", 365, 83.425m, "1 год")
     ];
 
     /// <summary>Строит полный каталог из управляемой дневной цены.</summary>
@@ -32,11 +32,20 @@ public static class SubscriptionPricingPolicy
         return Periods.ToDictionary(period => $"unlimited-{period.Code}", period =>
         {
             var discount = discounts?.GetValueOrDefault(period.Days) ?? period.DefaultDiscountPercent;
-            if (discount is < 0 or > 20) throw new ArgumentOutOfRangeException(nameof(discounts));
+            if (discount is < 0 or >= 100) throw new ArgumentOutOfRangeException(nameof(discounts));
             return new PaymentProductOptions
             {
                 Enabled = enabled,
-                Name = $"Unlimited · {period.RussianName}",
+                Name = period.Code switch
+                {
+                    "day" => "Пробный · 1 день",
+                    "week" => "Начальный · 1 неделя",
+                    "month" => "Оптимальный · 1 месяц",
+                    "quarter" => "Профессиональный · 3 месяца",
+                    "half-year" => "Бизнес · 6 месяцев",
+                    "year" => "Максимальный · 1 год",
+                    _ => $"Unlimited · {period.RussianName}"
+                },
                 Plan = SubscriptionPlans.Unlimited,
                 DurationDays = period.Days,
                 AmountMinor = Calculate(dailyAmountMinor, period.Days, discount),
@@ -53,6 +62,9 @@ public static class SubscriptionPricingPolicy
     public static Dictionary<string, PaymentProductOptions> Normalize(
         IReadOnlyDictionary<string, PaymentProductOptions> current)
     {
+        if (UsesLegacyHighPriceDefaults(current))
+            return Build(9_900, "RUB");
+
         if (current.Count == Periods.Count && Periods.All(period =>
             current.TryGetValue($"unlimited-{period.Code}", out var product) &&
             product.Plan == SubscriptionPlans.Unlimited && product.DurationDays == period.Days))
@@ -61,7 +73,7 @@ public static class SubscriptionPricingPolicy
         var reference = current.Values.Where(x => x.Enabled && x.AmountMinor > 0)
             .OrderByDescending(x => x.Plan == SubscriptionPlans.Unlimited)
             .ThenBy(x => Math.Abs(x.DurationDays - 30)).FirstOrDefault();
-        const long defaultDailyAmountMinor = 3_700;
+        const long defaultDailyAmountMinor = 9_900;
         var daily = reference is null ? defaultDailyAmountMinor : InferDailyPrice(reference);
         return Build(daily, reference?.Currency ?? "RUB");
     }
@@ -69,7 +81,7 @@ public static class SubscriptionPricingPolicy
     /// <summary>Цена периода с округлением вверх до целой денежной единицы.</summary>
     public static long Calculate(long dailyAmountMinor, int days, decimal discountPercent)
     {
-        if (dailyAmountMinor <= 0 || days <= 0 || discountPercent is < 0 or > 20) return 0;
+        if (dailyAmountMinor <= 0 || days <= 0 || discountPercent is < 0 or >= 100) return 0;
         var raw = dailyAmountMinor * days * (100m - discountPercent) / 100m;
         return checked((long)(decimal.Ceiling(raw / 100m) * 100m));
     }
@@ -77,9 +89,17 @@ public static class SubscriptionPricingPolicy
     private static long InferDailyPrice(PaymentProductOptions product)
     {
         var period = Periods.SingleOrDefault(x => x.Days == product.DurationDays);
-        var discount = period?.DefaultDiscountPercent ?? Math.Clamp(product.DiscountPercent, 0m, 20m);
+        var discount = period?.DefaultDiscountPercent ?? Math.Clamp(product.DiscountPercent, 0m, 95m);
         var denominator = product.DurationDays * (100m - discount) / 100m;
-        return denominator <= 0 ? 3_700 : Math.Max(1, (long)decimal.Ceiling(product.AmountMinor / denominator));
+        return denominator <= 0 ? 9_900 : Math.Max(1, (long)decimal.Floor(product.AmountMinor / denominator));
+    }
+
+    /// <summary>Опознаёт прежнюю стандартную сетку, чтобы безопасно заменить только системные цены.</summary>
+    private static bool UsesLegacyHighPriceDefaults(IReadOnlyDictionary<string, PaymentProductOptions> current)
+    {
+        long[] legacyAmounts = [3_700, 24_700, 99_900, 289_800, 559_500, 1_080_400];
+        var ordered = current.Values.OrderBy(x => x.DurationDays).Select(x => x.AmountMinor).ToArray();
+        return ordered.SequenceEqual(legacyAmounts);
     }
 }
 
