@@ -90,6 +90,12 @@ public sealed class AdminTelegramController(
             options.AutomaticProductCodes,
             options.StarsPerCurrencyUnit,
             options.StarsRoundingStep,
+            options.TransportMode,
+            proxies = options.Proxies.Select(x => new
+            {
+                x.Id, x.Host, x.Port, x.Username,
+                passwordConfigured = x.Password.Length > 0
+            }),
             effectiveProductStars,
             tokenConfigured = options.BotToken.Length > 0,
             options.BotId,
@@ -121,8 +127,26 @@ public sealed class AdminTelegramController(
             request.Name.Trim().Length is < 2 or > 64 || request.Description.Trim().Length is < 10 or > 512 ||
             request.ShortDescription.Trim().Length is < 5 or > 120 || request.SupportText.Trim().Length is < 5 or > 1000 ||
             request.ProxyFileMaxItems is < 1 or > 10_000 || request.WebhookMaxConnections is < 1 or > 100 ||
-            !TelegramTokenPolicy.IsValid(botToken))
+            !TelegramTokenPolicy.IsValid(botToken) ||
+            !TelegramTransportModes.All.Contains(request.TransportMode, StringComparer.Ordinal))
             return Invalid("Проверьте token и ограничения полей Telegram Bot API.");
+        if (request.Proxies.Count > 10 || request.Proxies.Any(x => !ValidProxy(x)))
+            return Invalid("Проверьте SOCKS5-прокси: допустимо до 10 адресов с портами 1..65535.");
+        if (request.TransportMode == TelegramTransportModes.Proxy && request.Proxies.Count == 0)
+            return Invalid("Для режима «Только SOCKS5» добавьте хотя бы один маршрут.");
+        var proxies = new List<TelegramProxyOptions>(request.Proxies.Count);
+        foreach (var item in request.Proxies)
+        {
+            var existing = current.Proxies.SingleOrDefault(x => x.Id == item.Id);
+            var password = item.Password is null ? existing?.Password ?? string.Empty : item.Password;
+            if (password.Length == 0) return Invalid("Для нового SOCKS5-прокси укажите пароль.");
+            proxies.Add(new TelegramProxyOptions
+            {
+                Id = item.Id == Guid.Empty ? Guid.NewGuid() : item.Id,
+                Host = item.Host.Trim().ToLowerInvariant(), Port = item.Port,
+                Username = item.Username.Trim(), Password = password
+            });
+        }
         var catalog = await payments.GetAsync(token);
         if (request.ProductStars.Count > 10 || request.AutomaticProductCodes.Count > 10 ||
             request.StarsPerCurrencyUnit is < 0.01m or > 1_000m || request.StarsRoundingStep is < 1 or > 1_000 ||
@@ -133,8 +157,15 @@ public sealed class AdminTelegramController(
             return Invalid("Проверьте тарифы, коэффициент и шаг: итоговая цена должна находиться в диапазоне 1..1000000 Stars.");
 
         TelegramBotIdentity identity;
-        try { identity = await api.GetMeAsync(botToken, token); }
-        catch (TelegramBotApiException exception) { return Invalid($"Telegram отклонил token: {exception.Message}"); }
+        try { identity = await api.GetMeAsync(botToken, proxies, request.TransportMode, token); }
+        catch (TelegramBotApiException exception)
+        {
+            var title = exception.ErrorCode == StatusCodes.Status504GatewayTimeout
+                ? "Не удалось подключиться к Telegram API ни через один настроенный маршрут."
+                : $"Telegram API отклонил запрос: {exception.Message}";
+            var statusCode = exception.ErrorCode is >= 400 and <= 599 ? exception.ErrorCode : StatusCodes.Status502BadGateway;
+            return Problem(title: title, detail: exception.Message, statusCode: statusCode);
+        }
         var options = new TelegramBotOptions
         {
             Enabled = false,
@@ -150,6 +181,8 @@ public sealed class AdminTelegramController(
             AutomaticProductCodes = new HashSet<string>(request.AutomaticProductCodes, StringComparer.OrdinalIgnoreCase),
             StarsPerCurrencyUnit = request.StarsPerCurrencyUnit,
             StarsRoundingStep = request.StarsRoundingStep,
+            TransportMode = request.TransportMode,
+            Proxies = proxies,
             BotToken = botToken,
             WebhookSecret = current.BotId == identity.Id && current.WebhookSecret.Length > 0
                 ? current.WebhookSecret : WebhookSecret(),
@@ -178,7 +211,9 @@ public sealed class AdminTelegramController(
     {
         var options = await configurations.GetAsync(token);
         if (options.BotToken.Length == 0 || !options.BotId.HasValue) return Invalid("Сначала подключите bot token.");
-        await api.ProvisionAsync(options, token);
+        try { await api.ProvisionAsync(options, token); }
+        catch (TelegramBotApiException exception)
+        { return Problem(title: "Не удалось применить настройки Telegram.", detail: exception.Message, statusCode: 502); }
         options.ProvisionedAt = DateTimeOffset.UtcNow;
         await configurations.SaveAsync(options, token);
         return await Get(token);
@@ -268,6 +303,13 @@ public sealed class AdminTelegramController(
         return Convert.ToHexString(bytes).ToLowerInvariant();
     }
 
+    private static bool ValidProxy(UpdateTelegramProxyRequest value) =>
+        value.Id != Guid.Empty && value.Host.Trim().Length is >= 1 and <= 253 &&
+        Uri.CheckHostName(value.Host.Trim()) != UriHostNameType.Unknown &&
+        value.Port is >= 1 and <= 65_535 && value.Username.Trim().Length is >= 1 and <= 128 &&
+        value.Username.All(x => !char.IsControl(x)) &&
+        (value.Password is null || value.Password.Length is >= 1 and <= 256 && value.Password.All(x => !char.IsControl(x)));
+
     private static BadRequestObjectResult Invalid(string title) => new(new ProblemDetails { Title = title, Status = 400 });
 }
 
@@ -300,6 +342,25 @@ public sealed class UpdateTelegramBotRequest
     [Range(1, 1_000)] public int StarsRoundingStep { get; set; } = 5;
     /// <summary>Новый token; null сохраняет прежний.</summary>
     [StringLength(256)] public string? BotToken { get; set; }
+    /// <summary>auto, proxy или direct.</summary>
+    [Required, StringLength(16)] public string TransportMode { get; set; } = TelegramTransportModes.Auto;
+    /// <summary>Полный упорядоченный список SOCKS5 upstream; null password сохраняет существующий.</summary>
+    [Required, MaxLength(10)] public List<UpdateTelegramProxyRequest> Proxies { get; set; } = [];
+}
+
+/// <summary>Редактируемые параметры SOCKS5-маршрута без раскрытия сохранённого пароля.</summary>
+public sealed class UpdateTelegramProxyRequest
+{
+    /// <summary>Стабильный идентификатор настройки.</summary>
+    public Guid Id { get; set; } = Guid.NewGuid();
+    /// <summary>Имя хоста или IP SOCKS5-сервера.</summary>
+    [Required, StringLength(253, MinimumLength = 1)] public string Host { get; set; } = string.Empty;
+    /// <summary>TCP-порт SOCKS5-сервера.</summary>
+    [Range(1, 65_535)] public int Port { get; set; } = 1080;
+    /// <summary>Логин SOCKS5-сервера.</summary>
+    [Required, StringLength(128, MinimumLength = 1)] public string Username { get; set; } = string.Empty;
+    /// <summary>Новый пароль либо null для сохранения ранее записанного.</summary>
+    [StringLength(256, MinimumLength = 1)] public string? Password { get; set; }
 }
 
 /// <summary>Ручное сообщение CRM или broadcast.</summary>

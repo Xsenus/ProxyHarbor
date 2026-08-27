@@ -21,6 +21,67 @@ public sealed class ApplicationUser : IdentityUser<Guid>
     public TelegramChat? TelegramChat { get; set; }
     /// <summary>Отзываемые персональные токены для API и безопасного обмена на web-сессию.</summary>
     public ICollection<UserApiToken> ApiTokens { get; set; } = [];
+    /// <summary>Публичный неизменяемый код для персональной реферальной ссылки.</summary>
+    public string ReferralCode { get; set; } = string.Empty;
+    /// <summary>Клиенты, зарегистрированные по ссылке этого пользователя.</summary>
+    public ICollection<ReferralRelationship> Referrals { get; set; } = [];
+    /// <summary>Реферальная связь, по которой был создан этот аккаунт.</summary>
+    public ReferralRelationship? ReferredBy { get; set; }
+}
+
+/// <summary>Неизменяемая связь пригласившего пользователя и нового клиента.</summary>
+public sealed class ReferralRelationship
+{
+    /// <summary>Первичный ключ реферальной связи.</summary>
+    public Guid Id { get; set; } = Guid.NewGuid();
+    /// <summary>Идентификатор владельца реферальной ссылки.</summary>
+    public Guid ReferrerUserId { get; set; }
+    /// <summary>Владелец реферальной ссылки.</summary>
+    public ApplicationUser ReferrerUser { get; set; } = null!;
+    /// <summary>Идентификатор приглашённого клиента.</summary>
+    public Guid ReferredUserId { get; set; }
+    /// <summary>Занятый номер в ограниченном наборе приглашений владельца.</summary>
+    public int Slot { get; set; }
+    /// <summary>Приглашённый клиент.</summary>
+    public ApplicationUser ReferredUser { get; set; } = null!;
+    /// <summary>Момент регистрации приглашённого клиента.</summary>
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+    /// <summary>Все начисления, полученные по этой связи.</summary>
+    public ICollection<ReferralReward> Rewards { get; set; } = [];
+}
+
+/// <summary>Идемпотентный журнал начислений за регистрацию и подтверждённые оплаты.</summary>
+public sealed class ReferralReward
+{
+    /// <summary>Первичный ключ начисления.</summary>
+    public Guid Id { get; set; } = Guid.NewGuid();
+    /// <summary>Идентификатор реферальной связи.</summary>
+    public Guid ReferralRelationshipId { get; set; }
+    /// <summary>Реферальная связь, породившая начисление.</summary>
+    public ReferralRelationship ReferralRelationship { get; set; } = null!;
+    /// <summary>Идентификатор оплаты, если начисление связано с покупкой.</summary>
+    public Guid? PaymentOrderId { get; set; }
+    /// <summary>Оплата, породившая начисление.</summary>
+    public PaymentOrder? PaymentOrder { get; set; }
+    /// <summary>Уникальный ключ идемпотентности начисления.</summary>
+    public string RewardKey { get; set; } = string.Empty;
+    /// <summary>Машиночитаемый вид начисления.</summary>
+    public string Kind { get; set; } = ReferralRewardKinds.Signup;
+    /// <summary>Количество добавленных дней подписки.</summary>
+    public int DaysGranted { get; set; }
+    /// <summary>Момент начисления в UTC.</summary>
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
+/// <summary>Поддерживаемые виды реферальных начислений.</summary>
+public static class ReferralRewardKinds
+{
+    /// <summary>Начисление за новую регистрацию.</summary>
+    public const string Signup = "signup";
+    /// <summary>Начисление за подтверждённую покупку приглашённого клиента.</summary>
+    public const string Purchase = "purchase";
+    /// <summary>Полный перечень допустимых видов.</summary>
+    public static readonly string[] All = [Signup, Purchase];
 }
 
 /// <summary>

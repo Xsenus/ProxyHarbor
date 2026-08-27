@@ -30,6 +30,10 @@ public sealed class AccountController(
         var subscription = await db.Subscriptions.AsNoTracking().SingleOrDefaultAsync(x => x.UserId == user.Id);
         var paidAccess = UserApiTokenService.HasPaidAccess(subscription, roles, DateTimeOffset.UtcNow);
         var tokens = await apiTokens.ListAsync(user.Id, HttpContext.RequestAborted);
+        var referralCount = await db.ReferralRelationships.CountAsync(x => x.ReferrerUserId == user.Id);
+        var referralRewardDays = await db.ReferralRewards
+            .Where(x => x.ReferralRelationship.ReferrerUserId == user.Id)
+            .SumAsync(x => (int?)x.DaysGranted) ?? 0;
         return Ok(new
         {
             user.Id,
@@ -39,6 +43,7 @@ public sealed class AccountController(
             user.PreferredLanguage,
             user.CreatedAt,
             user.LastLoginAt,
+            user.ReferralCode,
             roles,
             subscription = subscription is null ? null : new
             {
@@ -48,12 +53,49 @@ public sealed class AccountController(
                 subscription.ExpiresAt
             },
             entitlements = new { unlimitedProxyAccess = paidAccess, apiTokens = paidAccess },
+            referral = new
+            {
+                code = user.ReferralCode,
+                link = $"{Request.Scheme}://{Request.Host}/register?ref={Uri.EscapeDataString(user.ReferralCode)}",
+                invited = referralCount,
+                remaining = Math.Max(0, ReferralRewards.MaximumReferralsPerUser - referralCount),
+                maximum = ReferralRewards.MaximumReferralsPerUser,
+                rewardDays = referralRewardDays
+            },
             apiTokens = tokens.Select(x => new
             {
                 x.Id, x.Name, x.DisplaySuffix, scopes = x.Scopes.Split(' ', StringSplitOptions.RemoveEmptyEntries),
                 x.CreatedAt, x.LastUsedAt, x.RevokedAt, active = x.RevokedAt is null && paidAccess
             })
         });
+    }
+
+    /// <summary>Постранично показывает приглашённых клиентов и каждое начисление владельцу ссылки.</summary>
+    [HttpGet("referrals")]
+    public async Task<IActionResult> Referrals(
+        [FromQuery, Range(1, 100_000)] int page = 1,
+        [FromQuery, Range(1, 100)] int pageSize = 10,
+        CancellationToken token = default)
+    {
+        var user = await users.GetUserAsync(User);
+        if (user is null || !user.IsActive) return Unauthorized();
+        var query = db.ReferralRelationships.AsNoTracking().Where(x => x.ReferrerUserId == user.Id);
+        var total = await query.CountAsync(token);
+        var items = await query.OrderByDescending(x => x.CreatedAt).ThenBy(x => x.Id)
+            .Skip((page - 1) * pageSize).Take(pageSize)
+            .Select(x => new
+            {
+                x.Id,
+                x.CreatedAt,
+                user = new { x.ReferredUser.UserName, x.ReferredUser.Email, x.ReferredUser.DisplayName },
+                rewards = x.Rewards.OrderByDescending(r => r.CreatedAt).Select(r => new
+                {
+                    r.Id, r.Kind, r.DaysGranted, r.CreatedAt,
+                    productCode = r.PaymentOrder == null ? null : r.PaymentOrder.ProductCode,
+                    durationDays = r.PaymentOrder == null ? (int?)null : r.PaymentOrder.DurationDays
+                })
+            }).ToArrayAsync(token);
+        return Ok(new { items, page, pageSize, total });
     }
 
     /// <summary>Выпускает токен и показывает полный секрет ровно один раз.</summary>

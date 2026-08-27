@@ -115,6 +115,75 @@ public sealed class IdentityAccountIntegrationTests
     }
 
     [Fact]
+    public async Task ReferralRegistrationCreatesAuditedRewardAndExtendsReferrer()
+    {
+        await using var fixture = CreateFixture();
+        await fixture.CreateRolesAsync();
+        var users = fixture.Get<UserManager<ApplicationUser>>();
+        var db = fixture.Get<ProxyHarborDbContext>();
+        var referrer = new ApplicationUser
+        {
+            UserName = "referrer", Email = "referrer@example.com", ReferralCode = "abc123def456"
+        };
+        Assert.True((await users.CreateAsync(referrer, "Initial-user-42!")).Succeeded);
+        Assert.True((await users.AddToRoleAsync(referrer, UserRoles.User)).Succeeded);
+        db.Subscriptions.Add(new UserSubscription { UserId = referrer.Id });
+        await db.SaveChangesAsync();
+
+        var response = await fixture.AuthController(new RecordingEmailSender()).Register(new RegisterAccountRequest
+        {
+            Username = "invited.user", Email = "invited@example.com", Password = "Initial-user-42!",
+            ReferralCode = referrer.ReferralCode
+        });
+
+        Assert.Equal(StatusCodes.Status201Created, Assert.IsType<ObjectResult>(response).StatusCode);
+        var relationship = await db.ReferralRelationships.Include(x => x.Rewards).SingleAsync();
+        Assert.Equal(referrer.Id, relationship.ReferrerUserId);
+        Assert.Equal(1, relationship.Slot);
+        var reward = Assert.Single(relationship.Rewards);
+        Assert.Equal(ReferralRewardKinds.Signup, reward.Kind);
+        Assert.Equal(1, reward.DaysGranted);
+        var subscription = await db.Subscriptions.SingleAsync(x => x.UserId == referrer.Id);
+        Assert.Equal(SubscriptionPlans.Unlimited, subscription.Plan);
+        Assert.InRange(subscription.ExpiresAt!.Value, DateTimeOffset.UtcNow.AddHours(23), DateTimeOffset.UtcNow.AddHours(25));
+        Assert.True(await users.IsInRoleAsync(referrer, UserRoles.Subscriber));
+    }
+
+    [Fact]
+    public async Task ReferralPurchaseRewardsFollowPolicyAndAreIdempotent()
+    {
+        await using var fixture = CreateFixture();
+        await fixture.CreateRolesAsync();
+        var users = fixture.Get<UserManager<ApplicationUser>>();
+        var db = fixture.Get<ProxyHarborDbContext>();
+        var referrer = new ApplicationUser { UserName = "owner", Email = "owner@example.com", ReferralCode = "111111111111" };
+        var referred = new ApplicationUser { UserName = "buyer", Email = "buyer@example.com", ReferralCode = "222222222222" };
+        Assert.True((await users.CreateAsync(referrer, "Initial-user-42!")).Succeeded);
+        Assert.True((await users.CreateAsync(referred, "Initial-user-42!")).Succeeded);
+        Assert.True((await users.AddToRoleAsync(referrer, UserRoles.User)).Succeeded);
+        Assert.True((await users.AddToRoleAsync(referred, UserRoles.User)).Succeeded);
+        db.Subscriptions.AddRange(new UserSubscription { UserId = referrer.Id }, new UserSubscription { UserId = referred.Id });
+        db.ReferralRelationships.Add(new ReferralRelationship { ReferrerUserId = referrer.Id, ReferredUserId = referred.Id, Slot = 1 });
+        await db.SaveChangesAsync();
+        var now = DateTimeOffset.UtcNow;
+        var expected = new Dictionary<int, int> { [30] = 1, [90] = 7, [180] = 30, [365] = 90 };
+
+        foreach (var pair in expected)
+        {
+            var order = new PaymentOrder { UserId = referred.Id, DurationDays = pair.Key, ProductCode = $"p-{pair.Key}", Provider = "test", Status = PaymentStatuses.Paid };
+            db.PaymentOrders.Add(order);
+            await db.SaveChangesAsync();
+            Assert.Equal(pair.Value, await ReferralRewards.GrantForPurchaseAsync(db, users, order, now, CancellationToken.None));
+            Assert.Equal(0, await ReferralRewards.GrantForPurchaseAsync(db, users, order, now, CancellationToken.None));
+            await db.SaveChangesAsync();
+        }
+
+        Assert.Equal(128, await db.ReferralRewards.Where(x => x.Kind == ReferralRewardKinds.Purchase).SumAsync(x => x.DaysGranted));
+        var subscription = await db.Subscriptions.SingleAsync(x => x.UserId == referrer.Id);
+        Assert.InRange(subscription.ExpiresAt!.Value, now.AddDays(127).AddHours(23), now.AddDays(128).AddHours(1));
+    }
+
+    [Fact]
     public async Task RecoveryIsNeutralAndFailsClosedWithoutSmtp()
     {
         await using var fixture = CreateFixture();

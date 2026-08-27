@@ -199,6 +199,7 @@ public sealed class PaymentsController(
             var account = await users.FindByIdAsync(order.UserId.ToString());
             if (account is not null && !await users.IsInRoleAsync(account, UserRoles.Subscriber))
                 await users.AddToRoleAsync(account, UserRoles.Subscriber);
+            await ReferralRewards.GrantForPurchaseAsync(db, users, order, order.PaidAt.Value, token);
         }
         else if (notification.Status == PaymentStatuses.Refunded)
         {

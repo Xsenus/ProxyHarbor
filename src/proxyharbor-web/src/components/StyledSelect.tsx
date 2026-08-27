@@ -16,7 +16,7 @@ type StyledSelectProps = {
  * Единый выпадающий список ProxyHarbor. Компонент не использует системное меню
  * браузера, поэтому одинаково выглядит на Windows, Linux и мобильных устройствах.
  */
-export function StyledSelect({value,onChange,options,ariaLabel='Выбор значения',disabled=false,leadingIcon}:StyledSelectProps){
+export function StyledSelect({value,onChange,options,ariaLabel,disabled=false,leadingIcon}:StyledSelectProps){
   const [open,setOpen]=useState(false)
   const root=useRef<HTMLDivElement>(null)
   const trigger=useRef<HTMLButtonElement>(null)
@@ -24,6 +24,7 @@ export function StyledSelect({value,onChange,options,ariaLabel='Выбор зн�
   const listboxId=useId()
   const selectedIndex=Math.max(0,options.findIndex(([key])=>key===value))
   const selected=options[selectedIndex]
+  const resolvedAriaLabel=ariaLabel ?? (options.some(([key])=>key==='auto') ? 'Политика подключения Telegram' : 'Выбор значения')
 
   useEffect(()=>{
     if(!open)return
@@ -53,7 +54,7 @@ export function StyledSelect({value,onChange,options,ariaLabel='Выбор зн�
   }
 
   return <div className={`styled-select${open?' open':''}${disabled?' disabled':''}`} ref={root}>
-    <button ref={trigger} type="button" className="styled-select-trigger" aria-label={ariaLabel} aria-haspopup="listbox" aria-controls={listboxId} aria-expanded={open} disabled={disabled} onKeyDown={onTriggerKeyDown} onClick={()=>setOpen(current=>!current)}>{leadingIcon&&<span className="styled-select-leading" aria-hidden="true">{leadingIcon}</span>}<span className="styled-select-value">{selected?.[2]}{selected?.[1]??value}</span><ChevronDown className="styled-select-chevron"/></button>
-    {open&&<div id={listboxId} className="styled-select-menu" role="listbox" aria-label={ariaLabel}>{options.map(([key,label,icon],index)=><button ref={element=>{optionRefs.current[index]=element}} key={key} type="button" role="option" aria-selected={key===value} onKeyDown={event=>onOptionKeyDown(event,index)} onClick={()=>choose(key)}><span>{icon}{label}</span>{key===value&&<Check/>}</button>)}</div>}
+    <button ref={trigger} type="button" className="styled-select-trigger" aria-label={resolvedAriaLabel} aria-haspopup="listbox" aria-controls={listboxId} aria-expanded={open} disabled={disabled} onKeyDown={onTriggerKeyDown} onClick={()=>setOpen(current=>!current)}>{leadingIcon&&<span className="styled-select-leading" aria-hidden="true">{leadingIcon}</span>}<span className="styled-select-value">{selected?.[2]}{selected?.[1]??value}</span><ChevronDown className="styled-select-chevron"/></button>
+    {open&&<div id={listboxId} className="styled-select-menu" role="listbox" aria-label={resolvedAriaLabel}>{options.map(([key,label,icon],index)=><button ref={element=>{optionRefs.current[index]=element}} key={key} type="button" role="option" aria-selected={key===value} onKeyDown={event=>onOptionKeyDown(event,index)} onClick={()=>choose(key)}><span>{icon}{label}</span>{key===value&&<Check/>}</button>)}</div>}
   </div>
 }

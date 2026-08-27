@@ -29,6 +29,10 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
     public DbSet<UserSubscription> Subscriptions => Set<UserSubscription>();
     /// <summary>Хеши персональных пользовательских API-токенов.</summary>
     public DbSet<UserApiToken> UserApiTokens => Set<UserApiToken>();
+    /// <summary>Реферальные регистрации с неизменяемым владельцем.</summary>
+    public DbSet<ReferralRelationship> ReferralRelationships => Set<ReferralRelationship>();
+    /// <summary>Идемпотентные начисления дней подписки за рефералов.</summary>
+    public DbSet<ReferralReward> ReferralRewards => Set<ReferralReward>();
     /// <summary>Аудируемые заказы на оплату без платёжных реквизитов.</summary>
     public DbSet<PaymentOrder> PaymentOrders => Set<PaymentOrder>();
     /// <summary>Singleton runtime-настройка платежей с защищёнными секретами.</summary>
@@ -63,6 +67,8 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
 
         var user = builder.Entity<ApplicationUser>();
         user.Property(x => x.DisplayName).HasMaxLength(120);
+        user.Property(x => x.ReferralCode).HasMaxLength(16);
+        user.HasIndex(x => x.ReferralCode).IsUnique();
         user.Property(x => x.PreferredLanguage).HasMaxLength(2).HasDefaultValue(SupportedLanguages.Default);
         user.HasIndex(x => x.CreatedAt);
         user.ToTable(table =>
@@ -99,6 +105,35 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
         {
             table.HasCheckConstraint("CK_UserApiTokens_Hash", "octet_length(\"SecretHash\") = 32");
             table.HasCheckConstraint("CK_UserApiTokens_Timeline", "\"LastUsedAt\" IS NULL OR \"LastUsedAt\" >= \"CreatedAt\"");
+        });
+
+        var referral = builder.Entity<ReferralRelationship>();
+        referral.HasIndex(x => x.ReferredUserId).IsUnique();
+        referral.HasIndex(x => new { x.ReferrerUserId, x.Slot }).IsUnique();
+        referral.HasIndex(x => new { x.ReferrerUserId, x.CreatedAt });
+        referral.HasOne(x => x.ReferrerUser).WithMany(x => x.Referrals)
+            .HasForeignKey(x => x.ReferrerUserId).OnDelete(DeleteBehavior.Restrict);
+        referral.HasOne(x => x.ReferredUser).WithOne(x => x.ReferredBy)
+            .HasForeignKey<ReferralRelationship>(x => x.ReferredUserId).OnDelete(DeleteBehavior.Cascade);
+        referral.ToTable(table =>
+        {
+            table.HasCheckConstraint("CK_ReferralRelationships_DifferentUsers", "\"ReferrerUserId\" <> \"ReferredUserId\"");
+            table.HasCheckConstraint("CK_ReferralRelationships_Slot", "\"Slot\" BETWEEN 1 AND 10");
+        });
+
+        var referralReward = builder.Entity<ReferralReward>();
+        referralReward.HasIndex(x => x.RewardKey).IsUnique();
+        referralReward.HasIndex(x => new { x.ReferralRelationshipId, x.CreatedAt });
+        referralReward.Property(x => x.RewardKey).HasMaxLength(96);
+        referralReward.Property(x => x.Kind).HasMaxLength(16);
+        referralReward.HasOne(x => x.ReferralRelationship).WithMany(x => x.Rewards)
+            .HasForeignKey(x => x.ReferralRelationshipId).OnDelete(DeleteBehavior.Cascade);
+        referralReward.HasOne(x => x.PaymentOrder).WithMany().HasForeignKey(x => x.PaymentOrderId)
+            .OnDelete(DeleteBehavior.Restrict);
+        referralReward.ToTable(table =>
+        {
+            table.HasCheckConstraint("CK_ReferralRewards_Kind", "\"Kind\" IN ('signup', 'purchase')");
+            table.HasCheckConstraint("CK_ReferralRewards_Days", "\"DaysGranted\" BETWEEN 1 AND 365");
         });
 
         var payment = builder.Entity<PaymentOrder>();

@@ -24,6 +24,26 @@ public sealed class TelegramBotApiClientTests
         Assert.False(TelegramTokenPolicy.IsValid("1:two:colons-and-enough-characters"));
     }
 
+    [Theory]
+    [InlineData(TelegramTransportModes.Auto, 3, true)]
+    [InlineData(TelegramTransportModes.Proxy, 2, false)]
+    [InlineData(TelegramTransportModes.Direct, 1, true)]
+    public void TransportPolicyBuildsOrderedFailover(string mode, int expectedAttempts, bool endsWithDirect)
+    {
+        var first = new TelegramProxyOptions { Host = "first.example", Port = 1080 };
+        var second = new TelegramProxyOptions { Host = "second.example", Port = 1080 };
+        var attempts = TelegramBotApiClient.ConnectionAttempts(new TelegramBotOptions
+        {
+            TransportMode = mode,
+            Proxies = [first, second]
+        }).ToArray();
+
+        Assert.Equal(expectedAttempts, attempts.Length);
+        if (mode != TelegramTransportModes.Direct)
+            Assert.Equal(new[] { first, second }, attempts.Take(2));
+        Assert.Equal(endsWithDirect, attempts[^1] is null);
+    }
+
     [Fact]
     public async Task GetMeUsesOfficialEndpointAndReadsIdentity()
     {

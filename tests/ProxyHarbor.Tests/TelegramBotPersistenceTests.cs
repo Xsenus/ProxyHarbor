@@ -23,11 +23,22 @@ public sealed class TelegramBotPersistenceTests
             ProductStars = new Dictionary<string, int> { ["pro-30"] = 250 },
             AutomaticProductCodes = new(StringComparer.OrdinalIgnoreCase) { "unlimited-30" },
             StarsPerCurrencyUnit = 1.25m,
-            StarsRoundingStep = 10
+            StarsRoundingStep = 10,
+            TransportMode = TelegramTransportModes.Proxy,
+            Proxies =
+            [
+                new TelegramProxyOptions
+                {
+                    Id = Guid.Parse("11111111-1111-1111-1111-111111111111"),
+                    Host = "proxy.example.test", Port = 1080,
+                    Username = "telegram-user", Password = "TEST_ONLY_PROXY_PASSWORD"
+                }
+            ]
         });
 
         var persisted = await db.TelegramBotConfigurations.SingleAsync();
         Assert.DoesNotContain("TEST_ONLY", persisted.ProtectedSecrets, StringComparison.Ordinal);
+        Assert.DoesNotContain("proxy.example.test", persisted.ProtectedSecrets, StringComparison.Ordinal);
         var restored = await store.GetAsync();
         Assert.Equal("123:TEST_ONLY_NOT_A_REAL_TOKEN", restored.BotToken);
         Assert.Equal("https://proxy.example.test/api/v1/telegram/webhook/proxyharborbot", restored.WebhookUrl);
@@ -35,6 +46,11 @@ public sealed class TelegramBotPersistenceTests
         Assert.Contains("UNLIMITED-30", restored.AutomaticProductCodes);
         Assert.Equal(1.25m, restored.StarsPerCurrencyUnit);
         Assert.Equal(10, restored.StarsRoundingStep);
+        Assert.Equal(TelegramTransportModes.Proxy, restored.TransportMode);
+        var proxy = Assert.Single(restored.Proxies);
+        Assert.Equal("proxy.example.test", proxy.Host);
+        Assert.Equal("telegram-user", proxy.Username);
+        Assert.Equal("TEST_ONLY_PROXY_PASSWORD", proxy.Password);
     }
 
     [Fact]

@@ -11,10 +11,19 @@ public sealed class TelegramBotApiClient(IHttpClientFactory clients)
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
+    internal Task<TelegramBotIdentity> GetMeAsync(string botToken, CancellationToken token) =>
+        GetMeAsync(botToken, [], TelegramTransportModes.Direct, token);
+
     /// <summary>Проверяет token и возвращает Telegram identity бота.</summary>
-    public async Task<TelegramBotIdentity> GetMeAsync(string botToken, CancellationToken token)
+    public async Task<TelegramBotIdentity> GetMeAsync(
+        string botToken, IReadOnlyList<TelegramProxyOptions> proxies, string transportMode, CancellationToken token)
     {
-        var result = await CallAsync(botToken, "getMe", new { }, token);
+        var result = await CallAsync(new TelegramBotOptions
+        {
+            BotToken = botToken,
+            Proxies = proxies.ToList(),
+            TransportMode = transportMode
+        }, "getMe", new { }, token);
         if (!result.TryGetProperty("id", out var id) || !id.TryGetInt64(out var botId) ||
             !result.TryGetProperty("username", out var username) || string.IsNullOrWhiteSpace(username.GetString()))
             throw new TelegramBotApiException(502, "Telegram вернул неполную identity бота.");
@@ -24,19 +33,19 @@ public sealed class TelegramBotApiClient(IHttpClientFactory clients)
     /// <summary>Атомарно приводит профиль, команды, menu button и транспорт к настройкам ProxyHarbor.</summary>
     public async Task ProvisionAsync(TelegramBotOptions options, CancellationToken token)
     {
-        _ = await CallAsync(options.BotToken, "setMyName", new { name = options.Name }, token);
-        _ = await CallAsync(options.BotToken, "setMyDescription", new { description = options.Description }, token);
-        _ = await CallAsync(options.BotToken, "setMyShortDescription", new { short_description = options.ShortDescription }, token);
+        _ = await CallAsync(options, "setMyName", new { name = options.Name }, token);
+        _ = await CallAsync(options, "setMyDescription", new { description = options.Description }, token);
+        _ = await CallAsync(options, "setMyShortDescription", new { short_description = options.ShortDescription }, token);
         var commands = LocalizedCommands().ToArray();
-        _ = await CallAsync(options.BotToken, "setMyCommands", new { commands = commands[0].Commands }, token);
+        _ = await CallAsync(options, "setMyCommands", new { commands = commands[0].Commands }, token);
         foreach (var localized in commands)
-            _ = await CallAsync(options.BotToken, "setMyCommands", new { commands = localized.Commands, language_code = localized.Language }, token);
-        _ = await CallAsync(options.BotToken, "setChatMenuButton", new { menu_button = new { type = "commands" } }, token);
-        await SetEmbeddedAvatarAsync(options.BotToken, token);
+            _ = await CallAsync(options, "setMyCommands", new { commands = localized.Commands, language_code = localized.Language }, token);
+        _ = await CallAsync(options, "setChatMenuButton", new { menu_button = new { type = "commands" } }, token);
+        await SetEmbeddedAvatarAsync(options, token);
 
         if (options.UpdateMode == TelegramUpdateModes.Webhook)
         {
-            _ = await CallAsync(options.BotToken, "setWebhook", new
+            _ = await CallAsync(options, "setWebhook", new
             {
                 url = options.WebhookUrl,
                 secret_token = options.WebhookSecret,
@@ -47,7 +56,7 @@ public sealed class TelegramBotApiClient(IHttpClientFactory clients)
         }
         else
         {
-            _ = await CallAsync(options.BotToken, "deleteWebhook", new { drop_pending_updates = false }, token);
+            _ = await CallAsync(options, "deleteWebhook", new { drop_pending_updates = false }, token);
         }
     }
 
@@ -72,7 +81,7 @@ public sealed class TelegramBotApiClient(IHttpClientFactory clients)
     public async Task<JsonElement[]> GetUpdatesAsync(
         TelegramBotOptions options, long offset, CancellationToken token)
     {
-        var result = await CallAsync(options.BotToken, "getUpdates", new
+        var result = await CallAsync(options, "getUpdates", new
         {
             offset,
             limit = 100,
@@ -84,9 +93,9 @@ public sealed class TelegramBotApiClient(IHttpClientFactory clients)
 
     /// <summary>Отправляет текст с опциональной inline-клавиатурой.</summary>
     public async Task<long> SendMessageAsync(
-        string botToken, long chatId, string text, object? replyMarkup, CancellationToken token)
+        TelegramBotOptions options, long chatId, string text, object? replyMarkup, CancellationToken token)
     {
-        var result = await CallAsync(botToken, "sendMessage", new
+        var result = await CallAsync(options, "sendMessage", new
         {
             chat_id = chatId,
             text,
@@ -99,9 +108,9 @@ public sealed class TelegramBotApiClient(IHttpClientFactory clients)
 
     /// <summary>Отправляет счёт цифровой услуги в Telegram Stars.</summary>
     public async Task<long> SendStarsInvoiceAsync(
-        string botToken, long chatId, TelegramInvoicePayload invoice, CancellationToken token)
+        TelegramBotOptions options, long chatId, TelegramInvoicePayload invoice, CancellationToken token)
     {
-        var result = await CallAsync(botToken, "sendInvoice", new
+        var result = await CallAsync(options, "sendInvoice", new
         {
             chat_id = chatId,
             title = invoice.Title,
@@ -118,8 +127,8 @@ public sealed class TelegramBotApiClient(IHttpClientFactory clients)
 
     /// <summary>Подтверждает или отклоняет обязательный pre-checkout за отведённые Telegram 10 секунд.</summary>
     public Task AnswerPreCheckoutAsync(
-        string botToken, string queryId, bool ok, string? error, CancellationToken token) =>
-        CallBooleanAsync(botToken, "answerPreCheckoutQuery", new
+        TelegramBotOptions options, string queryId, bool ok, string? error, CancellationToken token) =>
+        CallBooleanAsync(options, "answerPreCheckoutQuery", new
         {
             pre_checkout_query_id = queryId,
             ok,
@@ -127,8 +136,8 @@ public sealed class TelegramBotApiClient(IHttpClientFactory clients)
         }, token);
 
     /// <summary>Закрывает индикатор callback-кнопки.</summary>
-    public Task AnswerCallbackAsync(string botToken, string queryId, string? text, CancellationToken token) =>
-        CallBooleanAsync(botToken, "answerCallbackQuery", new
+    public Task AnswerCallbackAsync(TelegramBotOptions options, string queryId, string? text, CancellationToken token) =>
+        CallBooleanAsync(options, "answerCallbackQuery", new
         {
             callback_query_id = queryId,
             text,
@@ -137,7 +146,7 @@ public sealed class TelegramBotApiClient(IHttpClientFactory clients)
 
     /// <summary>Отправляет сгенерированный текстовый файл прокси без записи на диск.</summary>
     public async Task<long> SendDocumentAsync(
-        string botToken, long chatId, string fileName, byte[] content, string caption, CancellationToken token)
+        TelegramBotOptions options, long chatId, string fileName, byte[] content, string caption, CancellationToken token)
     {
         using var multipart = new MultipartFormDataContent();
         multipart.Add(new StringContent(chatId.ToString(System.Globalization.CultureInfo.InvariantCulture)), "chat_id");
@@ -146,11 +155,11 @@ public sealed class TelegramBotApiClient(IHttpClientFactory clients)
         var file = new ByteArrayContent(content);
         file.Headers.ContentType = new("text/plain");
         multipart.Add(file, "document", fileName);
-        var result = await SendAsync(botToken, "sendDocument", multipart, token);
+        var result = await SendAsync(options, "sendDocument", multipart, token);
         return result.GetProperty("message_id").GetInt64();
     }
 
-    private async Task SetEmbeddedAvatarAsync(string botToken, CancellationToken token)
+    private async Task SetEmbeddedAvatarAsync(TelegramBotOptions options, CancellationToken token)
     {
         await using var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream(
             "ProxyHarbor.Api.Assets.telegram-bot-avatar.png")
@@ -163,27 +172,54 @@ public sealed class TelegramBotApiClient(IHttpClientFactory clients)
         var image = new ByteArrayContent(memory.ToArray());
         image.Headers.ContentType = new("image/png");
         multipart.Add(image, "avatar", "proxyharbor-bot.png");
-        _ = await SendAsync(botToken, "setMyProfilePhoto", multipart, token);
+        _ = await SendAsync(options, "setMyProfilePhoto", multipart, token);
     }
 
-    private async Task CallBooleanAsync(string tokenValue, string method, object payload, CancellationToken token) =>
-        _ = await CallAsync(tokenValue, method, payload, token);
+    private async Task CallBooleanAsync(TelegramBotOptions options, string method, object payload, CancellationToken token) =>
+        _ = await CallAsync(options, method, payload, token);
 
     private async Task<JsonElement> CallAsync(
-        string tokenValue, string method, object payload, CancellationToken token)
+        TelegramBotOptions options, string method, object payload, CancellationToken token)
     {
         using var content = JsonContent.Create(payload, options: Json);
-        return await SendAsync(tokenValue, method, content, token);
+        return await SendAsync(options, method, content, token);
     }
 
     private async Task<JsonElement> SendAsync(
-        string tokenValue, string method, HttpContent content, CancellationToken token)
+        TelegramBotOptions options, string method, HttpContent content, CancellationToken token)
     {
+        var tokenValue = options.BotToken;
         if (!TelegramTokenPolicy.IsValid(tokenValue))
             throw new TelegramBotApiException(400, "Некорректный token Telegram-бота.");
-        var client = clients.CreateClient("telegram");
-        using var response = await client.PostAsync(
-            $"https://api.telegram.org/bot{tokenValue}/{method}", content, token);
+        var payload = await content.ReadAsByteArrayAsync(token);
+        var contentHeaders = content.Headers.ToArray();
+        var attempts = ConnectionAttempts(options).ToArray();
+        Exception? lastTransportError = null;
+        HttpResponseMessage? response = null;
+        foreach (var proxy in attempts)
+        {
+            try
+            {
+                using var requestContent = new ByteArrayContent(payload);
+                foreach (var header in contentHeaders)
+                    requestContent.Headers.TryAddWithoutValidation(header.Key, header.Value);
+                response = await PostAsync(proxy, tokenValue, method, requestContent, token);
+                break;
+            }
+            catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException)
+            {
+                if (token.IsCancellationRequested) throw;
+                lastTransportError = exception;
+            }
+        }
+        if (response is null)
+            throw new TelegramBotApiException(504,
+                attempts.Any(x => x is not null)
+                    ? "Не удалось подключиться к Telegram ни через один настроенный SOCKS5-прокси."
+                    : "Сервер не может установить соединение с Telegram Bot API.",
+                innerException: lastTransportError);
+        using (response)
+        {
         var body = await response.Content.ReadAsStringAsync(token);
         TelegramEnvelope? envelope = null;
         try { envelope = JsonSerializer.Deserialize<TelegramEnvelope>(body, Json); }
@@ -195,6 +231,36 @@ public sealed class TelegramBotApiClient(IHttpClientFactory clients)
                 envelope?.Parameters?.RetryAfter,
                 response.StatusCode == HttpStatusCode.Forbidden);
         return envelope.Result;
+        }
+    }
+
+    private async Task<HttpResponseMessage> PostAsync(
+        TelegramProxyOptions? proxy, string botToken, string method, HttpContent content, CancellationToken token)
+    {
+        if (proxy is null)
+            return await clients.CreateClient("telegram").PostAsync(
+                $"https://api.telegram.org/bot{botToken}/{method}", content, token);
+        var webProxy = new WebProxy(new Uri($"socks5://{proxy.Host}:{proxy.Port}"))
+        {
+            Credentials = new NetworkCredential(proxy.Username, proxy.Password)
+        };
+        using var handler = new SocketsHttpHandler
+        {
+            Proxy = webProxy,
+            UseProxy = true,
+            ConnectTimeout = TimeSpan.FromSeconds(8),
+            AllowAutoRedirect = false,
+            AutomaticDecompression = DecompressionMethods.All
+        };
+        using var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(20) };
+        return await client.PostAsync($"https://api.telegram.org/bot{botToken}/{method}", content, token);
+    }
+
+    internal static IEnumerable<TelegramProxyOptions?> ConnectionAttempts(TelegramBotOptions options)
+    {
+        if (options.TransportMode != TelegramTransportModes.Direct)
+            foreach (var proxy in options.Proxies) yield return proxy;
+        if (options.TransportMode != TelegramTransportModes.Proxy) yield return null;
     }
 
     private static string TelegramSafeText(string? description)
@@ -230,7 +296,8 @@ public sealed record TelegramInvoicePayload(Guid OrderId, string Title, string D
 
 /// <summary>Ошибка Bot API с данными для управляемого повтора.</summary>
 public sealed class TelegramBotApiException(
-    int errorCode, string message, int? retryAfterSeconds = null, bool forbidden = false) : Exception(message)
+    int errorCode, string message, int? retryAfterSeconds = null, bool forbidden = false,
+    Exception? innerException = null) : Exception(message, innerException)
 {
     /// <summary>Telegram error_code либо HTTP status.</summary>
     public int ErrorCode { get; } = errorCode;

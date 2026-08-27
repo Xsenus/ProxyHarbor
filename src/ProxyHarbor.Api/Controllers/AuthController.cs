@@ -72,7 +72,8 @@ public sealed class AuthController(
                 Email = request.Email.Trim(),
                 DisplayName = request.DisplayName?.Trim(),
                 PreferredLanguage = SupportedLanguages.Normalize(request.PreferredLanguage),
-                IsActive = true
+                IsActive = true,
+                ReferralCode = await CreateReferralCodeAsync()
             };
             var created = await users.CreateAsync(user, request.Password);
             if (!created.Succeeded) return IdentityProblem(created, "Не удалось создать аккаунт");
@@ -80,11 +81,55 @@ public sealed class AuthController(
             if (!roleResult.Succeeded) return IdentityProblem(roleResult, "Не удалось назначить права аккаунта");
 
             db.Subscriptions.Add(new UserSubscription { UserId = user.Id });
+            if (!string.IsNullOrWhiteSpace(request.ReferralCode))
+            {
+                var code = request.ReferralCode.Trim().ToLowerInvariant();
+                var referrer = await db.Users.SingleOrDefaultAsync(x => x.ReferralCode == code && x.IsActive);
+                if (referrer is null)
+                    return BadRequest(new ProblemDetails { Title = "Реферальная ссылка недействительна", Status = 400 });
+                // PostgreSQL advisory lock serializes registrations for one referrer. Together with
+                // the unique (ReferrerUserId, Slot) index this prevents an 11th concurrent invite.
+                if (db.Database.IsRelational())
+                    await db.Database.ExecuteSqlInterpolatedAsync(
+                        $"SELECT pg_advisory_xact_lock(hashtextextended({referrer.Id.ToString()}, 0))");
+                var occupiedSlots = await db.ReferralRelationships.Where(x => x.ReferrerUserId == referrer.Id)
+                    .Select(x => x.Slot).ToArrayAsync();
+                var slot = Enumerable.Range(1, ReferralRewards.MaximumReferralsPerUser)
+                    .FirstOrDefault(candidate => !occupiedSlots.Contains(candidate));
+                if (slot == 0)
+                    return Conflict(new ProblemDetails { Title = "Лимит приглашений по этой ссылке исчерпан", Status = 409 });
+                var relationship = new ReferralRelationship
+                {
+                    ReferrerUserId = referrer.Id,
+                    ReferredUserId = user.Id,
+                    Slot = slot
+                };
+                db.ReferralRelationships.Add(relationship);
+                db.ReferralRewards.Add(new ReferralReward
+                {
+                    ReferralRelationship = relationship,
+                    RewardKey = $"signup:{user.Id:N}",
+                    Kind = ReferralRewardKinds.Signup,
+                    DaysGranted = 1
+                });
+                await db.SaveChangesAsync();
+                await ReferralRewards.ExtendSubscriptionAsync(db, users, referrer.Id, 1, DateTimeOffset.UtcNow, HttpContext.RequestAborted);
+            }
             await db.SaveChangesAsync();
             await transaction.CommitAsync();
             await signIn.SignInAsync(user, isPersistent: false);
             return StatusCode(StatusCodes.Status201Created, await CreateSessionAsync(user));
         });
+    }
+
+    private async Task<string> CreateReferralCodeAsync()
+    {
+        for (var attempt = 0; attempt < 8; attempt++)
+        {
+            var code = ReferralCodes.New();
+            if (!await db.Users.AnyAsync(x => x.ReferralCode == code)) return code;
+        }
+        throw new InvalidOperationException("Не удалось создать уникальный реферальный код.");
     }
 
     /// <summary>Не раскрывая наличие email, отправляет одноразовую ссылку восстановления.</summary>
@@ -233,6 +278,8 @@ public sealed class RegisterAccountRequest
     [Required, StringLength(256, MinimumLength = 12)] public string Password { get; set; } = string.Empty;
     /// <summary>Язык сайта, писем и привязанного Telegram-бота.</summary>
     [Required, StringLength(2, MinimumLength = 2)] public string PreferredLanguage { get; set; } = SupportedLanguages.Default;
+    /// <summary>Необязательный код из персональной ссылки пригласившего пользователя.</summary>
+    [RegularExpression("^[a-f0-9]{12}$")] public string? ReferralCode { get; set; }
 }
 
 /// <summary>Запрос ссылки восстановления без account enumeration.</summary>

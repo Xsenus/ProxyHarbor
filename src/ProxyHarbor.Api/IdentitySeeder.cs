@@ -37,15 +37,18 @@ public static class IdentitySeeder
                 Email = email,
                 EmailConfirmed = true,
                 DisplayName = "Администратор",
+                ReferralCode = ReferralCodes.New(),
                 IsActive = true
             };
             EnsureSucceeded(await users.CreateAsync(administrator, password),
                 "Не удалось создать bootstrap-администратора");
         }
 
-        if (!administrator.IsActive)
+        if (!administrator.IsActive || string.IsNullOrWhiteSpace(administrator.ReferralCode))
         {
             administrator.IsActive = true;
+            if (string.IsNullOrWhiteSpace(administrator.ReferralCode))
+                administrator.ReferralCode = ReferralCodes.New();
             EnsureSucceeded(await users.UpdateAsync(administrator),
                 "Не удалось активировать bootstrap-администратора");
         }

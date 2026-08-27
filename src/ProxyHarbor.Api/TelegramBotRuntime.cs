@@ -230,7 +230,7 @@ public sealed class TelegramUpdateProcessor(
         if (!callback.TryGetProperty("from", out var from) || !callback.TryGetProperty("message", out var message) ||
             !message.TryGetProperty("chat", out var chatElement))
         {
-            await api.AnswerCallbackAsync(options.BotToken, queryId, "Command expired.", token);
+            await api.AnswerCallbackAsync(options, queryId, "Command expired.", token);
             return;
         }
         var chat = await EnsureChatAsync(chatElement, from, token);
@@ -244,7 +244,7 @@ public sealed class TelegramUpdateProcessor(
         else if (data == "language") await SendLanguageMenuAsync(chat, token);
         else if (data.StartsWith("language:", StringComparison.Ordinal)) await ChangeLanguageAsync(chat, data[9..], token);
         else await SendMainMenuAsync(chat, token);
-        await api.AnswerCallbackAsync(options.BotToken, queryId, null, token);
+        await api.AnswerCallbackAsync(options, queryId, null, token);
     }
 
     private async Task HandlePreCheckoutAsync(
@@ -267,7 +267,7 @@ public sealed class TelegramUpdateProcessor(
                 x.User.TelegramChat != null && x.User.TelegramChat.TelegramUserId == telegramUserId, token);
             if (valid) error = null;
         }
-        await api.AnswerPreCheckoutAsync(options.BotToken, queryId, valid, error, token);
+        await api.AnswerPreCheckoutAsync(options, queryId, valid, error, token);
     }
 
     private async Task HandleSuccessfulPaymentAsync(
@@ -310,6 +310,7 @@ public sealed class TelegramUpdateProcessor(
         var account = await users.FindByIdAsync(chat.UserId.ToString());
         if (account is not null && !await users.IsInRoleAsync(account, UserRoles.Subscriber))
             await users.AddToRoleAsync(account, UserRoles.Subscriber);
+        await ReferralRewards.GrantForPurchaseAsync(db, users, order, paidAt, token);
         await db.SaveChangesAsync(token);
         await transaction.CommitAsync(token);
         await ReplyAsync(chat, TelegramLocalization.Get("paymentConfirmed", Language(chat),
@@ -471,6 +472,7 @@ public sealed class TelegramUpdateProcessor(
             {
                 UserName = $"tg.{telegramUserId}",
                 DisplayName = displayName.Length == 0 ? $"Telegram {telegramUserId}" : TelegramDispatchService.Limit(displayName, 120),
+                ReferralCode = ReferralCodes.New(),
                 PreferredLanguage = SupportedLanguages.Normalize(from.TryGetProperty("language_code", out var initialLanguage) ? initialLanguage.GetString() : null),
                 EmailConfirmed = false,
                 IsActive = true
@@ -690,7 +692,7 @@ public sealed class TelegramOutboundWorker(
     {
         var payload = JsonSerializer.Deserialize<TelegramTextPayload>(message.PayloadJson, Json)
             ?? throw new InvalidOperationException("Пустой text payload.");
-        return await api.SendMessageAsync(settings.BotToken, message.TelegramChat.ChatId,
+        return await api.SendMessageAsync(settings, message.TelegramChat.ChatId,
             payload.Text, payload.ReplyMarkup, token);
     }
 
@@ -699,7 +701,7 @@ public sealed class TelegramOutboundWorker(
     {
         var payload = JsonSerializer.Deserialize<TelegramInvoicePayload>(message.PayloadJson, Json)
             ?? throw new InvalidOperationException("Пустой invoice payload.");
-        return await api.SendStarsInvoiceAsync(settings.BotToken, message.TelegramChat.ChatId, payload, token);
+        return await api.SendStarsInvoiceAsync(settings, message.TelegramChat.ChatId, payload, token);
     }
 
     private static async Task<long> SendProxyFileAsync(
@@ -710,7 +712,7 @@ public sealed class TelegramOutboundWorker(
             ?? throw new InvalidOperationException("Пустой proxy_file payload.");
         var file = await BuildProxyFileAsync(
             db, Math.Min(payload.Count, settings.ProxyFileMaxItems), freshAfter, token);
-        return await api.SendDocumentAsync(settings.BotToken, message.TelegramChat.ChatId,
+        return await api.SendDocumentAsync(settings, message.TelegramChat.ChatId,
             $"proxyharbor-{DateTimeOffset.UtcNow:yyyyMMdd-HHmm}.txt", file.Content,
             $"{file.Count:N0} проверенных прокси · сформировано {DateTimeOffset.UtcNow:dd.MM.yyyy HH:mm} UTC", token);
     }

@@ -45,6 +45,10 @@ public sealed class TelegramBotOptions
     public decimal StarsPerCurrencyUnit { get; set; } = 1m;
     /// <summary>Шаг округления автоматической цены вверх.</summary>
     public int StarsRoundingStep { get; set; } = 5;
+    /// <summary>auto пробует SOCKS5 по очереди и затем прямое соединение; proxy запрещает direct fallback.</summary>
+    public string TransportMode { get; set; } = TelegramTransportModes.Auto;
+    /// <summary>Защищённый список SOCKS5 upstream с авторизацией и failover.</summary>
+    public List<TelegramProxyOptions> Proxies { get; set; } = [];
     /// <summary>Секретный bot token; доступен только серверу.</summary>
     public string BotToken { get; set; } = string.Empty;
     /// <summary>Секрет проверки webhook header.</summary>
@@ -65,6 +69,34 @@ public sealed class TelegramBotOptions
 
     /// <summary>Готов ли runtime принимать update.</summary>
     public bool Ready => Enabled && BotId.HasValue && BotToken.Length > 0 && WebhookSecret.Length > 0;
+}
+
+/// <summary>Защищённые параметры одного SOCKS5-маршрута к Telegram API.</summary>
+public sealed class TelegramProxyOptions
+{
+    /// <summary>Стабильный идентификатор для безопасного обновления пароля.</summary>
+    public Guid Id { get; set; } = Guid.NewGuid();
+    /// <summary>Имя хоста или IP SOCKS5-сервера.</summary>
+    public string Host { get; set; } = string.Empty;
+    /// <summary>TCP-порт SOCKS5-сервера.</summary>
+    public int Port { get; set; } = 1080;
+    /// <summary>Логин SOCKS5-сервера.</summary>
+    public string Username { get; set; } = string.Empty;
+    /// <summary>Пароль SOCKS5-сервера; хранится только в защищённой конфигурации.</summary>
+    public string Password { get; set; } = string.Empty;
+}
+
+/// <summary>Политики выбора маршрута к Telegram API.</summary>
+public static class TelegramTransportModes
+{
+    /// <summary>Сначала прокси, затем прямой резервный маршрут.</summary>
+    public const string Auto = "auto";
+    /// <summary>Только настроенные SOCKS5-прокси.</summary>
+    public const string Proxy = "proxy";
+    /// <summary>Только прямое соединение.</summary>
+    public const string Direct = "direct";
+    /// <summary>Все поддерживаемые политики.</summary>
+    public static readonly string[] All = [Auto, Proxy, Direct];
 }
 
 /// <summary>Допустимые взаимоисключающие способы получения update.</summary>
@@ -129,6 +161,9 @@ public sealed class TelegramBotConfigurationStore(
                 AutomaticProductCodes = new HashSet<string>(settings.AutomaticProductCodes ?? [], StringComparer.OrdinalIgnoreCase),
                 StarsPerCurrencyUnit = settings.StarsPerCurrencyUnit <= 0 ? 1m : settings.StarsPerCurrencyUnit,
                 StarsRoundingStep = settings.StarsRoundingStep <= 0 ? 5 : settings.StarsRoundingStep,
+                TransportMode = TelegramTransportModes.All.Contains(settings.TransportMode, StringComparer.Ordinal)
+                    ? settings.TransportMode : TelegramTransportModes.Auto,
+                Proxies = secrets.Proxies ?? [],
                 BotToken = secrets.BotToken,
                 WebhookSecret = secrets.WebhookSecret,
                 BotId = entity.BotId,
@@ -158,9 +193,9 @@ public sealed class TelegramBotConfigurationStore(
             options.Enabled, options.UpdateMode, options.Name, options.Description,
             options.ShortDescription, options.SupportText, options.ProxyFileMaxItems,
             options.WebhookMaxConnections, options.ProductStars, options.AutomaticProductCodes,
-            options.StarsPerCurrencyUnit, options.StarsRoundingStep), Json);
+            options.StarsPerCurrencyUnit, options.StarsRoundingStep, options.TransportMode), Json);
         entity.ProtectedSecrets = protector.Protect(JsonSerializer.Serialize(
-            new StoredSecrets(options.BotToken, options.WebhookSecret), Json));
+            new StoredSecrets(options.BotToken, options.WebhookSecret, options.Proxies), Json));
         entity.BotId = options.BotId;
         entity.BotUsername = options.BotUsername;
         entity.ProvisionedAt = options.ProvisionedAt;
@@ -180,8 +215,9 @@ public sealed class TelegramBotConfigurationStore(
         Dictionary<string, int> ProductStars,
         HashSet<string>? AutomaticProductCodes = null,
         decimal StarsPerCurrencyUnit = 1m,
-        int StarsRoundingStep = 5);
-    private sealed record StoredSecrets(string BotToken, string WebhookSecret);
+        int StarsRoundingStep = 5,
+        string TransportMode = TelegramTransportModes.Auto);
+    private sealed record StoredSecrets(string BotToken, string WebhookSecret, List<TelegramProxyOptions>? Proxies = null);
 }
 
 /// <summary>Единая формула цены Stars для админки и runtime торгового бота.</summary>

@@ -39,7 +39,7 @@ docker compose up -d --build
 
 ## Платежи и подписки
 
-Telegram Stars и commerce-бот настраиваются в `/admin/telegram`; token хранится в БД только как Data Protection ciphertext и не использует `TELEGRAM_BOT_TOKEN`, зарезервированный для доставки backup. Полный runbook: [TELEGRAM_BOT.md](TELEGRAM_BOT.md).
+Telegram Stars и commerce-бот настраиваются в `/admin/telegram`; token и упорядоченные SOCKS5 credentials хранятся в БД только как Data Protection ciphertext и не используют `TELEGRAM_BOT_TOKEN`, зарезервированный для доставки backup. Режим `auto` пробует прокси по порядку и затем прямой маршрут, `proxy` исключает прямое соединение, а `direct` отключает прокси. Полный runbook: [TELEGRAM_BOT.md](TELEGRAM_BOT.md).
 
 Биллинг по умолчанию выключен (`PAYMENTS_ENABLED=false`). Сначала заключите договор с провайдером,
 получите merchant-реквизиты и проверьте тестовый платёж. ProxyHarbor использует hosted checkout:
