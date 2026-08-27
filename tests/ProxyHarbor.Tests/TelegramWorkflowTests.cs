@@ -40,6 +40,7 @@ public sealed class TelegramWorkflowTests
         Assert.Contains(await fixture.Db.TelegramConversationMessages.ToArrayAsync(), x =>
             x.Direction == "bot" && x.Text.Contains("Telegram Stars", StringComparison.Ordinal));
         var user = await fixture.Db.Users.SingleAsync();
+        Assert.Equal("tg.9001@telegram.proxyharbor.invalid", user.Email);
         Assert.True(await fixture.Users.IsInRoleAsync(user, UserRoles.User));
 
         await processor.ProcessAsync(Message(1, "/start"), TelegramUpdateModes.Webhook, CancellationToken.None);
@@ -265,7 +266,8 @@ public sealed class TelegramWorkflowTests
             collection.AddDbContext<ProxyHarborDbContext>(builder => builder
                 .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
                 .ConfigureWarnings(warnings => warnings.Ignore(InMemoryEventId.TransactionIgnoredWarning)));
-            collection.AddIdentityCore<ApplicationUser>().AddRoles<IdentityRole<Guid>>().AddEntityFrameworkStores<ProxyHarborDbContext>();
+            collection.AddIdentityCore<ApplicationUser>(options => options.User.RequireUniqueEmail = true)
+                .AddRoles<IdentityRole<Guid>>().AddEntityFrameworkStores<ProxyHarborDbContext>();
             var services = collection.BuildServiceProvider();
             var db = services.GetRequiredService<ProxyHarborDbContext>();
             var users = services.GetRequiredService<UserManager<ApplicationUser>>();
@@ -307,7 +309,11 @@ public sealed class TelegramWorkflowTests
 
         internal async Task<ApplicationUser> CreateWebUserAsync(string username)
         {
-            var user = new ApplicationUser { UserName = username, DisplayName = username };
+            var user = new ApplicationUser
+            {
+                UserName = username, DisplayName = username,
+                Email = $"{username}@example.test"
+            };
             Assert.True((await Users.CreateAsync(user)).Succeeded);
             Db.Subscriptions.Add(new UserSubscription { UserId = user.Id, User = user });
             await Db.SaveChangesAsync();

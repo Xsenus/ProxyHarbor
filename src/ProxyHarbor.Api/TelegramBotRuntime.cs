@@ -471,6 +471,10 @@ public sealed class TelegramUpdateProcessor(
             var user = new ApplicationUser
             {
                 UserName = $"tg.{telegramUserId}",
+                // Identity требует уникальный email и отклоняет null даже для аккаунта,
+                // созданного Telegram. Зарезервированный домен .invalid исключает
+                // случайную доставку писем и остаётся стабильным уникальным ключом.
+                Email = $"tg.{telegramUserId}@telegram.proxyharbor.invalid",
                 DisplayName = displayName.Length == 0 ? $"Telegram {telegramUserId}" : TelegramDispatchService.Limit(displayName, 120),
                 ReferralCode = ReferralCodes.New(),
                 PreferredLanguage = SupportedLanguages.Normalize(from.TryGetProperty("language_code", out var initialLanguage) ? initialLanguage.GetString() : null),
