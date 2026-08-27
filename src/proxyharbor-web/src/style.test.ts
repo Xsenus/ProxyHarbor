@@ -31,7 +31,7 @@ describe('responsive accessibility stylesheet', () => {
     expect(stylesheet).toContain('.admin-section{display:flex;flex-direction:column;width:100%;min-height:calc(100vh - 76px)')
     expect(stylesheet).toContain('.admin-page-heading{display:flex;align-items:center;justify-content:space-between;gap:20px;width:100%;height:auto;min-height:44px;max-width:none;padding:0;margin:0 0 16px;border:0}')
     expect(stylesheet).toContain('.admin-breadcrumb h1{overflow:hidden;margin:0')
-    expect(stylesheet).toContain('.proxy-inventory-card>.pagination,.users-registry>.pagination')
+    expect(stylesheet).toContain('.proxy-inventory-card>.pagination,.users-registry>.pagination,.telegram-chat-list>.pagination')
     expect(stylesheet).toContain('margin-top:auto;margin-bottom:-5px')
     expect(stylesheet).toContain('.users-table .user-identity>span{display:block;flex:1 1 auto;min-width:0;height:auto;border-radius:0;background:transparent;color:inherit}')
     expect(stylesheet).toContain('.users-table,.admin-proxy-table{scrollbar-width:thin;scrollbar-color:#315e50 #091510}')
