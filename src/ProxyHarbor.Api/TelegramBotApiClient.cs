@@ -136,13 +136,15 @@ public sealed class TelegramBotApiClient(IHttpClientFactory clients)
         }, token);
 
     /// <summary>Закрывает индикатор callback-кнопки.</summary>
-    public Task AnswerCallbackAsync(TelegramBotOptions options, string queryId, string? text, CancellationToken token) =>
-        CallBooleanAsync(options, "answerCallbackQuery", new
-        {
-            callback_query_id = queryId,
-            text,
-            show_alert = false
-        }, token);
+    public Task AnswerCallbackAsync(TelegramBotOptions options, string queryId, string? text, CancellationToken token)
+    {
+        // Telegram трактует отсутствие текста как обычное закрытие индикатора кнопки.
+        // Явный JSON null некоторые клиенты показывают пользователю как строку "null".
+        object payload = string.IsNullOrWhiteSpace(text)
+            ? new { callback_query_id = queryId }
+            : new { callback_query_id = queryId, text, show_alert = false };
+        return CallBooleanAsync(options, "answerCallbackQuery", payload, token);
+    }
 
     /// <summary>Отправляет сгенерированный текстовый файл прокси без записи на диск.</summary>
     public async Task<long> SendDocumentAsync(

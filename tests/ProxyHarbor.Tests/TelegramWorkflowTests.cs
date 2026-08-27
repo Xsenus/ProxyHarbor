@@ -121,6 +121,10 @@ public sealed class TelegramWorkflowTests
         Assert.True(await fixture.Users.IsInRoleAsync(account, UserRoles.Subscriber));
         Assert.Contains("answerPreCheckoutQuery", fixture.Telegram.Methods);
         Assert.Contains("answerCallbackQuery", fixture.Telegram.Methods);
+        Assert.Contains(fixture.Telegram.Requests, request =>
+            request.Method == "answerCallbackQuery" &&
+            request.Body.Contains("callback-10", StringComparison.Ordinal) &&
+            !request.Body.Contains("\"text\"", StringComparison.Ordinal));
         await processor.ProcessAsync(Message(42, "/account"), TelegramUpdateModes.Webhook, CancellationToken.None);
     }
 
@@ -333,6 +337,7 @@ public sealed class TelegramWorkflowTests
     {
         private readonly RecordingTelegramHandler handler = new();
         internal IReadOnlyCollection<string> Methods => handler.Methods;
+        internal IReadOnlyCollection<(string Method, string Body)> Requests => handler.Requests;
         public HttpClient CreateClient(string name) => new(handler, false);
         public void Dispose() => handler.Dispose();
     }
@@ -340,13 +345,17 @@ public sealed class TelegramWorkflowTests
     private sealed class RecordingTelegramHandler : HttpMessageHandler
     {
         internal List<string> Methods { get; } = [];
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        internal List<(string Method, string Body)> Requests { get; } = [];
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             var method = request.RequestUri!.Segments[^1];
             Methods.Add(method);
+            Requests.Add((method, request.Content is null
+                ? string.Empty
+                : await request.Content.ReadAsStringAsync(cancellationToken)));
             var result = method == "getMe" ? "{\"id\":42,\"username\":\"ProxyHarborTestBot\"}" : "true";
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
-            { Content = new StringContent($"{{\"ok\":true,\"result\":{result}}}", Encoding.UTF8, "application/json") });
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            { Content = new StringContent($"{{\"ok\":true,\"result\":{result}}}", Encoding.UTF8, "application/json") };
         }
     }
 }
