@@ -7,6 +7,8 @@
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-08-27
+
 ### Added
 
 - Добавлена распределённая проверка прокси на управляемых из админки внешних VPS: одноразовое SSH-развёртывание изолированного checker-agent, hashed agent tokens, TOFU SSH fingerprint, PostgreSQL `SKIP LOCKED` leases, heartbeat/TTL failover, полный audit, локальный fallback, адаптивная панель и backup schema v7.
