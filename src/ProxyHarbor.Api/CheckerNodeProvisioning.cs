@@ -212,6 +212,10 @@ public sealed class CheckerNodeProvisioner(IOptions<CheckerAgentDeploymentOption
         if ! id proxyharbor-checker >/dev/null 2>&1; then
           useradd --system --user-group --home-dir /nonexistent --shell /usr/sbin/nologin proxyharbor-checker
         fi
+        # The directory is initially private because it also serves Docker token staging.
+        # Native systemd execution needs traversal permission without exposing the token.
+        chown root:proxyharbor-checker /opt/proxyharbor-checker
+        chmod 0750 /opt/proxyharbor-checker
         work=$(mktemp -d /opt/proxyharbor-checker/install.XXXXXX)
         cleanup() { rm -rf "$work"; }
         trap cleanup EXIT HUP INT TERM

@@ -71,6 +71,8 @@ public sealed class CheckerNodeProvisionerTests
         Assert.Contains("if command -v docker >/dev/null 2>&1 && docker info", script, StringComparison.Ordinal);
         Assert.Contains("proxyharbor-checker-agent-next", script, StringComparison.Ordinal);
         Assert.Contains("systemctl enable proxyharbor-checker-agent.service", script, StringComparison.Ordinal);
+        Assert.Contains("chown root:proxyharbor-checker /opt/proxyharbor-checker", script, StringComparison.Ordinal);
+        Assert.Contains("chmod 0750 /opt/proxyharbor-checker", script, StringComparison.Ordinal);
         Assert.Contains("ProtectSystem=strict", DecodeUnit(script), StringComparison.Ordinal);
         Assert.Contains("NoNewPrivileges=true", DecodeUnit(script), StringComparison.Ordinal);
         Assert.Contains("sha256sum --check proxyharbor-checker-agent.tar.gz.sha256 >/dev/null", script, StringComparison.Ordinal);
