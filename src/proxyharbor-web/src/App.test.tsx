@@ -405,6 +405,38 @@ describe('ProxyHarbor UI', () => {
     expect(container.querySelector('.admin-proxy-address .country-flag.flag-de')).toBeInTheDocument()
   })
 
+  it('shows VPN statistics and performs filtering, sorting and paging on the server', async () => {
+    window.history.replaceState({}, '', '/admin/vpn')
+    vi.mocked(fetch).mockImplementation(async input => {
+      const url = String(input)
+      if (url.includes('/api/v1/admin/vpn/endpoints?')) return jsonResponse({
+        items:[{id:'vpn-1',host:'198.51.100.20',port:443,countryCode:'FR',protocol:'Vless',transport:'tcp',status:'Reachable',latencyMs:84,firstSeenAt:'2026-08-20T10:00:00Z',lastSeenAt:new Date().toISOString(),lastCheckedAt:new Date().toISOString(),nextCheckAt:new Date(Date.now()+120000).toISOString(),successfulChecks:18,failedChecks:2,successRate:90,knownForSeconds:93600,connectionUri:'vless://full-secret-configuration'}],
+        page:1,pageSize:10,total:24,
+        summary:{total:500,reachable:24,pending:60,unreachable:400,unsupportedTransport:16,everReachable:90,averageReachableLatencyMs:84,countries:12,longestKnownSeconds:93600},
+        countries:[{code:'FR',count:20},{code:'DE',count:10}],
+      })
+      if (url.includes('/api/v1/admin/sources')) return jsonResponse({items:[],page:1,pageSize:10,total:0})
+      if (url.includes('/api/v1/admin/diagnostics')) return jsonResponse({serverTime:new Date().toISOString(),databaseBytes:0,validationQueue:{total:0,due:0},recentRuns:[],recentValidationRuns:[],recentBackups:[]})
+      return jsonResponse({title:'Unexpected request'},500)
+    })
+
+    const {container}=render(<App/>)
+    expect(await screen.findByText('198.51.100.20:443')).toBeInTheDocument()
+    expect(screen.getByRole('button',{name:'Статус VPN'})).toHaveTextContent('Рабочие')
+    expect(screen.getByLabelText('Страна VPN')).toBeInTheDocument()
+    expect(screen.getByText('Страница 1 из 3 · Найдено: 24')).toBeInTheDocument()
+    expect(container.querySelector('.admin-vpn-address .country-flag.flag-fr')).toBeInTheDocument()
+    expect(vi.mocked(fetch).mock.calls.some(([input])=>{
+      const request=new URL(String(input),'https://example.test')
+      return request.pathname.endsWith('/api/v1/admin/vpn/endpoints')&&request.searchParams.get('status')==='Reachable'&&request.searchParams.get('sort')==='lastChecked'
+    })).toBe(true)
+    fireEvent.click(screen.getByRole('button',{name:'Качество: сортировка по убыванию'}))
+    await waitFor(()=>expect(vi.mocked(fetch).mock.calls.some(([input])=>String(input).includes('sort=quality&order=desc'))).toBe(true))
+    fireEvent.click(screen.getByRole('button',{name:'Следующая страница'}))
+    await waitFor(()=>expect(vi.mocked(fetch).mock.calls.some(([input])=>String(input).includes('page=2'))).toBe(true))
+    expect(screen.getByRole('button',{name:'Копировать конфигурацию VPN'})).toHaveAttribute('data-tooltip','Копировать полную конфигурацию')
+  })
+
   it('creates sources in a modal editor', async () => {
     window.history.replaceState({}, '', '/admin/sources')
     vi.mocked(fetch).mockImplementation(async (input, options) => {

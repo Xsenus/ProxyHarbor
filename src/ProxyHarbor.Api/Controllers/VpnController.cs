@@ -191,6 +191,9 @@ public sealed record VpnEndpointResponse(Guid Id, string Host, int Port, string?
 [Authorize(Roles = UserRoles.Administrator)]
 public sealed class AdminVpnController(IDbContextFactory<ProxyHarborDbContext> dbFactory, VpnCatalogService catalog) : ControllerBase
 {
+    private static readonly string[] AllowedEndpointSorts =
+        ["address", "protocol", "status", "latency", "quality", "firstSeen", "lastSeen", "lastChecked"];
+
     /// <summary>Возвращает страницу VPN-источников.</summary>
     [HttpGet("sources")]
     public async Task<ActionResult<PagedResult<AdminVpnSourceResponse>>> Sources(
@@ -248,18 +251,103 @@ public sealed class AdminVpnController(IDbContextFactory<ProxyHarborDbContext> d
     }
 
     [HttpGet("endpoints")]
-    public async Task<ActionResult<PagedResult<VpnEndpointResponse>>> Endpoints([FromQuery] int page = 1, [FromQuery] int pageSize = 10,
-        [FromQuery] VpnProtocol? protocol = null, [FromQuery] VpnEndpointStatus? status = null, CancellationToken token = default)
+    public async Task<ActionResult<AdminVpnEndpointPage>> Endpoints(
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 10,
+        [FromQuery] VpnProtocol? protocol = null,
+        [FromQuery] VpnEndpointStatus? status = null,
+        [FromQuery] string? transport = null,
+        [FromQuery] string? country = null,
+        [FromQuery] string? query = null,
+        [FromQuery] string sort = "lastChecked",
+        [FromQuery] string order = "desc",
+        CancellationToken token = default)
     {
-        page = Math.Clamp(page, 1, 100_000); pageSize = Math.Clamp(pageSize, 10, 100);
-        await using var db = await dbFactory.CreateDbContextAsync(token); var query = db.VpnEndpoints.AsNoTracking();
-        if (protocol.HasValue) query = query.Where(x => x.Protocol == protocol.Value); if (status.HasValue) query = query.Where(x => x.Status == status.Value);
-        var total = await query.CountAsync(token);
-        var items = await query.OrderByDescending(x => x.LastCheckedAt).ThenBy(x => x.Id).Skip((page - 1) * pageSize).Take(pageSize)
-            .Select(x => new VpnEndpointResponse(x.Id, x.Host, x.Port, x.CountryCode, x.Protocol, x.Transport,
-                x.Status, x.LatencyMs, x.FirstSeenAt, x.LastSeenAt, x.LastCheckedAt, x.SuccessfulChecks,
-                x.FailedChecks, x.ConnectionUri)).ToArrayAsync(token);
-        return Ok(new PagedResult<VpnEndpointResponse>(items, page, pageSize, total));
+        page = Math.Clamp(page, 1, 100_000);
+        pageSize = Math.Clamp(pageSize, 10, 100);
+        transport = transport?.Trim().ToLowerInvariant();
+        country = country?.Trim().ToUpperInvariant();
+        query = query?.Trim();
+        order = order.Trim().ToLowerInvariant();
+
+        if (transport is { Length: > 0 } && transport is not ("tcp" or "udp"))
+            return Problem("Транспорт должен быть TCP или UDP.", statusCode: 400);
+        if (country is { Length: > 0 } && (country.Length != 2 || !country.All(char.IsAsciiLetter)))
+            return Problem("Страна должна быть двухбуквенным ISO-кодом.", statusCode: 400);
+        if (query is { Length: > 128 })
+            return Problem("Поисковая строка не может быть длиннее 128 символов.", statusCode: 400);
+        if (!AllowedEndpointSorts.Contains(sort, StringComparer.Ordinal) || order is not ("asc" or "desc"))
+            return Problem("Неизвестный порядок сортировки.", statusCode: 400);
+
+        var now = DateTimeOffset.UtcNow;
+        await using var db = await dbFactory.CreateDbContextAsync(token);
+        var all = db.VpnEndpoints.AsNoTracking();
+        var rawSummary = await all.GroupBy(_ => 1).Select(group => new
+        {
+            Total = group.Count(),
+            Reachable = group.Count(item => item.Status == VpnEndpointStatus.Reachable),
+            Pending = group.Count(item => item.Status == VpnEndpointStatus.Pending),
+            Unreachable = group.Count(item => item.Status == VpnEndpointStatus.Unreachable),
+            Unsupported = group.Count(item => item.Status == VpnEndpointStatus.UnsupportedTransport),
+            EverReachable = group.Count(item => item.SuccessfulChecks > 0),
+            Countries = group.Where(item => item.CountryCode != null).Select(item => item.CountryCode).Distinct().Count(),
+            AverageReachableLatencyMs = group.Where(item => item.Status == VpnEndpointStatus.Reachable && item.LatencyMs != null)
+                .Average(item => (double?)item.LatencyMs),
+            OldestReachableAt = group.Where(item => item.Status == VpnEndpointStatus.Reachable)
+                .Min(item => (DateTimeOffset?)item.FirstSeenAt)
+        }).SingleOrDefaultAsync(token);
+        var countries = await all.Where(item => item.CountryCode != null)
+            .GroupBy(item => item.CountryCode!)
+            .Select(group => new { Code = group.Key, Count = group.Count() })
+            .OrderByDescending(item => item.Count).ThenBy(item => item.Code)
+            .ToArrayAsync(token);
+
+        var filtered = all;
+        if (protocol.HasValue) filtered = filtered.Where(item => item.Protocol == protocol.Value);
+        if (status.HasValue) filtered = filtered.Where(item => item.Status == status.Value);
+        if (!string.IsNullOrEmpty(transport)) filtered = filtered.Where(item => item.Transport == transport);
+        if (!string.IsNullOrEmpty(country)) filtered = filtered.Where(item => item.CountryCode == country);
+        if (!string.IsNullOrEmpty(query))
+        {
+            var search = query;
+            filtered = filtered.Where(item => item.Host.Contains(search));
+        }
+
+        var total = await filtered.CountAsync(token);
+        var ascending = order == "asc";
+        var ordered = (sort, ascending) switch
+        {
+            ("address", true) => filtered.OrderBy(item => item.Host).ThenBy(item => item.Port),
+            ("address", false) => filtered.OrderByDescending(item => item.Host).ThenByDescending(item => item.Port),
+            ("protocol", true) => filtered.OrderBy(item => item.Protocol).ThenBy(item => item.Host),
+            ("protocol", false) => filtered.OrderByDescending(item => item.Protocol).ThenBy(item => item.Host),
+            ("status", true) => filtered.OrderBy(item => item.Status).ThenBy(item => item.Host),
+            ("status", false) => filtered.OrderByDescending(item => item.Status).ThenBy(item => item.Host),
+            ("latency", true) => filtered.OrderBy(item => item.LatencyMs == null).ThenBy(item => item.LatencyMs).ThenBy(item => item.Id),
+            ("latency", false) => filtered.OrderBy(item => item.LatencyMs == null).ThenByDescending(item => item.LatencyMs).ThenBy(item => item.Id),
+            ("quality", true) => filtered.OrderBy(item => item.SuccessfulChecks + item.FailedChecks == 0
+                    ? -1.0 : item.SuccessfulChecks * 1.0 / (item.SuccessfulChecks + item.FailedChecks))
+                .ThenBy(item => item.Id),
+            ("quality", false) => filtered.OrderByDescending(item => item.SuccessfulChecks + item.FailedChecks == 0
+                    ? -1.0 : item.SuccessfulChecks * 1.0 / (item.SuccessfulChecks + item.FailedChecks))
+                .ThenBy(item => item.Id),
+            ("firstSeen", true) => filtered.OrderBy(item => item.FirstSeenAt).ThenBy(item => item.Id),
+            ("firstSeen", false) => filtered.OrderByDescending(item => item.FirstSeenAt).ThenBy(item => item.Id),
+            ("lastSeen", true) => filtered.OrderBy(item => item.LastSeenAt).ThenBy(item => item.Id),
+            ("lastSeen", false) => filtered.OrderByDescending(item => item.LastSeenAt).ThenBy(item => item.Id),
+            (_, true) => filtered.OrderBy(item => item.LastCheckedAt == null).ThenBy(item => item.LastCheckedAt).ThenBy(item => item.Id),
+            _ => filtered.OrderBy(item => item.LastCheckedAt == null).ThenByDescending(item => item.LastCheckedAt).ThenBy(item => item.Id)
+        };
+        var entities = await ordered.Skip((page - 1) * pageSize).Take(pageSize).ToArrayAsync(token);
+        var summary = rawSummary is null
+            ? new AdminVpnSummary(0, 0, 0, 0, 0, 0, null, 0, null)
+            : new AdminVpnSummary(rawSummary.Total, rawSummary.Reachable, rawSummary.Pending,
+                rawSummary.Unreachable, rawSummary.Unsupported, rawSummary.EverReachable,
+                rawSummary.AverageReachableLatencyMs is null ? null : (int)Math.Round(rawSummary.AverageReachableLatencyMs.Value),
+                rawSummary.Countries, rawSummary.OldestReachableAt is null ? null : Math.Max(0, (long)(now - rawSummary.OldestReachableAt.Value).TotalSeconds));
+
+        return Ok(new AdminVpnEndpointPage(entities.Select(item => AdminVpnEndpointItem.From(item, now)).ToArray(),
+            page, pageSize, total, summary, countries.Select(item => new AdminVpnCountry(item.Code, item.Count)).ToArray()));
     }
 
     [HttpPost("collect")]
@@ -304,4 +392,28 @@ public sealed class SaveVpnSourceRequest
 public sealed record AdminVpnSourceResponse(Guid Id, string Name, string Provider, string Url, VpnProtocol DefaultProtocol,
     bool Enabled, int Priority, string License, DateTimeOffset? LastFetchedAt, DateTimeOffset? LastSucceededAt,
     int LastItemCount, int ConsecutiveFailures, string? LastError, bool IsBuiltIn);
+
+public sealed record AdminVpnEndpointPage(IReadOnlyList<AdminVpnEndpointItem> Items, int Page, int PageSize, int Total,
+    AdminVpnSummary Summary, IReadOnlyList<AdminVpnCountry> Countries);
+
+public sealed record AdminVpnSummary(int Total, int Reachable, int Pending, int Unreachable, int UnsupportedTransport,
+    int EverReachable, int? AverageReachableLatencyMs, int Countries, long? LongestKnownSeconds);
+
+public sealed record AdminVpnCountry(string Code, int Count);
+
+public sealed record AdminVpnEndpointItem(Guid Id, string Host, int Port, string? CountryCode, VpnProtocol Protocol,
+    string Transport, VpnEndpointStatus Status, int? LatencyMs, DateTimeOffset FirstSeenAt, DateTimeOffset LastSeenAt,
+    DateTimeOffset? LastCheckedAt, DateTimeOffset? NextCheckAt, int SuccessfulChecks, int FailedChecks,
+    decimal SuccessRate, long KnownForSeconds, string? LastError, string? ConnectionUri)
+{
+    public static AdminVpnEndpointItem From(VpnEndpoint item, DateTimeOffset now)
+    {
+        var checks = item.SuccessfulChecks + item.FailedChecks;
+        var successRate = checks == 0 ? 0 : Math.Round(item.SuccessfulChecks * 100m / checks, 1);
+        return new(item.Id, item.Host, item.Port, item.CountryCode, item.Protocol, item.Transport, item.Status,
+            item.LatencyMs, item.FirstSeenAt, item.LastSeenAt, item.LastCheckedAt, item.NextCheckAt,
+            item.SuccessfulChecks, item.FailedChecks, successRate,
+            Math.Max(0, (long)(now - item.FirstSeenAt).TotalSeconds), item.LastError, item.ConnectionUri);
+    }
+}
 #pragma warning restore CS1591

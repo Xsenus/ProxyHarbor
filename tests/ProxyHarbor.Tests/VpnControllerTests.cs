@@ -135,17 +135,24 @@ public sealed class VpnControllerTests
         var options = Options();
         var source = Source("Needle feed", "https://8.8.8.8/needle.txt", "Needle provider");
         await SeedAsync(options, source,
-            Endpoint(source, "1.1.1.1", VpnProtocol.Trojan, VpnEndpointStatus.Reachable, 50),
-            Endpoint(source, "9.9.9.9", VpnProtocol.Vmess, VpnEndpointStatus.Unreachable, null));
+            Endpoint(source, "1.1.1.1", VpnProtocol.Trojan, VpnEndpointStatus.Reachable, 50, "US"),
+            Endpoint(source, "9.9.9.9", VpnProtocol.Vmess, VpnEndpointStatus.Unreachable, null, "DE"));
         var controller = Admin(options);
 
         var sourcePage = Page(await controller.Sources(page: 0, pageSize: 999, search: " provider ", token: CancellationToken.None));
-        var endpointPage = Page(await controller.Endpoints(page: 1, pageSize: 10,
-            protocol: VpnProtocol.Trojan, status: VpnEndpointStatus.Reachable, token: CancellationToken.None));
+        var endpointPage = AdminEndpointPage(await controller.Endpoints(page: 1, pageSize: 10,
+            protocol: VpnProtocol.Trojan, status: VpnEndpointStatus.Reachable, transport: "tcp",
+            country: "us", query: "1.1", sort: "quality", order: "desc", token: CancellationToken.None));
 
         Assert.Single(sourcePage.Items);
         Assert.False(sourcePage.Items[0].IsBuiltIn);
         Assert.Single(endpointPage.Items);
+        Assert.Equal(2, endpointPage.Summary.Total);
+        Assert.Equal(1, endpointPage.Summary.Reachable);
+        Assert.Equal(2, endpointPage.Countries.Count);
+        Assert.Equal("US", endpointPage.Items[0].CountryCode);
+        Assert.Equal(400, Assert.IsType<ObjectResult>((await controller.Endpoints(country: "USA", token: CancellationToken.None)).Result).StatusCode);
+        Assert.Equal(400, Assert.IsType<ObjectResult>((await controller.Endpoints(sort: "unknown", token: CancellationToken.None)).Result).StatusCode);
     }
 
     [Fact]
@@ -242,6 +249,9 @@ public sealed class VpnControllerTests
 
     private static PagedResult<T> Page<T>(ActionResult<PagedResult<T>> result) =>
         Assert.IsType<PagedResult<T>>(Assert.IsType<OkObjectResult>(result.Result).Value);
+
+    private static AdminVpnEndpointPage AdminEndpointPage(ActionResult<AdminVpnEndpointPage> result) =>
+        Assert.IsType<AdminVpnEndpointPage>(Assert.IsType<OkObjectResult>(result.Result).Value);
 
     private sealed class TestDbFactory(DbContextOptions<ProxyHarborDbContext> options)
         : IDbContextFactory<ProxyHarborDbContext>
