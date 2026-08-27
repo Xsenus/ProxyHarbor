@@ -191,7 +191,10 @@ public sealed class DistributedProxyValidationService(
                 .SetProperty(x => x.LastHeartbeatAt, now)
                 .SetProperty(x => x.LastCompletedAt, now)
                 .SetProperty(x => x.LastError, (string?)null)
-                .SetProperty(x => x.CompletedChecks, x => x.CompletedChecks + persisted.Checked)
+                // Deferred означает корректно обработанную, но не засчитанную как
+                // сетевой успех/ошибка попытку; для загрузки узла это всё равно
+                // завершённая работа и она должна попадать в общий счётчик.
+                .SetProperty(x => x.CompletedChecks, x => x.CompletedChecks + persisted.Checked + persisted.Deferred)
                 .SetProperty(x => x.AliveChecks, x => x.AliveChecks + persisted.Alive), token);
         if (runUpdated != 1 || nodeUpdated != 1)
             throw new InvalidOperationException("Checker-узел потерял ownership при завершении партии.");
