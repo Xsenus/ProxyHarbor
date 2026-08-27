@@ -607,25 +607,32 @@ public sealed class TelegramOutboundWorker(
         await db.TelegramOutboundMessages.Where(x => x.Status == TelegramOutboundStatuses.Processing && x.LeaseUntil < DateTimeOffset.UtcNow)
             .ExecuteUpdateAsync(x => x.SetProperty(m => m.Status, TelegramOutboundStatuses.Pending)
                 .SetProperty(m => m.LeaseUntil, (DateTimeOffset?)null), token);
-        await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, token);
-        var message = await db.TelegramOutboundMessages
-            .FromSqlRaw("""
-                SELECT * FROM "TelegramOutboundMessages"
-                WHERE "Status" = 'pending' AND "AvailableAt" <= now()
-                ORDER BY "AvailableAt", "CreatedAt"
-                FOR UPDATE SKIP LOCKED LIMIT 1
-                """)
-            .Include(x => x.TelegramChat).SingleOrDefaultAsync(token);
-        if (message is null)
+        // PostgreSQL retry is enabled globally. A user transaction must therefore run
+        // inside the provider execution strategy; otherwise the worker fails before it
+        // can claim even the first queue item on production.
+        var strategy = db.Database.CreateExecutionStrategy();
+        var message = await strategy.ExecuteAsync(async () =>
         {
+            await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, token);
+            var claimed = await db.TelegramOutboundMessages
+                .FromSqlRaw("""
+                    SELECT * FROM "TelegramOutboundMessages"
+                    WHERE "Status" = 'pending' AND "AvailableAt" <= now()
+                    ORDER BY "AvailableAt", "CreatedAt"
+                    FOR UPDATE SKIP LOCKED LIMIT 1
+                    """)
+                .Include(x => x.TelegramChat).SingleOrDefaultAsync(token);
+            if (claimed is not null)
+            {
+                claimed.Status = TelegramOutboundStatuses.Processing;
+                claimed.LeaseUntil = DateTimeOffset.UtcNow.AddMinutes(2);
+                claimed.Attempts++;
+                await db.SaveChangesAsync(token);
+            }
             await transaction.CommitAsync(token);
-            return false;
-        }
-        message.Status = TelegramOutboundStatuses.Processing;
-        message.LeaseUntil = DateTimeOffset.UtcNow.AddMinutes(2);
-        message.Attempts++;
-        await db.SaveChangesAsync(token);
-        await transaction.CommitAsync(token);
+            return claimed;
+        });
+        if (message is null) return false;
         if (message.TelegramChat.IsBlocked)
         {
             message.Status = TelegramOutboundStatuses.Canceled;
