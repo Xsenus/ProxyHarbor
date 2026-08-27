@@ -215,6 +215,31 @@ public sealed class TelegramWorkflowTests
         Assert.IsType<OkObjectResult>(await controller.Provision(CancellationToken.None));
     }
 
+    [Fact]
+    public async Task FailedProvisionKeepsPreviousActiveTelegramConfiguration()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var before = await fixture.BotStore.GetAsync();
+        fixture.Telegram.FailMethod = "deleteWebhook";
+
+        var result = await fixture.AdminController().Update(new UpdateTelegramBotRequest
+        {
+            Enabled = true, UpdateMode = TelegramUpdateModes.Polling, Name = "Changed name",
+            Description = "Изменённое достаточно длинное описание Telegram-бота.",
+            ShortDescription = "Изменённое короткое описание", SupportText = "Изменённый ответ оператора.",
+            ProxyFileMaxItems = 750, WebhookMaxConnections = 30,
+            BotToken = "123:TEST_ONLY_NOT_A_REAL_TOKEN",
+            ProductStars = new Dictionary<string, int> { ["pro-30"] = 300 }
+        }, CancellationToken.None);
+
+        Assert.IsType<ObjectResult>(result);
+        var saved = await fixture.BotStore.GetAsync();
+        Assert.True(saved.Enabled);
+        Assert.Equal(before.UpdateMode, saved.UpdateMode);
+        Assert.Equal(before.Name, saved.Name);
+        Assert.Equal(before.ProductStars, saved.ProductStars);
+    }
+
     private static JsonElement Message(int updateId, string text) => JsonSerializer.SerializeToElement(new
     {
         update_id = updateId,
@@ -357,6 +382,7 @@ public sealed class TelegramWorkflowTests
         private readonly RecordingTelegramHandler handler = new();
         internal IReadOnlyCollection<string> Methods => handler.Methods;
         internal IReadOnlyCollection<(string Method, string Body)> Requests => handler.Requests;
+        internal string? FailMethod { set => handler.FailMethod = value; }
         public HttpClient CreateClient(string name) => new(handler, false);
         public void Dispose() => handler.Dispose();
     }
@@ -365,6 +391,7 @@ public sealed class TelegramWorkflowTests
     {
         internal List<string> Methods { get; } = [];
         internal List<(string Method, string Body)> Requests { get; } = [];
+        internal string? FailMethod { get; set; }
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             var method = request.RequestUri!.Segments[^1];
@@ -372,6 +399,9 @@ public sealed class TelegramWorkflowTests
             Requests.Add((method, request.Content is null
                 ? string.Empty
                 : await request.Content.ReadAsStringAsync(cancellationToken)));
+            if (method == FailMethod)
+                return new HttpResponseMessage(HttpStatusCode.BadGateway)
+                { Content = new StringContent("{\"ok\":false,\"error_code\":502,\"description\":\"temporary failure\"}", Encoding.UTF8, "application/json") };
             var result = method == "getMe" ? "{\"id\":42,\"username\":\"ProxyHarborTestBot\"}" : "true";
             return new HttpResponseMessage(HttpStatusCode.OK)
             { Content = new StringContent($"{{\"ok\":true,\"result\":{result}}}", Encoding.UTF8, "application/json") };

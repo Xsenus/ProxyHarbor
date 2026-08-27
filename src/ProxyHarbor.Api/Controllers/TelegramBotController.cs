@@ -189,9 +189,11 @@ public sealed class AdminTelegramController(
             BotId = identity.Id,
             BotUsername = identity.Username
         };
-        await configurations.SaveAsync(options, token);
         try
         {
+            // Сначала полностью применяем профиль и transport в Telegram. Если внешний API
+            // временно недоступен, прежняя рабочая конфигурация остаётся активной: частично
+            // сохранённый снимок с Enabled=false не должен выключать бот после неудачного PUT.
             await api.ProvisionAsync(options, token);
             options.ProvisionedAt = DateTimeOffset.UtcNow;
             options.Enabled = request.Enabled;
