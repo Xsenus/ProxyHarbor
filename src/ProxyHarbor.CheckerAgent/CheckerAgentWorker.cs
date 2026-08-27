@@ -190,11 +190,18 @@ public sealed class CheckerAgentWorker(
                 request.Content = JsonContent.Create(results, options: JsonOptions);
                 using var response = await clients.CreateClient("control-plane").SendAsync(request, token);
                 if (response.StatusCode == HttpStatusCode.Conflict)
-                    throw new InvalidOperationException("Central service rejected an expired lease.");
+                {
+                    var detail = await ReadBoundedErrorAsync(response.Content, token);
+                    throw new LeaseLostException(
+                        string.IsNullOrWhiteSpace(detail)
+                            ? "Central service rejected the lease."
+                            : $"Central service rejected the lease: {detail}");
+                }
                 response.EnsureSuccessStatusCode();
                 return;
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+            catch (LeaseLostException) { throw; }
             catch (Exception exception)
             {
                 last = exception;
@@ -202,6 +209,24 @@ public sealed class CheckerAgentWorker(
             }
         }
         throw new InvalidOperationException("Could not upload lease results after retries.", last);
+    }
+
+    private static async Task<string?> ReadBoundedErrorAsync(HttpContent content, CancellationToken token)
+    {
+        var raw = await content.ReadAsStringAsync(token);
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        try
+        {
+            using var document = JsonDocument.Parse(raw);
+            if (document.RootElement.TryGetProperty("message", out var message) &&
+                message.ValueKind == JsonValueKind.String)
+                raw = message.GetString() ?? raw;
+        }
+        catch (JsonException)
+        {
+            // Non-JSON gateway errors are still useful, but remain strictly bounded.
+        }
+        return raw.Trim()[..Math.Min(500, raw.Trim().Length)];
     }
 
     private async Task SendHeartbeatAsync(string? error, CancellationToken token)
@@ -227,3 +252,5 @@ public sealed class CheckerAgentWorker(
         return request;
     }
 }
+
+internal sealed class LeaseLostException(string message) : InvalidOperationException(message);

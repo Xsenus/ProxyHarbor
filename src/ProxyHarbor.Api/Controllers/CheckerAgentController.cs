@@ -12,8 +12,13 @@ namespace ProxyHarbor.Api.Controllers;
 [ApiController, AllowAnonymous, Route("api/v1/checker-agent")]
 public sealed class CheckerAgentController(
     ProxyHarborDbContext db,
-    DistributedProxyValidationService validation) : ControllerBase
+    DistributedProxyValidationService validation,
+    ILogger<CheckerAgentController> logger) : ControllerBase
 {
+    private static readonly Action<ILogger, Guid, Guid, string, Exception?> LeaseRejected =
+        LoggerMessage.Define<Guid, Guid, string>(LogLevel.Warning,
+            new EventId(4109, nameof(LeaseRejected)),
+            "Checker node {NodeId} result for lease {LeaseId} was rejected: {Reason}");
     /// <summary>Records liveness and current agent workload.</summary>
     [HttpPost("heartbeat")]
     public async Task<IActionResult> Heartbeat([FromBody] CheckerHeartbeatRequest request, CancellationToken token)
@@ -63,6 +68,7 @@ public sealed class CheckerAgentController(
         }
         catch (InvalidOperationException exception)
         {
+            LeaseRejected(logger, node.Value, leaseId, exception.Message, exception);
             return Conflict(new { error = "lease_lost", message = exception.Message });
         }
     }
