@@ -76,6 +76,24 @@ public sealed class DistributedProxyValidationService(
             if (claimed.Count > 0)
             {
                 var ids = claimed.Select(x => x.Id).ToArray();
+                var reclaimedLeaseIds = claimed
+                    .Where(x => x.CheckLeaseId.HasValue)
+                    .Select(x => x.CheckLeaseId!.Value)
+                    .Distinct()
+                    .ToArray();
+                if (reclaimedLeaseIds.Length > 0)
+                {
+                    // Аудит закрывается именно в момент фактического повторного назначения.
+                    // Так краткий разрыв heartbeat не создаёт ложный failed, а отобранная
+                    // новым узлом просроченная партия никогда не остаётся вечным running.
+                    await db.ValidationRuns
+                        .Where(x => reclaimedLeaseIds.Contains(x.LeaseId) && x.Status == "running")
+                        .ExecuteUpdateAsync(setters => setters
+                            .SetProperty(x => x.FinishedAt, now)
+                            .SetProperty(x => x.Status, "failed")
+                            .SetProperty(x => x.Error,
+                                "Checker-узел не завершил партию до истечения аренды; пакет передан другому узлу."), token);
+                }
                 await db.Proxies.Where(x => ids.Contains(x.Id)).ExecuteUpdateAsync(setters => setters
                     .SetProperty(x => x.CheckLeaseUntil, leaseUntil)
                     .SetProperty(x => x.CheckLeaseId, leaseId), token);
