@@ -22,10 +22,10 @@ public sealed class CheckerAgentDeploymentOptions
     public string NativeRuntimeVersion { get; set; } = "10.0.11";
     /// <summary>SHA-512 of the official Microsoft linux-x64 runtime archive.</summary>
     public string NativeRuntimeLinuxX64Sha512 { get; set; } =
-        "64c77a5f98d6dfc63393ed5d2fed47c2855c7cdd4322008b3b13e1d0b710aefc1fba7e56612f25f7e8a2b1b6cef5cf77cb3a834ff3685e723ad286703c3396d8";
+        "4c6be0623330074e699dab8084be15a1baebb7a518c0dd8ce99f93cf79777cd46f3a38ef9d25edc152ed606f084b63736bd9e4082eb32d188fc357bf6ac4d1d6";
     /// <summary>SHA-512 of the official Microsoft linux-arm64 runtime archive.</summary>
     public string NativeRuntimeLinuxArm64Sha512 { get; set; } =
-        "2a729a4eff6a55e271b3ae7d4f2be98aef16df22e3b9316827558e204f7881bbf0b7b9f8ebcfb1a1419c87fbcb8a00f5be72b6474e02c695c30b2c52bafb65ed";
+        "9549f7a59d5d6f7dd3e965bf88631698b23974aff4e34d589037d6ae9a3f4433902881b4d23f7e18602ab954823f5be35015054a6eccb57041b0f20d92873ed7";
     /// <summary>Minimum free space required for an atomic native installation.</summary>
     public int NativeMinimumFreeMegabytes { get; set; } = 300;
 }
@@ -232,13 +232,13 @@ public sealed class CheckerNodeProvisioner(IOptions<CheckerAgentDeploymentOption
         runtime_root=/opt/proxyharbor-checker/dotnet
         runtime_replaced=0
         runtime_existed=0
-        if [ ! -x "$runtime_root/dotnet" ] || ! "$runtime_root/dotnet" --list-runtimes 2>/dev/null | grep -q '^Microsoft.NETCore.App __RUNTIME_VERSION__ '; then
-          runtime_url="https://builds.dotnet.microsoft.com/dotnet/Runtime/__RUNTIME_VERSION__/dotnet-runtime-__RUNTIME_VERSION__-$runtime_rid.tar.gz"
+        if [ ! -x "$runtime_root/dotnet" ] || ! "$runtime_root/dotnet" --list-runtimes 2>/dev/null | grep -q '^Microsoft.AspNetCore.App __RUNTIME_VERSION__ '; then
+          runtime_url="https://builds.dotnet.microsoft.com/dotnet/aspnetcore/Runtime/__RUNTIME_VERSION__/aspnetcore-runtime-__RUNTIME_VERSION__-$runtime_rid.tar.gz"
           curl --fail --location --silent --show-error --retry 3 "$runtime_url" -o "$work/runtime.tar.gz"
           printf '%s  %s\n' "$runtime_sha" "$work/runtime.tar.gz" | sha512sum --check >/dev/null
           mkdir "$work/dotnet"
           tar -xzf "$work/runtime.tar.gz" -C "$work/dotnet"
-          "$work/dotnet/dotnet" --list-runtimes | grep -q '^Microsoft.NETCore.App __RUNTIME_VERSION__ '
+          "$work/dotnet/dotnet" --list-runtimes | grep -q '^Microsoft.AspNetCore.App __RUNTIME_VERSION__ '
           rm -rf /opt/proxyharbor-checker/dotnet.previous
           if [ -d "$runtime_root" ]; then
             runtime_existed=1
