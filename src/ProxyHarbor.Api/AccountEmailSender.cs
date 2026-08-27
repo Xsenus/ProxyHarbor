@@ -1,8 +1,8 @@
 using System.Net;
 using System.Net.Mail;
 using System.Text.Encodings.Web;
-using ProxyHarbor.Infrastructure;
 using Microsoft.Extensions.Options;
+using ProxyHarbor.Infrastructure;
 
 namespace ProxyHarbor.Api;
 

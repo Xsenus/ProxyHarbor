@@ -1,12 +1,12 @@
-using Microsoft.AspNetCore.Authorization;
-using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.RateLimiting;
-using Microsoft.EntityFrameworkCore;
 using System.Globalization;
 using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.EntityFrameworkCore;
 using ProxyHarbor.Domain;
 using ProxyHarbor.Infrastructure;
 
@@ -170,7 +170,9 @@ public sealed class VpnController(
     }
     private BadRequestObjectResult InvalidCountries() => BadRequest(new ProblemDetails
     {
-        Title = "Некорректная страна", Detail = "Используйте двухбуквенные ISO-коды стран.", Status = 400
+        Title = "Некорректная страна",
+        Detail = "Используйте двухбуквенные ISO-коды стран.",
+        Status = 400
     });
 
     private sealed class AlwaysPaidAccessService : IFreeExportAccessService
@@ -219,8 +221,16 @@ public sealed class AdminVpnController(IDbContextFactory<ProxyHarborDbContext> d
         var problem = await ValidateRequestAsync(request, token); if (problem is not null) return problem;
         await using var db = await dbFactory.CreateDbContextAsync(token);
         if (await db.VpnSources.AnyAsync(x => x.Url == request.Url, token)) return Conflict(new ProblemDetails { Detail = "Такой VPN feed уже существует." });
-        var source = new VpnSource { Name = request.Name.Trim(), Provider = request.Provider.Trim(), Url = request.Url,
-            DefaultProtocol = request.Protocol, Enabled = request.Enabled, Priority = request.Priority, License = request.License.Trim() };
+        var source = new VpnSource
+        {
+            Name = request.Name.Trim(),
+            Provider = request.Provider.Trim(),
+            Url = request.Url,
+            DefaultProtocol = request.Protocol,
+            Enabled = request.Enabled,
+            Priority = request.Priority,
+            License = request.License.Trim()
+        };
         db.VpnSources.Add(source); await db.SaveChangesAsync(token);
         return Created($"/api/v1/admin/vpn/sources/{source.Id}", Map(source, false));
     }

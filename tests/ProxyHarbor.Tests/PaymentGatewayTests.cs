@@ -74,8 +74,11 @@ public sealed class PaymentGatewayTests
     {
         var complete = new PaymentProviderOptions
         {
-            Enabled = true, MerchantId = "merchant", PublicId = "public",
-            SecretKey = "secret", SecondarySecret = "secondary"
+            Enabled = true,
+            MerchantId = "merchant",
+            PublicId = "public",
+            SecretKey = "secret",
+            SecondarySecret = "secondary"
         };
         Assert.True(PaymentProviderConfiguration.IsReady(code, complete));
     }
@@ -88,7 +91,10 @@ public sealed class PaymentGatewayTests
     {
         var provider = new PaymentProviderOptions
         {
-            Enabled = true, MerchantId = "merchant", SecretKey = "secret", SecondarySecret = "secondary"
+            Enabled = true,
+            MerchantId = "merchant",
+            SecretKey = "secret",
+            SecondarySecret = "secondary"
         };
         if (missing == "merchant") provider.MerchantId = string.Empty;
         else provider.SecondarySecret = string.Empty;
@@ -163,8 +169,13 @@ public sealed class PaymentGatewayTests
         var order = Guid.NewGuid();
         var values = new SortedDictionary<string, string>(StringComparer.Ordinal)
         {
-            ["Amount"] = "49900", ["OrderId"] = order.ToString("D"), ["Password"] = "tbank-password",
-            ["PaymentId"] = "987", ["Status"] = "CONFIRMED", ["Success"] = "true", ["TerminalKey"] = "terminal"
+            ["Amount"] = "49900",
+            ["OrderId"] = order.ToString("D"),
+            ["Password"] = "tbank-password",
+            ["PaymentId"] = "987",
+            ["Status"] = "CONFIRMED",
+            ["Success"] = "true",
+            ["TerminalKey"] = "terminal"
         };
         var token = Sha256Hex(string.Concat(values.Values));
         var context = Request("POST", JsonSerializer.Serialize(new { TerminalKey = "terminal", OrderId = order.ToString("D"), Success = true, Status = "CONFIRMED", PaymentId = 987, Amount = 49_900, Token = token }));
@@ -216,8 +227,13 @@ public sealed class PaymentGatewayTests
         var order = Guid.NewGuid();
         var values = new SortedDictionary<string, string>(StringComparer.Ordinal)
         {
-            ["Amount"] = "49900", ["OrderId"] = order.ToString("D"), ["Password"] = "tbank-password",
-            ["PaymentId"] = "988", ["Status"] = providerStatus, ["Success"] = "true", ["TerminalKey"] = "terminal"
+            ["Amount"] = "49900",
+            ["OrderId"] = order.ToString("D"),
+            ["Password"] = "tbank-password",
+            ["PaymentId"] = "988",
+            ["Status"] = providerStatus,
+            ["Success"] = "true",
+            ["TerminalKey"] = "terminal"
         };
         var token = Sha256Hex(string.Concat(values.Values));
         var body = JsonSerializer.Serialize(new { TerminalKey = "terminal", OrderId = order.ToString("D"), Success = true, Status = providerStatus, PaymentId = 988, Amount = 49_900, Token = token });
@@ -265,9 +281,15 @@ public sealed class PaymentGatewayTests
         var order = Guid.NewGuid();
         var fields = new SortedDictionary<string, string>(StringComparer.Ordinal)
         {
-            ["amount"] = "485.03", ["currency"] = "643", ["datetime"] = "2026-08-26T10:00:00Z",
-            ["label"] = order.ToString("D"), ["operation_id"] = "ym-42", ["sender"] = "41001",
-            ["sha1_hash"] = "legacy", ["test_notification"] = "false", ["unaccepted"] = "false",
+            ["amount"] = "485.03",
+            ["currency"] = "643",
+            ["datetime"] = "2026-08-26T10:00:00Z",
+            ["label"] = order.ToString("D"),
+            ["operation_id"] = "ym-42",
+            ["sender"] = "41001",
+            ["sha1_hash"] = "legacy",
+            ["test_notification"] = "false",
+            ["unaccepted"] = "false",
             ["withdraw_amount"] = "499.00"
         };
         using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes("yoomoney-notification"));
@@ -290,8 +312,11 @@ public sealed class PaymentGatewayTests
         var order = Guid.NewGuid();
         var unsigned = JsonSerializer.Serialize(new
         {
-            order_id = order.ToString("D"), uuid = "crypto-42", status = "paid",
-            amount = "499.00", currency = "RUB"
+            order_id = order.ToString("D"),
+            uuid = "crypto-42",
+            status = "paid",
+            amount = "499.00",
+            currency = "RUB"
         });
 #pragma warning disable CA5351 // Cryptomus mandates MD5 for this protocol signature.
         var sign = Convert.ToHexString(MD5.HashData(Encoding.UTF8.GetBytes(
@@ -312,8 +337,11 @@ public sealed class PaymentGatewayTests
         var order = Guid.NewGuid();
         var body = JsonSerializer.Serialize(new
         {
-            order_id = order.ToString("D"), payment_id = 4242, payment_status = "finished",
-            price_amount = 499.00m, price_currency = "rub"
+            order_id = order.ToString("D"),
+            payment_id = 4242,
+            payment_status = "finished",
+            price_amount = 499.00m,
+            price_currency = "rub"
         });
         using var hmac = new HMACSHA512(Encoding.UTF8.GetBytes("now-ipn"));
         var context = Request("POST", body);
@@ -341,8 +369,11 @@ public sealed class PaymentGatewayTests
         var order = Guid.NewGuid();
         var unsigned = JsonSerializer.Serialize(new
         {
-            order_id = order.ToString("N"), uuid = "crypto-state", status = providerStatus,
-            amount = "499.00", currency = "RUB"
+            order_id = order.ToString("N"),
+            uuid = "crypto-state",
+            status = providerStatus,
+            amount = "499.00",
+            currency = "RUB"
         });
 #pragma warning disable CA5351
         var sign = Convert.ToHexString(MD5.HashData(Encoding.UTF8.GetBytes(
@@ -364,9 +395,12 @@ public sealed class PaymentGatewayTests
     {
         var body = JsonSerializer.Serialize(new
         {
-            invoice_id = "invoice-state", metadata = new { items = NestedItems },
-            order_id = Guid.NewGuid().ToString("D"), payment_status = providerStatus,
-            price_amount = "499.00", price_currency = "RUB"
+            invoice_id = "invoice-state",
+            metadata = new { items = NestedItems },
+            order_id = Guid.NewGuid().ToString("D"),
+            payment_status = providerStatus,
+            price_amount = "499.00",
+            price_currency = "RUB"
         });
         using var hmac = new HMACSHA512(Encoding.UTF8.GetBytes("now-ipn"));
         var context = Request("POST", body);
@@ -386,8 +420,12 @@ public sealed class PaymentGatewayTests
     {
         var values = new SortedDictionary<string, string>(StringComparer.Ordinal)
         {
-            ["amount"] = "499.00", ["currency"] = "643", ["label"] = Guid.NewGuid().ToString("D"),
-            ["operation_id"] = "ym-rejected", ["test_notification"] = "false", ["unaccepted"] = "false"
+            ["amount"] = "499.00",
+            ["currency"] = "643",
+            ["label"] = Guid.NewGuid().ToString("D"),
+            ["operation_id"] = "ym-rejected",
+            ["test_notification"] = "false",
+            ["unaccepted"] = "false"
         };
         values[changedKey] = changedValue;
         using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes("yoomoney-notification"));
@@ -416,7 +454,8 @@ public sealed class PaymentGatewayTests
     {
         var options = new PaymentOptions
         {
-            Enabled = true, PublicBaseUrl = "https://proxy.example.com",
+            Enabled = true,
+            PublicBaseUrl = "https://proxy.example.com",
             Providers = new Dictionary<string, PaymentProviderOptions>(StringComparer.OrdinalIgnoreCase)
             {
                 ["yookassa"] = new() { Enabled = true, MerchantId = "shop", SecretKey = "yoo-secret" },
@@ -435,8 +474,14 @@ public sealed class PaymentGatewayTests
 
     private static PaymentOrder Order(string provider) => new()
     {
-        Id = Guid.NewGuid(), UserId = Guid.NewGuid(), ProductCode = "pro-monthly", Plan = "pro",
-        Provider = provider, AmountMinor = 49_900, Currency = "RUB", DurationDays = 30,
+        Id = Guid.NewGuid(),
+        UserId = Guid.NewGuid(),
+        ProductCode = "pro-monthly",
+        Plan = "pro",
+        Provider = provider,
+        AmountMinor = 49_900,
+        Currency = "RUB",
+        DurationDays = 30,
         IdempotencyKey = Guid.NewGuid().ToString("N")
     };
 

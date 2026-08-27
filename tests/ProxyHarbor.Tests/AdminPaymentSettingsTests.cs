@@ -111,7 +111,10 @@ public sealed class AdminPaymentSettingsTests
 
     private static TelegramBotOptions ReadyTelegram() => new()
     {
-        Enabled = true, BotId = 1, BotToken = "token", WebhookSecret = "secret"
+        Enabled = true,
+        BotId = 1,
+        BotToken = "token",
+        WebhookSecret = "secret"
     };
 
     private sealed class TelegramStore(TelegramBotOptions value) : ITelegramBotConfigurationStore
@@ -125,10 +128,15 @@ public sealed class AdminPaymentSettingsTests
         Enabled = enabled,
         Products = SubscriptionPricingPolicy.Build(3_700, "RUB").Select(pair => new UpdatePaymentProductRequest
         {
-            Code = pair.Key, Enabled = pair.Value.Enabled, Name = pair.Value.Name,
-            Plan = pair.Value.Plan, DurationDays = pair.Value.DurationDays,
-            AmountMinor = pair.Value.AmountMinor, DiscountPercent = pair.Value.DiscountPercent,
-            Currency = pair.Value.Currency, Description = pair.Value.Description
+            Code = pair.Key,
+            Enabled = pair.Value.Enabled,
+            Name = pair.Value.Name,
+            Plan = pair.Value.Plan,
+            DurationDays = pair.Value.DurationDays,
+            AmountMinor = pair.Value.AmountMinor,
+            DiscountPercent = pair.Value.DiscountPercent,
+            Currency = pair.Value.Currency,
+            Description = pair.Value.Description
         }).ToList(),
         Providers = PaymentProviderConfiguration.Codes.Select(code => new UpdatePaymentProviderRequest
         {
@@ -146,8 +154,12 @@ public sealed class AdminPaymentSettingsTests
         {
             ["pro-monthly"] = new()
             {
-                Enabled = true, Name = "Pro", Plan = SubscriptionPlans.Pro,
-                DurationDays = 30, AmountMinor = 49_900, Currency = "RUB"
+                Enabled = true,
+                Name = "Pro",
+                Plan = SubscriptionPlans.Pro,
+                DurationDays = 30,
+                AmountMinor = 49_900,
+                Currency = "RUB"
             }
         },
         Providers = PaymentProviderConfiguration.Codes.ToDictionary(

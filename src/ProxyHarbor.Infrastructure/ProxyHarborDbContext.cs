@@ -23,6 +23,8 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
     public DbSet<CollectionRun> Runs => Set<CollectionRun>();
     /// <summary>История validation-партий.</summary>
     public DbSet<ValidationRun> ValidationRuns => Set<ValidationRun>();
+    /// <summary>Подключённые внешние checker-узлы.</summary>
+    public DbSet<CheckerNode> CheckerNodes => Set<CheckerNode>();
     /// <summary>История создания и Telegram-доставки backup.</summary>
     public DbSet<BackupRun> BackupRuns => Set<BackupRun>();
     /// <summary>Текущие тарифы пользователей, отделённые от Identity-ролей.</summary>
@@ -37,6 +39,8 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
     public DbSet<ReferralReward> ReferralRewards => Set<ReferralReward>();
     /// <summary>Аудируемые заказы на оплату без платёжных реквизитов.</summary>
     public DbSet<PaymentOrder> PaymentOrders => Set<PaymentOrder>();
+    /// <summary>Надёжные одноразовые уведомления веб-кабинета.</summary>
+    public DbSet<UserNotification> UserNotifications => Set<UserNotification>();
     /// <summary>Singleton runtime-настройка платежей с защищёнными секретами.</summary>
     public DbSet<PaymentConfiguration> PaymentConfigurations => Set<PaymentConfiguration>();
     /// <summary>Аудит ручных изменений подписок.</summary>
@@ -163,6 +167,8 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
         payment.Property(x => x.ProductCode).HasMaxLength(64);
         payment.Property(x => x.Plan).HasMaxLength(32);
         payment.Property(x => x.Provider).HasMaxLength(32);
+        payment.Property(x => x.PaymentMethod).HasMaxLength(32);
+        payment.Property(x => x.PaymentInstrument).HasMaxLength(120);
         payment.Property(x => x.Currency).HasMaxLength(3);
         payment.Property(x => x.Status).HasMaxLength(32);
         payment.Property(x => x.ProviderPaymentId).HasMaxLength(255);
@@ -178,6 +184,16 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
             table.HasCheckConstraint("CK_PaymentOrders_Currency", "char_length(\"Currency\") = 3 AND \"Currency\" = upper(\"Currency\")");
             table.HasCheckConstraint("CK_PaymentOrders_Timeline", "\"PaidAt\" IS NULL OR (\"PaidAt\" >= \"CreatedAt\" AND \"Status\" IN ('paid', 'refunded'))");
         });
+
+        var notification = builder.Entity<UserNotification>();
+        notification.HasIndex(x => x.DeduplicationKey).IsUnique();
+        notification.HasIndex(x => new { x.UserId, x.DeliveredAt, x.CreatedAt });
+        notification.Property(x => x.Kind).HasMaxLength(64);
+        notification.Property(x => x.Message).HasMaxLength(500);
+        notification.Property(x => x.ActionUrl).HasMaxLength(500);
+        notification.Property(x => x.DeduplicationKey).HasMaxLength(160);
+        notification.HasOne(x => x.User).WithMany().HasForeignKey(x => x.UserId)
+            .OnDelete(DeleteBehavior.Cascade);
 
         var paymentConfiguration = builder.Entity<PaymentConfiguration>();
         paymentConfiguration.Property(x => x.SettingsJson).HasColumnType("jsonb");
@@ -417,6 +433,24 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
 
         var validationRun = builder.Entity<ValidationRun>();
         validationRun.HasIndex(x => x.LeaseId).IsUnique();
+        validationRun.HasIndex(x => new { x.CheckerNodeId, x.StartedAt });
+        validationRun.HasOne(x => x.CheckerNode).WithMany(x => x.ValidationRuns)
+            .HasForeignKey(x => x.CheckerNodeId).OnDelete(DeleteBehavior.SetNull);
+
+        var checkerNode = builder.Entity<CheckerNode>();
+        checkerNode.HasKey(x => x.Id);
+        checkerNode.HasIndex(x => x.Name).IsUnique();
+        checkerNode.HasIndex(x => x.Host);
+        checkerNode.HasIndex(x => x.LastHeartbeatAt);
+        checkerNode.Property(x => x.Name).HasMaxLength(100);
+        checkerNode.Property(x => x.Host).HasMaxLength(64);
+        checkerNode.Property(x => x.SshUsername).HasMaxLength(64);
+        checkerNode.Property(x => x.TokenHash).HasMaxLength(32);
+        checkerNode.Property(x => x.HostKeyFingerprint).HasMaxLength(128);
+        checkerNode.Property(x => x.AgentVersion).HasMaxLength(80);
+        checkerNode.Property(x => x.RemoteAddress).HasMaxLength(64);
+        checkerNode.Property(x => x.DeploymentStatus).HasMaxLength(32);
+        checkerNode.Property(x => x.LastError).HasMaxLength(1000);
         validationRun.HasIndex(x => x.StartedAt);
         validationRun.HasIndex(x => new { x.Status, x.FinishedAt });
         validationRun.Property(x => x.Status).HasMaxLength(32);

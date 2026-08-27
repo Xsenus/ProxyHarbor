@@ -57,3 +57,37 @@ export function ToastSignal({ kind, message, action }: { kind: ToastKind; messag
   // Component tests and embedded screens can render without the application provider.
   return !push && message ? <span className="sr-only" role={kind === 'error' ? 'alert' : 'status'}>{message}</span> : null
 }
+
+type ServerNotification = { id: string; message: string; actionUrl?: string }
+
+/** Доставляет сохранённые сервером уведомления один раз, даже после повторного входа или перезагрузки. */
+export function NotificationBridge({ apiBase = '' }: { apiBase?: string }) {
+  const push = useContext(ToastContext)
+  useEffect(() => {
+    if (!push) return
+    let stopped = false
+    const poll = async () => {
+      try {
+        const response = await fetch(`${apiBase}/api/v1/account/notifications`, { credentials: 'include' })
+        if (!response.ok || stopped) return
+        const items = await response.json() as ServerNotification[]
+        for (const item of items) {
+          if (stopped) return
+          push('info', item.message, item.actionUrl ? {
+            label: 'Открыть',
+            run: () => window.location.assign(item.actionUrl!),
+          } : undefined)
+          await fetch(`${apiBase}/api/v1/account/notifications/${item.id}/delivered`, {
+            method: 'POST', credentials: 'include',
+          })
+        }
+      } catch {
+        // Отсутствие сети или гостевая сессия не должны мешать работе публичной страницы.
+      }
+    }
+    void poll()
+    const timer = window.setInterval(() => void poll(), 60_000)
+    return () => { stopped = true; window.clearInterval(timer) }
+  }, [apiBase, push])
+  return null
+}

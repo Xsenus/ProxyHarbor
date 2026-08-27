@@ -222,17 +222,17 @@ public sealed class TelegramBotApiClient(IHttpClientFactory clients)
                 innerException: lastTransportError);
         using (response)
         {
-        var body = await response.Content.ReadAsStringAsync(token);
-        TelegramEnvelope? envelope = null;
-        try { envelope = JsonSerializer.Deserialize<TelegramEnvelope>(body, Json); }
-        catch (JsonException) { /* Ошибка ниже не включает body и token. */ }
-        if (!response.IsSuccessStatusCode || envelope is null || !envelope.Ok)
-            throw new TelegramBotApiException(
-                envelope?.ErrorCode ?? (int)response.StatusCode,
-                TelegramSafeText(envelope?.Description),
-                envelope?.Parameters?.RetryAfter,
-                response.StatusCode == HttpStatusCode.Forbidden);
-        return envelope.Result;
+            var body = await response.Content.ReadAsStringAsync(token);
+            TelegramEnvelope? envelope = null;
+            try { envelope = JsonSerializer.Deserialize<TelegramEnvelope>(body, Json); }
+            catch (JsonException) { /* Ошибка ниже не включает body и token. */ }
+            if (!response.IsSuccessStatusCode || envelope is null || !envelope.Ok)
+                throw new TelegramBotApiException(
+                    envelope?.ErrorCode ?? (int)response.StatusCode,
+                    TelegramSafeText(envelope?.Description),
+                    envelope?.Parameters?.RetryAfter,
+                    response.StatusCode == HttpStatusCode.Forbidden);
+            return envelope.Result;
         }
     }
 

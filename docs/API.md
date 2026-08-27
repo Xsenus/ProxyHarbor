@@ -275,6 +275,8 @@ Readiness не кэшируется и выполняет zero-row probe все�
 | `POST /api/v1/auth/forgot-password` | Отправить нейтральный reset-response без account enumeration |
 | `POST /api/v1/auth/reset-password` | Применить одноразовый Identity token |
 | `GET /api/v1/account/profile` | Получить профиль, роли и подписку |
+| `GET /api/v1/account/notifications` | Получить ещё не показанные уведомления кабинета |
+| `POST /api/v1/account/notifications/{id}/delivered` | Подтвердить показ уведомления |
 | `POST /api/v1/account/api-tokens` | Выпустить токен; полный секрет присутствует только в этом ответе |
 | `DELETE /api/v1/account/api-tokens/{id}` | Необратимо отозвать токен владельца |
 | `POST /api/v1/auth/token-login` | Обменять действующий платный токен на защищённую cookie-сессию |
@@ -397,6 +399,46 @@ DNS проверяется до сохранения. Collection/source mutation
   "deferred": 0
 }
 ```
+
+## Распределённые checker-узлы
+
+### GET `/api/v1/admin/checker-nodes`
+
+Возвращает несекретный каталог VPS, online/busy-состояние, lease, heartbeat, версию агента, fingerprint, ошибки и накопительные счётчики. Agent token и SSH-пароль не возвращаются.
+
+### POST `/api/v1/admin/checker-nodes`
+
+Создаёт запись и выполняет одноразовую установку через SSH:
+
+```json
+{
+  "name": "checker-eu-1",
+  "host": "203.0.113.10",
+  "sshPort": 22,
+  "sshUsername": "root",
+  "password": "transient-password",
+  "concurrency": 200,
+  "batchSize": 400
+}
+```
+
+Host должен быть публичным IP. Пароль не сохраняется. Неудачная установка оставляет диагностируемую запись со статусом `failed`, которую можно повторно развернуть.
+
+### PUT `/api/v1/admin/checker-nodes/{id}`
+
+Меняет `enabled`, `concurrency` и `batchSize`. Отключённый узел не получает новые партии.
+
+### POST `/api/v1/admin/checker-nodes/{id}/deploy`
+
+Повторно проверяет SSH fingerprint, заменяет checker-контейнер и только после успешного запуска ротирует agent token. Тело содержит только transient `password`.
+
+### DELETE `/api/v1/admin/checker-nodes/{id}`
+
+Сначала удаляет именованный контейнер и token-файл с VPS, затем удаляет центральную запись. Если VPS недоступен, возвращает `502`, а запись сохраняется.
+
+### Agent API
+
+Маршруты `/api/v1/checker-agent/heartbeat`, `/lease`, `/lease/{leaseId}/renew` и `/lease/{leaseId}/results` предназначены только для checker-контейнера. Аутентификация требует одновременно UUID в `X-Checker-Node` и Bearer token. Lease выдаётся атомарно, продлевается heartbeat и принимается только с полным набором результатов. Эти маршруты не являются пользовательским API.
 
 ## POST `/api/v1/admin/backup`
 

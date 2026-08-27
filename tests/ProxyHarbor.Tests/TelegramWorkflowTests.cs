@@ -154,8 +154,13 @@ public sealed class TelegramWorkflowTests
         var user = await fixture.CreateWebUserAsync("crm-user");
         var chat = new TelegramChat
         {
-            ChatId = 8123, TelegramUserId = 8123, UserId = user.Id, User = user,
-            Username = "crm_user", DisplayName = "CRM User", NotificationsEnabled = true
+            ChatId = 8123,
+            TelegramUserId = 8123,
+            UserId = user.Id,
+            User = user,
+            Username = "crm_user",
+            DisplayName = "CRM User",
+            NotificationsEnabled = true
         };
         fixture.Db.TelegramChats.Add(chat);
         fixture.Db.TelegramConversationMessages.Add(new TelegramConversationMessage
@@ -190,17 +195,23 @@ public sealed class TelegramWorkflowTests
         { Description = "слишком коротко", ShortDescription = "short", SupportText = "support", BotToken = "invalid token" }, CancellationToken.None));
         Assert.IsType<BadRequestObjectResult>(await controller.Update(new UpdateTelegramBotRequest
         {
-            Description = "Достаточно длинное описание Telegram-бота.", ShortDescription = "Короткое описание",
-            SupportText = "Ответ оператора", BotToken = "123:TEST_ONLY_NOT_A_REAL_TOKEN",
+            Description = "Достаточно длинное описание Telegram-бота.",
+            ShortDescription = "Короткое описание",
+            SupportText = "Ответ оператора",
+            BotToken = "123:TEST_ONLY_NOT_A_REAL_TOKEN",
             ProductStars = new Dictionary<string, int> { ["unknown"] = 50 }
         }, CancellationToken.None));
 
         var result = await controller.Update(new UpdateTelegramBotRequest
         {
-            Enabled = true, UpdateMode = TelegramUpdateModes.Webhook, Name = "ProxyHarbor",
+            Enabled = true,
+            UpdateMode = TelegramUpdateModes.Webhook,
+            Name = "ProxyHarbor",
             Description = "Проверенные прокси и управление подпиской ProxyHarbor.",
-            ShortDescription = "Прокси, подписка и личный кабинет.", SupportText = "Оператор ответит в этом чате.",
-            ProxyFileMaxItems = 500, WebhookMaxConnections = 20,
+            ShortDescription = "Прокси, подписка и личный кабинет.",
+            SupportText = "Оператор ответит в этом чате.",
+            ProxyFileMaxItems = 500,
+            WebhookMaxConnections = 20,
             BotToken = "123:TEST_ONLY_NOT_A_REAL_TOKEN",
             ProductStars = new Dictionary<string, int> { ["pro-30"] = 250 }
         }, CancellationToken.None);
@@ -224,10 +235,14 @@ public sealed class TelegramWorkflowTests
 
         var result = await fixture.AdminController().Update(new UpdateTelegramBotRequest
         {
-            Enabled = true, UpdateMode = TelegramUpdateModes.Polling, Name = "Changed name",
+            Enabled = true,
+            UpdateMode = TelegramUpdateModes.Polling,
+            Name = "Changed name",
             Description = "Изменённое достаточно длинное описание Telegram-бота.",
-            ShortDescription = "Изменённое короткое описание", SupportText = "Изменённый ответ оператора.",
-            ProxyFileMaxItems = 750, WebhookMaxConnections = 30,
+            ShortDescription = "Изменённое короткое описание",
+            SupportText = "Изменённый ответ оператора.",
+            ProxyFileMaxItems = 750,
+            WebhookMaxConnections = 30,
             BotToken = "123:TEST_ONLY_NOT_A_REAL_TOKEN",
             ProductStars = new Dictionary<string, int> { ["pro-30"] = 300 }
         }, CancellationToken.None);
@@ -248,8 +263,12 @@ public sealed class TelegramWorkflowTests
             chat = new { id = 7001, type = "private" },
             from = new
             {
-                id = 9001, is_bot = false, first_name = "Иван", last_name = "Тест",
-                username = "ivan_test", language_code = "ru"
+                id = 9001,
+                is_bot = false,
+                first_name = "Иван",
+                last_name = "Тест",
+                username = "ivan_test",
+                language_code = "ru"
             },
             text
         }
@@ -260,8 +279,10 @@ public sealed class TelegramWorkflowTests
         update_id = updateId,
         callback_query = new
         {
-            id = $"callback-{updateId}", from = new { id = 9001, first_name = "Иван", username = "ivan_test" },
-            message = new { chat = new { id = 7001, type = "private" } }, data
+            id = $"callback-{updateId}",
+            from = new { id = 9001, first_name = "Иван", username = "ivan_test" },
+            message = new { chat = new { id = 7001, type = "private" } },
+            data
         }
     });
 
@@ -271,8 +292,11 @@ public sealed class TelegramWorkflowTests
             update_id = updateId,
             pre_checkout_query = new
             {
-                id = $"checkout-{updateId}", from = new { id = 9001 }, currency,
-                total_amount = amount, invoice_payload = payload
+                id = $"checkout-{updateId}",
+                from = new { id = 9001 },
+                currency,
+                total_amount = amount,
+                invoice_payload = payload
             }
         });
 
@@ -286,8 +310,11 @@ public sealed class TelegramWorkflowTests
                 from = new { id = 9001, first_name = "Иван", username = "ivan_test" },
                 successful_payment = new
                 {
-                    currency = "XTR", total_amount = amount, invoice_payload = orderId.ToString("N"),
-                    telegram_payment_charge_id = chargeId, provider_payment_charge_id = ""
+                    currency = "XTR",
+                    total_amount = amount,
+                    invoice_payload = orderId.ToString("N"),
+                    telegram_payment_charge_id = chargeId,
+                    provider_payment_charge_id = ""
                 }
             }
         });
@@ -327,9 +354,14 @@ public sealed class TelegramWorkflowTests
                 Options.Create(new TelegramBotHostOptions { PublicBaseUrl = "https://proxy.example.test" }), protection);
             await botStore.SaveAsync(new TelegramBotOptions
             {
-                Enabled = true, UpdateMode = TelegramUpdateModes.Webhook, PublicBaseUrl = "https://proxy.example.test",
-                BotToken = "123:TEST_ONLY_NOT_A_REAL_TOKEN", WebhookSecret = "webhook_secret_for_tests",
-                BotId = 42, BotUsername = "ProxyHarborTestBot", ProductStars = new Dictionary<string, int> { ["pro-30"] = 250 }
+                Enabled = true,
+                UpdateMode = TelegramUpdateModes.Webhook,
+                PublicBaseUrl = "https://proxy.example.test",
+                BotToken = "123:TEST_ONLY_NOT_A_REAL_TOKEN",
+                WebhookSecret = "webhook_secret_for_tests",
+                BotId = 42,
+                BotUsername = "ProxyHarborTestBot",
+                ProductStars = new Dictionary<string, int> { ["pro-30"] = 250 }
             });
             var paymentOptions = new PaymentOptions
             {
@@ -359,7 +391,8 @@ public sealed class TelegramWorkflowTests
         {
             var user = new ApplicationUser
             {
-                UserName = username, DisplayName = username,
+                UserName = username,
+                DisplayName = username,
                 Email = $"{username}@example.test"
             };
             Assert.True((await Users.CreateAsync(user)).Succeeded);

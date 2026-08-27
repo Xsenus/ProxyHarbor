@@ -144,6 +144,9 @@ jobs:
           - component: web
             image: proxyharbor-web
             dockerfile: src/proxyharbor-web/Dockerfile
+          - component: checker-agent
+            image: proxyharbor-checker-agent
+            dockerfile: src/ProxyHarbor.CheckerAgent/Dockerfile
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Validate release tag and derive immutable metadata
@@ -247,7 +250,7 @@ jobs:
           IS_PRERELEASE: ${{ steps.release.outputs.is-prerelease }}
           REVISION: ${{ github.sha }}
         run: |
-          test "$(find release-metadata -maxdepth 1 -name '*.json' -type f | wc -l)" -eq 3
+          test "$(find release-metadata -maxdepth 1 -name '*.json' -type f | wc -l)" -eq 4
           jq --slurp --arg version "$VERSION" --arg revision "$REVISION" \
             '{schemaVersion:1,version:$version,revision:$revision,images:(sort_by(.component))}' \
             release-metadata/*.json > proxyharbor-release.json

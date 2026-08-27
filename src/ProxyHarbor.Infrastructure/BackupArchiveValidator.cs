@@ -35,11 +35,12 @@ public static class BackupArchiveValidator
     ];
     private static readonly HashSet<string> AllowedEntries = new(
         RequiredDatabaseEntries
-            .Concat(["database/backup-runs.json", "database/validation-runs.json"])
+            .Concat(["database/backup-runs.json", "database/validation-runs.json", "database/checker-nodes.json"])
             .Concat(["database/vpn-sources.json", "database/vpn-endpoints.json", "database/vpn-endpoint-sources.json"])
             .Concat(CurrentSettingsEntries)
             .Concat(IdentityEntries)
             .Append("database/payment-orders.json")
+            .Append("database/user-notifications.json")
             .Append("database/payment-configuration.json")
             .Append("database/subscription-admin-actions.json")
             .Append("database/proxy-access-buckets.json")
@@ -85,7 +86,7 @@ public static class BackupArchiveValidator
         if (!root.TryGetProperty("version", out var version) ||
             version.ValueKind != JsonValueKind.Number ||
             !version.TryGetInt32(out var versionNumber) ||
-            versionNumber is < 2 or > 6)
+            versionNumber is < 2 or > 7)
             throw new InvalidDataException("Версия manifest backup не поддерживается.");
         if (!root.TryGetProperty("secretsIncluded", out var secretsIncluded) ||
             secretsIncluded.ValueKind is not (JsonValueKind.True or JsonValueKind.False) ||
@@ -123,6 +124,8 @@ public static class BackupArchiveValidator
             _ = RequiredEntry(archive, "database/validation-runs.json");
         if (versionNumber >= 6)
             foreach (var name in IdentityEntries) _ = RequiredEntry(archive, name);
+        if (versionNumber >= 7)
+            _ = RequiredEntry(archive, "database/checker-nodes.json");
 
         if (versionNumber >= 5)
         {

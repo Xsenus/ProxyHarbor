@@ -70,6 +70,8 @@ services:
       Payments__Enabled: ${PAYMENTS_ENABLED:-false}
       Payments__PublicBaseUrl: ${PUBLIC_BASE_URL:-https://proxy.blagodaty.ru}
       TelegramBot__PublicBaseUrl: ${PUBLIC_BASE_URL:-https://proxy.blagodaty.ru}
+      CheckerAgentDeployment__PublicBaseUrl: ${PUBLIC_BASE_URL:-https://proxy.blagodaty.ru}
+      CheckerAgentDeployment__Image: ${CHECKER_AGENT_IMAGE:-ghcr.io/xsenus/proxyharbor-checker-agent:latest}
       GeoIp__DatabasePath: /app/geo-data/dbip-country-lite.mmdb
       Payments__Providers__yookassa__Enabled: ${YOOKASSA_ENABLED:-false}
       Payments__Providers__yookassa__MerchantId: ${YOOKASSA_SHOP_ID:-}

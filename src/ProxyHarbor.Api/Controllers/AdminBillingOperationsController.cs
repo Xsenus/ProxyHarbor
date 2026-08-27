@@ -45,9 +45,25 @@ public sealed class AdminPaymentOrdersController(ProxyHarborDbContext db) : Cont
         var total = await orders.CountAsync(token);
         var items = await orders.OrderByDescending(x => x.CreatedAt).ThenByDescending(x => x.Id)
             .Skip((page - 1) * pageSize).Take(pageSize)
-            .Select(x => new { x.Id, x.UserId, x.User.UserName, x.User.Email, x.ProductCode, x.Plan,
-                x.Provider, x.AmountMinor, x.Currency, x.Status, x.ProviderPaymentId,
-                x.CreatedAt, x.PaidAt, x.UpdatedAt }).ToListAsync(token);
+            .Select(x => new
+            {
+                x.Id,
+                x.UserId,
+                x.User.UserName,
+                x.User.Email,
+                x.ProductCode,
+                x.Plan,
+                x.Provider,
+                x.PaymentMethod,
+                x.PaymentInstrument,
+                x.AmountMinor,
+                x.Currency,
+                x.Status,
+                x.ProviderPaymentId,
+                x.CreatedAt,
+                x.PaidAt,
+                x.UpdatedAt
+            }).ToListAsync(token);
         var summary = await db.PaymentOrders.AsNoTracking().GroupBy(x => x.Status)
             .Select(x => new { status = x.Key, count = x.Count(), amountMinor = x.Sum(y => y.AmountMinor) })
             .ToListAsync(token);
@@ -83,8 +99,19 @@ public sealed class AdminSubscriptionsController(ProxyHarborDbContext db, UserMa
         var items = await rows.OrderByDescending(x => x.Status == SubscriptionStatuses.Active)
             .ThenBy(x => x.ExpiresAt).ThenBy(x => x.Id)
             .Skip((page - 1) * pageSize).Take(pageSize)
-            .Select(x => new { x.Id, x.UserId, x.User.UserName, x.User.Email, x.User.DisplayName,
-                x.Plan, x.Status, x.StartedAt, x.ExpiresAt, x.UpdatedAt }).ToListAsync(token);
+            .Select(x => new
+            {
+                x.Id,
+                x.UserId,
+                x.User.UserName,
+                x.User.Email,
+                x.User.DisplayName,
+                x.Plan,
+                x.Status,
+                x.StartedAt,
+                x.ExpiresAt,
+                x.UpdatedAt
+            }).ToListAsync(token);
         var summary = new
         {
             active = await db.Subscriptions.CountAsync(x => x.Status == SubscriptionStatuses.Active, token),
@@ -126,8 +153,12 @@ public sealed class AdminSubscriptionsController(ProxyHarborDbContext db, UserMa
             SubscriptionId = subscription.Id,
             AdministratorId = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!),
             Action = request.ExtensionDays == 0 ? "update" : "extend",
-            PreviousPlan = previousPlan, PreviousStatus = previousStatus, PreviousExpiresAt = previousExpires,
-            NewPlan = subscription.Plan, NewStatus = subscription.Status, NewExpiresAt = subscription.ExpiresAt,
+            PreviousPlan = previousPlan,
+            PreviousStatus = previousStatus,
+            PreviousExpiresAt = previousExpires,
+            NewPlan = subscription.Plan,
+            NewStatus = subscription.Status,
+            NewExpiresAt = subscription.ExpiresAt,
             Reason = string.IsNullOrWhiteSpace(request.Reason) ? null : request.Reason.Trim()
         });
         await db.SaveChangesAsync(token);

@@ -28,8 +28,12 @@ public sealed class SubscriptionPricingPolicyTests
         {
             ["unlimited-monthly"] = new()
             {
-                Enabled = true, Name = "Unlimited", Plan = "unlimited",
-                DurationDays = 30, AmountMinor = 99_900, Currency = "RUB"
+                Enabled = true,
+                Name = "Unlimited",
+                Plan = "unlimited",
+                DurationDays = 30,
+                AmountMinor = 99_900,
+                Currency = "RUB"
             }
         });
 
@@ -150,8 +154,12 @@ public sealed class SubscriptionPricingPolicyTests
             var period = SubscriptionPricingPolicy.Periods[index];
             legacy[$"unlimited-{period.Code}"] = new PaymentProductOptions
             {
-                Enabled = true, Name = period.RussianName, Plan = SubscriptionPlans.Unlimited,
-                DurationDays = period.Days, AmountMinor = amounts[index], Currency = "RUB"
+                Enabled = true,
+                Name = period.RussianName,
+                Plan = SubscriptionPlans.Unlimited,
+                DurationDays = period.Days,
+                AmountMinor = amounts[index],
+                Currency = "RUB"
             };
         }
 

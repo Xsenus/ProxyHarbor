@@ -118,6 +118,7 @@ public sealed class BackupPipelineTests
                     "database/access-block-rules.json",
                     "database/backup-configuration.json",
                     "database/backup-runs.json",
+                    "database/checker-nodes.json",
                     "database/free-proxy-export-grants.json",
                     "database/payment-configuration.json",
                     "database/payment-orders.json",
@@ -134,6 +135,7 @@ public sealed class BackupPipelineTests
                     "database/telegram-conversation-messages.json",
                     "database/telegram-outbound-messages.json",
                     "database/telegram-update-receipts.json",
+                    "database/user-notifications.json",
                     "database/user-roles.json",
                     "database/users.json",
                     "database/validation-runs.json",
@@ -153,7 +155,7 @@ public sealed class BackupPipelineTests
             Assert.True(sources.RootElement[0].GetProperty("lastResultTruncated").GetBoolean());
             using var manifestStream = BackupArchiveValidator.RequiredEntry(archive, "manifest.json").Open();
             using var manifest = await JsonDocument.ParseAsync(manifestStream);
-            Assert.Equal(6, manifest.RootElement.GetProperty("version").GetInt32());
+            Assert.Equal(7, manifest.RootElement.GetProperty("version").GetInt32());
             Assert.Equal(1, manifest.RootElement.GetProperty("settingsSchemaVersion").GetInt32());
         }
         finally

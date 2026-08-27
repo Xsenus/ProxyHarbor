@@ -122,13 +122,13 @@ public sealed class TelegramDispatchService(ProxyHarborDbContext db)
 
     private static TelegramOutboundMessage New<T>(
         TelegramChat chat, string kind, T payload, string key, DateTimeOffset? availableAt) => new()
-    {
-        TelegramChatId = chat.Id,
-        Kind = kind,
-        PayloadJson = JsonSerializer.Serialize(payload, Json),
-        IdempotencyKey = Limit(key, 160),
-        AvailableAt = availableAt ?? DateTimeOffset.UtcNow
-    };
+        {
+            TelegramChatId = chat.Id,
+            Kind = kind,
+            PayloadJson = JsonSerializer.Serialize(payload, Json),
+            IdempotencyKey = Limit(key, 160),
+            AvailableAt = availableAt ?? DateTimeOffset.UtcNow
+        };
 
     internal static string Limit(string value, int maximum) => value.Length <= maximum ? value : value[..maximum];
 }
@@ -209,7 +209,9 @@ public sealed class TelegramUpdateProcessor(
         if (text.Length == 0) return;
         db.TelegramConversationMessages.Add(new TelegramConversationMessage
         {
-            TelegramChatId = chat.Id, Direction = "inbound", Text = text
+            TelegramChatId = chat.Id,
+            Direction = "inbound",
+            Text = text
         });
         await db.SaveChangesAsync(token);
         var command = text.Split(' ', 2)[0].Split('@', 2)[0].ToLowerInvariant();
@@ -298,6 +300,8 @@ public sealed class TelegramUpdateProcessor(
             throw new InvalidOperationException("Заказ больше не принимает оплату.");
         var paidAt = DateTimeOffset.UtcNow;
         order.ProviderPaymentId = chargeId;
+        order.PaymentMethod = "telegram_stars";
+        order.PaymentInstrument = "Telegram Stars";
         order.Status = PaymentStatuses.Paid;
         order.PaidAt = paidAt;
         order.UpdatedAt = paidAt;
@@ -305,7 +309,8 @@ public sealed class TelegramUpdateProcessor(
         var begins = subscription.ExpiresAt is { } expires && expires > paidAt ? expires : paidAt;
         subscription.Plan = order.Plan;
         subscription.Status = SubscriptionStatuses.Active;
-        subscription.StartedAt = paidAt;
+        if (subscription.ExpiresAt is null || subscription.ExpiresAt <= paidAt)
+            subscription.StartedAt = paidAt;
         subscription.ExpiresAt = begins.AddDays(order.DurationDays);
         subscription.ExternalCustomerId ??= $"telegram:{chat.TelegramUserId}";
         subscription.ExternalSubscriptionId = chargeId;
@@ -338,6 +343,8 @@ public sealed class TelegramUpdateProcessor(
             ProductCode = productCode,
             Plan = product.Plan,
             Provider = "telegram_stars",
+            PaymentMethod = "telegram_stars",
+            PaymentInstrument = "Telegram Stars",
             AmountMinor = stars,
             Currency = "XTR",
             DurationDays = product.DurationDays
@@ -493,8 +500,11 @@ public sealed class TelegramUpdateProcessor(
             db.Subscriptions.Add(new UserSubscription { UserId = user.Id });
             chat = new TelegramChat
             {
-                ChatId = chatId, TelegramUserId = telegramUserId, UserId = user.Id,
-                User = user, DisplayName = user.DisplayName
+                ChatId = chatId,
+                TelegramUserId = telegramUserId,
+                UserId = user.Id,
+                User = user,
+                DisplayName = user.DisplayName
             };
             db.TelegramChats.Add(chat);
             await ApplyTelegramReferralAsync(user, referralCode, token);
@@ -856,7 +866,7 @@ public sealed class TelegramSubscriptionReminderWorker(
             try { await RunAsync(stoppingToken); }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
             catch (Exception exception) { ReminderFailed(logger, exception); }
-            await Task.Delay(TimeSpan.FromMinutes(15), stoppingToken);
+            await Task.Delay(TimeSpan.FromMinutes(5), stoppingToken);
         }
     }
 
@@ -864,7 +874,6 @@ public sealed class TelegramSubscriptionReminderWorker(
     {
         using var scope = scopes.CreateScope();
         var settings = await scope.ServiceProvider.GetRequiredService<ITelegramBotConfigurationStore>().GetAsync(token);
-        if (!settings.Ready) return;
         var db = scope.ServiceProvider.GetRequiredService<ProxyHarborDbContext>();
         var users = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
         var queue = scope.ServiceProvider.GetRequiredService<TelegramDispatchService>();
@@ -874,35 +883,80 @@ public sealed class TelegramSubscriptionReminderWorker(
             .ToArrayAsync(token);
         foreach (var subscription in expired)
         {
+            var expiredAt = subscription.ExpiresAt!.Value;
             subscription.Status = SubscriptionStatuses.Expired;
             subscription.UpdatedAt = now;
             if (await users.IsInRoleAsync(subscription.User, UserRoles.Subscriber))
                 await users.RemoveFromRoleAsync(subscription.User, UserRoles.Subscriber);
-            if (subscription.User.TelegramChat is { NotificationsEnabled: true, IsBlocked: false } chat)
+            var expiredKey = $"subscription-expired:{subscription.Id:N}:{subscription.ExpiresAt:yyyyMMddHHmm}";
+            if (!await db.UserNotifications.AnyAsync(x => x.DeduplicationKey == expiredKey, token))
+                db.UserNotifications.Add(new UserNotification
+                {
+                    UserId = subscription.UserId,
+                    Kind = "subscription_expired",
+                    Message = ReminderText(subscription.User.PreferredLanguage, "expired", expiredAt),
+                    ActionUrl = "/account?tab=billing",
+                    DeduplicationKey = expiredKey
+                });
+            if (settings.Ready && subscription.User.TelegramChat is { NotificationsEnabled: true, IsBlocked: false } chat)
                 await queue.EnqueueTextAsync(chat,
-                    "⏰ Подписка закончилась. Продлить доступ и снова получить файл можно через /buy.",
-                    $"subscription-expired:{subscription.Id:N}:{subscription.ExpiresAt:yyyyMMddHHmm}", token: token);
+                    ReminderText(subscription.User.PreferredLanguage, "expired", expiredAt),
+                    expiredKey, token: token);
         }
         await db.SaveChangesAsync(token);
 
         var upcoming = await db.Subscriptions.AsNoTracking().Include(x => x.User).ThenInclude(x => x.TelegramChat)
-            .Where(x => x.Status == SubscriptionStatuses.Active && x.ExpiresAt > now && x.ExpiresAt <= now.AddDays(7) &&
-                        x.User.TelegramChat != null && x.User.TelegramChat.NotificationsEnabled && !x.User.TelegramChat.IsBlocked)
+            .Where(x => x.Status == SubscriptionStatuses.Active && x.ExpiresAt > now && x.ExpiresAt <= now.AddHours(12))
             .ToArrayAsync(token);
         foreach (var subscription in upcoming)
         {
             var remaining = subscription.ExpiresAt!.Value - now;
-            var window = remaining <= TimeSpan.FromDays(1) ? "1d" : remaining <= TimeSpan.FromDays(3) ? "3d" : "7d";
-            var chat = subscription.User.TelegramChat!;
-            await queue.EnqueueTextAsync(chat,
-                $"⏳ Подписка закончится <b>{subscription.ExpiresAt:dd.MM.yyyy HH:mm} UTC</b>. Продлить можно заранее через /buy — новый срок прибавится к текущему.",
-                $"subscription-reminder:{subscription.Id:N}:{subscription.ExpiresAt:yyyyMMddHHmm}:{window}",
-                replyMarkup: new { inline_keyboard = new[] { new[] { new { text = "⭐ Продлить", callback_data = "products" } } } }, token: token);
+            var window = remaining <= TimeSpan.FromHours(1) ? "1h" : "12h";
+            var key = $"subscription-reminder:{subscription.Id:N}:{subscription.ExpiresAt:yyyyMMddHHmm}:{window}";
+            var text = ReminderText(subscription.User.PreferredLanguage, window, subscription.ExpiresAt.Value);
+            if (!await db.UserNotifications.AnyAsync(x => x.DeduplicationKey == key, token))
+                db.UserNotifications.Add(new UserNotification
+                {
+                    UserId = subscription.UserId,
+                    Kind = $"subscription_expires_{window}",
+                    Message = text,
+                    ActionUrl = "/account?tab=billing",
+                    DeduplicationKey = key
+                });
+            if (settings.Ready && subscription.User.TelegramChat is { NotificationsEnabled: true, IsBlocked: false } chat)
+                await queue.EnqueueTextAsync(chat, text, key,
+                    replyMarkup: new { inline_keyboard = new[] { new[] { new { text = "⭐ Продлить", callback_data = "products" } } } }, token: token);
         }
+        await db.SaveChangesAsync(token);
 
         await db.TelegramUpdateReceipts.Where(x => x.ReceivedAt < now.AddDays(-30)).ExecuteDeleteAsync(token);
         await db.TelegramOutboundMessages.Where(x => x.CreatedAt < now.AddDays(-90) &&
             (x.Status == TelegramOutboundStatuses.Sent || x.Status == TelegramOutboundStatuses.Canceled || x.Status == TelegramOutboundStatuses.Failed))
             .ExecuteDeleteAsync(token);
+        await db.UserNotifications.Where(x => x.DeliveredAt != null && x.DeliveredAt < now.AddDays(-90))
+            .ExecuteDeleteAsync(token);
+    }
+
+    private static string ReminderText(string? language, string window, DateTimeOffset expiresAt)
+    {
+        var expiry = expiresAt.ToString("dd.MM.yyyy HH:mm 'UTC'", CultureInfo.InvariantCulture);
+        return (SupportedLanguages.Normalize(language), window) switch
+        {
+            ("en", "12h") => $"⏳ Your subscription expires in 12 hours ({expiry}). Renew now; the new period will be added to the current one.",
+            ("en", "1h") => $"⏰ Your subscription expires in 1 hour ({expiry}). Renew to keep uninterrupted access.",
+            ("en", _) => "⏰ Your subscription has expired. Renew it to restore full access.",
+            ("de", "12h") => $"⏳ Ihr Abonnement läuft in 12 Stunden ab ({expiry}). Eine Verlängerung wird an die aktuelle Laufzeit angehängt.",
+            ("de", "1h") => $"⏰ Ihr Abonnement läuft in 1 Stunde ab ({expiry}). Jetzt verlängern, um den Zugriff zu behalten.",
+            ("de", _) => "⏰ Ihr Abonnement ist abgelaufen. Verlängern Sie es, um den vollen Zugriff wiederherzustellen.",
+            ("fr", "12h") => $"⏳ Votre abonnement expire dans 12 heures ({expiry}). Toute prolongation s'ajoute à la période actuelle.",
+            ("fr", "1h") => $"⏰ Votre abonnement expire dans 1 heure ({expiry}). Renouvelez-le pour conserver l'accès.",
+            ("fr", _) => "⏰ Votre abonnement a expiré. Renouvelez-le pour rétablir l'accès complet.",
+            ("zh", "12h") => $"⏳ 您的订阅将在 12 小时后到期（{expiry}）。续订时长会添加到当前期限之后。",
+            ("zh", "1h") => $"⏰ 您的订阅将在 1 小时后到期（{expiry}）。请续订以保持访问。",
+            ("zh", _) => "⏰ 您的订阅已到期。续订后可恢复完整访问。",
+            (_, "12h") => $"⏳ Подписка закончится через 12 часов ({expiry}). Продлить можно заранее — новый срок прибавится к текущему.",
+            (_, "1h") => $"⏰ Подписка закончится через 1 час ({expiry}). Продлите её, чтобы сохранить доступ без перерыва.",
+            _ => "⏰ Подписка закончилась. Продлите её, чтобы восстановить полный доступ."
+        };
     }
 }

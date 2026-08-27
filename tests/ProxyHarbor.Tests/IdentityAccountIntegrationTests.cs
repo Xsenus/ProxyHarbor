@@ -137,7 +137,9 @@ public sealed class IdentityAccountIntegrationTests
         var db = fixture.Get<ProxyHarborDbContext>();
         var referrer = new ApplicationUser
         {
-            UserName = "referrer", Email = "referrer@example.com", ReferralCode = "abc123def456"
+            UserName = "referrer",
+            Email = "referrer@example.com",
+            ReferralCode = "abc123def456"
         };
         Assert.True((await users.CreateAsync(referrer, "Initial-user-42!")).Succeeded);
         Assert.True((await users.AddToRoleAsync(referrer, UserRoles.User)).Succeeded);
@@ -146,7 +148,9 @@ public sealed class IdentityAccountIntegrationTests
 
         var response = await fixture.AuthController(new RecordingEmailSender()).Register(new RegisterAccountRequest
         {
-            Username = "invited.user", Email = "invited@example.com", Password = "Initial-user-42!",
+            Username = "invited.user",
+            Email = "invited@example.com",
+            Password = "Initial-user-42!",
             ReferralCode = referrer.ReferralCode
         });
 
@@ -273,8 +277,10 @@ public sealed class IdentityAccountIntegrationTests
         Assert.True((await users.AddToRolesAsync(user, [UserRoles.User, UserRoles.Subscriber])).Succeeded);
         db.Subscriptions.Add(new UserSubscription
         {
-            UserId = user.Id, Plan = SubscriptionPlans.Unlimited,
-            Status = SubscriptionStatuses.Active, ExpiresAt = DateTimeOffset.UtcNow.AddDays(7)
+            UserId = user.Id,
+            Plan = SubscriptionPlans.Unlimited,
+            Status = SubscriptionStatuses.Active,
+            ExpiresAt = DateTimeOffset.UtcNow.AddDays(7)
         });
         await db.SaveChangesAsync();
         var service = new UserApiTokenService(db, users);
@@ -435,7 +441,9 @@ public sealed class IdentityAccountIntegrationTests
         var db = fixture.Get<ProxyHarborDbContext>();
         var subscription = new UserSubscription
         {
-            UserId = client.Id, Plan = SubscriptionPlans.Pro, Status = SubscriptionStatuses.Active,
+            UserId = client.Id,
+            Plan = SubscriptionPlans.Pro,
+            Status = SubscriptionStatuses.Active,
             ExpiresAt = DateTimeOffset.UtcNow.AddDays(10)
         };
         db.Subscriptions.Add(subscription);
@@ -472,7 +480,8 @@ public sealed class IdentityAccountIntegrationTests
         Assert.IsType<BadRequestObjectResult>(await fixture.AdminSubscriptionsController().Update(
             subscription.Id, new UpdateSubscriptionRequest
             {
-                Plan = SubscriptionPlans.Pro, Status = SubscriptionStatuses.Active,
+                Plan = SubscriptionPlans.Pro,
+                Status = SubscriptionStatuses.Active,
                 ExpiresAt = subscription.StartedAt.AddDays(-1)
             }, CancellationToken.None));
     }
@@ -541,7 +550,7 @@ public sealed class IdentityAccountIntegrationTests
 
         public AccountController AccountController() => WithContext(new AccountController(
             Get<UserManager<ApplicationUser>>(), Get<SignInManager<ApplicationUser>>(), Get<ProxyHarborDbContext>(),
-            new UserApiTokenService(Get<ProxyHarborDbContext>(), Get<UserManager<ApplicationUser>>() )));
+            new UserApiTokenService(Get<ProxyHarborDbContext>(), Get<UserManager<ApplicationUser>>())));
 
         public AdminUsersController AdminUsersController() => WithContext(new AdminUsersController(
             Get<UserManager<ApplicationUser>>(), Get<ProxyHarborDbContext>()));

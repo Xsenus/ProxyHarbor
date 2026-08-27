@@ -22,6 +22,7 @@
 | [TELEGRAM_BOT.md](TELEGRAM_BOT.md) | Commerce-бот, Stars, CRM, webhook/polling и эксплуатация |
 | [MONITORING.md](MONITORING.md) | Метрики, alarms и incident response |
 | [PERFORMANCE.md](PERFORMANCE.md) | Нагрузочная модель, измерения и tuning |
+| [DISTRIBUTED_CHECKERS.md](DISTRIBUTED_CHECKERS.md) | Подключение VPS, leases, failover и безопасная эксплуатация checker-агентов |
 
 ## Разработчику и сопровождающему
 

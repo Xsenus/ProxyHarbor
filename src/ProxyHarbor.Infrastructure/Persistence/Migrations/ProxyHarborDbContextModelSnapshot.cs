@@ -200,6 +200,104 @@ namespace ProxyHarbor.Infrastructure.Persistence.Migrations
                         });
                 });
 
+            modelBuilder.Entity("ProxyHarbor.Domain.CheckerNode", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("AgentVersion")
+                        .HasMaxLength(80)
+                        .HasColumnType("character varying(80)");
+
+                    b.Property<long>("AliveChecks")
+                        .HasColumnType("bigint");
+
+                    b.Property<int>("BatchSize")
+                        .HasColumnType("integer");
+
+                    b.Property<long>("CompletedChecks")
+                        .HasColumnType("bigint");
+
+                    b.Property<int>("Concurrency")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("CurrentLeaseId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset?>("CurrentLeaseUntil")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("DeploymentStatus")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<bool>("Enabled")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("Host")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<string>("HostKeyFingerprint")
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
+
+                    b.Property<DateTimeOffset?>("LastCompletedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("LastError")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)");
+
+                    b.Property<DateTimeOffset?>("LastHeartbeatAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset?>("LastLeaseAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<string>("RemoteAddress")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<int>("SshPort")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("SshUsername")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<byte[]>("TokenHash")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("bytea");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Host");
+
+                    b.HasIndex("LastHeartbeatAt");
+
+                    b.HasIndex("Name")
+                        .IsUnique();
+
+                    b.ToTable("CheckerNodes");
+                });
+
             modelBuilder.Entity("ProxyHarbor.Domain.CollectionRun", b =>
                 {
                     b.Property<Guid>("Id")
@@ -482,6 +580,9 @@ namespace ProxyHarbor.Infrastructure.Persistence.Migrations
                     b.Property<int>("Checked")
                         .HasColumnType("integer");
 
+                    b.Property<Guid?>("CheckerNodeId")
+                        .HasColumnType("uuid");
+
                     b.Property<int>("Claimed")
                         .HasColumnType("integer");
 
@@ -512,6 +613,8 @@ namespace ProxyHarbor.Infrastructure.Persistence.Migrations
                         .IsUnique();
 
                     b.HasIndex("StartedAt");
+
+                    b.HasIndex("CheckerNodeId", "StartedAt");
 
                     b.HasIndex("Status", "FinishedAt");
 
@@ -953,6 +1056,15 @@ namespace ProxyHarbor.Infrastructure.Persistence.Migrations
 
                     b.Property<DateTimeOffset?>("PaidAt")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("PaymentInstrument")
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)");
+
+                    b.Property<string>("PaymentMethod")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
 
                     b.Property<string>("Plan")
                         .IsRequired()
@@ -1588,6 +1700,50 @@ namespace ProxyHarbor.Infrastructure.Persistence.Migrations
                         });
                 });
 
+            modelBuilder.Entity("ProxyHarbor.Infrastructure.UserNotification", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ActionUrl")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("DeduplicationKey")
+                        .IsRequired()
+                        .HasMaxLength(160)
+                        .HasColumnType("character varying(160)");
+
+                    b.Property<DateTimeOffset?>("DeliveredAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<string>("Message")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("DeduplicationKey")
+                        .IsUnique();
+
+                    b.HasIndex("UserId", "DeliveredAt", "CreatedAt");
+
+                    b.ToTable("UserNotifications");
+                });
+
             modelBuilder.Entity("ProxyHarbor.Infrastructure.UserSubscription", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1690,6 +1846,16 @@ namespace ProxyHarbor.Infrastructure.Persistence.Migrations
                         .HasForeignKey("UserId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
+                });
+
+            modelBuilder.Entity("ProxyHarbor.Domain.ValidationRun", b =>
+                {
+                    b.HasOne("ProxyHarbor.Domain.CheckerNode", "CheckerNode")
+                        .WithMany("ValidationRuns")
+                        .HasForeignKey("CheckerNodeId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.Navigation("CheckerNode");
                 });
 
             modelBuilder.Entity("ProxyHarbor.Domain.VpnEndpoint", b =>
@@ -1899,6 +2065,17 @@ namespace ProxyHarbor.Infrastructure.Persistence.Migrations
                     b.Navigation("UserApiToken");
                 });
 
+            modelBuilder.Entity("ProxyHarbor.Infrastructure.UserNotification", b =>
+                {
+                    b.HasOne("ProxyHarbor.Infrastructure.ApplicationUser", "User")
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("User");
+                });
+
             modelBuilder.Entity("ProxyHarbor.Infrastructure.UserSubscription", b =>
                 {
                     b.HasOne("ProxyHarbor.Infrastructure.ApplicationUser", "User")
@@ -1908,6 +2085,11 @@ namespace ProxyHarbor.Infrastructure.Persistence.Migrations
                         .IsRequired();
 
                     b.Navigation("User");
+                });
+
+            modelBuilder.Entity("ProxyHarbor.Domain.CheckerNode", b =>
+                {
+                    b.Navigation("ValidationRuns");
                 });
 
             modelBuilder.Entity("ProxyHarbor.Domain.VpnEndpoint", b =>

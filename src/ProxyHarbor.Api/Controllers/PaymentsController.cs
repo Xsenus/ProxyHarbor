@@ -46,11 +46,16 @@ public sealed class PaymentsController(
             enabled = options.Enabled,
             products = options.Products.Where(x => x.Value.Enabled).Select(x => new
             {
-                code = x.Key, x.Value.Name, x.Value.Plan, x.Value.DurationDays,
-                x.Value.AmountMinor, x.Value.DiscountPercent,
+                code = x.Key,
+                x.Value.Name,
+                x.Value.Plan,
+                x.Value.DurationDays,
+                x.Value.AmountMinor,
+                x.Value.DiscountPercent,
                 fullDailyPriceMinor = dailyPrice is null ? x.Value.AmountMinor : checked(dailyPrice.Value * x.Value.DurationDays),
                 savingsMinor = dailyPrice is null ? 0 : Math.Max(0, checked(dailyPrice.Value * x.Value.DurationDays) - x.Value.AmountMinor),
-                currency = x.Value.Currency.ToUpperInvariant(), x.Value.Description
+                currency = x.Value.Currency.ToUpperInvariant(),
+                x.Value.Description
             }),
             providers = PaymentProviderConfiguration.Codes.Select(code => new
             {
@@ -83,9 +88,15 @@ public sealed class PaymentsController(
 
         var order = new PaymentOrder
         {
-            UserId = user.Id, ProductCode = productCode, Plan = product.Plan,
-            Provider = providerCode, AmountMinor = product.AmountMinor,
-            Currency = product.Currency.ToUpperInvariant(), DurationDays = product.DurationDays
+            UserId = user.Id,
+            ProductCode = productCode,
+            Plan = product.Plan,
+            Provider = providerCode,
+            AmountMinor = product.AmountMinor,
+            PaymentMethod = DefaultPaymentMethod(providerCode),
+            PaymentInstrument = ProviderName(providerCode),
+            Currency = product.Currency.ToUpperInvariant(),
+            DurationDays = product.DurationDays
         };
         db.PaymentOrders.Add(order);
         await db.SaveChangesAsync(token);
@@ -115,7 +126,20 @@ public sealed class PaymentsController(
         if (user is null || !user.IsActive) return Unauthorized();
         return Ok(await db.PaymentOrders.AsNoTracking().Where(x => x.UserId == user.Id)
             .OrderByDescending(x => x.CreatedAt).Take(50)
-            .Select(x => new { x.Id, x.ProductCode, x.Plan, x.Provider, x.AmountMinor, x.Currency, x.Status, x.CreatedAt, x.PaidAt })
+            .Select(x => new
+            {
+                x.Id,
+                x.ProductCode,
+                x.Plan,
+                x.Provider,
+                x.PaymentMethod,
+                x.PaymentInstrument,
+                x.AmountMinor,
+                x.Currency,
+                x.Status,
+                x.CreatedAt,
+                x.PaidAt
+            })
             .ToArrayAsync(token));
     }
 
@@ -183,6 +207,8 @@ public sealed class PaymentsController(
         if (!string.Equals(order.ProviderPaymentId, notification.ProviderPaymentId, StringComparison.Ordinal))
             return Problem("Идентификатор операции не соответствует заказу.", statusCode: 400);
         order.Status = notification.Status;
+        order.PaymentMethod = notification.PaymentMethod ?? order.PaymentMethod;
+        order.PaymentInstrument = notification.PaymentInstrument ?? order.PaymentInstrument;
         order.UpdatedAt = DateTimeOffset.UtcNow;
         if (notification.Status == PaymentStatuses.Paid)
         {
@@ -191,7 +217,8 @@ public sealed class PaymentsController(
             var begins = subscription.ExpiresAt is { } expires && expires > order.PaidAt ? expires : order.PaidAt.Value;
             subscription.Plan = order.Plan;
             subscription.Status = SubscriptionStatuses.Active;
-            subscription.StartedAt = order.PaidAt.Value;
+            if (subscription.ExpiresAt is null || subscription.ExpiresAt <= order.PaidAt.Value)
+                subscription.StartedAt = order.PaidAt.Value;
             subscription.ExpiresAt = begins.AddDays(order.DurationDays);
             subscription.ExternalCustomerId ??= order.UserId.ToString("D");
             subscription.ExternalSubscriptionId = notification.ProviderPaymentId;
@@ -231,9 +258,22 @@ public sealed class PaymentsController(
 
     private static string ProviderName(string code) => code switch
     {
-        "yookassa" => "ЮKassa", "yoomoney" => "ЮMoney", "cloudpayments" => "CloudPayments",
-        "robokassa" => "Robokassa", "tbank" => "Т-Банк", "stripe" => "Stripe",
-        "cryptomus" => "Cryptomus", "nowpayments" => "NOWPayments", _ => code
+        "yookassa" => "ЮKassa",
+        "yoomoney" => "ЮMoney",
+        "cloudpayments" => "CloudPayments",
+        "robokassa" => "Robokassa",
+        "tbank" => "Т-Банк",
+        "stripe" => "Stripe",
+        "cryptomus" => "Cryptomus",
+        "nowpayments" => "NOWPayments",
+        _ => code
+    };
+
+    private static string DefaultPaymentMethod(string code) => code switch
+    {
+        "yoomoney" => "wallet",
+        "cryptomus" or "nowpayments" => "crypto",
+        _ => "payment_gateway"
     };
 
     private static bool FixedTokenEquals(string expected, string actual)

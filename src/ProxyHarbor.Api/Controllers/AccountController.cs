@@ -70,8 +70,14 @@ public sealed class AccountController(
             },
             apiTokens = tokens.Select(x => new
             {
-                x.Id, x.Name, x.DisplaySuffix, scopes = x.Scopes.Split(' ', StringSplitOptions.RemoveEmptyEntries),
-                x.CreatedAt, x.LastUsedAt, x.RevokedAt, active = x.RevokedAt is null && paidAccess
+                x.Id,
+                x.Name,
+                x.DisplaySuffix,
+                scopes = x.Scopes.Split(' ', StringSplitOptions.RemoveEmptyEntries),
+                x.CreatedAt,
+                x.LastUsedAt,
+                x.RevokedAt,
+                active = x.RevokedAt is null && paidAccess
             })
         });
     }
@@ -96,7 +102,10 @@ public sealed class AccountController(
                 user = new { x.ReferredUser.UserName, x.ReferredUser.Email, x.ReferredUser.DisplayName },
                 rewards = x.Rewards.OrderByDescending(r => r.CreatedAt).Select(r => new
                 {
-                    r.Id, r.Kind, r.DaysGranted, r.CreatedAt,
+                    r.Id,
+                    r.Kind,
+                    r.DaysGranted,
+                    r.CreatedAt,
                     productCode = r.PaymentOrder == null ? null : r.PaymentOrder.ProductCode,
                     durationDays = r.PaymentOrder == null ? (int?)null : r.PaymentOrder.DurationDays
                 })

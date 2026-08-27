@@ -309,6 +309,63 @@ public sealed class ValidationRun
     public string Status { get; set; } = "running";
     /// <summary>Bounded-диагностика отказа или null при полном успехе.</summary>
     public string? Error { get; set; }
+    /// <summary>Внешний checker-узел, выполнявший партию; null означает локальный validator.</summary>
+    public Guid? CheckerNodeId { get; set; }
+    /// <summary>Навигация к внешнему checker-узлу.</summary>
+    public CheckerNode? CheckerNode { get; set; }
+}
+
+/// <summary>Подключённый внешний VPS, который арендует пакеты проверки у центрального сервиса.</summary>
+public sealed class CheckerNode
+{
+    /// <summary>Стабильный идентификатор и часть заголовка аутентификации агента.</summary>
+    public Guid Id { get; set; } = Guid.NewGuid();
+    /// <summary>Понятное администратору уникальное имя узла.</summary>
+    public required string Name { get; set; }
+    /// <summary>Публичный IP VPS, использовавшийся при развёртывании.</summary>
+    public required string Host { get; set; }
+    /// <summary>Порт SSH, использующийся только для установки и удаления контейнера.</summary>
+    public int SshPort { get; set; } = 22;
+    /// <summary>Системный пользователь VPS; пароль намеренно не хранится.</summary>
+    public required string SshUsername { get; set; }
+    /// <summary>SHA-256 bearer-токена агента. Сам токен существует только на VPS.</summary>
+    public required byte[] TokenHash { get; set; }
+    /// <summary>TOFU SHA-256 fingerprint SSH host key для защиты повторного развёртывания.</summary>
+    public string? HostKeyFingerprint { get; set; }
+    /// <summary>Разрешено ли агенту получать и продлевать задания.</summary>
+    public bool Enabled { get; set; } = true;
+    /// <summary>Максимальное число параллельных сетевых проб на этом VPS.</summary>
+    public int Concurrency { get; set; } = 200;
+    /// <summary>Максимальный размер одной атомарной аренды.</summary>
+    public int BatchSize { get; set; } = 400;
+    /// <summary>Время регистрации узла.</summary>
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+    /// <summary>Время последнего изменения администратором или deploy-процессом.</summary>
+    public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
+    /// <summary>Последний успешно принятый heartbeat.</summary>
+    public DateTimeOffset? LastHeartbeatAt { get; set; }
+    /// <summary>Последняя выдача непустого пакета.</summary>
+    public DateTimeOffset? LastLeaseAt { get; set; }
+    /// <summary>Последняя полностью сохранённая партия.</summary>
+    public DateTimeOffset? LastCompletedAt { get; set; }
+    /// <summary>Текущий точный token аренды либо null.</summary>
+    public Guid? CurrentLeaseId { get; set; }
+    /// <summary>Момент автоматического возврата незавершённой партии.</summary>
+    public DateTimeOffset? CurrentLeaseUntil { get; set; }
+    /// <summary>Версия подключённого контейнера.</summary>
+    public string? AgentVersion { get; set; }
+    /// <summary>Фактический адрес последнего HTTPS-запроса агента.</summary>
+    public string? RemoteAddress { get; set; }
+    /// <summary>Состояние provisioning: pending/deploying/starting/failed.</summary>
+    public string DeploymentStatus { get; set; } = "pending";
+    /// <summary>Последняя bounded-ошибка установки или работы.</summary>
+    public string? LastError { get; set; }
+    /// <summary>Общее число объективных проверок, сохранённых от узла.</summary>
+    public long CompletedChecks { get; set; }
+    /// <summary>Общее число подтверждённых узлом живых прокси.</summary>
+    public long AliveChecks { get; set; }
+    /// <summary>История распределённых validation-партий узла.</summary>
+    public ICollection<ValidationRun> ValidationRuns { get; set; } = [];
 }
 
 /// <summary>Постоянный аудит создания и внешней доставки резервной копии.</summary>

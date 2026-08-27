@@ -18,8 +18,12 @@ public sealed class TelegramBotPersistenceTests
             new EphemeralDataProtectionProvider());
         await store.SaveAsync(new TelegramBotOptions
         {
-            Enabled = true, PublicBaseUrl = "https://attacker.example", BotToken = "123:TEST_ONLY_NOT_A_REAL_TOKEN",
-            WebhookSecret = "safe_webhook_secret", BotId = 42, BotUsername = "ProxyHarborBot",
+            Enabled = true,
+            PublicBaseUrl = "https://attacker.example",
+            BotToken = "123:TEST_ONLY_NOT_A_REAL_TOKEN",
+            WebhookSecret = "safe_webhook_secret",
+            BotId = 42,
+            BotUsername = "ProxyHarborBot",
             ProductStars = new Dictionary<string, int> { ["pro-30"] = 250 },
             AutomaticProductCodes = new(StringComparer.OrdinalIgnoreCase) { "unlimited-30" },
             RublesPerStar = 1.68m,
@@ -116,24 +120,28 @@ public sealed class TelegramBotPersistenceTests
 
     private static TelegramChat Chat(long id, bool notifications, bool blocked) => new()
     {
-        ChatId = id, TelegramUserId = id, UserId = Guid.NewGuid(), DisplayName = $"User {id}",
-        NotificationsEnabled = notifications, IsBlocked = blocked
+        ChatId = id,
+        TelegramUserId = id,
+        UserId = Guid.NewGuid(),
+        DisplayName = $"User {id}",
+        NotificationsEnabled = notifications,
+        IsBlocked = blocked
     };
 
     private static ProxyEndpoint Endpoint(
         string host, int port, ProxyStatus status, DateTimeOffset checkedAt,
         int latency, int successfulChecks, ProxyProtocol protocol = ProxyProtocol.Http) => new()
-    {
-        Host = host,
-        Port = port,
-        Protocol = protocol,
-        Status = status,
-        LatencyMs = latency,
-        LastCheckedAt = checkedAt,
-        SuccessfulChecks = successfulChecks,
-        FailedChecks = status == ProxyStatus.Dead ? 1 : 0,
-        FirstAliveAt = status == ProxyStatus.Alive ? checkedAt : null,
-        LastAliveAt = status == ProxyStatus.Alive ? checkedAt : null,
-        CurrentAliveSince = status == ProxyStatus.Alive ? checkedAt : null
-    };
+        {
+            Host = host,
+            Port = port,
+            Protocol = protocol,
+            Status = status,
+            LatencyMs = latency,
+            LastCheckedAt = checkedAt,
+            SuccessfulChecks = successfulChecks,
+            FailedChecks = status == ProxyStatus.Dead ? 1 : 0,
+            FirstAliveAt = status == ProxyStatus.Alive ? checkedAt : null,
+            LastAliveAt = status == ProxyStatus.Alive ? checkedAt : null,
+            CurrentAliveSince = status == ProxyStatus.Alive ? checkedAt : null
+        };
 }

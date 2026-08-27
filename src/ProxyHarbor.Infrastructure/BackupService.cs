@@ -295,6 +295,10 @@ public sealed class BackupService(
                 await WriteJsonAsync(archive, "database/runs.json", db.Runs.AsNoTracking().AsAsyncEnumerable(), token);
                 await WriteJsonAsync(archive, "database/validation-runs.json",
                     db.ValidationRuns.AsNoTracking().AsAsyncEnumerable(), token);
+                // Пароль SSH намеренно никогда не сохраняется в БД. В backup попадают
+                // только безопасные метаданные узла, fingerprint и хеш agent-токена.
+                await WriteJsonAsync(archive, "database/checker-nodes.json",
+                    db.CheckerNodes.AsNoTracking().AsAsyncEnumerable(), token);
                 // Текущий аудит завершается только после шифрования и Telegram-доставки,
                 // поэтому в снимок входят лишь полностью определённые предыдущие попытки.
                 await WriteJsonAsync(archive, "database/backup-runs.json",
@@ -306,6 +310,7 @@ public sealed class BackupService(
                 await WriteJsonAsync(archive, "database/user-roles.json", db.UserRoles.AsNoTracking().AsAsyncEnumerable(), token);
                 await WriteJsonAsync(archive, "database/subscriptions.json", db.Subscriptions.AsNoTracking().AsAsyncEnumerable(), token);
                 await WriteJsonAsync(archive, "database/payment-orders.json", db.PaymentOrders.AsNoTracking().AsAsyncEnumerable(), token);
+                await WriteJsonAsync(archive, "database/user-notifications.json", db.UserNotifications.AsNoTracking().AsAsyncEnumerable(), token);
                 await WriteJsonAsync(archive, "database/subscription-admin-actions.json", db.SubscriptionAdminActions.AsNoTracking().AsAsyncEnumerable(), token);
                 await WriteJsonAsync(archive, "database/proxy-access-buckets.json", db.ProxyAccessBuckets.AsNoTracking().AsAsyncEnumerable(), token);
                 await WriteJsonAsync(archive, "database/site-visit-logs.json", db.SiteVisitLogs.AsNoTracking().AsAsyncEnumerable(), token);
@@ -340,9 +345,9 @@ public sealed class BackupService(
                 await WriteJsonAsync(archive, "manifest.json",
                     new
                     {
-                        // v6 допускает additive database entries; старые v6 архивы без
-                        // payment-orders по-прежнему полностью восстанавливаются.
-                        version = 6,
+                        // v7 фиксирует checker-nodes как обязательную часть полного снимка.
+                        // Архивы v2-v6 остаются совместимыми с restore.
+                        version = 7,
                         settingsSchemaVersion = 1,
                         createdAt = DateTimeOffset.UtcNow,
                         secretsIncluded = false

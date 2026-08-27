@@ -17,7 +17,7 @@ public sealed class CommerceControllerTests
     {
         var payments = Options(true);
         payments.Providers["yookassa"] = new PaymentProviderOptions
-            { Enabled = true, MerchantId = "shop", SecretKey = "secret" };
+        { Enabled = true, MerchantId = "shop", SecretKey = "secret" };
         var controller = Controller(payments, new TelegramBotOptions(), paid: false);
 
         var result = Assert.IsType<OkObjectResult>(await controller.Availability(CancellationToken.None));
@@ -49,7 +49,10 @@ public sealed class CommerceControllerTests
         var payments = Options(false);
         var telegram = new TelegramBotOptions
         {
-            Enabled = true, BotId = 1, BotToken = "token", WebhookSecret = "secret",
+            Enabled = true,
+            BotId = 1,
+            BotToken = "token",
+            WebhookSecret = "secret",
             AutomaticProductCodes = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "pro-30" }
         };
         var controller = Controller(payments, telegram, paid: false);
@@ -65,7 +68,7 @@ public sealed class CommerceControllerTests
     {
         var controller = new CommerceController(new PaymentStore(payments), new TelegramStore(telegram), new Access(paid));
         controller.ControllerContext = new ControllerContext
-            { HttpContext = new DefaultHttpContext { User = new ClaimsPrincipal() } };
+        { HttpContext = new DefaultHttpContext { User = new ClaimsPrincipal() } };
         return controller;
     }
 
@@ -75,7 +78,7 @@ public sealed class CommerceControllerTests
         Products = new(StringComparer.OrdinalIgnoreCase)
         {
             ["pro-30"] = new PaymentProductOptions
-                { Enabled = true, Plan = "pro", AmountMinor = 49_900, DurationDays = 30 }
+            { Enabled = true, Plan = "pro", AmountMinor = 49_900, DurationDays = 30 }
         }
     };
 

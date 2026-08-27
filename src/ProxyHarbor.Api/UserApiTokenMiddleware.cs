@@ -1,5 +1,5 @@
-using System.Security.Claims;
 using System.Diagnostics;
+using System.Security.Claims;
 using Microsoft.Net.Http.Headers;
 using ProxyHarbor.Infrastructure;
 

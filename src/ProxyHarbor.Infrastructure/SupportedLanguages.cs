@@ -25,7 +25,11 @@ public static class SupportedLanguages
     public static readonly string[] All = [Russian, English, German, French, Chinese];
     private static readonly Dictionary<string, string> Cultures = new(StringComparer.Ordinal)
     {
-        [Russian] = "ru-RU", [English] = "en-US", [German] = "de-DE", [French] = "fr-FR", [Chinese] = "zh-CN"
+        [Russian] = "ru-RU",
+        [English] = "en-US",
+        [German] = "de-DE",
+        [French] = "fr-FR",
+        [Chinese] = "zh-CN"
     };
 
     /// <summary>

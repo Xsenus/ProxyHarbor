@@ -4,13 +4,14 @@ Backup ProxyHarbor — это переносимый зашифрованный 
 
 ## Что входит в архив
 
-Manifest v6 содержит согласованный repeatable-read snapshot:
+Manifest v7 содержит согласованный repeatable-read snapshot:
 
 - `Proxies`, `Sources`, collection runs, validation runs и завершённые предыдущие backup runs;
 - настройки Collector и Backup;
 - безопасные runtime-настройки CORS, trusted networks, hosts и logging;
-- счета, подписки, аудит ручных продлений, агрегаты выдачи по IP и правила блокировки;
+- счета со способом оплаты, подписки, одноразовые уведомления, аудит ручных продлений, агрегаты выдачи по IP и правила блокировки;
 - конфигурацию commerce-бота, Telegram CRM, очередь доставки и обработанные update;
+- внешние checker-узлы, их несекретные SSH-реквизиты, fingerprint, состояние lease и счётчики;
 - UTC-время, версии manifest/settings schema и `secretsIncluded=false`.
 
 В архив никогда не входят PostgreSQL connection string/password, admin password, admin API key, credentials бота доставки backup, data-protection keys или encryption key. Token commerce-бота сохраняется только как Data Protection ciphertext. Без независимо сохранённого volume ключей он после переноса не расшифруется, поэтому ключи и исходный token необходимо хранить во внешнем secret manager.
@@ -58,7 +59,7 @@ Audit требует непустой канонический PHB3, завер�
 docker compose --profile tools run --rm --no-deps -T restore \
   --input /app/backups/proxyharbor-YYYYMMDD-HHMMSS.phbackup \
   --inspect-settings > recovery-settings.json
-jq --exit-status '.manifest.version == 6 and .manifest.secretsIncluded == false' recovery-settings.json
+jq --exit-status '.manifest.version == 7 and .manifest.secretsIncluded == false' recovery-settings.json
 ```
 
 Этот JSON предназначен для операторской сверки. Настройки автоматически не применяются.
@@ -92,7 +93,7 @@ curl --fail https://proxy.example.com/health/ready
 
 API удерживает shared PostgreSQL lifetime lease, restore требует exclusive lease. Поэтому забытая живая реплика блокирует замену данных. Во время restore новые API/worker write pipelines также не стартуют.
 
-Restore выполняет migrations и транзакционный импорт proxy/audit-таблиц, а для backup v6 также аккаунтов, ролей и подписок. Архивы v2–v5 не содержат Identity snapshot и сохраняют текущие аккаунты целевой БД. Успешное сообщение появляется только после подтверждённого удаления временного plaintext. Если cleanup завершился ошибкой, считайте это инцидентом обращения с plaintext и удалите названный каталог вручную.
+Restore выполняет migrations и транзакционный импорт proxy/audit-таблиц. Backup v6 добавляет аккаунты, роли и подписки, а v7 — внешний checker-каталог и связь validation-аудита с узлами. Архивы v2–v5 не содержат Identity snapshot и сохраняют текущие аккаунты целевой БД. SSH-пароли и agent-токены в backup не попадают: после переноса checker-узлы нужно переустановить из админки. Успешное сообщение появляется только после подтверждённого удаления временного plaintext. Если cleanup завершился ошибкой, считайте это инцидентом обращения с plaintext и удалите названный каталог вручную.
 
 Если ошибка произошла после возможного commit, сначала исследуйте целевую БД. Не повторяйте destructive restore вслепую.
 

@@ -119,8 +119,15 @@ public sealed class AdminPaymentsController(
         options.Enabled,
         products = options.Products.OrderBy(x => x.Key).Select(x => new
         {
-            code = x.Key, x.Value.Enabled, x.Value.Name, x.Value.Plan, x.Value.DurationDays,
-            x.Value.AmountMinor, x.Value.DiscountPercent, x.Value.Currency, x.Value.Description,
+            code = x.Key,
+            x.Value.Enabled,
+            x.Value.Name,
+            x.Value.Plan,
+            x.Value.DurationDays,
+            x.Value.AmountMinor,
+            x.Value.DiscountPercent,
+            x.Value.Currency,
+            x.Value.Description,
             fullDailyPriceMinor = checked(x.Value.DurationDays * options.Products.Values
                 .Single(product => product.DurationDays == 1).AmountMinor),
             savingsMinor = checked(x.Value.DurationDays * options.Products.Values
@@ -154,9 +161,15 @@ public sealed class AdminPaymentsController(
     private static BadRequestObjectResult Invalid(string title) => new(new ProblemDetails { Title = title, Status = 400 });
     private static string ProviderName(string code) => code switch
     {
-        "yookassa" => "ЮKassa", "yoomoney" => "ЮMoney", "cloudpayments" => "CloudPayments",
-        "robokassa" => "Robokassa", "tbank" => "Т-Банк", "stripe" => "Stripe",
-        "cryptomus" => "Cryptomus", "nowpayments" => "NOWPayments", _ => code
+        "yookassa" => "ЮKassa",
+        "yoomoney" => "ЮMoney",
+        "cloudpayments" => "CloudPayments",
+        "robokassa" => "Robokassa",
+        "tbank" => "Т-Банк",
+        "stripe" => "Stripe",
+        "cryptomus" => "Cryptomus",
+        "nowpayments" => "NOWPayments",
+        _ => code
     };
 }
 

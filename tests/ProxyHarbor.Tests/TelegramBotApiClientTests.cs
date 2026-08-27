@@ -116,15 +116,19 @@ public sealed class TelegramBotApiClientTests
         });
         await new TelegramBotApiClient(factory).ProvisionAsync(new TelegramBotOptions
         {
-            BotToken = "123:TEST_ONLY_NOT_A_REAL_TOKEN", UpdateMode = TelegramUpdateModes.Polling,
-            Name = "ProxyHarbor", Description = "Полное описание тестового бота.",
-            ShortDescription = "Короткое описание", BotUsername = "ProxyHarborBot",
-            WebhookSecret = "secret", PublicBaseUrl = "https://proxy.example.test"
+            BotToken = "123:TEST_ONLY_NOT_A_REAL_TOKEN",
+            UpdateMode = TelegramUpdateModes.Polling,
+            Name = "ProxyHarbor",
+            Description = "Полное описание тестового бота.",
+            ShortDescription = "Короткое описание",
+            BotUsername = "ProxyHarborBot",
+            WebhookSecret = "secret",
+            PublicBaseUrl = "https://proxy.example.test"
         }, CancellationToken.None);
         Assert.Equal("https://api.telegram.org/bot123:TEST_ONLY_NOT_A_REAL_TOKEN/deleteWebhook", factory.LastRequestUri);
     }
 
-    private sealed class RecordingFactory(Func<HttpRequestMessage,HttpResponseMessage> response) : IHttpClientFactory, IDisposable
+    private sealed class RecordingFactory(Func<HttpRequestMessage, HttpResponseMessage> response) : IHttpClientFactory, IDisposable
     {
         private readonly RecordingHandler _handler = new(response);
         public string? LastRequestUri => _handler.LastRequestUri;
@@ -132,7 +136,7 @@ public sealed class TelegramBotApiClientTests
         public void Dispose() => _handler.Dispose();
     }
 
-    private sealed class RecordingHandler(Func<HttpRequestMessage,HttpResponseMessage> response) : HttpMessageHandler
+    private sealed class RecordingHandler(Func<HttpRequestMessage, HttpResponseMessage> response) : HttpMessageHandler
     {
         public string? LastRequestUri { get; private set; }
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)

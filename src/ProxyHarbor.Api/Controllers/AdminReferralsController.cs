@@ -27,13 +27,17 @@ public sealed class AdminReferralsController(ProxyHarborDbContext db) : Controll
             .Skip((page - 1) * pageSize).Take(pageSize)
             .Select(x => new
             {
-                x.Id, x.CreatedAt,
+                x.Id,
+                x.CreatedAt,
                 referrer = new { x.ReferrerUserId, x.ReferrerUser.UserName, x.ReferrerUser.Email, x.ReferrerUser.DisplayName },
                 referred = new { x.ReferredUserId, x.ReferredUser.UserName, x.ReferredUser.Email, x.ReferredUser.DisplayName },
                 rewardDays = x.Rewards.Sum(r => r.DaysGranted),
                 rewards = x.Rewards.OrderByDescending(r => r.CreatedAt).Select(r => new
                 {
-                    r.Id, r.Kind, r.DaysGranted, r.CreatedAt,
+                    r.Id,
+                    r.Kind,
+                    r.DaysGranted,
+                    r.CreatedAt,
                     productCode = r.PaymentOrder == null ? null : r.PaymentOrder.ProductCode,
                     durationDays = r.PaymentOrder == null ? (int?)null : r.PaymentOrder.DurationDays
                 })

@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Net.Http.Headers;
 using System.Security.Cryptography;
@@ -5,7 +6,6 @@ using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using System.Diagnostics.CodeAnalysis;
 using Microsoft.Extensions.Options;
 using ProxyHarbor.Infrastructure;
 
@@ -67,7 +67,9 @@ public sealed class PaymentProviderOptions
 }
 
 internal sealed record CheckoutResult(string? ProviderPaymentId, string CheckoutUrl);
-internal sealed record PaymentNotification(Guid OrderId, string ProviderPaymentId, string Status, long AmountMinor, string Currency);
+internal sealed record PaymentNotification(
+    Guid OrderId, string ProviderPaymentId, string Status, long AmountMinor, string Currency,
+    string? PaymentMethod = null, string? PaymentInstrument = null);
 
 internal static class PaymentProviderConfiguration
 {
@@ -181,11 +183,16 @@ public sealed class PaymentGatewayClient(IHttpClientFactory clients, IPaymentCon
     {
         var payload = new Dictionary<string, object?>
         {
-            ["Amount"] = order.AmountMinor / 100m, ["Currency"] = order.Currency,
-            ["Description"] = $"ProxyHarbor {order.ProductCode}", ["Email"] = user.Email,
-            ["InvoiceId"] = order.Id.ToString("D"), ["AccountId"] = user.Id.ToString("D"),
-            ["SendEmail"] = false, ["RequireConfirmation"] = false,
-            ["SuccessRedirectUrl"] = ReturnUrl(publicBaseUrl, order.Id), ["FailRedirectUrl"] = ReturnUrl(publicBaseUrl, order.Id)
+            ["Amount"] = order.AmountMinor / 100m,
+            ["Currency"] = order.Currency,
+            ["Description"] = $"ProxyHarbor {order.ProductCode}",
+            ["Email"] = user.Email,
+            ["InvoiceId"] = order.Id.ToString("D"),
+            ["AccountId"] = user.Id.ToString("D"),
+            ["SendEmail"] = false,
+            ["RequireConfirmation"] = false,
+            ["SuccessRedirectUrl"] = ReturnUrl(publicBaseUrl, order.Id),
+            ["FailRedirectUrl"] = ReturnUrl(publicBaseUrl, order.Id)
         };
         using var request = new HttpRequestMessage(HttpMethod.Post, "https://api.cloudpayments.ru/orders/create")
         { Content = JsonContent.Create(payload) };
@@ -209,10 +216,15 @@ public sealed class PaymentGatewayClient(IHttpClientFactory clients, IPaymentCon
             $"{provider.MerchantId}:{amount}:{invoice}:{provider.SecretKey}:{custom}");
         var query = new Dictionary<string, string?>
         {
-            ["MerchantLogin"] = provider.MerchantId, ["OutSum"] = amount,
-            ["InvId"] = invoice, ["Description"] = $"ProxyHarbor {order.ProductCode}",
-            ["Email"] = user.Email, ["Culture"] = "ru", ["Encoding"] = "utf-8",
-            ["IsTest"] = provider.TestMode ? "1" : "0", ["Shp_order"] = order.Id.ToString("D"),
+            ["MerchantLogin"] = provider.MerchantId,
+            ["OutSum"] = amount,
+            ["InvId"] = invoice,
+            ["Description"] = $"ProxyHarbor {order.ProductCode}",
+            ["Email"] = user.Email,
+            ["Culture"] = "ru",
+            ["Encoding"] = "utf-8",
+            ["IsTest"] = provider.TestMode ? "1" : "0",
+            ["Shp_order"] = order.Id.ToString("D"),
             ["SignatureValue"] = signature
         };
         return new(invoice, "https://auth.robokassa.ru/Merchant/Index.aspx?" + QueryString(query));
@@ -223,11 +235,15 @@ public sealed class PaymentGatewayClient(IHttpClientFactory clients, IPaymentCon
     {
         var payload = new SortedDictionary<string, object?>(StringComparer.Ordinal)
         {
-            ["Amount"] = order.AmountMinor, ["CustomerKey"] = user.Id.ToString("D"),
-            ["Description"] = $"ProxyHarbor {order.ProductCode}", ["FailURL"] = ReturnUrl(publicBaseUrl, order.Id),
+            ["Amount"] = order.AmountMinor,
+            ["CustomerKey"] = user.Id.ToString("D"),
+            ["Description"] = $"ProxyHarbor {order.ProductCode}",
+            ["FailURL"] = ReturnUrl(publicBaseUrl, order.Id),
             ["NotificationURL"] = $"{publicBaseUrl.TrimEnd('/')}/api/v1/payments/webhooks/tbank",
-            ["OrderId"] = order.Id.ToString("D"), ["PayType"] = "O",
-            ["SuccessURL"] = ReturnUrl(publicBaseUrl, order.Id), ["TerminalKey"] = provider.MerchantId
+            ["OrderId"] = order.Id.ToString("D"),
+            ["PayType"] = "O",
+            ["SuccessURL"] = ReturnUrl(publicBaseUrl, order.Id),
+            ["TerminalKey"] = provider.MerchantId
         };
         payload["Token"] = TBankToken(payload, provider.SecretKey);
         using var response = await clients.CreateClient().PostAsJsonAsync(
@@ -242,10 +258,14 @@ public sealed class PaymentGatewayClient(IHttpClientFactory clients, IPaymentCon
     {
         var fields = new Dictionary<string, string>
         {
-            ["mode"] = "payment", ["success_url"] = ReturnUrl(publicBaseUrl, order.Id),
-            ["cancel_url"] = ReturnUrl(publicBaseUrl, order.Id), ["customer_email"] = user.Email ?? string.Empty,
-            ["client_reference_id"] = order.Id.ToString("D"), ["metadata[order_id]"] = order.Id.ToString("D"),
-            ["line_items[0][quantity]"] = "1", ["line_items[0][price_data][currency]"] = order.Currency.ToLowerInvariant(),
+            ["mode"] = "payment",
+            ["success_url"] = ReturnUrl(publicBaseUrl, order.Id),
+            ["cancel_url"] = ReturnUrl(publicBaseUrl, order.Id),
+            ["customer_email"] = user.Email ?? string.Empty,
+            ["client_reference_id"] = order.Id.ToString("D"),
+            ["metadata[order_id]"] = order.Id.ToString("D"),
+            ["line_items[0][quantity]"] = "1",
+            ["line_items[0][price_data][currency]"] = order.Currency.ToLowerInvariant(),
             ["line_items[0][price_data][unit_amount]"] = order.AmountMinor.ToString(CultureInfo.InvariantCulture),
             ["line_items[0][price_data][product_data][name]"] = $"ProxyHarbor {order.ProductCode}"
         };
@@ -263,11 +283,14 @@ public sealed class PaymentGatewayClient(IHttpClientFactory clients, IPaymentCon
     {
         var payload = new Dictionary<string, object?>
         {
-            ["amount"] = Major(order.AmountMinor), ["currency"] = order.Currency,
-            ["order_id"] = order.Id.ToString("N"), ["url_return"] = ReturnUrl(publicBaseUrl, order.Id),
+            ["amount"] = Major(order.AmountMinor),
+            ["currency"] = order.Currency,
+            ["order_id"] = order.Id.ToString("N"),
+            ["url_return"] = ReturnUrl(publicBaseUrl, order.Id),
             ["url_success"] = ReturnUrl(publicBaseUrl, order.Id),
             ["url_callback"] = $"{publicBaseUrl.TrimEnd('/')}/api/v1/payments/webhooks/cryptomus",
-            ["is_payment_multiple"] = true, ["lifetime"] = 3600
+            ["is_payment_multiple"] = true,
+            ["lifetime"] = 3600
         };
         var body = JsonSerializer.Serialize(payload, Json);
         using var request = new HttpRequestMessage(HttpMethod.Post, "https://api.cryptomus.com/v1/payment")
@@ -290,7 +313,8 @@ public sealed class PaymentGatewayClient(IHttpClientFactory clients, IPaymentCon
             order_id = order.Id.ToString("D"),
             order_description = $"ProxyHarbor {order.ProductCode}",
             ipn_callback_url = $"{publicBaseUrl.TrimEnd('/')}/api/v1/payments/webhooks/nowpayments",
-            success_url = ReturnUrl(publicBaseUrl, order.Id), cancel_url = ReturnUrl(publicBaseUrl, order.Id),
+            success_url = ReturnUrl(publicBaseUrl, order.Id),
+            cancel_url = ReturnUrl(publicBaseUrl, order.Id),
             is_fixed_rate = true
         };
         using var request = new HttpRequestMessage(HttpMethod.Post, "https://api.nowpayments.io/v1/invoice")
@@ -315,7 +339,9 @@ public sealed class PaymentGatewayClient(IHttpClientFactory clients, IPaymentCon
         return new(Guid.Parse(verified.GetProperty("metadata").GetProperty("order_id").GetString()!),
             paymentId, MapStatus(verified.GetProperty("status").GetString()),
             ParseMinor(verified.GetProperty("amount").GetProperty("value").GetString()!),
-            verified.GetProperty("amount").GetProperty("currency").GetString()!);
+            verified.GetProperty("amount").GetProperty("currency").GetString()!,
+            JsonString(verified, "payment_method", "type"),
+            JsonString(verified, "payment_method", "type"));
     }
 
     private static PaymentNotification ReadYooMoney(string body, PaymentProviderOptions provider)
@@ -334,7 +360,7 @@ public sealed class PaymentGatewayClient(IHttpClientFactory clients, IPaymentCon
             throw new InvalidOperationException("ЮMoney прислал неподдерживаемую валюту.");
         var amount = form.GetValueOrDefault("withdraw_amount") ?? form["amount"];
         return new(Guid.Parse(form["label"]), form["operation_id"], PaymentStatuses.Paid,
-            ParseMinor(amount), "RUB");
+            ParseMinor(amount), "RUB", "wallet", form.GetValueOrDefault("payment_type") ?? "YooMoney");
     }
 
     private static PaymentNotification ReadCloudPayments(
@@ -347,7 +373,8 @@ public sealed class PaymentGatewayClient(IHttpClientFactory clients, IPaymentCon
             ? request.Query.ToDictionary(x => x.Key, x => x.Value.ToString(), StringComparer.OrdinalIgnoreCase)
             : ParseForm(body);
         return new(Guid.Parse(form["InvoiceId"]), form.GetValueOrDefault("TransactionId") ?? form["InvoiceId"], PaymentStatuses.Paid,
-            ParseMinor(form["Amount"]), form.GetValueOrDefault("Currency") ?? "RUB");
+            ParseMinor(form["Amount"]), form.GetValueOrDefault("Currency") ?? "RUB",
+            "card", SafeCardLabel(form.GetValueOrDefault("CardType"), form.GetValueOrDefault("CardLastFour")));
     }
 
     private static PaymentNotification ReadRobokassa(
@@ -361,7 +388,7 @@ public sealed class PaymentGatewayClient(IHttpClientFactory clients, IPaymentCon
             $"{form["OutSum"]}:{form["InvId"]}:{provider.SecondarySecret}:{custom}");
         RequireFixedEquals(expected, form["SignatureValue"]);
         return new(Guid.Parse(form["Shp_order"]), form["InvId"], PaymentStatuses.Paid,
-            ParseMinor(form["OutSum"]), "RUB");
+            ParseMinor(form["OutSum"]), "RUB", "payment_gateway", form.GetValueOrDefault("IncCurrLabel") ?? "Robokassa");
     }
 
     private static PaymentNotification ReadTBank(string body, PaymentProviderOptions provider)
@@ -374,7 +401,7 @@ public sealed class PaymentGatewayClient(IHttpClientFactory clients, IPaymentCon
         var status = root.GetProperty("Status").GetString();
         return new(Guid.Parse(root.GetProperty("OrderId").GetString()!), root.GetProperty("PaymentId").ToString(),
             status == "CONFIRMED" ? PaymentStatuses.Paid : status is "REFUNDED" or "REVERSED" ? PaymentStatuses.Refunded : PaymentStatuses.Failed,
-            root.GetProperty("Amount").GetInt64(), "RUB");
+            root.GetProperty("Amount").GetInt64(), "RUB", "payment_gateway", "T-Bank");
     }
 
     private static PaymentNotification ReadStripe(
@@ -392,7 +419,8 @@ public sealed class PaymentGatewayClient(IHttpClientFactory clients, IPaymentCon
         var status = session.TryGetProperty("payment_status", out var paymentStatus) && paymentStatus.GetString() == "paid"
             ? PaymentStatuses.Paid : PaymentStatuses.Pending;
         return new(orderId, session.GetProperty("id").GetString()!, status,
-            session.GetProperty("amount_total").GetInt64(), session.GetProperty("currency").GetString()!.ToUpperInvariant());
+            session.GetProperty("amount_total").GetInt64(), session.GetProperty("currency").GetString()!.ToUpperInvariant(),
+            "card", "Stripe Checkout");
     }
 
     private static PaymentNotification ReadCryptomus(string body, PaymentProviderOptions provider)
@@ -412,7 +440,8 @@ public sealed class PaymentGatewayClient(IHttpClientFactory clients, IPaymentCon
             "cancel" => PaymentStatuses.Canceled,
             "fail" or "wrong_amount" or "system_fail" or "refund_fail" => PaymentStatuses.Failed,
             _ => PaymentStatuses.Pending
-        }, ParseMinor(NodeText(root["amount"])), NodeText(root["currency"]).ToUpperInvariant());
+        }, ParseMinor(NodeText(root["amount"])), NodeText(root["currency"]).ToUpperInvariant(),
+            "crypto", CryptoInstrument(root["payer_currency"] ?? root["currency"], root["network"]));
     }
 
     private static PaymentNotification ReadNowPayments(
@@ -433,7 +462,23 @@ public sealed class PaymentGatewayClient(IHttpClientFactory clients, IPaymentCon
             "expired" => PaymentStatuses.Canceled,
             "failed" => PaymentStatuses.Failed,
             _ => PaymentStatuses.Pending
-        }, ParseMinor(NodeText(objectRoot["price_amount"])), NodeText(objectRoot["price_currency"]).ToUpperInvariant());
+        }, ParseMinor(NodeText(objectRoot["price_amount"])), NodeText(objectRoot["price_currency"]).ToUpperInvariant(),
+            "crypto", CryptoInstrument(objectRoot["pay_currency"], objectRoot["network"]));
+    }
+
+    private static string? JsonString(JsonElement root, string objectName, string propertyName) =>
+        root.TryGetProperty(objectName, out var nested) && nested.ValueKind == JsonValueKind.Object &&
+        nested.TryGetProperty(propertyName, out var value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString() : null;
+    private static string SafeCardLabel(string? type, string? lastFour)
+    {
+        var brand = string.IsNullOrWhiteSpace(type) ? "Банковская карта" : type.Trim();
+        return lastFour is { Length: 4 } && lastFour.All(char.IsDigit) ? $"{brand} •••• {lastFour}" : brand;
+    }
+    private static string CryptoInstrument(JsonNode? currency, JsonNode? network)
+    {
+        var value = currency is null ? "Криптовалюта" : NodeText(currency).ToUpperInvariant();
+        return network is null ? value : $"{value} / {NodeText(network).ToUpperInvariant()}";
     }
 
     private static string ReturnUrl(string publicBaseUrl, Guid id) =>

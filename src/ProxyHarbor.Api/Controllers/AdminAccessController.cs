@@ -29,9 +29,15 @@ public sealed class AdminAccessController(ProxyHarborDbContext db, ProxyAccessMo
             x.LastSeenAt >= since && !x.Endpoint.StartsWith(ProxyAccessMonitor.SitePagePrefix));
         if (!string.IsNullOrWhiteSpace(query)) buckets = buckets.Where(x => x.IpAddress.Contains(query.Trim()));
         var grouped = buckets.GroupBy(x => x.IpAddress)
-            .Select(x => new { IpAddress = x.Key, requests = x.Sum(y => y.Requests),
-                blockedRequests = x.Sum(y => y.BlockedRequests), proxyItems = x.Sum(y => y.ProxyItems),
-                bytesSent = x.Sum(y => y.BytesSent), lastSeenAt = x.Max(y => y.LastSeenAt) });
+            .Select(x => new
+            {
+                IpAddress = x.Key,
+                requests = x.Sum(y => y.Requests),
+                blockedRequests = x.Sum(y => y.BlockedRequests),
+                proxyItems = x.Sum(y => y.ProxyItems),
+                bytesSent = x.Sum(y => y.BytesSent),
+                lastSeenAt = x.Max(y => y.LastSeenAt)
+            });
         var total = await grouped.CountAsync(token);
         var ordered = sort switch
         {
@@ -55,15 +61,28 @@ public sealed class AdminAccessController(ProxyHarborDbContext db, ProxyAccessMo
         {
             var link = accountLinks.FirstOrDefault(x => x.IpAddress == row.IpAddress);
             var account = link?.UserId is Guid id && accounts.TryGetValue(id, out var found) ? found : null;
-            return new { row.IpAddress, userId = link?.UserId, userName = account?.UserName,
-                email = account?.Email, displayName = account?.DisplayName, row.requests,
-                row.blockedRequests, row.proxyItems, row.bytesSent, row.lastSeenAt,
-                isBlocked = activeIpRules.Contains(row.IpAddress) };
+            return new
+            {
+                row.IpAddress,
+                userId = link?.UserId,
+                userName = account?.UserName,
+                email = account?.Email,
+                displayName = account?.DisplayName,
+                row.requests,
+                row.blockedRequests,
+                row.proxyItems,
+                row.bytesSent,
+                row.lastSeenAt,
+                isBlocked = activeIpRules.Contains(row.IpAddress)
+            };
         }).ToArray();
-        var summary = new { requests = await buckets.SumAsync(x => (long?)x.Requests, token) ?? 0,
+        var summary = new
+        {
+            requests = await buckets.SumAsync(x => (long?)x.Requests, token) ?? 0,
             proxyItems = await buckets.SumAsync(x => (long?)x.ProxyItems, token) ?? 0,
             uniqueIps = await buckets.Select(x => x.IpAddress).Distinct().CountAsync(token),
-            activeRules = await db.AccessBlockRules.CountAsync(x => x.Enabled && (x.ExpiresAt == null || x.ExpiresAt > DateTimeOffset.UtcNow), token) };
+            activeRules = await db.AccessBlockRules.CountAsync(x => x.Enabled && (x.ExpiresAt == null || x.ExpiresAt > DateTimeOffset.UtcNow), token)
+        };
         return Ok(new { items, page, pageSize, total, sort, order, summary });
     }
 
@@ -135,9 +154,19 @@ public sealed class AdminAccessController(ProxyHarborDbContext db, ProxyAccessMo
                 .Select(x => x.IpAddress).Distinct().CountAsync(token)
         };
         var blockedIps = await ActiveIpRules(token);
-        var enriched = items.Select(x => new { x.IpAddress, x.userId, x.userName, x.email,
-            x.displayName, x.PageViews, x.Pages, x.FirstSeenAt, x.LastSeenAt,
-            isBlocked = blockedIps.Contains(x.IpAddress) }).ToArray();
+        var enriched = items.Select(x => new
+        {
+            x.IpAddress,
+            x.userId,
+            x.userName,
+            x.email,
+            x.displayName,
+            x.PageViews,
+            x.Pages,
+            x.FirstSeenAt,
+            x.LastSeenAt,
+            isBlocked = blockedIps.Contains(x.IpAddress)
+        }).ToArray();
         return Ok(new { items = enriched, page, pageSize, total, sort, order, summary, retentionDays = 90 });
     }
 
@@ -165,10 +194,17 @@ public sealed class AdminAccessController(ProxyHarborDbContext db, ProxyAccessMo
             _ => descending ? source.OrderByDescending(x => x.VisitedAt) : source.OrderBy(x => x.VisitedAt)
         };
         var items = await ordered.ThenByDescending(x => x.Id).Skip((page - 1) * pageSize).Take(pageSize)
-            .Select(x => new { x.Id, x.IpAddress, x.UserId, x.Page, x.VisitedAt,
+            .Select(x => new
+            {
+                x.Id,
+                x.IpAddress,
+                x.UserId,
+                x.Page,
+                x.VisitedAt,
                 userName = x.User != null ? x.User.UserName : null,
                 email = x.User != null ? x.User.Email : null,
-                displayName = x.User != null ? x.User.DisplayName : null })
+                displayName = x.User != null ? x.User.DisplayName : null
+            })
             .ToListAsync(token);
         return Ok(new { items, page, pageSize, total, sort, order, retentionDays = 90 });
     }
@@ -197,8 +233,18 @@ public sealed class AdminAccessController(ProxyHarborDbContext db, ProxyAccessMo
             _ => descending ? source.OrderByDescending(x => x.CreatedAt) : source.OrderBy(x => x.CreatedAt)
         };
         var items = await ordered.ThenByDescending(x => x.Id).Skip((page - 1) * pageSize).Take(pageSize)
-            .Select(x => new { x.Id, x.Kind, x.Value, x.UserId, x.Reason, x.Enabled,
-                x.ExpiresAt, x.CreatedAt, x.UpdatedAt }).ToListAsync(token);
+            .Select(x => new
+            {
+                x.Id,
+                x.Kind,
+                x.Value,
+                x.UserId,
+                x.Reason,
+                x.Enabled,
+                x.ExpiresAt,
+                x.CreatedAt,
+                x.UpdatedAt
+            }).ToListAsync(token);
         return Ok(new { items, page, pageSize, total, sort, order });
     }
 
@@ -218,9 +264,15 @@ public sealed class AdminAccessController(ProxyHarborDbContext db, ProxyAccessMo
             if (!IPAddress.TryParse(value, out var ip)) return BadRequest(); value = ProxyAccessMonitor.NormalizeAddress(ip);
         }
         else if (!IPNetwork.TryParse(value, out var network)) return BadRequest(); else value = network.ToString();
-        var rule = new AccessBlockRule { Kind = request.Kind, Value = value, UserId = userId,
-            Reason = request.Reason.Trim(), ExpiresAt = request.ExpiresAt,
-            AdministratorId = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!) };
+        var rule = new AccessBlockRule
+        {
+            Kind = request.Kind,
+            Value = value,
+            UserId = userId,
+            Reason = request.Reason.Trim(),
+            ExpiresAt = request.ExpiresAt,
+            AdministratorId = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!)
+        };
         db.AccessBlockRules.Add(rule); await db.SaveChangesAsync(token); await monitor.ReloadRulesAsync(token);
         return CreatedAtAction(nameof(List), new { }, new { rule.Id });
     }

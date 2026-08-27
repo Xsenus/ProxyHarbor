@@ -48,14 +48,54 @@ public sealed class PaymentControllerTests
     }
 
     [Fact]
+    public async Task ConsecutivePaymentsAppendTheirDurationsAndKeepOriginalStart()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var controller = fixture.Controller(OptionsFor("cloudpayments"));
+
+        await controller.Checkout(new CreateCheckoutRequest
+        { ProductCode = "pro-daily", Provider = "cloudpayments" }, default);
+        var daily = await fixture.Db.PaymentOrders.SingleAsync();
+        SetWebhookRequest(controller,
+            $"InvoiceId={daily.Id:D}&TransactionId=daily-1&Amount=99.00&Currency=RUB&CardType=MIR&CardLastFour=1234",
+            "cloud-secret");
+        Assert.IsType<OkObjectResult>(await controller.Webhook("cloudpayments", default));
+        fixture.Db.ChangeTracker.Clear();
+        var afterDay = await fixture.Db.Subscriptions.AsNoTracking().SingleAsync();
+
+        await controller.Checkout(new CreateCheckoutRequest
+        { ProductCode = "pro-monthly", Provider = "cloudpayments" }, default);
+        var monthly = await fixture.Db.PaymentOrders.SingleAsync(x => x.ProductCode == "pro-monthly");
+        SetWebhookRequest(controller,
+            $"InvoiceId={monthly.Id:D}&TransactionId=month-1&Amount=499.00&Currency=RUB",
+            "cloud-secret");
+        Assert.IsType<OkObjectResult>(await controller.Webhook("cloudpayments", default));
+
+        fixture.Db.ChangeTracker.Clear();
+        var combined = await fixture.Db.Subscriptions.AsNoTracking().SingleAsync();
+        var storedDaily = await fixture.Db.PaymentOrders.AsNoTracking().SingleAsync(x => x.Id == daily.Id);
+        Assert.Equal(afterDay.StartedAt, combined.StartedAt);
+        Assert.Equal(afterDay.ExpiresAt!.Value.AddDays(30), combined.ExpiresAt);
+        Assert.Equal("card", storedDaily.PaymentMethod);
+        Assert.Equal("MIR •••• 1234", storedDaily.PaymentInstrument);
+    }
+
+    [Fact]
     public async Task RefundRevokesOnlySubscriptionActivatedByThatPayment()
     {
         await using var fixture = await Fixture.CreateAsync();
         var order = new PaymentOrder
         {
-            UserId = fixture.User.Id, ProductCode = "pro-monthly", Plan = SubscriptionPlans.Pro,
-            Provider = "tbank", ProviderPaymentId = "987", AmountMinor = 49_900, Currency = "RUB",
-            DurationDays = 30, Status = PaymentStatuses.Paid, PaidAt = DateTimeOffset.UtcNow
+            UserId = fixture.User.Id,
+            ProductCode = "pro-monthly",
+            Plan = SubscriptionPlans.Pro,
+            Provider = "tbank",
+            ProviderPaymentId = "987",
+            AmountMinor = 49_900,
+            Currency = "RUB",
+            DurationDays = 30,
+            Status = PaymentStatuses.Paid,
+            PaidAt = DateTimeOffset.UtcNow
         };
         fixture.Db.PaymentOrders.Add(order);
         var subscription = await fixture.Db.Subscriptions.SingleAsync();
@@ -67,8 +107,13 @@ public sealed class PaymentControllerTests
         var controller = fixture.Controller(OptionsFor("tbank"));
         var values = new SortedDictionary<string, string>(StringComparer.Ordinal)
         {
-            ["Amount"] = "49900", ["OrderId"] = order.Id.ToString("D"), ["Password"] = "tbank-password",
-            ["PaymentId"] = "987", ["Status"] = "REFUNDED", ["Success"] = "true", ["TerminalKey"] = "terminal"
+            ["Amount"] = "49900",
+            ["OrderId"] = order.Id.ToString("D"),
+            ["Password"] = "tbank-password",
+            ["PaymentId"] = "987",
+            ["Status"] = "REFUNDED",
+            ["Success"] = "true",
+            ["TerminalKey"] = "terminal"
         };
         var token = Sha256Hex(string.Concat(values.Values));
         var body = JsonSerializer.Serialize(new { TerminalKey = "terminal", OrderId = order.Id.ToString("D"), Success = true, Status = "REFUNDED", PaymentId = 987, Amount = 49_900, Token = token });
@@ -109,8 +154,13 @@ public sealed class PaymentControllerTests
         var options = OptionsFor("yoomoney");
         var order = new PaymentOrder
         {
-            UserId = fixture.User.Id, ProductCode = "pro-monthly", Plan = SubscriptionPlans.Pro,
-            Provider = "yoomoney", AmountMinor = 49_900, Currency = "RUB", DurationDays = 30
+            UserId = fixture.User.Id,
+            ProductCode = "pro-monthly",
+            Plan = SubscriptionPlans.Pro,
+            Provider = "yoomoney",
+            AmountMinor = 49_900,
+            Currency = "RUB",
+            DurationDays = 30
         };
         fixture.Db.PaymentOrders.Add(order);
         await fixture.Db.SaveChangesAsync();
@@ -136,8 +186,13 @@ public sealed class PaymentControllerTests
         options.Providers["yoomoney"].Enabled = !disableProvider;
         var order = new PaymentOrder
         {
-            UserId = fixture.User.Id, ProductCode = "pro-monthly", Plan = SubscriptionPlans.Pro,
-            Provider = "yoomoney", AmountMinor = 49_900, Currency = "RUB", DurationDays = 30,
+            UserId = fixture.User.Id,
+            ProductCode = "pro-monthly",
+            Plan = SubscriptionPlans.Pro,
+            Provider = "yoomoney",
+            AmountMinor = 49_900,
+            Currency = "RUB",
+            DurationDays = 30,
             CreatedAt = expired ? DateTimeOffset.UtcNow.AddHours(-2) : DateTimeOffset.UtcNow
         };
         fixture.Db.PaymentOrders.Add(order);
@@ -154,6 +209,7 @@ public sealed class PaymentControllerTests
         PublicBaseUrl = "https://proxy.example.com",
         Products = new Dictionary<string, PaymentProductOptions>(StringComparer.OrdinalIgnoreCase)
         {
+            ["pro-daily"] = new() { Enabled = true, Name = "Pro day", Plan = "pro", DurationDays = 1, AmountMinor = 9_900, Currency = "RUB" },
             ["pro-monthly"] = new() { Enabled = true, Name = "Pro", Plan = "pro", DurationDays = 30, AmountMinor = 49_900, Currency = "RUB" }
         },
         Providers = new Dictionary<string, PaymentProviderOptions>(StringComparer.OrdinalIgnoreCase)

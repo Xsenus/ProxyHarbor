@@ -187,13 +187,13 @@ internal static class RestoreApplication
         await Console.Out.WriteLineAsync();
     }
 
-    /// <summary>Читает настройки из v5/v6, чья точная схема уже проверена валидатором.</summary>
+    /// <summary>Читает настройки из v5-v7, чья точная схема уже проверена валидатором.</summary>
     internal static RestoreSettingsInspection ReadSettingsInspection(ZipArchive archive)
     {
         var manifest = ReadJsonObject(archive, "manifest.json");
-        if (manifest.GetProperty("version").GetInt32() is not (5 or 6))
+        if (manifest.GetProperty("version").GetInt32() is not (5 or 6 or 7))
             throw new InvalidDataException(
-                "Полный снимок настроек доступен только для backup manifest v5 или v6.");
+                "Полный снимок настроек доступен только для backup manifest v5, v6 или v7.");
 
         return new RestoreSettingsInspection(
             manifest,
@@ -247,6 +247,7 @@ internal static class RestoreApplication
             // Замена выполняется в одной транзакции: при любой ошибке старая БД остаётся целой.
             await db.BackupRuns.ExecuteDeleteAsync(token);
             await db.ValidationRuns.ExecuteDeleteAsync(token);
+            await db.CheckerNodes.ExecuteDeleteAsync(token);
             await db.Runs.ExecuteDeleteAsync(token);
             await db.Proxies.ExecuteDeleteAsync(token);
             await db.Sources.ExecuteDeleteAsync(token);
@@ -281,6 +282,7 @@ internal static class RestoreApplication
                 await db.FreeProxyExportGrants.ExecuteDeleteAsync(token);
                 await db.AccessBlockRules.ExecuteDeleteAsync(token);
                 await db.SubscriptionAdminActions.ExecuteDeleteAsync(token);
+                await db.UserNotifications.ExecuteDeleteAsync(token);
                 await db.PaymentOrders.ExecuteDeleteAsync(token);
                 await db.Subscriptions.ExecuteDeleteAsync(token);
                 await db.Users.ExecuteDeleteAsync(token);
@@ -328,13 +330,17 @@ internal static class RestoreApplication
                 WriteRunAsync,
                 hooks,
                 token);
+            // Узлы должны появиться раньше ValidationRuns из-за nullable FK аудита.
+            if (archive.GetEntry("database/checker-nodes.json") is not null)
+                _ = await ImportIdentityAsync<CheckerNode>(
+                    archive, "database/checker-nodes.json", db, token);
             var validationRunCount = archive.GetEntry("database/validation-runs.json") is null
                 ? 0
                 : await ImportAsync<ValidationRun>(
                     archive,
                     "database/validation-runs.json",
                     connection,
-                    """COPY "ValidationRuns" ("Id", "LeaseId", "StartedAt", "FinishedAt", "Claimed", "Checked", "Alive", "Deferred", "Status", "Error") FROM STDIN (FORMAT BINARY)""",
+                    """COPY "ValidationRuns" ("Id", "LeaseId", "CheckerNodeId", "StartedAt", "FinishedAt", "Claimed", "Checked", "Alive", "Deferred", "Status", "Error") FROM STDIN (FORMAT BINARY)""",
                     RestoreEntityValidator.ValidateValidationRun,
                     WriteValidationRunAsync,
                     hooks,
@@ -359,6 +365,8 @@ internal static class RestoreApplication
                 _ = await ImportIdentityAsync<UserSubscription>(archive, "database/subscriptions.json", db, token);
                 if (archive.GetEntry("database/payment-orders.json") is not null)
                     _ = await ImportIdentityAsync<PaymentOrder>(archive, "database/payment-orders.json", db, token);
+                if (archive.GetEntry("database/user-notifications.json") is not null)
+                    _ = await ImportIdentityAsync<UserNotification>(archive, "database/user-notifications.json", db, token);
                 if (archive.GetEntry("database/subscription-admin-actions.json") is not null)
                     _ = await ImportIdentityAsync<SubscriptionAdminAction>(archive, "database/subscription-admin-actions.json", db, token);
                 if (archive.GetEntry("database/proxy-access-buckets.json") is not null)
@@ -541,6 +549,7 @@ internal static class RestoreApplication
         await writer.StartRowAsync(token);
         await writer.WriteAsync(entity.Id, token);
         await writer.WriteAsync(entity.LeaseId, token);
+        await WriteNullableValueAsync(writer, entity.CheckerNodeId, token);
         await writer.WriteAsync(entity.StartedAt, token);
         await WriteNullableValueAsync(writer, entity.FinishedAt, token);
         await writer.WriteAsync(entity.Claimed, token);
@@ -789,7 +798,7 @@ internal sealed record RestoreOptions(
         dotnet run --project src/ProxyHarbor.Restore -- \
           --input ./proxyharbor.phbackup --replace-existing-data
 
-        Без подключения к БД вывести безопасные настройки manifest v5/v6 в JSON:
+        Без подключения к БД вывести безопасные настройки manifest v5-v7 в JSON:
           --input ./proxyharbor.phbackup --inspect-settings
 
         По умолчанию строка БД читается из ConnectionStrings__Postgres,

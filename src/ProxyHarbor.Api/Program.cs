@@ -128,6 +128,14 @@ builder.Services.AddHostedService<TelegramSubscriptionReminderWorker>();
 builder.Services.AddSingleton<ProxyAccessMonitor>();
 builder.Services.AddScoped<IFreeExportAccessService, FreeExportAccessService>();
 builder.Services.AddScoped<IUserApiTokenService, UserApiTokenService>();
+builder.Services.AddOptions<CheckerAgentDeploymentOptions>()
+    .Bind(builder.Configuration.GetSection(CheckerAgentDeploymentOptions.Section))
+    .Validate(x => Uri.TryCreate(x.PublicBaseUrl, UriKind.Absolute, out var uri) &&
+        uri.Scheme == Uri.UriSchemeHttps && string.IsNullOrEmpty(uri.UserInfo) &&
+        uri.AbsolutePath == "/" && string.IsNullOrEmpty(uri.Query) && string.IsNullOrEmpty(uri.Fragment),
+        "CheckerAgentDeployment:PublicBaseUrl должен быть корневым HTTPS origin без пути, query и fragment")
+    .ValidateOnStart();
+builder.Services.AddSingleton<CheckerNodeProvisioner>();
 builder.Services.AddHostedService(services => services.GetRequiredService<ProxyAccessMonitor>());
 builder.Services.AddControllers().AddJsonOptions(x =>
     x.JsonSerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter()));

@@ -57,6 +57,32 @@ public sealed class BackupArchiveValidatorTests
     }
 
     [Fact]
+    public void VersionSevenRequiresAndAcceptsCheckerNodesSnapshot()
+    {
+        var settings = CurrentSettings();
+        using var archive = CreateArchive(
+            """{"version":7,"settingsSchemaVersion":1,"createdAt":"2026-08-27T10:00:00Z","secretsIncluded":false}""",
+            includeBackupRuns: true, includeValidationRuns: true, includeSettings: true, includeIdentity: true,
+            includeCheckerNodes: true, collectorSettings: settings.Collector,
+            backupSettings: settings.Backup, runtimeSettings: settings.Runtime);
+
+        BackupArchiveValidator.Validate(archive);
+    }
+
+    [Fact]
+    public void VersionSevenRejectsMissingCheckerNodesSnapshot()
+    {
+        var settings = CurrentSettings();
+        using var archive = CreateArchive(
+            """{"version":7,"settingsSchemaVersion":1,"createdAt":"2026-08-27T10:00:00Z","secretsIncluded":false}""",
+            includeBackupRuns: true, includeValidationRuns: true, includeSettings: true, includeIdentity: true,
+            collectorSettings: settings.Collector, backupSettings: settings.Backup, runtimeSettings: settings.Runtime);
+
+        var exception = Assert.Throws<InvalidDataException>(() => BackupArchiveValidator.Validate(archive));
+        Assert.Contains("database/checker-nodes.json", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void VersionFiveRejectsIdentitySnapshotFromNewerSchema()
     {
         var settings = CurrentSettings();
@@ -265,6 +291,7 @@ public sealed class BackupArchiveValidatorTests
         bool includeValidationRuns = false,
         bool includeSettings = false,
         bool includeIdentity = false,
+        bool includeCheckerNodes = false,
         string? omittedEntry = null,
         string? unexpectedEntry = null,
         string collectorSettings = "{}",
@@ -281,6 +308,7 @@ public sealed class BackupArchiveValidatorTests
             AddEntry(writer, "database/runs.json", "[]");
             if (includeBackupRuns) AddEntry(writer, "database/backup-runs.json", "[]");
             if (includeValidationRuns) AddEntry(writer, "database/validation-runs.json", "[]");
+            if (includeCheckerNodes) AddEntry(writer, "database/checker-nodes.json", "[]");
             if (includeIdentity)
             {
                 AddEntry(writer, "database/users.json", "[]");

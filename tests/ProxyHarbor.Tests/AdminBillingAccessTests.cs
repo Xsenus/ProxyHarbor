@@ -89,8 +89,8 @@ public sealed class AdminBillingAccessTests
         Assert.Contains("\"requests\":20", json);
         Assert.Contains("\"proxyItems\":200", json);
         foreach (var sort in new[] { "ip", "requests", "proxyItems", "bytesSent", "lastSeen" })
-        foreach (var order in new[] { "asc", "desc" })
-            Assert.IsType<OkObjectResult>(await controller.List(sort: sort, order: order, token: CancellationToken.None));
+            foreach (var order in new[] { "asc", "desc" })
+                Assert.IsType<OkObjectResult>(await controller.List(sort: sort, order: order, token: CancellationToken.None));
         Assert.IsType<BadRequestResult>(await controller.List(sort: "unknown", token: CancellationToken.None));
         Assert.IsType<BadRequestResult>(await controller.List(order: "sideways", token: CancellationToken.None));
     }
@@ -122,8 +122,8 @@ public sealed class AdminBillingAccessTests
         Assert.Contains("\"PageViews\":5", visitorJson);
         Assert.Contains("member@example.test", visitorJson);
         foreach (var sort in new[] { "ip", "pageViews", "pages", "firstSeen", "lastSeen" })
-        foreach (var order in new[] { "asc", "desc" })
-            Assert.IsType<OkObjectResult>(await controller.Visitors(sort: sort, order: order, token: CancellationToken.None));
+            foreach (var order in new[] { "asc", "desc" })
+                Assert.IsType<OkObjectResult>(await controller.Visitors(sort: sort, order: order, token: CancellationToken.None));
         Assert.IsType<BadRequestResult>(await controller.Visitors(sort: "unknown", token: CancellationToken.None));
         Assert.IsType<BadRequestResult>(await controller.Visitors(order: "sideways", token: CancellationToken.None));
     }
@@ -137,8 +137,13 @@ public sealed class AdminBillingAccessTests
         fixture.Db.SiteVisitLogs.AddRange(
             new SiteVisitLog { IpAddress = "198.51.100.2", Page = "home", VisitedAt = DateTimeOffset.UtcNow.AddMinutes(-2) },
             new SiteVisitLog { IpAddress = "198.51.100.1", UserId = admin.Id, Page = "admin-access", VisitedAt = DateTimeOffset.UtcNow.AddMinutes(-1) });
-        fixture.Db.AccessBlockRules.Add(new AccessBlockRule { Kind = AccessBlockKinds.Ip,
-            Value = "198.51.100.9", Reason = "test rule", AdministratorId = admin.Id });
+        fixture.Db.AccessBlockRules.Add(new AccessBlockRule
+        {
+            Kind = AccessBlockKinds.Ip,
+            Value = "198.51.100.9",
+            Reason = "test rule",
+            AdministratorId = admin.Id
+        });
         await fixture.Db.SaveChangesAsync();
         var controller = WithPrincipal(new AdminAccessController(fixture.Db,
             new ProxyAccessMonitor(fixture.Factory, NullLogger<ProxyAccessMonitor>.Instance)), admin.Id);
@@ -149,8 +154,8 @@ public sealed class AdminBillingAccessTests
         Assert.Contains("admin@example.test", historyJson);
         Assert.Contains("\"total\":2", historyJson);
         foreach (var sort in new[] { "ip", "page", "visitedAt" })
-        foreach (var order in new[] { "asc", "desc" })
-            Assert.IsType<OkObjectResult>(await controller.VisitHistory(sort: sort, order: order, token: CancellationToken.None));
+            foreach (var order in new[] { "asc", "desc" })
+                Assert.IsType<OkObjectResult>(await controller.VisitHistory(sort: sort, order: order, token: CancellationToken.None));
         Assert.IsType<OkObjectResult>(await controller.VisitHistory(query: "admin-access", token: CancellationToken.None));
         Assert.IsType<BadRequestResult>(await controller.VisitHistory(sort: "wrong", token: CancellationToken.None));
         Assert.IsType<BadRequestResult>(await controller.VisitHistory(order: "sideways", token: CancellationToken.None));
@@ -158,8 +163,8 @@ public sealed class AdminBillingAccessTests
         var rules = Assert.IsType<OkObjectResult>(await controller.Rules(token: CancellationToken.None));
         Assert.Contains("198.51.100.9", System.Text.Json.JsonSerializer.Serialize(rules.Value));
         foreach (var sort in new[] { "target", "createdAt", "expiresAt", "status" })
-        foreach (var order in new[] { "asc", "desc" })
-            Assert.IsType<OkObjectResult>(await controller.Rules(sort: sort, order: order, token: CancellationToken.None));
+            foreach (var order in new[] { "asc", "desc" })
+                Assert.IsType<OkObjectResult>(await controller.Rules(sort: sort, order: order, token: CancellationToken.None));
         Assert.IsType<OkObjectResult>(await controller.Rules(query: "test rule", token: CancellationToken.None));
         Assert.IsType<BadRequestResult>(await controller.Rules(sort: "wrong", token: CancellationToken.None));
         Assert.IsType<BadRequestResult>(await controller.Rules(order: "sideways", token: CancellationToken.None));
@@ -182,7 +187,10 @@ public sealed class AdminBillingAccessTests
         await using var fixture = new Fixture();
         var user = new ApplicationUser
         {
-            Id = Guid.NewGuid(), UserName = "visitor", Email = "visitor@example.test", DisplayName = "Посетитель"
+            Id = Guid.NewGuid(),
+            UserName = "visitor",
+            Email = "visitor@example.test",
+            DisplayName = "Посетитель"
         };
         fixture.Db.Users.Add(user);
         fixture.Db.ProxyAccessBuckets.AddRange(
@@ -259,7 +267,9 @@ public sealed class AdminBillingAccessTests
         fixture.Db.Users.Add(admin);
         fixture.Db.AccessBlockRules.Add(new AccessBlockRule
         {
-            Kind = AccessBlockKinds.Ip, Value = "203.0.113.5", Reason = "test",
+            Kind = AccessBlockKinds.Ip,
+            Value = "203.0.113.5",
+            Reason = "test",
             AdministratorId = admin.Id
         });
         await fixture.Db.SaveChangesAsync();
@@ -284,18 +294,29 @@ public sealed class AdminBillingAccessTests
 
     private static PaymentOrder Order(ApplicationUser user, string provider, string status, long amount) => new()
     {
-        User = user, UserId = user.Id, ProductCode = "pro-30", Plan = SubscriptionPlans.Pro,
-        Provider = provider, AmountMinor = amount, Currency = "RUB", DurationDays = 30,
-        Status = status, ProviderPaymentId = Guid.NewGuid().ToString("N")
+        User = user,
+        UserId = user.Id,
+        ProductCode = "pro-30",
+        Plan = SubscriptionPlans.Pro,
+        Provider = provider,
+        AmountMinor = amount,
+        Currency = "RUB",
+        DurationDays = 30,
+        Status = status,
+        ProviderPaymentId = Guid.NewGuid().ToString("N")
     };
 
     private static ProxyAccessBucket Bucket(string ip, int requests, long items,
         string endpoint = "catalog", Guid? userId = null) => new()
-    {
-        BucketStartedAt = DateTimeOffset.UtcNow.AddMinutes(-5), IpAddress = ip,
-        UserId = userId, Endpoint = endpoint, Requests = requests, ProxyItems = items,
-        LastSeenAt = DateTimeOffset.UtcNow
-    };
+        {
+            BucketStartedAt = DateTimeOffset.UtcNow.AddMinutes(-5),
+            IpAddress = ip,
+            UserId = userId,
+            Endpoint = endpoint,
+            Requests = requests,
+            ProxyItems = items,
+            LastSeenAt = DateTimeOffset.UtcNow
+        };
 
     private static DefaultHttpContext Context(string path, string ip)
     {

@@ -93,7 +93,10 @@ public sealed class AdminTelegramController(
             options.TransportMode,
             proxies = options.Proxies.Select(x => new
             {
-                x.Id, x.Host, x.Port, x.Username,
+                x.Id,
+                x.Host,
+                x.Port,
+                x.Username,
                 passwordConfigured = x.Password.Length > 0
             }),
             effectiveProductStars,
@@ -143,8 +146,10 @@ public sealed class AdminTelegramController(
             proxies.Add(new TelegramProxyOptions
             {
                 Id = item.Id == Guid.Empty ? Guid.NewGuid() : item.Id,
-                Host = item.Host.Trim().ToLowerInvariant(), Port = item.Port,
-                Username = item.Username.Trim(), Password = password
+                Host = item.Host.Trim().ToLowerInvariant(),
+                Port = item.Port,
+                Username = item.Username.Trim(),
+                Password = password
             });
         }
         var catalog = await payments.GetAsync(token);
@@ -243,8 +248,17 @@ public sealed class AdminTelegramController(
             .Skip((page - 1) * pageSize).Take(pageSize)
             .Select(x => new
             {
-                x.Id, x.ChatId, x.TelegramUserId, x.UserId, x.Username, x.DisplayName,
-                x.LanguageCode, x.NotificationsEnabled, x.IsBlocked, x.CreatedAt, x.LastInteractionAt,
+                x.Id,
+                x.ChatId,
+                x.TelegramUserId,
+                x.UserId,
+                x.Username,
+                x.DisplayName,
+                x.LanguageCode,
+                x.NotificationsEnabled,
+                x.IsBlocked,
+                x.CreatedAt,
+                x.LastInteractionAt,
                 subscription = new { x.User.Subscription!.Plan, x.User.Subscription.Status, x.User.Subscription.ExpiresAt },
                 messages = db.TelegramConversationMessages.Count(m => m.TelegramChatId == x.Id)
             }).ToArrayAsync(token);

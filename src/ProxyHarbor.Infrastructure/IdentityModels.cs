@@ -326,6 +326,10 @@ public sealed class PaymentOrder
     public string Plan { get; set; } = SubscriptionPlans.Pro;
     /// <summary>Платёжный шлюз либо встроенный канал telegram_stars.</summary>
     public string Provider { get; set; } = string.Empty;
+    /// <summary>Безопасный код фактического способа оплаты: card, wallet, crypto или telegram_stars.</summary>
+    public string PaymentMethod { get; set; } = string.Empty;
+    /// <summary>Безопасное описание инструмента без номера карты, токенов и иных секретов.</summary>
+    public string? PaymentInstrument { get; set; }
     /// <summary>Сумма в минимальных единицах валюты, например копейках.</summary>
     public long AmountMinor { get; set; }
     /// <summary>Трёхбуквенный ISO 4217 код валюты.</summary>
@@ -346,6 +350,29 @@ public sealed class PaymentOrder
     public DateTimeOffset? PaidAt { get; set; }
     /// <summary>Последняя синхронизация состояния.</summary>
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
+/// <summary>Одноразовое уведомление пользователя, доставляемое в веб-кабинете.</summary>
+public sealed class UserNotification
+{
+    /// <summary>Внутренний идентификатор уведомления.</summary>
+    public Guid Id { get; set; } = Guid.NewGuid();
+    /// <summary>Получатель.</summary>
+    public Guid UserId { get; set; }
+    /// <summary>Навигация к получателю.</summary>
+    public ApplicationUser User { get; set; } = null!;
+    /// <summary>Стабильный семантический код уведомления.</summary>
+    public string Kind { get; set; } = string.Empty;
+    /// <summary>Локализованный текст, не содержащий секретов.</summary>
+    public string Message { get; set; } = string.Empty;
+    /// <summary>Внутренний путь для действия из уведомления.</summary>
+    public string? ActionUrl { get; set; }
+    /// <summary>Уникальный бизнес-ключ защиты от повторной постановки.</summary>
+    public string DeduplicationKey { get; set; } = string.Empty;
+    /// <summary>Момент создания в UTC.</summary>
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+    /// <summary>Момент подтверждённого показа в браузере.</summary>
+    public DateTimeOffset? DeliveredAt { get; set; }
 }
 
 /// <summary>Строго ограниченные состояния платёжного заказа.</summary>
