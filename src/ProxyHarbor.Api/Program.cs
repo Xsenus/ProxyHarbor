@@ -77,7 +77,9 @@ builder.Services.ConfigureApplicationCookie(options =>
             ? CookieSecurePolicy.SameAsRequest
             : CookieSecurePolicy.Always;
         options.Cookie.Path = "/";
-        options.ExpireTimeSpan = TimeSpan.FromHours(8);
+        // Постоянная cookie живёт 30 дней и продлевается при активности. Непостоянная
+        // cookie всё равно удаляется браузером при завершении сеанса.
+        options.ExpireTimeSpan = TimeSpan.FromDays(30);
         options.SlidingExpiration = true;
         options.Events.OnRedirectToLogin = context =>
         {

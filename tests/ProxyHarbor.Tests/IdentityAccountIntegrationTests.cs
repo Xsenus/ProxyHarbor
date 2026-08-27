@@ -71,13 +71,27 @@ public sealed class IdentityAccountIntegrationTests
         Assert.Equal(SubscriptionPlans.Free,
             (await fixture.Get<ProxyHarborDbContext>().Subscriptions.SingleAsync()).Plan);
 
+        fixture.HttpContext.Response.Headers.Clear();
         var emailLogin = await controller.Login(new AccountLoginRequest
         {
             Username = "user@example.com",
-            Password = "Initial-user-42!"
+            Password = "Initial-user-42!",
+            RememberMe = true
         });
         Assert.IsType<OkObjectResult>(emailLogin);
         Assert.NotNull(user.LastLoginAt);
+        Assert.Contains("expires=", fixture.HttpContext.Response.Headers.SetCookie.ToString(),
+            StringComparison.OrdinalIgnoreCase);
+
+        fixture.HttpContext.Response.Headers.Clear();
+        Assert.IsType<OkObjectResult>(await controller.Login(new AccountLoginRequest
+        {
+            Username = "proxy.user",
+            Password = "Initial-user-42!",
+            RememberMe = false
+        }));
+        Assert.DoesNotContain("expires=", fixture.HttpContext.Response.Headers.SetCookie.ToString(),
+            StringComparison.OrdinalIgnoreCase);
 
         var invalidLogin = await controller.Login(new AccountLoginRequest
         {

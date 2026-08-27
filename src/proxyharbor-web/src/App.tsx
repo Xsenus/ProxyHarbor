@@ -892,8 +892,21 @@ function AccountLoginPage() {
   const [password, setPassword] = useState('')
   const [apiToken,setApiToken] = useState('')
   const [showPassword, setShowPassword] = useState(false)
+  const [rememberMe, setRememberMe] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+
+  useEffect(() => {
+    const controller = new AbortController()
+    void fetch(`${API}/api/v1/auth/session`, { credentials: 'include', signal: controller.signal })
+      .then(async response => {
+        if (!response.ok) return
+        const session = await response.json() as { roles?: string[] }
+        window.location.replace(session.roles?.includes('Administrator') ? '/admin' : '/account')
+      })
+      .catch(reason => { if (reason instanceof DOMException && reason.name === 'AbortError') return })
+    return () => controller.abort()
+  }, [])
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault()
@@ -905,7 +918,7 @@ function AccountLoginPage() {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(mode==='token'?{token:apiToken.trim()}:{username,password}),
+        body: JSON.stringify(mode==='token'?{token:apiToken.trim(),rememberMe}:{username,password,rememberMe}),
       })
       if (!response.ok) throw new Error(await responseMessage(response, 'Неверный логин, email или пароль'))
       const session = await response.json() as { roles?: string[] }
@@ -929,6 +942,7 @@ function AccountLoginPage() {
         <label htmlFor="admin-password">{t('password')}</label>
         <div className="login-field"><LockKeyhole size={18}/><input id="admin-password" required type={showPassword ? 'text' : 'password'} placeholder={t('password')} autoComplete="current-password" maxLength={256} value={password} onChange={event => setPassword(event.target.value)}/><button className="password-toggle" type="button" aria-label={showPassword ? 'Скрыть пароль' : 'Показать пароль'} onClick={() => setShowPassword(value => !value)}>{showPassword ? <EyeOff/> : <Eye/>}</button></div>
         <a className="forgot-link" href="/forgot-password">{t('forgotPassword')}</a></>:<><label htmlFor="account-token">{t('apiToken')}</label><div className="login-field token-login-field"><ShieldCheck size={18}/><input id="account-token" autoFocus required type="password" autoComplete="off" autoCapitalize="none" spellCheck={false} minLength={80} maxLength={160} value={apiToken} onChange={event=>setApiToken(event.target.value)} placeholder="ph_live_…"/></div><small className="token-login-hint">{t('apiTokenLoginHint')}</small></>}
+        <label className="remember-session"><input className="ui-checkbox-input" type="checkbox" checked={rememberMe} onChange={event=>setRememberMe(event.target.checked)}/><span className="ui-checkbox-mark" aria-hidden="true"><Check/></span><span><b>{t('rememberMe')}</b><small>{t('rememberMeHint')}</small></span></label>
         <button className="login-submit" type="submit" disabled={busy || mode==='password'&&(!username||!password) || mode==='token'&&!apiToken}>{busy ? t('signingIn') : t('signIn')}</button>
       </form>
       <ToastSignal kind="error" message={error}/>

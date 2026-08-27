@@ -16,6 +16,16 @@ public sealed class AuthControllerTests
         var request = new AccountLoginRequest { Username = identifier, Password = "some-password" };
 
         Assert.Empty(Validate(request));
+        Assert.True(request.RememberMe);
+    }
+
+    [Fact]
+    public void TokenLoginAlsoRemembersTheBrowserByDefault()
+    {
+        var request = new TokenLoginRequest { Token = new string('a', 80) };
+
+        Assert.Empty(Validate(request));
+        Assert.True(request.RememberMe);
     }
 
     [Fact]

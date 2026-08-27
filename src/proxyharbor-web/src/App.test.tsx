@@ -205,7 +205,7 @@ describe('ProxyHarbor UI', () => {
     })).toBe(true))
   })
 
-  it('renders a dedicated login page without the public catalog', () => {
+  it('renders a dedicated login page and probes an existing cookie session', async () => {
     window.history.replaceState({}, '', '/admin/login')
     render(<App />)
     expect(screen.getByRole('heading', { name: 'Вход в ProxyHarbor' })).toBeInTheDocument()
@@ -213,7 +213,7 @@ describe('ProxyHarbor UI', () => {
     expect(screen.getByLabelText('Пароль')).toHaveAttribute('autocomplete', 'current-password')
     expect(screen.queryByPlaceholderText('X-Admin-Key')).not.toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Лучшие прямо сейчас' })).not.toBeInTheDocument()
-    expect(vi.mocked(fetch)).not.toHaveBeenCalled()
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith(expect.stringContaining('/api/v1/auth/session'), expect.objectContaining({ credentials: 'include' })))
   })
 
   it('submits login and password to the session endpoint without an admin-key header', async () => {
@@ -225,10 +225,12 @@ describe('ProxyHarbor UI', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Войти' }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Неверный логин или пароль')
-    const [, options] = vi.mocked(fetch).mock.calls[0]
+    const loginCall = vi.mocked(fetch).mock.calls.find(([input]) => String(input).includes('/api/v1/auth/login'))
+    expect(loginCall).toBeDefined()
+    const [, options] = loginCall!
     expect(options?.credentials).toBe('include')
     expect(new Headers(options?.headers).has('X-Admin-Key')).toBe(false)
-    expect(JSON.parse(String(options?.body))).toEqual({ username: 'admin', password: 'wrong-password' })
+    expect(JSON.parse(String(options?.body))).toEqual({ username: 'admin', password: 'wrong-password', rememberMe: true })
   })
 
   it.each([

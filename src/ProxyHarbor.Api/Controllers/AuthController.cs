@@ -31,7 +31,8 @@ public sealed class AuthController(
         var user = await FindByIdentifierAsync(request.Username);
         if (user is null || !user.IsActive) return InvalidCredentials();
 
-        var result = await signIn.PasswordSignInAsync(user, request.Password, false, lockoutOnFailure: true);
+        var result = await signIn.PasswordSignInAsync(
+            user, request.Password, request.RememberMe, lockoutOnFailure: true);
         if (!result.Succeeded) return InvalidCredentials();
 
         user.LastLoginAt = DateTimeOffset.UtcNow;
@@ -49,7 +50,7 @@ public sealed class AuthController(
     {
         var authentication = await apiTokens.AuthenticateAsync(request.Token.Trim(), token);
         if (authentication is null) return InvalidToken();
-        await signIn.SignInAsync(authentication.User, isPersistent: false);
+        await signIn.SignInAsync(authentication.User, isPersistent: request.RememberMe);
         authentication.User.LastLoginAt = DateTimeOffset.UtcNow;
         await users.UpdateAsync(authentication.User);
         return Ok(await CreateSessionAsync(authentication.User));
@@ -117,7 +118,8 @@ public sealed class AuthController(
             }
             await db.SaveChangesAsync();
             await transaction.CommitAsync();
-            await signIn.SignInAsync(user, isPersistent: false);
+            // Новый аккаунт не должен неожиданно потерять вход после перезапуска браузера.
+            await signIn.SignInAsync(user, isPersistent: true);
             return StatusCode(StatusCodes.Status201Created, await CreateSessionAsync(user));
         });
     }
@@ -256,6 +258,8 @@ public sealed class AccountLoginRequest
     [Required, StringLength(254, MinimumLength = 3)] public string Username { get; set; } = string.Empty;
     /// <summary>Текущий пароль.</summary>
     [Required, StringLength(256, MinimumLength = 1)] public string Password { get; set; } = string.Empty;
+    /// <summary>Создать постоянную cookie-сессию, переживающую перезапуск браузера.</summary>
+    public bool RememberMe { get; set; } = true;
 }
 
 /// <summary>API-токен передаётся только в JSON-теле защищённого POST-запроса.</summary>
@@ -263,6 +267,8 @@ public sealed class TokenLoginRequest
 {
     /// <summary>Полный токен формата ph_live_…</summary>
     [Required, StringLength(160, MinimumLength = 80)] public string Token { get; set; } = string.Empty;
+    /// <summary>Создать постоянную cookie-сессию, переживающую перезапуск браузера.</summary>
+    public bool RememberMe { get; set; } = true;
 }
 
 /// <summary>Данные регистрации бесплатного аккаунта.</summary>
