@@ -5,6 +5,9 @@ namespace ProxyHarbor.Tests;
 
 public sealed class LocalizationTests
 {
+    private static readonly string[] QualityTierMarkers =
+        ["среднего качества", "medium-quality", "mittlerer Qualität", "qualité moyenne", "中等质量"];
+
     [Theory]
     [InlineData("ru-RU", "ru")]
     [InlineData("en-US", "en")]
@@ -63,4 +66,24 @@ public sealed class LocalizationTests
     [InlineData("zh", "免费访问")]
     public void LocalizesFreeExportUpgradeMessage(string language, string expected) =>
         Assert.StartsWith(expected, FreeExportAccessService.GetUpgradeMessage(language), StringComparison.Ordinal);
+
+    [Theory]
+    [InlineData("ru")]
+    [InlineData("en")]
+    [InlineData("de")]
+    [InlineData("fr")]
+    [InlineData("zh")]
+    public void FreeAccessMessagesDoNotDescribeQualityTier(string language)
+    {
+        var messages = new[]
+        {
+            FreeExportAccessService.GetUpgradeMessage(language),
+            FreeExportAccessService.GetProxyCatalogUpgradeMessage(language, 150),
+            FreeExportAccessService.GetVpnUpgradeMessage(language, 350)
+        };
+
+        Assert.All(messages, message => Assert.DoesNotContain(
+            QualityTierMarkers,
+            marker => message.Contains(marker, StringComparison.OrdinalIgnoreCase)));
+    }
 }
