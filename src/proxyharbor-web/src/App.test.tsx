@@ -242,6 +242,45 @@ describe('ProxyHarbor UI', () => {
     expect(screen.queryByRole('heading', { name: 'Лучшие прямо сейчас' })).not.toBeInTheDocument()
   })
 
+  it('organizes the account into focused tabs and sorts plans by duration', async () => {
+    window.history.replaceState({}, '', '/account')
+    vi.mocked(fetch).mockImplementation(async input => {
+      const url = String(input)
+      if (url.includes('/api/v1/account/profile')) return jsonResponse({
+        id:'user-1',userName:'alex',email:'alex@example.com',displayName:'Алексей',preferredLanguage:'ru',
+        createdAt:'2026-08-01T10:00:00Z',lastLoginAt:new Date().toISOString(),roles:['User'],
+        subscription:{plan:'pro',status:'active',startedAt:'2026-08-01T10:00:00Z',expiresAt:'2026-09-01T10:00:00Z'},
+        entitlements:{unlimitedProxyAccess:true,apiTokens:true},apiTokens:[],
+      })
+      if (url.includes('/api/v1/payments/catalog')) return jsonResponse({
+        enabled:false,providers:[],products:[
+          {code:'month',name:'Оптимальный',plan:'pro',durationDays:30,amountMinor:69000,discountPercent:77,fullDailyPriceMinor:297000,savingsMinor:228000,currency:'RUB',description:'30 дней полного доступа'},
+          {code:'day',name:'Пробный',plan:'pro',durationDays:1,amountMinor:9900,discountPercent:0,fullDailyPriceMinor:9900,savingsMinor:0,currency:'RUB',description:'Один день полного доступа'},
+          {code:'week',name:'Начальный',plan:'pro',durationDays:7,amountMinor:35000,discountPercent:50,fullDailyPriceMinor:69300,savingsMinor:34300,currency:'RUB',description:'Неделя полного доступа'},
+        ],
+      })
+      if (url.includes('/api/v1/payments/orders')) return jsonResponse([])
+      return jsonResponse({title:'Unexpected request'},500)
+    })
+
+    const { container } = render(<App />)
+    expect(await screen.findByRole('heading',{name:'Профиль'})).toBeInTheDocument()
+    const tabs = screen.getByRole('tablist',{name:'Разделы личного кабинета'})
+    expect(within(tabs).getByRole('tab',{name:'Обзор'})).toHaveAttribute('aria-selected','true')
+    expect(await screen.findByText('Алексей')).toBeInTheDocument()
+    expect(screen.getByText('Активна')).toBeInTheDocument()
+
+    fireEvent.click(within(tabs).getByRole('tab',{name:'Личные данные'}))
+    expect(screen.getByLabelText('Текущий пароль')).toHaveAttribute('autocomplete','current-password')
+    expect(screen.getByLabelText('Новый пароль')).toHaveAttribute('autocomplete','new-password')
+
+    fireEvent.click(within(tabs).getByRole('tab',{name:'Тарифы и оплата'}))
+    const planCards = [...container.querySelectorAll('.payment-products>article')]
+    expect(planCards.map(card=>within(card as HTMLElement).getByText(/дн\./).textContent)).toEqual(['1 дн.','7 дн.','30 дн.'])
+    expect(within(planCards[2] as HTMLElement).getByText('Оптимальный выбор')).toBeInTheDocument()
+    expect(screen.queryByRole('button',{name:'ЮKassa'})).not.toBeInTheDocument()
+  })
+
   it('renders a dedicated authenticated admin page without public content', async () => {
     window.history.replaceState({}, '', '/admin')
     vi.mocked(fetch).mockImplementation(async input => {
