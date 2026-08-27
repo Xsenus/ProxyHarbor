@@ -34,6 +34,10 @@ public sealed class AccountController(
         var referralRewardDays = await db.ReferralRewards
             .Where(x => x.ReferralRelationship.ReferrerUserId == user.Id)
             .SumAsync(x => (int?)x.DaysGranted) ?? 0;
+        var botUsername = await db.TelegramBotConfigurations.AsNoTracking()
+            .Where(x => x.Id == 1)
+            .Select(x => x.BotUsername)
+            .SingleOrDefaultAsync();
         return Ok(new
         {
             user.Id,
@@ -57,6 +61,8 @@ public sealed class AccountController(
             {
                 code = user.ReferralCode,
                 link = $"{Request.Scheme}://{Request.Host}/register?ref={Uri.EscapeDataString(user.ReferralCode)}",
+                telegramLink = string.IsNullOrWhiteSpace(botUsername) ? null :
+                    $"https://t.me/{Uri.EscapeDataString(botUsername)}?start=ref_{Uri.EscapeDataString(user.ReferralCode)}",
                 invited = referralCount,
                 remaining = Math.Max(0, ReferralRewards.MaximumReferralsPerUser - referralCount),
                 maximum = ReferralRewards.MaximumReferralsPerUser,

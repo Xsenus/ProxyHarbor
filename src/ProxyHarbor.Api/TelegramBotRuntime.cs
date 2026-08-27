@@ -195,14 +195,17 @@ public sealed class TelegramUpdateProcessor(
         if (!message.TryGetProperty("chat", out var chatElement) ||
             chatElement.GetProperty("type").GetString() != "private" ||
             !message.TryGetProperty("from", out var from)) return;
-        var chat = await EnsureChatAsync(chatElement, from, token);
+        var messageText = message.TryGetProperty("text", out var rawText)
+            ? TelegramDispatchService.Limit(rawText.GetString()?.Trim() ?? string.Empty, 4096)
+            : string.Empty;
+        var chat = await EnsureChatAsync(chatElement, from, token, StartReferralCode(messageText));
         if (message.TryGetProperty("successful_payment", out var successful))
         {
             await HandleSuccessfulPaymentAsync(chat, successful, token);
             return;
         }
-        if (!message.TryGetProperty("text", out var textElement)) return;
-        var text = TelegramDispatchService.Limit(textElement.GetString()?.Trim() ?? string.Empty, 4096);
+        if (messageText.Length == 0) return;
+        var text = messageText;
         if (text.Length == 0) return;
         db.TelegramConversationMessages.Add(new TelegramConversationMessage
         {
@@ -455,7 +458,7 @@ public sealed class TelegramUpdateProcessor(
         fragments.Any(fragment => value.Contains(fragment, StringComparison.Ordinal));
 
     private async Task<TelegramChat> EnsureChatAsync(
-        JsonElement chatElement, JsonElement from, CancellationToken token)
+        JsonElement chatElement, JsonElement from, CancellationToken token, string? referralCode = null)
     {
         var chatId = chatElement.GetProperty("id").GetInt64();
         var telegramUserId = from.GetProperty("id").GetInt64();
@@ -494,6 +497,7 @@ public sealed class TelegramUpdateProcessor(
                 User = user, DisplayName = user.DisplayName
             };
             db.TelegramChats.Add(chat);
+            await ApplyTelegramReferralAsync(user, referralCode, token);
         }
         chat.ChatId = chatId;
         chat.Username = from.TryGetProperty("username", out var username) ? TelegramDispatchService.Limit(username.GetString() ?? string.Empty, 64) : null;
@@ -503,6 +507,47 @@ public sealed class TelegramUpdateProcessor(
         chat.LastInteractionAt = DateTimeOffset.UtcNow;
         await db.SaveChangesAsync(token);
         return chat;
+    }
+
+    /// <summary>Применяет Telegram deep-link только при создании нового аккаунта.</summary>
+    private async Task ApplyTelegramReferralAsync(
+        ApplicationUser referred, string? referralCode, CancellationToken token)
+    {
+        if (string.IsNullOrWhiteSpace(referralCode)) return;
+        var referrer = await db.Users.SingleOrDefaultAsync(x =>
+            x.ReferralCode == referralCode && x.IsActive && x.Id != referred.Id, token);
+        if (referrer is null || await db.ReferralRelationships.AnyAsync(x => x.ReferredUserId == referred.Id, token)) return;
+        var occupiedSlots = await db.ReferralRelationships.Where(x => x.ReferrerUserId == referrer.Id)
+            .Select(x => x.Slot).ToArrayAsync(token);
+        var slot = Enumerable.Range(1, ReferralRewards.MaximumReferralsPerUser)
+            .FirstOrDefault(candidate => !occupiedSlots.Contains(candidate));
+        if (slot == 0) return;
+        var relationship = new ReferralRelationship
+        {
+            ReferrerUserId = referrer.Id,
+            ReferredUserId = referred.Id,
+            Slot = slot
+        };
+        db.ReferralRelationships.Add(relationship);
+        db.ReferralRewards.Add(new ReferralReward
+        {
+            ReferralRelationship = relationship,
+            RewardKey = $"signup:{referred.Id:N}",
+            Kind = ReferralRewardKinds.Signup,
+            DaysGranted = 1
+        });
+        await db.SaveChangesAsync(token);
+        await ReferralRewards.ExtendSubscriptionAsync(
+            db, users, referrer.Id, 1, DateTimeOffset.UtcNow, token);
+    }
+
+    private static string? StartReferralCode(string text)
+    {
+        var parts = text.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (parts.Length != 2 || !parts[0].Split('@', 2)[0].Equals("/start", StringComparison.OrdinalIgnoreCase) ||
+            !parts[1].StartsWith("ref_", StringComparison.OrdinalIgnoreCase)) return null;
+        var code = parts[1][4..].ToLowerInvariant();
+        return code.Length == 12 && code.All(character => char.IsAsciiHexDigit(character)) ? code : null;
     }
 
     private async Task HandleMembershipAsync(JsonElement membership, CancellationToken token)

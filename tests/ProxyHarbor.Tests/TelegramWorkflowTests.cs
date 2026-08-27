@@ -56,6 +56,25 @@ public sealed class TelegramWorkflowTests
     }
 
     [Fact]
+    public async Task TelegramStartDeepLinkCreatesReferralAndRewardsOwnerOnce()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var owner = await fixture.CreateWebUserAsync("referral-owner");
+        owner.ReferralCode = "abc123def456";
+        await fixture.Users.UpdateAsync(owner);
+        var processor = fixture.Processor();
+
+        await processor.ProcessAsync(Message(1, "/start ref_abc123def456"), TelegramUpdateModes.Webhook, CancellationToken.None);
+        await processor.ProcessAsync(Message(2, "/start ref_abc123def456"), TelegramUpdateModes.Webhook, CancellationToken.None);
+
+        var relationship = await fixture.Db.ReferralRelationships.Include(x => x.Rewards).SingleAsync();
+        Assert.Equal(owner.Id, relationship.ReferrerUserId);
+        Assert.Single(relationship.Rewards);
+        Assert.Equal(ReferralRewardKinds.Signup, relationship.Rewards.Single().Kind);
+        Assert.Equal(1, relationship.Rewards.Single().DaysGranted);
+    }
+
+    [Fact]
     public async Task MembershipUpdateMarksKnownChatBlockedAndIgnoresUnknownOrNonPrivateMessages()
     {
         await using var fixture = await Fixture.CreateAsync();
