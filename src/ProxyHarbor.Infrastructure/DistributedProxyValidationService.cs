@@ -147,6 +147,14 @@ public sealed class DistributedProxyValidationService(
         Guid nodeId, Guid leaseId, CheckerLeaseResultRequest request, CancellationToken token)
     {
         ArgumentNullException.ThrowIfNull(request);
+        await using var strategyDb = await dbFactory.CreateDbContextAsync(token);
+        var strategy = strategyDb.Database.CreateExecutionStrategy();
+        return await strategy.ExecuteAsync(() => CompleteCoreAsync(nodeId, leaseId, request, token));
+    }
+
+    private async Task<CheckerLeaseCompletion> CompleteCoreAsync(
+        Guid nodeId, Guid leaseId, CheckerLeaseResultRequest request, CancellationToken token)
+    {
         var now = DateTimeOffset.UtcNow;
         await using var db = await dbFactory.CreateDbContextAsync(token);
         await using var transaction = await db.Database.BeginTransactionAsync(token);

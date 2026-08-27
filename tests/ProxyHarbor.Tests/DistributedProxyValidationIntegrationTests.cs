@@ -30,7 +30,9 @@ public sealed class DistributedProxyValidationIntegrationTests
         try
         {
             var dbOptions = new DbContextOptionsBuilder<ProxyHarborDbContext>()
-                .UseNpgsql(connection.ConnectionString).Options;
+                // Production enables retry-on-failure. The distributed completion owns
+                // an explicit transaction and therefore must execute inside that strategy.
+                .UseNpgsql(connection.ConnectionString, postgres => postgres.EnableRetryOnFailure()).Options;
             var factory = new TestDbFactory(dbOptions);
             await using (var migrationDb = await factory.CreateDbContextAsync())
                 await migrationDb.Database.MigrateAsync();
