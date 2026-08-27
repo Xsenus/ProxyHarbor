@@ -22,6 +22,24 @@ foreach ($workflowName in 'ci.yml', 'release.yml') {
     }
 }
 
+# Быстрый unit job не поднимает PostgreSQL и поэтому имеет отдельную нижнюю границу
+# ветвлений. Полный integration/release gate намеренно продолжает использовать более
+# строгий default 68%; контракт защищает оба уровня от случайного смешивания.
+$ciWorkflow = Get-Content -LiteralPath (Join-Path $repositoryRoot '.github/workflows/ci.yml') -Raw
+$releaseWorkflow = Get-Content -LiteralPath (Join-Path $repositoryRoot '.github/workflows/release.yml') -Raw
+$unitInvocation = './tools/Assert-Coverage.ps1 -ReportPath $report.FullName -MinimumBranchRate 0.65'
+$fullInvocation = './tools/Assert-Coverage.ps1 -ReportPath $report.FullName'
+if (-not $ciWorkflow.Contains($unitInvocation, [StringComparison]::Ordinal)) {
+    throw 'ci.yml потерял отдельный unit coverage floor 65% branches.'
+}
+if (($ciWorkflow.Split($fullInvocation, [StringSplitOptions]::None).Count - 1) -lt 2) {
+    throw 'ci.yml должен содержать unit и production PostgreSQL coverage gates.'
+}
+if (-not $releaseWorkflow.Contains($fullInvocation, [StringComparison]::Ordinal) -or
+    $releaseWorkflow.Contains('-MinimumBranchRate 0.65', [StringComparison]::Ordinal)) {
+    throw 'release.yml должен применять строгий default production coverage gate.'
+}
+
 function Write-CoverageFixture(
     [string]$Path,
     [int[]]$Hits,
@@ -76,4 +94,4 @@ try {
     }
 }
 
-Write-Host 'Coverage contracts пройдены: defaults 65/68, CI/release wiring и pass/line/branch fixtures.' -ForegroundColor Green
+Write-Host 'Coverage contracts пройдены: unit branches 65%, production defaults 65/68, CI/release wiring и fixtures.' -ForegroundColor Green
