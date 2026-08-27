@@ -57,9 +57,9 @@ public static class ServiceCollectionExtensions
             .Validate(x => !x.Enabled || BackupOptions.IsDirectoryValid(x.Directory),
                 "Backup Directory должен быть абсолютным безопасным путём длиной не более 1024 символов")
             .Validate(x => string.IsNullOrWhiteSpace(x.TelegramBotToken) == string.IsNullOrWhiteSpace(x.TelegramChatId), "TelegramBotToken и TelegramChatId задаются только вместе")
-            .Validate(x => !x.Enabled || (!string.IsNullOrWhiteSpace(x.TelegramBotToken) &&
-                !string.IsNullOrWhiteSpace(x.TelegramChatId)),
-                "При Backup Enabled доставка в Telegram обязательна; задайте TelegramBotToken и TelegramChatId")
+            // Telegram-реквизиты могут храниться в защищённой runtime-конфигурации БД,
+            // поэтому на старте проверяем только явно переданную deploy-пару. Полный
+            // эффективный снимок проверяется BackupService перед созданием архива.
             .Validate(x => string.IsNullOrWhiteSpace(x.TelegramBotToken) ||
                 BackupOptions.IsTelegramBotTokenValid(x.TelegramBotToken),
                 "TelegramBotToken должен содержать 20..256 printable path-safe ASCII символов без /, \\, ?, # и %")

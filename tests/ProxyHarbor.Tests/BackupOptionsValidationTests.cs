@@ -159,7 +159,7 @@ public sealed class BackupOptionsValidationTests
     }
 
     [Fact]
-    public void EnabledBackupRejectsMissingTelegramDelivery()
+    public void EnabledBackupAllowsTelegramDeliveryStoredInRuntimeConfiguration()
     {
         using var provider = BuildProvider(
             new string('k', BackupOptions.MinimumEncryptionKeyLength),
@@ -167,11 +167,11 @@ public sealed class BackupOptionsValidationTests
             null,
             null);
 
-        var exception = Assert.Throws<OptionsValidationException>(() =>
-            provider.GetRequiredService<IOptions<BackupOptions>>().Value);
+        var options = provider.GetRequiredService<IOptions<BackupOptions>>().Value;
 
-        Assert.Contains(exception.Failures,
-            failure => failure.Contains("доставка в Telegram обязательна", StringComparison.Ordinal));
+        Assert.True(options.Enabled);
+        Assert.Null(options.TelegramBotToken);
+        Assert.Null(options.TelegramChatId);
     }
 
     [Fact]
