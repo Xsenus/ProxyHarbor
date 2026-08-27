@@ -25,7 +25,7 @@ public sealed class CommerceController(
                 paymentOptions.Providers.TryGetValue(code, out var provider) &&
                 PaymentProviderConfiguration.IsReady(code, provider))
             : 0;
-        var telegramReady = hasProduct && telegramOptions.Ready && paymentOptions.Products.Any(product =>
+        var telegramReady = paymentOptions.Enabled && hasProduct && telegramOptions.Ready && paymentOptions.Products.Any(product =>
             product.Value.Enabled && TelegramStarsPricing.TryResolve(
                 telegramOptions, product.Key, product.Value, out _));
         var fullAccess = await access.HasPaidAccessAsync(User, token);

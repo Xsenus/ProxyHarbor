@@ -27,7 +27,7 @@ public sealed class AdminPaymentSettingsTests
         Assert.DoesNotContain("merchant-secret-never-plaintext", row.SettingsJson, StringComparison.Ordinal);
         Assert.Equal("merchant-secret-never-plaintext", (await store.GetAsync()).Providers["yookassa"].SecretKey);
 
-        var response = Assert.IsType<OkObjectResult>(await new AdminPaymentsController(store).Get(default));
+        var response = Assert.IsType<OkObjectResult>(await Controller(store).Get(default));
         Assert.DoesNotContain("merchant-secret-never-plaintext", JsonSerializer.Serialize(response.Value), StringComparison.Ordinal);
     }
 
@@ -36,7 +36,7 @@ public sealed class AdminPaymentSettingsTests
     {
         await using var fixture = Fixture.Create();
         var store = new PaymentConfigurationStore(fixture.Db, Options.Create(DefaultOptions()), fixture.Protection);
-        var controller = new AdminPaymentsController(store);
+        var controller = Controller(store);
         var request = Request(enabled: true, secret: null);
         Assert.IsType<BadRequestObjectResult>(await controller.Update(request, default));
 
@@ -65,7 +65,7 @@ public sealed class AdminPaymentSettingsTests
     public async Task AdminUpdateRejectsMalformedCatalogSnapshots()
     {
         await using var fixture = Fixture.Create();
-        var controller = new AdminPaymentsController(new PaymentConfigurationStore(
+        var controller = Controller(new PaymentConfigurationStore(
             fixture.Db, Options.Create(DefaultOptions()), fixture.Protection));
 
         var empty = Request(false, null);
@@ -87,6 +87,37 @@ public sealed class AdminPaymentSettingsTests
         var noProvider = Request(true, null);
         noProvider.Providers.ForEach(provider => provider.Enabled = false);
         Assert.IsType<BadRequestObjectResult>(await controller.Update(noProvider, default));
+    }
+
+    [Fact]
+    public async Task AdminCanEnableBillingWithTelegramStarsWithoutExternalProvider()
+    {
+        await using var fixture = Fixture.Create();
+        var store = new PaymentConfigurationStore(fixture.Db, Options.Create(DefaultOptions()), fixture.Protection);
+        var telegram = ReadyTelegram();
+        telegram.AutomaticProductCodes = SubscriptionPricingPolicy.Periods
+            .Select(period => $"unlimited-{period.Code}")
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var controller = new AdminPaymentsController(store, new TelegramStore(telegram));
+        var request = Request(true, null);
+        request.Providers.ForEach(provider => provider.Enabled = false);
+
+        Assert.IsType<OkObjectResult>(await controller.Update(request, default));
+        Assert.True((await store.GetAsync()).Enabled);
+    }
+
+    private static AdminPaymentsController Controller(IPaymentConfigurationStore store) =>
+        new(store, new TelegramStore(new TelegramBotOptions()));
+
+    private static TelegramBotOptions ReadyTelegram() => new()
+    {
+        Enabled = true, BotId = 1, BotToken = "token", WebhookSecret = "secret"
+    };
+
+    private sealed class TelegramStore(TelegramBotOptions value) : ITelegramBotConfigurationStore
+    {
+        public Task<TelegramBotOptions> GetAsync(CancellationToken token = default) => Task.FromResult(value);
+        public Task SaveAsync(TelegramBotOptions options, CancellationToken token = default) => Task.CompletedTask;
     }
 
     private static UpdatePaymentSettingsRequest Request(bool enabled, string? secret) => new()

@@ -43,6 +43,24 @@ public sealed class CommerceControllerTests
         Assert.True(json.GetProperty("fullAccess").GetBoolean());
     }
 
+    [Fact]
+    public async Task DoesNotAdvertiseTelegramStarsWhileBillingIsDisabled()
+    {
+        var payments = Options(false);
+        var telegram = new TelegramBotOptions
+        {
+            Enabled = true, BotId = 1, BotToken = "token", WebhookSecret = "secret",
+            AutomaticProductCodes = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "pro-30" }
+        };
+        var controller = Controller(payments, telegram, paid: false);
+
+        var result = Assert.IsType<OkObjectResult>(await controller.Availability(CancellationToken.None));
+        var json = JsonSerializer.SerializeToElement(result.Value, Json);
+
+        Assert.False(json.GetProperty("available").GetBoolean());
+        Assert.False(json.GetProperty("telegram").GetBoolean());
+    }
+
     private static CommerceController Controller(PaymentOptions payments, TelegramBotOptions telegram, bool paid)
     {
         var controller = new CommerceController(new PaymentStore(payments), new TelegramStore(telegram), new Access(paid));

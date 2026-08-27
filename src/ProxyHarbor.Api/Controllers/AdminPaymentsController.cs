@@ -10,7 +10,9 @@ namespace ProxyHarbor.Api.Controllers;
 [ApiController, Route("api/v1/admin/payments"), EnableRateLimiting("admin")]
 [Authorize(Roles = UserRoles.Administrator)]
 [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
-public sealed class AdminPaymentsController(IPaymentConfigurationStore configurations) : ControllerBase
+public sealed class AdminPaymentsController(
+    IPaymentConfigurationStore configurations,
+    ITelegramBotConfigurationStore telegramConfigurations) : ControllerBase
 {
     /// <summary>Возвращает настройки и только признаки наличия секретов.</summary>
     [HttpGet]
@@ -91,9 +93,15 @@ public sealed class AdminPaymentsController(IPaymentConfigurationStore configura
             providers[code] = provider;
         }
 
+        var telegram = await telegramConfigurations.GetAsync(token);
+        var telegramReady = telegram.Ready && products.Any(product =>
+            product.Value.Enabled && TelegramStarsPricing.TryResolve(
+                telegram, product.Key, product.Value, out _));
+        var providerReady = providers.Any(pair =>
+            PaymentProviderConfiguration.IsReady(pair.Key, pair.Value));
         if (request.Enabled && (!products.Values.Any(x => x.Enabled) ||
-            !providers.Any(pair => PaymentProviderConfiguration.IsReady(pair.Key, pair.Value))))
-            return Invalid("Для включения оплаты нужен хотя бы один активный тариф и полностью настроенный провайдер.");
+            (!providerReady && !telegramReady)))
+            return Invalid("Для включения оплаты нужен активный тариф и хотя бы один готовый шлюз или Telegram Stars.");
 
         var next = new PaymentOptions
         {
