@@ -22,7 +22,7 @@ public sealed class TelegramBotPersistenceTests
             WebhookSecret = "safe_webhook_secret", BotId = 42, BotUsername = "ProxyHarborBot",
             ProductStars = new Dictionary<string, int> { ["pro-30"] = 250 },
             AutomaticProductCodes = new(StringComparer.OrdinalIgnoreCase) { "unlimited-30" },
-            StarsPerCurrencyUnit = 1.25m,
+            RublesPerStar = 1.68m,
             StarsRoundingStep = 10,
             TransportMode = TelegramTransportModes.Proxy,
             Proxies =
@@ -44,7 +44,7 @@ public sealed class TelegramBotPersistenceTests
         Assert.Equal("https://proxy.example.test/api/v1/telegram/webhook/proxyharborbot", restored.WebhookUrl);
         Assert.Equal(250, restored.ProductStars["pro-30"]);
         Assert.Contains("UNLIMITED-30", restored.AutomaticProductCodes);
-        Assert.Equal(1.25m, restored.StarsPerCurrencyUnit);
+        Assert.Equal(1.68m, restored.RublesPerStar);
         Assert.Equal(10, restored.StarsRoundingStep);
         Assert.Equal(TelegramTransportModes.Proxy, restored.TransportMode);
         var proxy = Assert.Single(restored.Proxies);

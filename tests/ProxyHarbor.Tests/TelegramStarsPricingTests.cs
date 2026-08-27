@@ -11,13 +11,13 @@ public sealed class TelegramStarsPricingTests
         var options = new TelegramBotOptions
         {
             AutomaticProductCodes = new(StringComparer.OrdinalIgnoreCase) { "pro-30" },
-            StarsPerCurrencyUnit = 1m,
+            RublesPerStar = 1.68m,
             StarsRoundingStep = 5
         };
         var product = new PaymentProductOptions { AmountMinor = 49_901, Currency = "RUB" };
 
         Assert.True(TelegramStarsPricing.TryResolve(options, "PRO-30", product, out var stars));
-        Assert.Equal(500, stars);
+        Assert.Equal(300, stars);
     }
 
     [Fact]
@@ -26,13 +26,23 @@ public sealed class TelegramStarsPricingTests
         var options = new TelegramBotOptions
         {
             ProductStars = new(StringComparer.OrdinalIgnoreCase) { ["pro-30"] = 249 },
-            StarsPerCurrencyUnit = 5m,
+            RublesPerStar = 5m,
             StarsRoundingStep = 100
         };
 
         Assert.True(TelegramStarsPricing.TryResolve(options, "pro-30",
             new PaymentProductOptions { AmountMinor = 999_900 }, out var stars));
         Assert.Equal(249, stars);
+    }
+
+    [Theory]
+    [InlineData(9_900, 60)]
+    [InlineData(35_000, 210)]
+    [InlineData(69_000, 415)]
+    [InlineData(189_000, 1_125)]
+    public void AutomaticPriceTracksRublesUsingConfiguredRetailReference(long amountMinor, int expectedStars)
+    {
+        Assert.Equal(expectedStars, TelegramStarsPricing.Calculate(amountMinor, 1.68m, 5));
     }
 
     [Theory]

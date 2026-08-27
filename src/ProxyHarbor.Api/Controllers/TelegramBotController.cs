@@ -88,7 +88,7 @@ public sealed class AdminTelegramController(
             options.WebhookMaxConnections,
             options.ProductStars,
             options.AutomaticProductCodes,
-            options.StarsPerCurrencyUnit,
+            options.RublesPerStar,
             options.StarsRoundingStep,
             options.TransportMode,
             proxies = options.Proxies.Select(x => new
@@ -149,12 +149,12 @@ public sealed class AdminTelegramController(
         }
         var catalog = await payments.GetAsync(token);
         if (request.ProductStars.Count > 10 || request.AutomaticProductCodes.Count > 10 ||
-            request.StarsPerCurrencyUnit is < 0.01m or > 1_000m || request.StarsRoundingStep is < 1 or > 1_000 ||
+            request.RublesPerStar is < 0.01m or > 1_000m || request.StarsRoundingStep is < 1 or > 1_000 ||
             request.ProductStars.Any(x => !catalog.Products.ContainsKey(x.Key) || x.Value is < 1 or > 1_000_000) ||
             request.AutomaticProductCodes.Any(x => !catalog.Products.ContainsKey(x)) ||
             request.AutomaticProductCodes.Any(x => TelegramStarsPricing.Calculate(
-                catalog.Products[x].AmountMinor, request.StarsPerCurrencyUnit, request.StarsRoundingStep) == 0))
-            return Invalid("Проверьте тарифы, коэффициент и шаг: итоговая цена должна находиться в диапазоне 1..1000000 Stars.");
+                catalog.Products[x].AmountMinor, request.RublesPerStar, request.StarsRoundingStep) == 0))
+            return Invalid("Проверьте тарифы, стоимость одной Star и шаг округления: итоговая цена должна находиться в диапазоне 1..1000000 Stars.");
 
         TelegramBotIdentity identity;
         try { identity = await api.GetMeAsync(botToken, proxies, request.TransportMode, token); }
@@ -179,7 +179,7 @@ public sealed class AdminTelegramController(
             WebhookMaxConnections = request.WebhookMaxConnections,
             ProductStars = new Dictionary<string, int>(request.ProductStars, StringComparer.OrdinalIgnoreCase),
             AutomaticProductCodes = new HashSet<string>(request.AutomaticProductCodes, StringComparer.OrdinalIgnoreCase),
-            StarsPerCurrencyUnit = request.StarsPerCurrencyUnit,
+            RublesPerStar = request.RublesPerStar,
             StarsRoundingStep = request.StarsRoundingStep,
             TransportMode = request.TransportMode,
             Proxies = proxies,
@@ -338,8 +338,8 @@ public sealed class UpdateTelegramBotRequest
     [Required] public Dictionary<string, int> ProductStars { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     /// <summary>Тарифы, цену которых нужно автоматически синхронизировать с основным каталогом.</summary>
     [Required] public HashSet<string> AutomaticProductCodes { get; set; } = new(StringComparer.OrdinalIgnoreCase);
-    /// <summary>Количество Stars на одну целую единицу валюты тарифа.</summary>
-    [Range(typeof(decimal), "0.01", "1000")] public decimal StarsPerCurrencyUnit { get; set; } = 1m;
+    /// <summary>Ориентировочная стоимость одной Telegram Star в рублях.</summary>
+    [Range(typeof(decimal), "0.01", "1000")] public decimal RublesPerStar { get; set; } = TelegramStarsPricing.DefaultRublesPerStar;
     /// <summary>Шаг безопасного округления автоматической цены вверх.</summary>
     [Range(1, 1_000)] public int StarsRoundingStep { get; set; } = 5;
     /// <summary>Новый token; null сохраняет прежний.</summary>

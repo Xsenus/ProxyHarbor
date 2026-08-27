@@ -41,8 +41,11 @@ public sealed class TelegramBotOptions
     public Dictionary<string, int> ProductStars { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     /// <summary>Коды продуктов, цена которых рассчитывается от основного каталога.</summary>
     public HashSet<string> AutomaticProductCodes { get; set; } = new(StringComparer.OrdinalIgnoreCase);
-    /// <summary>Количество Stars на одну целую единицу валюты продукта.</summary>
-    public decimal StarsPerCurrencyUnit { get; set; } = 1m;
+    /// <summary>
+    /// Ориентировочная розничная стоимость одной Star в рублях. Telegram может
+    /// показывать пользователям другой курс из-за платформы, налогов и региона.
+    /// </summary>
+    public decimal RublesPerStar { get; set; } = TelegramStarsPricing.DefaultRublesPerStar;
     /// <summary>Шаг округления автоматической цены вверх.</summary>
     public int StarsRoundingStep { get; set; } = 5;
     /// <summary>auto пробует SOCKS5 по очереди и затем прямое соединение; proxy запрещает direct fallback.</summary>
@@ -159,7 +162,12 @@ public sealed class TelegramBotConfigurationStore(
                 WebhookMaxConnections = settings.WebhookMaxConnections,
                 ProductStars = new Dictionary<string, int>(settings.ProductStars, StringComparer.OrdinalIgnoreCase),
                 AutomaticProductCodes = new HashSet<string>(settings.AutomaticProductCodes ?? [], StringComparer.OrdinalIgnoreCase),
-                StarsPerCurrencyUnit = settings.StarsPerCurrencyUnit <= 0 ? 1m : settings.StarsPerCurrencyUnit,
+                // Старые снимки хранили обратный коэффициент Stars/₽, который давал
+                // завышенную цену 1:1. При первом чтении переводим их на новый
+                // понятный ориентир ₽/Star без изменения структуры таблицы.
+                RublesPerStar = settings.RublesPerStar is > 0
+                    ? settings.RublesPerStar.Value
+                    : TelegramStarsPricing.DefaultRublesPerStar,
                 StarsRoundingStep = settings.StarsRoundingStep <= 0 ? 5 : settings.StarsRoundingStep,
                 TransportMode = TelegramTransportModes.All.Contains(settings.TransportMode, StringComparer.Ordinal)
                     ? settings.TransportMode : TelegramTransportModes.Auto,
@@ -193,7 +201,7 @@ public sealed class TelegramBotConfigurationStore(
             options.Enabled, options.UpdateMode, options.Name, options.Description,
             options.ShortDescription, options.SupportText, options.ProxyFileMaxItems,
             options.WebhookMaxConnections, options.ProductStars, options.AutomaticProductCodes,
-            options.StarsPerCurrencyUnit, options.StarsRoundingStep, options.TransportMode), Json);
+            options.RublesPerStar, options.StarsRoundingStep, options.TransportMode), Json);
         entity.ProtectedSecrets = protector.Protect(JsonSerializer.Serialize(
             new StoredSecrets(options.BotToken, options.WebhookSecret, options.Proxies), Json));
         entity.BotId = options.BotId;
@@ -214,7 +222,7 @@ public sealed class TelegramBotConfigurationStore(
         int WebhookMaxConnections,
         Dictionary<string, int> ProductStars,
         HashSet<string>? AutomaticProductCodes = null,
-        decimal StarsPerCurrencyUnit = 1m,
+        decimal? RublesPerStar = null,
         int StarsRoundingStep = 5,
         string TransportMode = TelegramTransportModes.Auto);
     private sealed record StoredSecrets(string BotToken, string WebhookSecret, List<TelegramProxyOptions>? Proxies = null);
@@ -223,6 +231,12 @@ public sealed class TelegramBotConfigurationStore(
 /// <summary>Единая формула цены Stars для админки и runtime торгового бота.</summary>
 public static class TelegramStarsPricing
 {
+    /// <summary>
+    /// Базовый ориентир по крупному пользовательскому пакету: около 1,68 ₽ за Star.
+    /// Администратор может менять его без выпуска новой версии приложения.
+    /// </summary>
+    public const decimal DefaultRublesPerStar = 1.68m;
+
     /// <summary>Возвращает ручную цену либо автоматически рассчитывает её из цены подписки.</summary>
     public static bool TryResolve(
         TelegramBotOptions options,
@@ -233,7 +247,7 @@ public static class TelegramStarsPricing
         if (!options.AutomaticProductCodes.Contains(productCode))
             return options.ProductStars.TryGetValue(productCode, out stars) && stars is >= 1 and <= 1_000_000;
 
-        stars = Calculate(product.AmountMinor, options.StarsPerCurrencyUnit, options.StarsRoundingStep);
+        stars = Calculate(product.AmountMinor, options.RublesPerStar, options.StarsRoundingStep);
         return stars is >= 1 and <= 1_000_000;
     }
 
@@ -241,10 +255,10 @@ public static class TelegramStarsPricing
     /// Переводит цену из минимальных денежных единиц в Stars и округляет вверх,
     /// чтобы округление никогда не уменьшало заданную владельцем стоимость.
     /// </summary>
-    public static int Calculate(long amountMinor, decimal starsPerCurrencyUnit, int roundingStep)
+    public static int Calculate(long amountMinor, decimal rublesPerStar, int roundingStep)
     {
-        if (amountMinor <= 0 || starsPerCurrencyUnit <= 0 || roundingStep <= 0) return 0;
-        var raw = amountMinor / 100m * starsPerCurrencyUnit;
+        if (amountMinor <= 0 || rublesPerStar <= 0 || roundingStep <= 0) return 0;
+        var raw = amountMinor / 100m / rublesPerStar;
         var rounded = decimal.Ceiling(raw / roundingStep) * roundingStep;
         return rounded > 1_000_000m ? 0 : decimal.ToInt32(rounded);
     }
