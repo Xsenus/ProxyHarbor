@@ -242,6 +242,28 @@ describe('ProxyHarbor UI', () => {
     expect(screen.queryByRole('heading', { name: 'Лучшие прямо сейчас' })).not.toBeInTheDocument()
   })
 
+  it('groups registration fields and independently reveals both passwords', () => {
+    window.history.replaceState({}, '', '/register')
+    const { container } = render(<App />)
+    const form = screen.getByRole('form', { name: 'Создать аккаунт' })
+    const password = within(form).getByLabelText('Пароль')
+    const confirmation = within(form).getByLabelText('Повторите пароль')
+    const toggles = within(form).getAllByRole('button', { name: 'Показать пароль' })
+
+    expect(container.querySelector('.registration-auth-card')).toBeInTheDocument()
+    expect(within(form).getByLabelText('Логин').closest('.registration-control')).toBeInTheDocument()
+    expect(password).toHaveAttribute('type', 'password')
+    expect(confirmation).toHaveAttribute('type', 'password')
+
+    fireEvent.click(toggles[0])
+    expect(password).toHaveAttribute('type', 'text')
+    expect(toggles[0]).toHaveAttribute('aria-pressed', 'true')
+    expect(confirmation).toHaveAttribute('type', 'password')
+
+    fireEvent.click(toggles[1])
+    expect(confirmation).toHaveAttribute('type', 'text')
+  })
+
   it('organizes the account into focused tabs and sorts plans by duration', async () => {
     window.history.replaceState({}, '', '/account')
     vi.mocked(fetch).mockImplementation(async input => {

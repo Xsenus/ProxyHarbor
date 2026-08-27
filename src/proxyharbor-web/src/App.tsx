@@ -934,6 +934,7 @@ function AccountLoginPage() {
 function RegisterPage() {
   const { language, t } = useI18n()
   const [form, setForm] = useState({ username: '', email: '', displayName: '', password: '', confirm: '' })
+  const [visiblePasswords, setVisiblePasswords] = useState({ password: false, confirm: false })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const submit = async (event: React.FormEvent) => {
@@ -946,15 +947,30 @@ function RegisterPage() {
       window.location.assign('/account')
     } catch (reason) { setError(reason instanceof Error ? reason.message : t('accountCreateFailed')); setBusy(false) }
   }
-  return <AuthLayout title={t('registerTitle')} kicker="FREE ACCOUNT" description={t('registerText')}>
-    <form className="login-form registration-form" onSubmit={submit}>
-      <label htmlFor="register-name">{t('yourName')}</label><div className="login-field"><User/><input id="register-name" maxLength={120} autoComplete="name" placeholder={t('optionalName')} value={form.displayName} onChange={event => setForm({...form, displayName: event.target.value})}/></div>
-      <label htmlFor="register-username">{t('username')}</label><div className="login-field"><User/><input id="register-username" required minLength={3} maxLength={64} pattern="[A-Za-z0-9._-]+" autoComplete="username" placeholder="proxy.user" value={form.username} onChange={event => setForm({...form, username: event.target.value})}/></div>
-      <label htmlFor="register-email">Email</label><div className="login-field"><Mail/><input id="register-email" required type="email" maxLength={254} autoComplete="email" placeholder="name@example.com" value={form.email} onChange={event => setForm({...form, email: event.target.value})}/></div>
-      <label htmlFor="register-password">{t('password')}</label><div className="login-field"><LockKeyhole/><input id="register-password" required minLength={12} maxLength={256} type="password" autoComplete="new-password" placeholder={t('passwordHint')} value={form.password} onChange={event => setForm({...form, password: event.target.value})}/></div>
-      <label htmlFor="register-confirm">{t('repeatPassword')}</label><div className="login-field"><ShieldCheck/><input id="register-confirm" required type="password" autoComplete="new-password" placeholder={t('repeatPassword')} value={form.confirm} onChange={event => setForm({...form, confirm: event.target.value})}/></div>
+  return <AuthLayout title={t('registerTitle')} kicker="FREE ACCOUNT" description={t('registerText')} variant="registration">
+    <form className="login-form registration-form" aria-label={t('registerTitle')} onSubmit={submit}>
+      <div className="registration-control registration-control-wide">
+        <label htmlFor="register-name">{t('yourName')}</label>
+        <div className="login-field"><User/><input id="register-name" maxLength={120} autoComplete="name" placeholder={t('optionalName')} value={form.displayName} onChange={event => setForm({...form, displayName: event.target.value})}/></div>
+      </div>
+      <div className="registration-control">
+        <label htmlFor="register-username">{t('username')}</label>
+        <div className="login-field"><User/><input id="register-username" required minLength={3} maxLength={64} pattern="[A-Za-z0-9._-]+" autoComplete="username" autoCapitalize="none" spellCheck={false} placeholder="proxy.user" value={form.username} onChange={event => setForm({...form, username: event.target.value})}/></div>
+      </div>
+      <div className="registration-control">
+        <label htmlFor="register-email">Email</label>
+        <div className="login-field"><Mail/><input id="register-email" required type="email" maxLength={254} autoComplete="email" autoCapitalize="none" spellCheck={false} placeholder="name@example.com" value={form.email} onChange={event => setForm({...form, email: event.target.value})}/></div>
+      </div>
+      <div className="registration-control">
+        <label htmlFor="register-password">{t('password')}</label>
+        <div className="login-field"><LockKeyhole/><input id="register-password" required minLength={12} maxLength={256} type={visiblePasswords.password ? 'text' : 'password'} autoComplete="new-password" placeholder={t('passwordHint')} value={form.password} onChange={event => setForm({...form, password: event.target.value})}/><button className="password-toggle" type="button" aria-label={visiblePasswords.password ? t('hidePassword') : t('showPassword')} aria-pressed={visiblePasswords.password} onClick={() => setVisiblePasswords(value => ({...value, password: !value.password}))}>{visiblePasswords.password ? <EyeOff/> : <Eye/>}</button></div>
+      </div>
+      <div className="registration-control">
+        <label htmlFor="register-confirm">{t('repeatPassword')}</label>
+        <div className="login-field"><ShieldCheck/><input id="register-confirm" required type={visiblePasswords.confirm ? 'text' : 'password'} autoComplete="new-password" placeholder={t('repeatPassword')} value={form.confirm} onChange={event => setForm({...form, confirm: event.target.value})}/><button className="password-toggle" type="button" aria-label={visiblePasswords.confirm ? t('hidePassword') : t('showPassword')} aria-pressed={visiblePasswords.confirm} onClick={() => setVisiblePasswords(value => ({...value, confirm: !value.confirm}))}>{visiblePasswords.confirm ? <EyeOff/> : <Eye/>}</button></div>
+      </div>
       <button className="login-submit" disabled={busy}>{busy ? t('creating') : t('createAccount')}</button>
-    </form>{error && <div className="admin-notice" role="alert"><X/>{error}</div>}<a className="back-link" href="/login">← {t('alreadyAccount')}</a>
+    </form>{error && <div className="admin-notice" role="alert"><X/>{error}</div>}<div className="account-auth-footer registration-auth-footer"><span>{t('alreadyAccount')}</span><a href="/login">{t('signIn')}</a></div><a className="back-link" href="/">← {t('home')}</a>
   </AuthLayout>
 }
 
@@ -1001,8 +1017,8 @@ function ResetPasswordPage() {
 }
 
 /** Единая оболочка auth-экранов сохраняет визуальный ритм и семантику заголовков. */
-function AuthLayout({title, kicker, description, children}: {title: string; kicker: string; description: string; children: React.ReactNode}) {
-  return <main className="login-page"><a className="brand" href="/"><span className="brand-mark"><Network size={20}/></span><span>Proxy<span>Harbor</span></span></a><LanguageSwitcher compact/><section className="login-card account-auth-card" aria-labelledby="auth-title"><span className="kicker">{kicker}</span><h1 id="auth-title">{title}</h1><p>{description}</p>{children}</section></main>
+function AuthLayout({title, kicker, description, children, variant}: {title: string; kicker: string; description: string; children: React.ReactNode; variant?: 'registration'}) {
+  return <main className={`login-page${variant ? ` ${variant}-auth-page` : ''}`}><a className="brand" href="/"><span className="brand-mark"><Network size={20}/></span><span>Proxy<span>Harbor</span></span></a><LanguageSwitcher compact/><section className={`login-card account-auth-card${variant ? ` ${variant}-auth-card` : ''}`} aria-labelledby="auth-title"><span className="kicker">{kicker}</span><h1 id="auth-title">{title}</h1><p>{description}</p>{children}</section></main>
 }
 
 /** Личный кабинет работает для любой роли и не запрашивает административные API. */
