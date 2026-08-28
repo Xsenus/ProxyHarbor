@@ -6,6 +6,7 @@ export type PublicInfoKind =
   | "privacy"
   | "personal-data-consent"
   | "marketing-consent"
+  | "acceptable-use"
   | "cookies"
   | "refunds"
   | "requisites";
@@ -18,6 +19,7 @@ export const publicInfoPaths: Record<string, PublicInfoKind> = {
   "/privacy": "privacy",
   "/personal-data-consent": "personal-data-consent",
   "/marketing-consent": "marketing-consent",
+  "/acceptable-use": "acceptable-use",
   "/cookies": "cookies",
   "/refunds": "refunds",
   "/requisites": "requisites",

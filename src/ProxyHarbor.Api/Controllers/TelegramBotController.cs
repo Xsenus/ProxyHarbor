@@ -69,8 +69,10 @@ public sealed class AdminTelegramController(
             users = await db.TelegramChats.CountAsync(token),
             activeUsers30d = await db.TelegramChats.CountAsync(x => x.LastInteractionAt >= now.AddDays(-30), token),
             notificationsEnabled = await db.TelegramChats.CountAsync(x => x.NotificationsEnabled && !x.IsBlocked, token),
-            marketingConsents = await db.TelegramChats.CountAsync(x => x.MarketingNotificationsEnabled &&
-                x.MarketingConsentVersion == LegalDocumentVersions.MarketingConsent && !x.IsBlocked, token),
+            marketingConsents = options.MarketingBroadcastsEnabled
+                ? await db.TelegramChats.CountAsync(x => x.MarketingNotificationsEnabled &&
+                    x.MarketingConsentVersion == LegalDocumentVersions.MarketingConsent && !x.IsBlocked, token)
+                : 0,
             blocked = await db.TelegramChats.CountAsync(x => x.IsBlocked, token),
             paidOrders = await db.PaymentOrders.CountAsync(x => x.Provider == "telegram_stars" && x.Status == PaymentStatuses.Paid, token),
             starsRevenue = await db.PaymentOrders.Where(x => x.Provider == "telegram_stars" && x.Status == PaymentStatuses.Paid)
@@ -81,6 +83,7 @@ public sealed class AdminTelegramController(
         return Ok(new
         {
             options.Enabled,
+            options.MarketingBroadcastsEnabled,
             options.UpdateMode,
             options.Name,
             options.Description,
@@ -236,6 +239,7 @@ public sealed class AdminTelegramController(
         [FromQuery, StringLength(120)] string? query = null,
         CancellationToken token = default)
     {
+        var options = await configurations.GetAsync(token);
         var source = db.TelegramChats.AsNoTracking().AsQueryable();
         if (!string.IsNullOrWhiteSpace(query))
         {
@@ -258,7 +262,8 @@ public sealed class AdminTelegramController(
                 x.DisplayName,
                 x.LanguageCode,
                 x.NotificationsEnabled,
-                MarketingNotificationsEnabled = x.MarketingNotificationsEnabled &&
+                MarketingNotificationsEnabled = options.MarketingBroadcastsEnabled &&
+                    x.MarketingNotificationsEnabled &&
                     x.MarketingConsentGrantedAt != null &&
                     x.MarketingConsentVersion == LegalDocumentVersions.MarketingConsent,
                 x.MarketingConsentGrantedAt,
@@ -297,6 +302,12 @@ public sealed class AdminTelegramController(
         var batch = Guid.NewGuid();
         if (request.Broadcast)
         {
+            var options = await configurations.GetAsync(token);
+            if (!options.MarketingBroadcastsEnabled)
+                return Problem(
+                    title: "Рекламные рассылки отключены deploy-политикой.",
+                    detail: "Функцию можно включить только после правовой квалификации сервиса и проверки ограничений рекламы.",
+                    statusCode: StatusCodes.Status409Conflict);
             var queued = await queue.EnqueueBroadcastAsync(text, batch, administratorId, token);
             return Accepted(new { batchId = batch, queued });
         }

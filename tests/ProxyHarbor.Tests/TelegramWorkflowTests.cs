@@ -86,6 +86,24 @@ public sealed class TelegramWorkflowTests
     }
 
     [Fact]
+    public async Task DeployPolicyPreventsMarketingConsentAndBroadcast()
+    {
+        await using var fixture = await Fixture.CreateAsync(marketingBroadcastsEnabled: false);
+        var processor = fixture.Processor();
+        await processor.ProcessAsync(Message(1, "/start"), TelegramUpdateModes.Webhook, CancellationToken.None);
+        var chat = await fixture.Db.TelegramChats.SingleAsync();
+
+        await processor.ProcessAsync(Callback(2, "notifications:marketing"), TelegramUpdateModes.Webhook, CancellationToken.None);
+
+        Assert.False(chat.MarketingNotificationsEnabled);
+        Assert.Null(chat.MarketingConsentGrantedAt);
+        var response = Assert.IsType<ObjectResult>(await fixture.AdminController().Send(
+            new SendTelegramMessageRequest { Broadcast = true, Text = "рассылка" }, CancellationToken.None));
+        Assert.Equal(StatusCodes.Status409Conflict, response.StatusCode);
+        Assert.Empty(fixture.Db.TelegramOutboundMessages.Where(x => x.IdempotencyKey.StartsWith("broadcast:")));
+    }
+
+    [Fact]
     public async Task TelegramStartDeepLinkCreatesReferralAndRewardsOwnerOnce()
     {
         await using var fixture = await Fixture.CreateAsync();
@@ -369,7 +387,7 @@ public sealed class TelegramWorkflowTests
             TelegramBotConfigurationStore botStore, StaticPaymentStore payments, RecordingTelegramFactory telegram)
         { this.services = services; Db = db; Users = users; BotStore = botStore; Payments = payments; Telegram = telegram; }
 
-        internal static async Task<Fixture> CreateAsync()
+        internal static async Task<Fixture> CreateAsync(bool marketingBroadcastsEnabled = true)
         {
             var collection = new ServiceCollection();
             collection.AddLogging();
@@ -386,7 +404,11 @@ public sealed class TelegramWorkflowTests
                 Assert.True((await roles.CreateAsync(new IdentityRole<Guid>(role))).Succeeded);
             var protection = new EphemeralDataProtectionProvider();
             var botStore = new TelegramBotConfigurationStore(db,
-                Options.Create(new TelegramBotHostOptions { PublicBaseUrl = "https://proxy.example.test" }), protection);
+                Options.Create(new TelegramBotHostOptions
+                {
+                    PublicBaseUrl = "https://proxy.example.test",
+                    MarketingBroadcastsEnabled = marketingBroadcastsEnabled
+                }), protection);
             await botStore.SaveAsync(new TelegramBotOptions
             {
                 Enabled = true,

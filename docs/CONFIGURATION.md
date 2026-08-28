@@ -30,6 +30,7 @@ docker compose up -d --build
 | `BACKUP_HISTORY_RETENTION_DAYS` | Хранение строк аудита backup, `1..3650` |
 | `BACKUP_ENCRYPTION_KEY` | Ключ новых PHB3, 32–1024 символа без control characters |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | Обязательная пара для включённого backup |
+| `TELEGRAM_MARKETING_BROADCASTS_ENABLED` | Deploy-блокировка массовой рекламной рассылки; по умолчанию `false`, включать только после отдельной правовой проверки |
 | `BACKEND_SUBNET` | Единственная доверенная container-сеть reverse proxy |
 | `PUBLIC_HOST`, `ACME_EMAIL` | Публичное DNS-имя и контакт ACME для production Caddy |
 | `PUBLIC_BASE_URL` | Публичный HTTPS origin для email, платёжных webhook и commerce-бота; Compose передаёт его как `TelegramBot__PublicBaseUrl` |
@@ -40,6 +41,8 @@ docker compose up -d --build
 ## Платежи и подписки
 
 Telegram Stars и commerce-бот настраиваются в `/admin/telegram`; token и упорядоченные SOCKS5 credentials хранятся в БД только как Data Protection ciphertext и не используют `TELEGRAM_BOT_TOKEN`, зарезервированный для доставки backup. Режим `auto` пробует прокси по порядку и затем прямой маршрут, `proxy` исключает прямое соединение, а `direct` отключает прокси. Полный runbook: [TELEGRAM_BOT.md](TELEGRAM_BOT.md).
+
+Массовая рекламная рассылка дополнительно защищена deploy-флагом `TELEGRAM_MARKETING_BROADCASTS_ENABLED=false`. При выключенном флаге пользователь не может выдать рекламное согласие, а admin API отвечает `409` на попытку broadcast. Наличие согласия адресата само по себе не снимает запреты на рекламу отдельных категорий услуг.
 
 Биллинг по умолчанию выключен (`PAYMENTS_ENABLED=false`). Сначала заключите договор с провайдером,
 получите merchant-реквизиты и проверьте тестовый платёж. ProxyHarbor использует hosted checkout:
