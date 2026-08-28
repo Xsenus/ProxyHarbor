@@ -321,6 +321,9 @@ describe('ProxyHarbor UI', () => {
     cleanup();window.history.replaceState({},'', '/marketing-consent');render(<App/>)
     expect(screen.getByRole('heading',{name:/Отдельное добровольное согласие/})).toBeInTheDocument()
     expect(screen.getByText(/По умолчанию рекламная рассылка отключена/)).toBeInTheDocument()
+    cleanup();window.history.replaceState({},'', '/acceptable-use');render(<App/>)
+    expect(screen.getByRole('heading',{name:/Запрещённое использование/})).toBeInTheDocument()
+    expect(screen.getByText(/не позиционируется и не должен использоваться как средство/)).toBeInTheDocument()
   })
 
   it('organizes the account into focused tabs and sorts plans by duration', async () => {

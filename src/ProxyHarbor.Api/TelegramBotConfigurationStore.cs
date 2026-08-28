@@ -14,6 +14,11 @@ public sealed class TelegramBotHostOptions
     public const string Section = "TelegramBot";
     /// <summary>Публичный HTTPS origin webhook.</summary>
     public string PublicBaseUrl { get; set; } = "https://proxy.blagodaty.ru";
+    /// <summary>
+    /// Явно разрешает рекламные broadcast после правовой квалификации сервиса.
+    /// По умолчанию выключено из-за части 10.8 статьи 5 Закона № 38-ФЗ.
+    /// </summary>
+    public bool MarketingBroadcastsEnabled { get; set; }
 }
 
 /// <summary>Эффективная runtime-конфигурация торгового бота.</summary>
@@ -25,6 +30,8 @@ public sealed class TelegramBotOptions
     public string UpdateMode { get; set; } = TelegramUpdateModes.Webhook;
     /// <summary>Доверенный deploy-origin.</summary>
     public string PublicBaseUrl { get; set; } = string.Empty;
+    /// <summary>Разрешены ли рекламные broadcast deploy-конфигурацией.</summary>
+    public bool MarketingBroadcastsEnabled { get; set; }
     /// <summary>Имя профиля бота.</summary>
     public string Name { get; set; } = "ProxyHarbor";
     /// <summary>Полное описание пустого чата.</summary>
@@ -141,7 +148,11 @@ public sealed class TelegramBotConfigurationStore(
     {
         var entity = await db.TelegramBotConfigurations.AsNoTracking()
             .SingleOrDefaultAsync(x => x.Id == SingletonId, token);
-        if (entity is null) return new TelegramBotOptions { PublicBaseUrl = host.Value.PublicBaseUrl };
+        if (entity is null) return new TelegramBotOptions
+        {
+            PublicBaseUrl = host.Value.PublicBaseUrl,
+            MarketingBroadcastsEnabled = host.Value.MarketingBroadcastsEnabled
+        };
         try
         {
             var settings = JsonSerializer.Deserialize<StoredSettings>(entity.SettingsJson, Json)
@@ -154,6 +165,7 @@ public sealed class TelegramBotConfigurationStore(
                 Enabled = settings.Enabled,
                 UpdateMode = settings.UpdateMode,
                 PublicBaseUrl = host.Value.PublicBaseUrl,
+                MarketingBroadcastsEnabled = host.Value.MarketingBroadcastsEnabled,
                 Name = settings.Name,
                 Description = settings.Description,
                 ShortDescription = settings.ShortDescription,
