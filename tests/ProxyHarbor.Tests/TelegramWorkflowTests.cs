@@ -24,27 +24,36 @@ public sealed class TelegramWorkflowTests
     {
         await using var fixture = await Fixture.CreateAsync();
         var processor = fixture.Processor();
+        await processor.ProcessAsync(Message(1, "/start"), TelegramUpdateModes.Webhook, CancellationToken.None);
+        await processor.ProcessAsync(Callback(2, "buy:pro-30"), TelegramUpdateModes.Webhook, CancellationToken.None);
+        Assert.Empty(fixture.Db.PaymentOrders);
+        await processor.ProcessAsync(Callback(3, "legal:offer"), TelegramUpdateModes.Webhook, CancellationToken.None);
+        await processor.ProcessAsync(Callback(4, "legal:personal-data"), TelegramUpdateModes.Webhook, CancellationToken.None);
         var commands = new[]
         {
-            "/start", "/account", "/buy", "/proxies", "/notifications", "/support", "/help",
+            "/account", "/buy", "/proxies", "/notifications", "/support", "/help",
             "как оплатить stars", "где файл прокси", "как проверяется скорость", "срок подписки", "вопрос оператору"
         };
         for (var index = 0; index < commands.Length; index++)
-            await processor.ProcessAsync(Message(index + 1, commands[index]), TelegramUpdateModes.Webhook, CancellationToken.None);
+            await processor.ProcessAsync(Message(index + 5, commands[index]), TelegramUpdateModes.Webhook, CancellationToken.None);
 
         Assert.Single(fixture.Db.TelegramChats);
         Assert.Single(fixture.Db.Subscriptions);
-        Assert.Equal(commands.Length, await fixture.Db.TelegramUpdateReceipts.CountAsync());
+        Assert.Equal(commands.Length + 4, await fixture.Db.TelegramUpdateReceipts.CountAsync());
         Assert.True(await fixture.Db.TelegramOutboundMessages.CountAsync() >= commands.Length);
         Assert.Contains(await fixture.Db.TelegramOutboundMessages.ToArrayAsync(), x => x.Kind == TelegramOutboundKinds.ProxyFile);
         Assert.Contains(await fixture.Db.TelegramConversationMessages.ToArrayAsync(), x =>
             x.Direction == "bot" && x.Text.Contains("Telegram Stars", StringComparison.Ordinal));
         var user = await fixture.Db.Users.SingleAsync();
         Assert.Equal("tg.9001@telegram.proxyharbor.invalid", user.Email);
+        Assert.Equal(LegalDocumentVersions.Offer, user.OfferVersion);
+        Assert.NotNull(user.OfferAcceptedAt);
+        Assert.Equal(LegalDocumentVersions.PersonalDataConsent, user.PersonalDataConsentVersion);
+        Assert.NotNull(user.PersonalDataConsentAcceptedAt);
         Assert.True(await fixture.Users.IsInRoleAsync(user, UserRoles.User));
 
         await processor.ProcessAsync(Message(1, "/start"), TelegramUpdateModes.Webhook, CancellationToken.None);
-        Assert.Equal(commands.Length, await fixture.Db.TelegramUpdateReceipts.CountAsync());
+        Assert.Equal(commands.Length + 4, await fixture.Db.TelegramUpdateReceipts.CountAsync());
 
         var subscription = await fixture.Db.Subscriptions.SingleAsync();
         subscription.ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(-1);
@@ -53,6 +62,27 @@ public sealed class TelegramWorkflowTests
         await processor.ProcessAsync(Message(51, "/account"), TelegramUpdateModes.Webhook, CancellationToken.None);
         Assert.Contains(await fixture.Db.TelegramConversationMessages.ToArrayAsync(), x =>
             x.Direction == "bot" && x.Text.Contains("нужна активная подписка", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task MarketingConsentIsOffByDefaultAndWithdrawalIsAudited()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var processor = fixture.Processor();
+        await processor.ProcessAsync(Message(1, "/start"), TelegramUpdateModes.Webhook, CancellationToken.None);
+        var chat = await fixture.Db.TelegramChats.SingleAsync();
+        Assert.False(chat.MarketingNotificationsEnabled);
+        Assert.Null(chat.MarketingConsentGrantedAt);
+
+        await processor.ProcessAsync(Callback(2, "notifications:marketing"), TelegramUpdateModes.Webhook, CancellationToken.None);
+        Assert.True(chat.MarketingNotificationsEnabled);
+        Assert.Equal(LegalDocumentVersions.MarketingConsent, chat.MarketingConsentVersion);
+        Assert.NotNull(chat.MarketingConsentGrantedAt);
+        Assert.Null(chat.MarketingConsentWithdrawnAt);
+
+        await processor.ProcessAsync(Callback(3, "notifications:marketing"), TelegramUpdateModes.Webhook, CancellationToken.None);
+        Assert.False(chat.MarketingNotificationsEnabled);
+        Assert.NotNull(chat.MarketingConsentWithdrawnAt);
     }
 
     [Fact]
@@ -117,6 +147,8 @@ public sealed class TelegramWorkflowTests
         var processor = fixture.Processor();
         await processor.ProcessAsync(Message(1, "/start"), TelegramUpdateModes.Webhook, CancellationToken.None);
         await processor.ProcessAsync(Json("""{"update_id":2,"callback_query":{"id":"bad","from":{"id":9001},"data":"account"}}"""), TelegramUpdateModes.Webhook, CancellationToken.None);
+        await processor.ProcessAsync(Callback(3, "legal:offer"), TelegramUpdateModes.Webhook, CancellationToken.None);
+        await processor.ProcessAsync(Callback(4, "legal:personal-data"), TelegramUpdateModes.Webhook, CancellationToken.None);
 
         var callbacks = new[] { "account", "products", "proxies", "notifications", "unknown", "buy:missing", "buy:pro-30" };
         for (var index = 0; index < callbacks.Length; index++)
@@ -160,7 +192,10 @@ public sealed class TelegramWorkflowTests
             User = user,
             Username = "crm_user",
             DisplayName = "CRM User",
-            NotificationsEnabled = true
+            NotificationsEnabled = true,
+            MarketingNotificationsEnabled = true,
+            MarketingConsentGrantedAt = DateTimeOffset.UtcNow,
+            MarketingConsentVersion = LegalDocumentVersions.MarketingConsent
         };
         fixture.Db.TelegramChats.Add(chat);
         fixture.Db.TelegramConversationMessages.Add(new TelegramConversationMessage

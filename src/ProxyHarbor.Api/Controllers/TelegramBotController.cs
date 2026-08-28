@@ -68,7 +68,9 @@ public sealed class AdminTelegramController(
         {
             users = await db.TelegramChats.CountAsync(token),
             activeUsers30d = await db.TelegramChats.CountAsync(x => x.LastInteractionAt >= now.AddDays(-30), token),
-            notifications = await db.TelegramChats.CountAsync(x => x.NotificationsEnabled && !x.IsBlocked, token),
+            notificationsEnabled = await db.TelegramChats.CountAsync(x => x.NotificationsEnabled && !x.IsBlocked, token),
+            marketingConsents = await db.TelegramChats.CountAsync(x => x.MarketingNotificationsEnabled &&
+                x.MarketingConsentVersion == LegalDocumentVersions.MarketingConsent && !x.IsBlocked, token),
             blocked = await db.TelegramChats.CountAsync(x => x.IsBlocked, token),
             paidOrders = await db.PaymentOrders.CountAsync(x => x.Provider == "telegram_stars" && x.Status == PaymentStatuses.Paid, token),
             starsRevenue = await db.PaymentOrders.Where(x => x.Provider == "telegram_stars" && x.Status == PaymentStatuses.Paid)
@@ -256,6 +258,12 @@ public sealed class AdminTelegramController(
                 x.DisplayName,
                 x.LanguageCode,
                 x.NotificationsEnabled,
+                MarketingNotificationsEnabled = x.MarketingNotificationsEnabled &&
+                    x.MarketingConsentGrantedAt != null &&
+                    x.MarketingConsentVersion == LegalDocumentVersions.MarketingConsent,
+                x.MarketingConsentGrantedAt,
+                x.MarketingConsentVersion,
+                x.MarketingConsentWithdrawnAt,
                 x.IsBlocked,
                 x.CreatedAt,
                 x.LastInteractionAt,
@@ -277,7 +285,7 @@ public sealed class AdminTelegramController(
         return Ok(items);
     }
 
-    /// <summary>Отвечает одному клиенту либо создаёт bounded broadcast всем подписанным чатам.</summary>
+    /// <summary>Отвечает одному клиенту либо создаёт bounded broadcast только давшим согласие на рекламу.</summary>
     [HttpPost("messages")]
     public async Task<IActionResult> Send([FromBody] SendTelegramMessageRequest request, CancellationToken token)
     {

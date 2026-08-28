@@ -44,6 +44,8 @@ public static class LegalDocumentVersions
     public const string Offer = "2.0";
     /// <summary>Текущая редакция отдельного согласия на обработку данных.</summary>
     public const string PersonalDataConsent = "1.0";
+    /// <summary>Текущая редакция отдельного согласия на рекламные сообщения.</summary>
+    public const string MarketingConsent = "1.0";
 }
 
 /// <summary>Неизменяемая связь пригласившего пользователя и нового клиента.</summary>
@@ -480,8 +482,16 @@ public sealed class TelegramChat
     public string DisplayName { get; set; } = string.Empty;
     /// <summary>Язык клиента из Telegram.</summary>
     public string? LanguageCode { get; set; }
-    /// <summary>Разрешены ли сервисные напоминания и информационные рассылки.</summary>
+    /// <summary>Разрешены ли договорные сервисные напоминания, не являющиеся рекламой.</summary>
     public bool NotificationsEnabled { get; set; } = true;
+    /// <summary>Отдельно разрешены ли рекламные и промо-сообщения.</summary>
+    public bool MarketingNotificationsEnabled { get; set; }
+    /// <summary>Момент последнего явно выраженного согласия на рекламные сообщения.</summary>
+    public DateTimeOffset? MarketingConsentGrantedAt { get; set; }
+    /// <summary>Редакция согласия на рекламные сообщения.</summary>
+    public string? MarketingConsentVersion { get; set; }
+    /// <summary>Момент последнего отзыва согласия на рекламные сообщения.</summary>
+    public DateTimeOffset? MarketingConsentWithdrawnAt { get; set; }
     /// <summary>Пользователь заблокировал бота либо чат отключён администратором.</summary>
     public bool IsBlocked { get; set; }
     /// <summary>Первое взаимодействие.</summary>
