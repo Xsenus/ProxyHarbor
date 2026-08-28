@@ -77,6 +77,9 @@ public sealed class CheckerNodeProvisionerTests
         Assert.Contains("NoNewPrivileges=true", DecodeUnit(script), StringComparison.Ordinal);
         Assert.Contains("sha256sum --check proxyharbor-checker-agent.tar.gz.sha256 >/dev/null", script, StringComparison.Ordinal);
         Assert.Contains("sha512sum --check", script, StringComparison.Ordinal);
+        Assert.Contains("command -v curl", script, StringComparison.Ordinal);
+        Assert.Contains("command -v wget", script, StringComparison.Ordinal);
+        Assert.Contains("download \"$runtime_url\" \"$work/runtime.tar.gz\"", script, StringComparison.Ordinal);
         Assert.Contains("aspnetcore-runtime-10.0.11-$runtime_rid.tar.gz", script, StringComparison.Ordinal);
         Assert.Contains("^Microsoft.AspNetCore.App 10.0.11 ", script, StringComparison.Ordinal);
         Assert.Contains("runtime_replaced=1", script, StringComparison.Ordinal);
