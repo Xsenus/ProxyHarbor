@@ -43,7 +43,7 @@ public sealed class TelegramWorkflowTests
         Assert.True(await fixture.Db.TelegramOutboundMessages.CountAsync() >= commands.Length);
         Assert.Contains(await fixture.Db.TelegramOutboundMessages.ToArrayAsync(), x => x.Kind == TelegramOutboundKinds.ProxyFile);
         Assert.Contains(await fixture.Db.TelegramConversationMessages.ToArrayAsync(), x =>
-            x.Direction == "bot" && x.Text.Contains("Telegram Stars", StringComparison.Ordinal));
+            x.Direction == "bot" && x.Text.Contains("Stars", StringComparison.Ordinal));
         var user = await fixture.Db.Users.SingleAsync();
         Assert.Equal("tg.9001@telegram.proxyharbor.invalid", user.Email);
         Assert.Equal(LegalDocumentVersions.Offer, user.OfferVersion);
@@ -168,7 +168,7 @@ public sealed class TelegramWorkflowTests
         await processor.ProcessAsync(Callback(3, "legal:offer"), TelegramUpdateModes.Webhook, CancellationToken.None);
         await processor.ProcessAsync(Callback(4, "legal:personal-data"), TelegramUpdateModes.Webhook, CancellationToken.None);
 
-        var callbacks = new[] { "account", "products", "proxies", "notifications", "unknown", "buy:missing", "buy:pro-30" };
+        var callbacks = new[] { "account", "products", "proxies", "notifications", "unknown", "buy:missing", "buy:pro-30", "pay:telegram_stars:pro-30" };
         for (var index = 0; index < callbacks.Length; index++)
             await processor.ProcessAsync(Callback(10 + index, callbacks[index]), TelegramUpdateModes.Webhook, CancellationToken.None);
         var order = await fixture.Db.PaymentOrders.SingleAsync();
@@ -195,6 +195,33 @@ public sealed class TelegramWorkflowTests
             request.Body.Contains("callback-10", StringComparison.Ordinal) &&
             !request.Body.Contains("\"text\"", StringComparison.Ordinal));
         await processor.ProcessAsync(Message(42, "/account"), TelegramUpdateModes.Webhook, CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task BuyOffersEveryReadyProviderAndCreatesExternalCheckout()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var processor = fixture.Processor();
+        await processor.ProcessAsync(Message(1, "/start"), TelegramUpdateModes.Webhook, CancellationToken.None);
+        await processor.ProcessAsync(Callback(2, "legal:offer"), TelegramUpdateModes.Webhook, CancellationToken.None);
+        await processor.ProcessAsync(Callback(3, "legal:personal-data"), TelegramUpdateModes.Webhook, CancellationToken.None);
+
+        await processor.ProcessAsync(Callback(4, "buy:pro-30"), TelegramUpdateModes.Webhook, CancellationToken.None);
+        var methodMessage = await fixture.Db.TelegramOutboundMessages
+            .Where(x => x.Kind == TelegramOutboundKinds.Text).OrderByDescending(x => x.CreatedAt).FirstAsync();
+        Assert.Contains("telegram_stars", methodMessage.PayloadJson, StringComparison.Ordinal);
+        foreach (var provider in new[] { "yookassa", "yoomoney", "cloudpayments", "robokassa", "tbank", "stripe", "cryptomus", "nowpayments" })
+            Assert.Contains($"pay:{provider}:pro-30", methodMessage.PayloadJson, StringComparison.Ordinal);
+
+        await processor.ProcessAsync(Callback(5, "pay:yoomoney:pro-30"), TelegramUpdateModes.Webhook, CancellationToken.None);
+
+        var order = await fixture.Db.PaymentOrders.SingleAsync();
+        Assert.Equal("yoomoney", order.Provider);
+        Assert.Equal(PaymentStatuses.Pending, order.Status);
+        var checkoutUrl = Assert.IsType<string>(order.CheckoutUrl);
+        Assert.StartsWith("https://proxy.example.test/api/v1/payments/hosted/yoomoney/", checkoutUrl, StringComparison.Ordinal);
+        Assert.Contains(await fixture.Db.TelegramOutboundMessages.ToArrayAsync(), x =>
+            x.PayloadJson.Contains(checkoutUrl, StringComparison.Ordinal));
     }
 
     [Fact]
@@ -423,15 +450,34 @@ public sealed class TelegramWorkflowTests
             var paymentOptions = new PaymentOptions
             {
                 Enabled = true,
+                PublicBaseUrl = "https://proxy.example.test",
                 Products = new Dictionary<string, PaymentProductOptions>
                 {
                     ["pro-30"] = new() { Enabled = true, Name = "Pro 30", Plan = SubscriptionPlans.Pro, DurationDays = 30, AmountMinor = 49_900, Currency = "RUB", Description = "Pro" }
+                },
+                Providers = new Dictionary<string, PaymentProviderOptions>
+                {
+                    ["yookassa"] = new() { Enabled = true, MerchantId = "shop", SecretKey = "secret" },
+                    ["yoomoney"] = new()
+                    {
+                        Enabled = true,
+                        DisplayName = "ЮMoney",
+                        MerchantId = "410011234567890",
+                        SecretKey = "test-notification-secret"
+                    },
+                    ["cloudpayments"] = new() { Enabled = true, PublicId = "public", SecretKey = "secret" },
+                    ["robokassa"] = new() { Enabled = true, MerchantId = "merchant", SecretKey = "secret", SecondarySecret = "secret2" },
+                    ["tbank"] = new() { Enabled = true, MerchantId = "terminal", SecretKey = "secret" },
+                    ["stripe"] = new() { Enabled = true, SecretKey = "secret", SecondarySecret = "webhook" },
+                    ["cryptomus"] = new() { Enabled = true, MerchantId = "merchant", SecretKey = "secret" },
+                    ["nowpayments"] = new() { Enabled = true, SecretKey = "secret", SecondarySecret = "ipn" }
                 }
             };
             return new Fixture(services, db, users, botStore, new StaticPaymentStore(paymentOptions), new RecordingTelegramFactory());
         }
 
         internal TelegramUpdateProcessor Processor() => new(Db, Users, BotStore, Payments,
+            new PaymentGatewayClient(Telegram, Payments),
             new TelegramBotApiClient(Telegram), new TelegramDispatchService(Db), NullLogger<TelegramUpdateProcessor>.Instance);
 
         internal AdminTelegramController AdminController()

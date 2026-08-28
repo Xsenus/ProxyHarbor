@@ -147,6 +147,161 @@ public sealed class PaymentGatewayTests
         Assert.Equal(PaymentStatuses.Paid, result.Status);
     }
 
+    [Theory]
+    [InlineData("yookassa", "yoo-direct")]
+    [InlineData("cloudpayments", "42001")]
+    [InlineData("robokassa", "7001")]
+    [InlineData("tbank", "88001")]
+    [InlineData("stripe", "cs_direct")]
+    [InlineData("cryptomus", "crypto-direct")]
+    public async Task DirectStatusCheckMapsSuccessfulPaymentToCanonicalNotification(
+        string provider, string providerPaymentId)
+    {
+        var order = Order(provider);
+        order.ProviderPaymentId = providerPaymentId;
+        var responseBody = provider switch
+        {
+            "yookassa" => JsonSerializer.Serialize(new
+            {
+                id = providerPaymentId,
+                status = "succeeded",
+                amount = new { value = "499.00", currency = "RUB" },
+                metadata = new { order_id = order.Id.ToString("D") }
+            }),
+            "cloudpayments" => JsonSerializer.Serialize(new
+            {
+                Success = true,
+                Model = new
+                {
+                    InvoiceId = order.Id.ToString("D"), TransactionId = 42001, Status = "Completed",
+                    Refunded = false, Amount = 499.00m, Currency = "RUB", CardType = "Visa", CardLastFour = "4242"
+                }
+            }),
+            "robokassa" => """
+                <OperationStateResponse xmlns="http://merchant.roboxchange.com/WebService/">
+                  <Result><Code>0</Code></Result><State><Code>100</Code></State>
+                  <Info><OutSum>499.00</OutSum><PaymentMethod><Description>Банковская карта</Description></PaymentMethod></Info>
+                </OperationStateResponse>
+                """,
+            "tbank" => JsonSerializer.Serialize(new
+            {
+                Success = true, PaymentId = 88001, OrderId = order.Id.ToString("D"),
+                Status = "CONFIRMED", Amount = 49_900
+            }),
+            "stripe" => JsonSerializer.Serialize(new
+            {
+                id = providerPaymentId, payment_status = "paid", status = "complete",
+                amount_total = 49_900, currency = "rub", metadata = new { order_id = order.Id.ToString("D") }
+            }),
+            "cryptomus" => JsonSerializer.Serialize(new
+            {
+                state = 0,
+                result = new
+                {
+                    uuid = providerPaymentId, order_id = order.Id.ToString("N"), status = "paid",
+                    amount = "499.00", currency = "RUB", payer_currency = "USDT", network = "TRON"
+                }
+            }),
+            _ => throw new InvalidOperationException("Unexpected provider")
+        };
+        var client = FullClient(_ => provider == "robokassa"
+            ? new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            { Content = new StringContent(responseBody, Encoding.UTF8, "application/xml") }
+            : JsonResponse(responseBody));
+
+        var result = await client.CheckStatusAsync(order, CancellationToken.None);
+
+        Assert.NotNull(result);
+        Assert.Equal(order.Id, result.OrderId);
+        Assert.Equal(providerPaymentId, result.ProviderPaymentId);
+        Assert.Equal(PaymentStatuses.Paid, result.Status);
+        Assert.Equal(order.AmountMinor, result.AmountMinor);
+        Assert.Equal(order.Currency, result.Currency);
+    }
+
+    [Theory]
+    [InlineData("yookassa", "pending", PaymentStatuses.Pending)]
+    [InlineData("yookassa", "canceled", PaymentStatuses.Canceled)]
+    [InlineData("cloudpayments", "Declined", PaymentStatuses.Failed)]
+    [InlineData("cloudpayments", "Cancelled", PaymentStatuses.Canceled)]
+    [InlineData("cloudpayments", "Refunded", PaymentStatuses.Refunded)]
+    [InlineData("cloudpayments", "AwaitingAuthentication", PaymentStatuses.Pending)]
+    [InlineData("robokassa", "10", PaymentStatuses.Canceled)]
+    [InlineData("robokassa", "60", PaymentStatuses.Failed)]
+    [InlineData("robokassa", "5", PaymentStatuses.Pending)]
+    [InlineData("tbank", "REFUNDED", PaymentStatuses.Refunded)]
+    [InlineData("tbank", "REVERSED", PaymentStatuses.Canceled)]
+    [InlineData("tbank", "REJECTED", PaymentStatuses.Failed)]
+    [InlineData("tbank", "NEW", PaymentStatuses.Pending)]
+    [InlineData("stripe", "expired", PaymentStatuses.Canceled)]
+    [InlineData("stripe", "open", PaymentStatuses.Pending)]
+    [InlineData("cryptomus", "refund_paid", PaymentStatuses.Refunded)]
+    [InlineData("cryptomus", "cancel", PaymentStatuses.Canceled)]
+    [InlineData("cryptomus", "wrong_amount", PaymentStatuses.Failed)]
+    [InlineData("cryptomus", "confirm_check", PaymentStatuses.Pending)]
+    public async Task DirectStatusCheckMapsNonSuccessfulStates(
+        string provider, string providerStatus, string expectedStatus)
+    {
+        var order = Order(provider);
+        order.ProviderPaymentId = "provider-state";
+        var responseBody = provider switch
+        {
+            "yookassa" => JsonSerializer.Serialize(new
+            {
+                id = order.ProviderPaymentId, status = providerStatus,
+                amount = new { value = "499.00", currency = "RUB" },
+                metadata = new { order_id = order.Id.ToString("D") }
+            }),
+            "cloudpayments" => JsonSerializer.Serialize(new
+            {
+                Success = true,
+                Model = new
+                {
+                    InvoiceId = order.Id.ToString("D"), TransactionId = order.ProviderPaymentId,
+                    Status = providerStatus == "Refunded" ? "Completed" : providerStatus,
+                    Refunded = providerStatus == "Refunded", Amount = 499.00m, Currency = "RUB"
+                }
+            }),
+            "robokassa" => $"""
+                <OperationStateResponse xmlns="http://merchant.roboxchange.com/WebService/">
+                  <Result><Code>0</Code></Result><State><Code>{providerStatus}</Code></State>
+                  <Info><OutSum>499.00</OutSum></Info>
+                </OperationStateResponse>
+                """,
+            "tbank" => JsonSerializer.Serialize(new
+            {
+                Success = true, PaymentId = order.ProviderPaymentId, OrderId = order.Id.ToString("D"),
+                Status = providerStatus, Amount = 49_900
+            }),
+            "stripe" => JsonSerializer.Serialize(new
+            {
+                id = order.ProviderPaymentId, payment_status = "unpaid", status = providerStatus,
+                amount_total = 49_900, currency = "rub", metadata = new { order_id = order.Id.ToString("D") }
+            }),
+            "cryptomus" => JsonSerializer.Serialize(new
+            {
+                state = 0,
+                result = new
+                {
+                    uuid = order.ProviderPaymentId, order_id = order.Id.ToString("N"), status = providerStatus,
+                    amount = "499.00", currency = "RUB"
+                }
+            }),
+            _ => throw new InvalidOperationException("Unexpected provider")
+        };
+        var client = FullClient(_ => provider == "robokassa"
+            ? new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            { Content = new StringContent(responseBody, Encoding.UTF8, "application/xml") }
+            : JsonResponse(responseBody));
+
+        var result = await client.CheckStatusAsync(order, CancellationToken.None);
+
+        Assert.NotNull(result);
+        Assert.Equal(expectedStatus, result.Status);
+        Assert.Equal(order.Id, result.OrderId);
+        Assert.Equal(order.AmountMinor, result.AmountMinor);
+    }
+
     [Fact]
     public async Task RobokassaResultUsesSecondPasswordAndExactAmount()
     {

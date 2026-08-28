@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Xml.Linq;
 using Microsoft.Extensions.Options;
 using ProxyHarbor.Infrastructure;
 
@@ -89,6 +90,27 @@ internal static class PaymentProviderConfiguration
         _ => false
     };
 
+    internal static string DisplayName(string code, PaymentProviderOptions? value = null) =>
+        !string.IsNullOrWhiteSpace(value?.DisplayName) ? value.DisplayName : code switch
+        {
+            "yookassa" => "ЮKassa",
+            "yoomoney" => "ЮMoney",
+            "cloudpayments" => "CloudPayments",
+            "robokassa" => "Robokassa",
+            "tbank" => "Т-Банк",
+            "stripe" => "Stripe",
+            "cryptomus" => "Cryptomus",
+            "nowpayments" => "NOWPayments",
+            _ => code
+        };
+
+    internal static string DefaultPaymentMethod(string code) => code switch
+    {
+        "yoomoney" => "wallet",
+        "cryptomus" or "nowpayments" => "crypto",
+        _ => "payment_gateway"
+    };
+
     private static bool Present(string value) => !string.IsNullOrWhiteSpace(value);
 }
 
@@ -120,6 +142,180 @@ public sealed class PaymentGatewayClient(IHttpClientFactory clients, IPaymentCon
             "nowpayments" => await CreateNowPaymentsAsync(order, provider, publicBaseUrl, token),
             _ => throw new InvalidOperationException("Неизвестный платёжный провайдер.")
         };
+    }
+
+    /// <summary>
+    /// Получает состояние уже созданного заказа напрямую у шлюза. Возвращает null,
+    /// когда провайдер ещё не знает операцию; webhook при этом продолжает работать.
+    /// </summary>
+    internal async Task<PaymentNotification?> CheckStatusAsync(PaymentOrder order, CancellationToken token)
+    {
+        var (provider, _) = await RequiredProviderAsync(order.Provider, token);
+        return order.Provider switch
+        {
+            "yookassa" => await CheckYooKassaAsync(order, provider, token),
+            "cloudpayments" => await CheckCloudPaymentsAsync(order, provider, token),
+            "robokassa" => await CheckRobokassaAsync(order, provider, token),
+            "tbank" => await CheckTBankAsync(order, provider, token),
+            "stripe" => await CheckStripeAsync(order, provider, token),
+            "cryptomus" => await CheckCryptomusAsync(order, provider, token),
+            _ => null
+        };
+    }
+
+    private async Task<PaymentNotification?> CheckYooKassaAsync(
+        PaymentOrder order, PaymentProviderOptions provider, CancellationToken token)
+    {
+        if (string.IsNullOrWhiteSpace(order.ProviderPaymentId)) return null;
+        using var request = new HttpRequestMessage(HttpMethod.Get,
+            $"https://api.yookassa.ru/v3/payments/{Uri.EscapeDataString(order.ProviderPaymentId)}");
+        request.Headers.Authorization = Basic(provider.MerchantId, provider.SecretKey);
+        using var response = await clients.CreateClient().SendAsync(request, token);
+        var root = await ReadSuccessJsonAsync(response, token);
+        var orderId = Guid.Parse(root.GetProperty("metadata").GetProperty("order_id").GetString()!);
+        return new(orderId, root.GetProperty("id").GetString()!,
+            MapStatus(root.GetProperty("status").GetString()),
+            ParseMinor(root.GetProperty("amount").GetProperty("value").GetString()!),
+            root.GetProperty("amount").GetProperty("currency").GetString()!,
+            JsonString(root, "payment_method", "type"), JsonString(root, "payment_method", "type"));
+    }
+
+    private async Task<PaymentNotification?> CheckCloudPaymentsAsync(
+        PaymentOrder order, PaymentProviderOptions provider, CancellationToken token)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, "https://api.cloudpayments.ru/v2/payments/find")
+        { Content = JsonContent.Create(new { InvoiceId = order.Id.ToString("D") }) };
+        request.Headers.Authorization = Basic(provider.PublicId, provider.SecretKey);
+        using var response = await clients.CreateClient().SendAsync(request, token);
+        var root = await ReadSuccessJsonAsync(response, token);
+        if (!root.GetProperty("Success").GetBoolean() || !root.TryGetProperty("Model", out var model) ||
+            model.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+            return null;
+        var status = model.TryGetProperty("Refunded", out var refunded) && refunded.GetBoolean()
+            ? PaymentStatuses.Refunded : model.GetProperty("Status").GetString() switch
+            {
+                "Completed" => PaymentStatuses.Paid,
+                "Declined" => PaymentStatuses.Failed,
+                "Cancelled" => PaymentStatuses.Canceled,
+                _ => PaymentStatuses.Pending
+            };
+        var providerId = model.GetProperty("TransactionId").ToString();
+        var instrument = SafeCardLabel(
+            model.TryGetProperty("CardType", out var cardType) ? cardType.GetString() : null,
+            model.TryGetProperty("CardLastFour", out var lastFour) ? lastFour.GetString() : null);
+        return new(Guid.Parse(model.GetProperty("InvoiceId").GetString()!), providerId, status,
+            checked((long)(model.GetProperty("Amount").GetDecimal() * 100m)),
+            model.GetProperty("Currency").GetString()!, "card", instrument);
+    }
+
+    private async Task<PaymentNotification?> CheckRobokassaAsync(
+        PaymentOrder order, PaymentProviderOptions provider, CancellationToken token)
+    {
+        if (provider.TestMode || string.IsNullOrWhiteSpace(order.ProviderPaymentId)) return null;
+        var signature = HashHex($"{provider.MerchantId}:{order.ProviderPaymentId}:{provider.SecondarySecret}");
+        var query = QueryString(new Dictionary<string, string?>
+        {
+            ["MerchantLogin"] = provider.MerchantId,
+            ["InvoiceID"] = order.ProviderPaymentId,
+            ["Signature"] = signature
+        });
+        using var response = await clients.CreateClient().GetAsync(
+            $"https://auth.robokassa.ru/Merchant/WebService/Service.asmx/OpStateExt?{query}", token);
+        var body = await response.Content.ReadAsStringAsync(token);
+        if (!response.IsSuccessStatusCode) throw new InvalidOperationException($"Robokassa вернула HTTP {(int)response.StatusCode}.");
+        var xml = XDocument.Parse(body);
+        string Required(string name) => xml.Descendants().First(x => x.Name.LocalName == name).Value;
+        var result = int.Parse(xml.Descendants().First(x => x.Name.LocalName == "Result")
+            .Elements().First(x => x.Name.LocalName == "Code").Value, CultureInfo.InvariantCulture);
+        if (result == 3) return null;
+        if (result != 0) throw new InvalidOperationException($"Robokassa отклонила сверку статуса: {result}.");
+        var state = int.Parse(xml.Descendants().First(x => x.Name.LocalName == "State")
+            .Elements().First(x => x.Name.LocalName == "Code").Value, CultureInfo.InvariantCulture);
+        var status = state switch
+        {
+            100 => PaymentStatuses.Paid,
+            10 => PaymentStatuses.Canceled,
+            60 => PaymentStatuses.Failed,
+            _ => PaymentStatuses.Pending
+        };
+        var paymentMethod = xml.Descendants().FirstOrDefault(x => x.Name.LocalName == "PaymentMethod")?
+            .Elements().FirstOrDefault(x => x.Name.LocalName == "Description")?.Value;
+        return new(order.Id, order.ProviderPaymentId, status, ParseMinor(Required("OutSum")), "RUB",
+            "payment_gateway", paymentMethod ?? "Robokassa");
+    }
+
+    private async Task<PaymentNotification?> CheckTBankAsync(
+        PaymentOrder order, PaymentProviderOptions provider, CancellationToken token)
+    {
+        if (string.IsNullOrWhiteSpace(order.ProviderPaymentId)) return null;
+        var payload = new SortedDictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["PaymentId"] = order.ProviderPaymentId,
+            ["TerminalKey"] = provider.MerchantId
+        };
+        payload["Token"] = TBankToken(payload, provider.SecretKey);
+        using var response = await clients.CreateClient().PostAsJsonAsync(
+            "https://securepay.tinkoff.ru/v2/GetState", payload, token);
+        var root = await ReadSuccessJsonAsync(response, token);
+        if (root.TryGetProperty("Success", out var success) && !success.GetBoolean())
+            throw new InvalidOperationException("Т-Банк отклонил сверку статуса.");
+        var providerId = root.GetProperty("PaymentId").ToString();
+        var status = root.GetProperty("Status").GetString() switch
+        {
+            "CONFIRMED" => PaymentStatuses.Paid,
+            "REFUNDED" or "PARTIAL_REFUNDED" => PaymentStatuses.Refunded,
+            "REVERSED" or "CANCELED" or "DEADLINE_EXPIRED" => PaymentStatuses.Canceled,
+            "REJECTED" or "AUTH_FAIL" => PaymentStatuses.Failed,
+            _ => PaymentStatuses.Pending
+        };
+        return new(Guid.Parse(root.GetProperty("OrderId").GetString()!), providerId, status,
+            root.GetProperty("Amount").GetInt64(), "RUB", "payment_gateway", "T-Банк");
+    }
+
+    private async Task<PaymentNotification?> CheckStripeAsync(
+        PaymentOrder order, PaymentProviderOptions provider, CancellationToken token)
+    {
+        if (string.IsNullOrWhiteSpace(order.ProviderPaymentId)) return null;
+        using var request = new HttpRequestMessage(HttpMethod.Get,
+            $"https://api.stripe.com/v1/checkout/sessions/{Uri.EscapeDataString(order.ProviderPaymentId)}");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", provider.SecretKey);
+        using var response = await clients.CreateClient().SendAsync(request, token);
+        var root = await ReadSuccessJsonAsync(response, token);
+        var status = root.GetProperty("payment_status").GetString() == "paid"
+            ? PaymentStatuses.Paid : root.GetProperty("status").GetString() == "expired"
+                ? PaymentStatuses.Canceled : PaymentStatuses.Pending;
+        return new(Guid.Parse(root.GetProperty("metadata").GetProperty("order_id").GetString()!),
+            root.GetProperty("id").GetString()!, status, root.GetProperty("amount_total").GetInt64(),
+            root.GetProperty("currency").GetString()!.ToUpperInvariant(), "card", "Stripe Checkout");
+    }
+
+    private async Task<PaymentNotification?> CheckCryptomusAsync(
+        PaymentOrder order, PaymentProviderOptions provider, CancellationToken token)
+    {
+        var body = JsonSerializer.Serialize(new { order_id = order.Id.ToString("N") }, Json);
+        using var request = new HttpRequestMessage(HttpMethod.Post, "https://api.cryptomus.com/v1/payment/info")
+        { Content = new StringContent(body, Encoding.UTF8, "application/json") };
+        request.Headers.Add("merchant", provider.MerchantId);
+        request.Headers.Add("sign", CryptomusSignature(body, provider.SecretKey));
+        using var response = await clients.CreateClient().SendAsync(request, token);
+        var root = await ReadSuccessJsonAsync(response, token);
+        var result = root.GetProperty("result");
+        var statusText = result.TryGetProperty("payment_status", out var paymentStatus)
+            ? paymentStatus.GetString() : result.GetProperty("status").GetString();
+        var status = statusText switch
+        {
+            "paid" or "paid_over" => PaymentStatuses.Paid,
+            "refund_paid" => PaymentStatuses.Refunded,
+            "cancel" => PaymentStatuses.Canceled,
+            "fail" or "wrong_amount" or "system_fail" or "refund_fail" => PaymentStatuses.Failed,
+            _ => PaymentStatuses.Pending
+        };
+        var providerId = result.GetProperty("uuid").GetString()!;
+        return new(Guid.ParseExact(result.GetProperty("order_id").GetString()!, "N"), providerId, status,
+            ParseMinor(result.GetProperty("amount").GetString()!),
+            result.GetProperty("currency").GetString()!.ToUpperInvariant(), "crypto",
+            CryptoInstrument(result.TryGetProperty("payer_currency", out var currency) ? JsonNode.Parse(currency.GetRawText()) : null,
+                result.TryGetProperty("network", out var network) ? JsonNode.Parse(network.GetRawText()) : null));
     }
 
     internal async Task<PaymentNotification> ReadNotificationAsync(

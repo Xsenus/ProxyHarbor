@@ -1,6 +1,7 @@
 using System.Data;
 using System.Globalization;
 using System.Net;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Identity;
@@ -143,6 +144,7 @@ public sealed class TelegramUpdateProcessor(
     UserManager<ApplicationUser> users,
     ITelegramBotConfigurationStore botConfigurations,
     IPaymentConfigurationStore payments,
+    PaymentGatewayClient gateways,
     TelegramBotApiClient api,
     TelegramDispatchService queue,
     ILogger<TelegramUpdateProcessor> logger)
@@ -150,6 +152,9 @@ public sealed class TelegramUpdateProcessor(
     private static readonly Action<ILogger, long, Exception?> UpdateFailed = LoggerMessage.Define<long>(
         LogLevel.Warning, new EventId(1701, nameof(UpdateFailed)),
         "Telegram update {UpdateId} не обработан.");
+    private static readonly Action<ILogger, Guid, string, Exception?> CheckoutFailed =
+        LoggerMessage.Define<Guid, string>(LogLevel.Warning, new EventId(1702, nameof(CheckoutFailed)),
+            "Не удалось создать Telegram checkout для заказа {OrderId} через {Provider}.");
 
     /// <summary>Обрабатывает update ровно один раз по update_id.</summary>
     public async Task ProcessAsync(JsonElement update, string transport, CancellationToken token)
@@ -260,7 +265,9 @@ public sealed class TelegramUpdateProcessor(
         else if (!HasCurrentLegalAcceptance(chat))
             await SendLegalOnboardingAsync(chat, options, token);
         else if (data.StartsWith("buy:", StringComparison.Ordinal))
-            await CreateStarsInvoiceAsync(chat, data[4..], options, token);
+            await SendPaymentMethodsAsync(chat, data[4..], options, token);
+        else if (data.StartsWith("pay:", StringComparison.Ordinal))
+            await CreatePaymentAsync(chat, data, queryId, options, token);
         else if (data == "account") await SendAccountAsync(chat, options, token);
         else if (data == "products") await SendProductsAsync(chat, options, token);
         else if (data == "proxies") await RequestProxyFileAsync(chat, options, token);
@@ -343,7 +350,7 @@ public sealed class TelegramUpdateProcessor(
     }
 
     private async Task CreateStarsInvoiceAsync(
-        TelegramChat chat, string productCode, TelegramBotOptions bot, CancellationToken token)
+        TelegramChat chat, string productCode, string idempotencyKey, TelegramBotOptions bot, CancellationToken token)
     {
         var catalog = await payments.GetAsync(token);
         productCode = productCode.Trim().ToLowerInvariant();
@@ -353,30 +360,186 @@ public sealed class TelegramUpdateProcessor(
             await ReplyAsync(chat, TelegramLocalization.Get("productUnavailable", Language(chat)), $"unavailable:{Guid.NewGuid():N}", token);
             return;
         }
-        var order = new PaymentOrder
+        var order = await db.PaymentOrders.SingleOrDefaultAsync(x => x.IdempotencyKey == idempotencyKey, token);
+        if (order is null)
         {
-            UserId = chat.UserId,
-            ProductCode = productCode,
-            Plan = product.Plan,
-            Provider = "telegram_stars",
-            PaymentMethod = "telegram_stars",
-            PaymentInstrument = "Telegram Stars",
-            AmountMinor = stars,
-            Currency = "XTR",
-            DurationDays = product.DurationDays
-        };
-        db.PaymentOrders.Add(order);
-        await db.SaveChangesAsync(token);
+            order = new PaymentOrder
+            {
+                UserId = chat.UserId,
+                ProductCode = productCode,
+                Plan = product.Plan,
+                Provider = "telegram_stars",
+                PaymentMethod = "telegram_stars",
+                PaymentInstrument = "Telegram Stars",
+                AmountMinor = stars,
+                Currency = "XTR",
+                DurationDays = product.DurationDays,
+                IdempotencyKey = idempotencyKey
+            };
+            db.PaymentOrders.Add(order);
+            await db.SaveChangesAsync(token);
+        }
         await queue.EnqueueInvoiceAsync(chat, new TelegramInvoicePayload(
             order.Id, Cut(product.Name, 32), Cut(product.Description, 255), stars),
             $"invoice:{order.Id:N}", token);
     }
 
+    private async Task CreatePaymentAsync(
+        TelegramChat chat, string callbackData, string callbackQueryId,
+        TelegramBotOptions bot, CancellationToken token)
+    {
+        var parts = callbackData.Split(':', 3, StringSplitOptions.TrimEntries);
+        if (parts.Length != 3 || parts[0] != "pay")
+        {
+            await ReplyAsync(chat, TelegramLocalization.Get("productUnavailable", Language(chat)),
+                $"invalid-payment:{Guid.NewGuid():N}", token);
+            return;
+        }
+        var idempotencyKey = PaymentCallbackKey(callbackQueryId);
+        if (parts[1] == "telegram_stars")
+        {
+            await CreateStarsInvoiceAsync(chat, parts[2], idempotencyKey, bot, token);
+            return;
+        }
+        await CreateExternalCheckoutAsync(chat, parts[2], parts[1], idempotencyKey, token);
+    }
+
+    private async Task CreateExternalCheckoutAsync(
+        TelegramChat chat, string productCode, string providerCode, string idempotencyKey, CancellationToken token)
+    {
+        var catalog = await payments.GetAsync(token);
+        productCode = productCode.Trim().ToLowerInvariant();
+        providerCode = providerCode.Trim().ToLowerInvariant();
+        if (!catalog.Enabled || !catalog.Products.TryGetValue(productCode, out var product) || !product.Enabled ||
+            !PaymentProviderConfiguration.Codes.Contains(providerCode, StringComparer.Ordinal) ||
+            !catalog.Providers.TryGetValue(providerCode, out var provider) ||
+            !PaymentProviderConfiguration.IsReady(providerCode, provider) ||
+            !ValidProduct(product))
+        {
+            await ReplyAsync(chat, TelegramLocalization.Get("productUnavailable", Language(chat)),
+                $"unavailable:{Guid.NewGuid():N}", token);
+            return;
+        }
+        var user = await users.FindByIdAsync(chat.UserId.ToString());
+        if (user is null || !user.IsActive)
+        {
+            await ReplyAsync(chat, TelegramLocalization.Get("checkoutFailed", Language(chat)),
+                $"checkout-user:{Guid.NewGuid():N}", token);
+            return;
+        }
+        var providerName = PaymentProviderConfiguration.DisplayName(providerCode, provider);
+        var order = await db.PaymentOrders.SingleOrDefaultAsync(x => x.IdempotencyKey == idempotencyKey, token);
+        if (order is null)
+        {
+            order = new PaymentOrder
+            {
+                UserId = user.Id,
+                ProductCode = productCode,
+                Plan = product.Plan,
+                Provider = providerCode,
+                PaymentMethod = PaymentProviderConfiguration.DefaultPaymentMethod(providerCode),
+                PaymentInstrument = providerName,
+                AmountMinor = product.AmountMinor,
+                Currency = product.Currency.ToUpperInvariant(),
+                DurationDays = product.DurationDays,
+                IdempotencyKey = idempotencyKey
+            };
+            db.PaymentOrders.Add(order);
+            await db.SaveChangesAsync(token);
+        }
+        else if (order.UserId != user.Id || order.ProductCode != productCode || order.Provider != providerCode)
+        {
+            await ReplyAsync(chat, TelegramLocalization.Get("checkoutFailed", Language(chat)),
+                $"checkout-conflict:{order.Id:N}", token);
+            return;
+        }
+        try
+        {
+            if (string.IsNullOrWhiteSpace(order.CheckoutUrl))
+            {
+                order.Status = PaymentStatuses.Pending;
+                var checkout = await gateways.CreateAsync(order, user, token);
+                order.ProviderPaymentId = checkout.ProviderPaymentId;
+                order.CheckoutUrl = checkout.CheckoutUrl;
+                order.UpdatedAt = DateTimeOffset.UtcNow;
+                await db.SaveChangesAsync(token);
+            }
+            if (!Uri.TryCreate(order.CheckoutUrl, UriKind.Absolute, out var checkoutUri) ||
+                checkoutUri.Scheme != Uri.UriSchemeHttps)
+                throw new InvalidOperationException("Платёжный шлюз вернул небезопасный checkout URL.");
+        }
+        catch (Exception exception)
+        {
+            CheckoutFailed(logger, order.Id, providerCode, exception);
+            order.Status = PaymentStatuses.Failed;
+            order.UpdatedAt = DateTimeOffset.UtcNow;
+            await db.SaveChangesAsync(CancellationToken.None);
+            await ReplyAsync(chat, TelegramLocalization.Get("checkoutFailed", Language(chat)),
+                $"checkout-failed:{order.Id:N}", CancellationToken.None);
+            return;
+        }
+        var language = Language(chat);
+        await queue.EnqueueTextAsync(chat,
+            TelegramLocalization.Get("externalCheckout", language,
+                ("provider", WebUtility.HtmlEncode(providerName)), ("price", FormatPrice(product))),
+            $"checkout:{order.Id:N}", replyMarkup: new
+            {
+                inline_keyboard = new[]
+                {
+                    new[] { new { text = TelegramLocalization.Get("checkoutButton", language,
+                        ("provider", providerName)), url = order.CheckoutUrl } }
+                }
+            }, token: token);
+    }
+
+    private async Task SendPaymentMethodsAsync(
+        TelegramChat chat, string productCode, TelegramBotOptions bot, CancellationToken token)
+    {
+        var catalog = await payments.GetAsync(token);
+        productCode = productCode.Trim().ToLowerInvariant();
+        if (!catalog.Enabled || !catalog.Products.TryGetValue(productCode, out var product) ||
+            !product.Enabled || !ValidProduct(product))
+        {
+            await ReplyAsync(chat, TelegramLocalization.Get("productUnavailable", Language(chat)),
+                $"unavailable:{Guid.NewGuid():N}", token);
+            return;
+        }
+        var rows = new List<object[]>();
+        var callbackTooLong = false;
+        void AddMethod(string text, string callbackData)
+        {
+            if (Encoding.UTF8.GetByteCount(callbackData) > 64) callbackTooLong = true;
+            else rows.Add([new { text, callback_data = callbackData }]);
+        }
+        if (TelegramStarsPricing.TryResolve(bot, productCode, product, out var stars))
+            AddMethod($"Telegram Stars · {stars} ⭐", $"pay:telegram_stars:{productCode}");
+        foreach (var code in PaymentProviderConfiguration.Codes)
+        {
+            if (catalog.Providers.TryGetValue(code, out var provider) &&
+                PaymentProviderConfiguration.IsReady(code, provider))
+                AddMethod($"{PaymentProviderConfiguration.DisplayName(code, provider)} · {FormatPrice(product)}",
+                    $"pay:{code}:{productCode}");
+        }
+        if (rows.Count == 0 || callbackTooLong)
+        {
+            await ReplyAsync(chat, TelegramLocalization.Get("productUnavailable", Language(chat)),
+                $"unavailable:{Guid.NewGuid():N}", token);
+            return;
+        }
+        await queue.EnqueueTextAsync(chat,
+            TelegramLocalization.Get("paymentMethods", Language(chat),
+                ("product", WebUtility.HtmlEncode(product.Name)), ("price", FormatPrice(product))),
+            $"payment-methods:{chat.Id:N}:{Guid.NewGuid():N}",
+            replyMarkup: new { inline_keyboard = rows }, token: token);
+    }
+
     private async Task SendProductsAsync(TelegramChat chat, TelegramBotOptions bot, CancellationToken token)
     {
         var catalog = await payments.GetAsync(token);
-        var products = catalog.Products.Where(x => x.Value.Enabled &&
-                TelegramStarsPricing.TryResolve(bot, x.Key, x.Value, out _))
+        var externalPaymentsAvailable = PaymentProviderConfiguration.Codes.Any(code =>
+            catalog.Providers.TryGetValue(code, out var provider) && PaymentProviderConfiguration.IsReady(code, provider));
+        var products = catalog.Products.Where(x => x.Value.Enabled && ValidProduct(x.Value) &&
+                (externalPaymentsAvailable || TelegramStarsPricing.TryResolve(bot, x.Key, x.Value, out _)))
             .OrderBy(x => x.Value.DurationDays).ToArray();
         if (!catalog.Enabled || products.Length == 0)
         {
@@ -387,7 +550,7 @@ public sealed class TelegramUpdateProcessor(
         {
             new
             {
-                text = $"{x.Value.Name} · {ResolvedStars(bot, x.Key, x.Value)} ⭐",
+                text = $"{x.Value.Name} · {FormatPrice(x.Value)}",
                 callback_data = $"buy:{x.Key}"
             }
         }).ToArray();
@@ -396,18 +559,28 @@ public sealed class TelegramUpdateProcessor(
             $"products:{chat.Id:N}:{Guid.NewGuid():N}", replyMarkup: new { inline_keyboard = rows }, token: token);
     }
 
-    private static int ResolvedStars(TelegramBotOptions options, string code, PaymentProductOptions product)
+    private static bool ValidProduct(PaymentProductOptions product) =>
+        SubscriptionPlans.All.Contains(product.Plan, StringComparer.Ordinal) &&
+        product.Plan != SubscriptionPlans.Free && product.AmountMinor > 0 &&
+        product.DurationDays is >= 1 and <= 3660 && product.Currency.Trim().Length == 3;
+
+    private static string FormatPrice(PaymentProductOptions product)
     {
-        _ = TelegramStarsPricing.TryResolve(options, code, product, out var stars);
-        return stars;
+        var amount = (product.AmountMinor / 100m).ToString("0.00", CultureInfo.InvariantCulture);
+        return product.Currency.Equals("RUB", StringComparison.OrdinalIgnoreCase)
+            ? $"{amount} ₽" : $"{amount} {product.Currency.ToUpperInvariant()}";
     }
+
+    private static string PaymentCallbackKey(string callbackQueryId) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"telegram-payment:{callbackQueryId}")))
+            .ToLowerInvariant();
 
     private async Task SendAccountAsync(TelegramChat chat, TelegramBotOptions options, CancellationToken token)
     {
         var subscription = await db.Subscriptions.AsNoTracking().SingleAsync(x => x.UserId == chat.UserId, token);
         var paidOrders = await db.PaymentOrders.AsNoTracking()
-            .Where(x => x.UserId == chat.UserId && x.Provider == "telegram_stars" && x.Status == PaymentStatuses.Paid)
-            .Select(x => new { x.AmountMinor, x.PaidAt })
+            .Where(x => x.UserId == chat.UserId && x.Status == PaymentStatuses.Paid)
+            .Select(x => new { x.Provider, x.AmountMinor, x.PaidAt })
             .ToArrayAsync(token);
         var deliveredFiles = await db.TelegramOutboundMessages.AsNoTracking().CountAsync(x =>
             x.TelegramChatId == chat.Id && x.Kind == TelegramOutboundKinds.ProxyFile &&
@@ -417,7 +590,7 @@ public sealed class TelegramUpdateProcessor(
         var language = Language(chat);
         var expires = subscription.ExpiresAt is null ? TelegramLocalization.Get("noExpiry", language) :
             subscription.ExpiresAt.Value.ToString("yyyy-MM-dd HH:mm 'UTC'", CultureInfo.InvariantCulture);
-        var paidStars = paidOrders.Sum(x => x.AmountMinor);
+        var paidStars = paidOrders.Where(x => x.Provider == "telegram_stars").Sum(x => x.AmountMinor);
         var lastPayment = paidOrders.MaxBy(x => x.PaidAt)?.PaidAt?.ToString("dd.MM.yyyy", CultureInfo.InvariantCulture) ?? "—";
         await queue.EnqueueTextAsync(chat, TelegramLocalization.Get("account", language,
                 ("status", TelegramLocalization.Get(active ? "activeSubscription" : "inactiveSubscription", language)),

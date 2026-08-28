@@ -112,6 +112,8 @@ builder.Services.AddOptions<PaymentOptions>().Bind(builder.Configuration.GetSect
 builder.Services.AddHttpClient();
 builder.Services.AddScoped<IPaymentConfigurationStore, PaymentConfigurationStore>();
 builder.Services.AddScoped<PaymentGatewayClient>();
+builder.Services.AddScoped<PaymentSettlementService>();
+builder.Services.AddHostedService<PaymentReconciliationWorker>();
 builder.Services.AddOptions<TelegramBotHostOptions>()
     .Bind(builder.Configuration.GetSection(TelegramBotHostOptions.Section))
     .Validate(x => Uri.TryCreate(x.PublicBaseUrl, UriKind.Absolute, out var uri) &&

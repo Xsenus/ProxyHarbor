@@ -1,5 +1,4 @@
 using System.ComponentModel.DataAnnotations;
-using System.Data;
 using System.Net;
 using System.Security.Cryptography;
 using System.Text;
@@ -22,7 +21,8 @@ public sealed class PaymentsController(
     UserManager<ApplicationUser> users,
     ProxyHarborDbContext db,
     PaymentGatewayClient gateways,
-    IPaymentConfigurationStore configurations) : ControllerBase
+    IPaymentConfigurationStore configurations,
+    PaymentSettlementService settlements) : ControllerBase
 {
     /// <summary>Совместимый статический конструктор для изолированных unit-тестов.</summary>
     internal PaymentsController(
@@ -30,7 +30,8 @@ public sealed class PaymentsController(
         ProxyHarborDbContext db,
         PaymentGatewayClient gateways,
         IOptions<PaymentOptions> configured)
-        : this(users, db, gateways, new StaticPaymentConfigurationStore(configured)) { }
+        : this(users, db, gateways, new StaticPaymentConfigurationStore(configured),
+            new PaymentSettlementService(db, users)) { }
 
     /// <summary>Возвращает разрешённые продукты и состояние всех поддерживаемых шлюзов.</summary>
     [HttpGet("catalog"), EnableRateLimiting("public")]
@@ -61,7 +62,7 @@ public sealed class PaymentsController(
             {
                 code,
                 name = options.Providers.TryGetValue(code, out var value) && !string.IsNullOrWhiteSpace(value.DisplayName)
-                    ? value.DisplayName : ProviderName(code),
+                    ? value.DisplayName : PaymentProviderConfiguration.DisplayName(code),
                 available = options.Enabled && value is not null && PaymentProviderConfiguration.IsReady(code, value)
             })
         });
@@ -93,8 +94,8 @@ public sealed class PaymentsController(
             Plan = product.Plan,
             Provider = providerCode,
             AmountMinor = product.AmountMinor,
-            PaymentMethod = DefaultPaymentMethod(providerCode),
-            PaymentInstrument = ProviderName(providerCode),
+            PaymentMethod = PaymentProviderConfiguration.DefaultPaymentMethod(providerCode),
+            PaymentInstrument = PaymentProviderConfiguration.DisplayName(providerCode, provider),
             Currency = product.Currency.ToUpperInvariant(),
             DurationDays = product.DurationDays
         };
@@ -191,60 +192,10 @@ public sealed class PaymentsController(
         catch (Exception exception) when (exception is InvalidOperationException or JsonException or FormatException or KeyNotFoundException)
         { return Problem("Уведомление не прошло проверку.", statusCode: 400); }
 
-        await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, token);
-        var order = await db.PaymentOrders.SingleOrDefaultAsync(x => x.Id == notification.OrderId, token);
-        if (order is null || order.Provider != providerCode || order.AmountMinor != notification.AmountMinor ||
-            !string.Equals(order.Currency, notification.Currency, StringComparison.OrdinalIgnoreCase))
+        var result = await settlements.ApplyAsync(providerCode, notification, token);
+        if (result is PaymentSettlementResult.OrderNotFound or PaymentSettlementResult.Mismatch)
             return Problem("Параметры уведомления не соответствуют заказу.", statusCode: 400);
-        if (order.Status == notification.Status ||
-            order.Status == PaymentStatuses.Paid && notification.Status != PaymentStatuses.Refunded)
-        {
-            await transaction.CommitAsync(token);
-            return Acknowledgement(providerCode, order);
-        }
-
-        order.ProviderPaymentId ??= notification.ProviderPaymentId;
-        if (!string.Equals(order.ProviderPaymentId, notification.ProviderPaymentId, StringComparison.Ordinal))
-            return Problem("Идентификатор операции не соответствует заказу.", statusCode: 400);
-        order.Status = notification.Status;
-        order.PaymentMethod = notification.PaymentMethod ?? order.PaymentMethod;
-        order.PaymentInstrument = notification.PaymentInstrument ?? order.PaymentInstrument;
-        order.UpdatedAt = DateTimeOffset.UtcNow;
-        if (notification.Status == PaymentStatuses.Paid)
-        {
-            order.PaidAt = DateTimeOffset.UtcNow;
-            var subscription = await db.Subscriptions.SingleAsync(x => x.UserId == order.UserId, token);
-            var begins = subscription.ExpiresAt is { } expires && expires > order.PaidAt ? expires : order.PaidAt.Value;
-            subscription.Plan = order.Plan;
-            subscription.Status = SubscriptionStatuses.Active;
-            if (subscription.ExpiresAt is null || subscription.ExpiresAt <= order.PaidAt.Value)
-                subscription.StartedAt = order.PaidAt.Value;
-            subscription.ExpiresAt = begins.AddDays(order.DurationDays);
-            subscription.ExternalCustomerId ??= order.UserId.ToString("D");
-            subscription.ExternalSubscriptionId = notification.ProviderPaymentId;
-            subscription.UpdatedAt = order.PaidAt.Value;
-            var account = await users.FindByIdAsync(order.UserId.ToString());
-            if (account is not null && !await users.IsInRoleAsync(account, UserRoles.Subscriber))
-                await users.AddToRoleAsync(account, UserRoles.Subscriber);
-            await ReferralRewards.GrantForPurchaseAsync(db, users, order, order.PaidAt.Value, token);
-        }
-        else if (notification.Status == PaymentStatuses.Refunded)
-        {
-            // Отзыв относится только к подписке, последней активированной этим заказом.
-            // Более свежая оплаченная подписка не должна пострадать от старого refund.
-            var subscription = await db.Subscriptions.SingleAsync(x => x.UserId == order.UserId, token);
-            if (string.Equals(subscription.ExternalSubscriptionId, notification.ProviderPaymentId, StringComparison.Ordinal))
-            {
-                subscription.Status = SubscriptionStatuses.Canceled;
-                subscription.ExpiresAt = DateTimeOffset.UtcNow;
-                subscription.UpdatedAt = DateTimeOffset.UtcNow;
-                var account = await users.FindByIdAsync(order.UserId.ToString());
-                if (account is not null && await users.IsInRoleAsync(account, UserRoles.Subscriber))
-                    await users.RemoveFromRoleAsync(account, UserRoles.Subscriber);
-            }
-        }
-        await db.SaveChangesAsync(token);
-        await transaction.CommitAsync(token);
+        var order = await db.PaymentOrders.AsNoTracking().SingleAsync(x => x.Id == notification.OrderId, token);
         return Acknowledgement(providerCode, order);
     }
 
@@ -254,26 +205,6 @@ public sealed class PaymentsController(
         "tbank" => Content("OK"),
         "cloudpayments" => Ok(new { code = 0 }),
         _ => Ok()
-    };
-
-    private static string ProviderName(string code) => code switch
-    {
-        "yookassa" => "ЮKassa",
-        "yoomoney" => "ЮMoney",
-        "cloudpayments" => "CloudPayments",
-        "robokassa" => "Robokassa",
-        "tbank" => "Т-Банк",
-        "stripe" => "Stripe",
-        "cryptomus" => "Cryptomus",
-        "nowpayments" => "NOWPayments",
-        _ => code
-    };
-
-    private static string DefaultPaymentMethod(string code) => code switch
-    {
-        "yoomoney" => "wallet",
-        "cryptomus" or "nowpayments" => "crypto",
-        _ => "payment_gateway"
     };
 
     private static bool FixedTokenEquals(string expected, string actual)
