@@ -5,6 +5,7 @@ import { StyledSelect } from './components/StyledSelect'
 import { ToastSignal } from './components/Toasts'
 import { PublicInfoPage, PublicPricingSection } from './PublicInfo'
 import { publicInfoPaths } from './publicInfoRoutes'
+import { analyticsAllowed, privacyPreferenceChanged } from './privacyPreferences'
 
 type Protocol = 'Http' | 'Https' | 'Socks4' | 'Socks5'
 type Proxy = { host: string; port: number; protocol: Protocol; url: string; latencyMs: number; successRate: number; exitIp?: string; countryCode?: string; lastCheckedAt: string; firstAliveAt?: string; lastAliveAt?: string; activeSince?: string; activeForSeconds?: number }
@@ -184,15 +185,22 @@ export default function App() {
   const adminSessionIdRef = useRef(0)
   const adminMutationAbortRefs = useRef(new Set<AbortController>())
   const recordedVisitRef = useRef('')
+  const [analyticsConsentRevision,setAnalyticsConsentRevision] = useState(0)
+
+  useEffect(() => {
+    const refresh = () => setAnalyticsConsentRevision(value => value + 1)
+    window.addEventListener(privacyPreferenceChanged, refresh)
+    return () => window.removeEventListener(privacyPreferenceChanged, refresh)
+  }, [])
 
   // Beacon не задерживает переход со страницы. Сервер принимает только pathname,
   // сводит его к фиксированному коду и не сохраняет query/fragment или tracking cookies.
   useEffect(() => {
-    if (recordedVisitRef.current === currentPath || typeof navigator.sendBeacon !== 'function') return
+    if (!analyticsAllowed() || recordedVisitRef.current === currentPath || typeof navigator.sendBeacon !== 'function') return
     recordedVisitRef.current = currentPath
     const payload = new Blob([JSON.stringify({ path: currentPath })], { type: 'application/json' })
     navigator.sendBeacon(`${API}/api/v1/telemetry/visit`, payload)
-  }, [currentPath])
+  }, [currentPath, analyticsConsentRevision])
 
   const cancelPublicRequests = useCallback(() => {
     publicRequestIdRef.current++
@@ -697,7 +705,7 @@ export default function App() {
       <section id="api" className="api-panel"><div><span className="kicker">ONE-CLICK EXPORT</span><h2>{t('exportTitle')}</h2><p>{t('exportText')}</p><small className="geo-attribution">IP geolocation: <a href="https://db-ip.com" target="_blank" rel="noreferrer">DB-IP</a></small></div><div className="export-grid">{['json','xml','txt','csv'].map(format => <a key={format} href={`${API}/api/v1/export/${format}?${exportQuery}`}><span>Proxy .{format}</span><ArrowDownToLine size={18}/></a>)}{['json','txt'].map(format=><a key={`vpn-${format}`} href={`${API}/api/v1/vpn/export/${format}`}><span>VPN .{format}</span><ArrowDownToLine size={18}/></a>)}</div><div className="endpoint"><span>GET</span><code>/api/v1/vpn?protocol=Vless&amp;country=DE</code></div></section>
     </main>
 
-    <footer><div className="brand"><span className="brand-mark"><Network size={18}/></span><span>Proxy<span>Harbor</span></span></div><nav aria-label="Информация о сервисе"><a href="/pricing">Тарифы</a><a href="/service">Получение доступа</a><a href="/offer">Оферта</a><a href="/privacy">Конфиденциальность</a><a href="/requisites">Реквизиты</a></nav><span>v{APP_VERSION} · © {new Date().getFullYear()}</span></footer></>}
+    <footer><div className="brand"><span className="brand-mark"><Network size={18}/></span><span>Proxy<span>Harbor</span></span></div><nav aria-label="Информация о сервисе"><a href="/pricing">Тарифы</a><a href="/service">Получение доступа</a><a href="/legal">Документы</a><a href="/offer">Оферта</a><a href="/privacy">Персональные данные</a><a href="/refunds">Возврат</a><a href="/requisites">Реквизиты</a></nav><span>v{APP_VERSION} · © {new Date().getFullYear()}</span></footer></>}
 
     {adminOpen && <main className="admin-workspace">
       <aside className="admin-sidebar" aria-label="Навигация по панели управления">
@@ -972,7 +980,8 @@ function RegisterPage() {
   const referralCode = useMemo(() => new URLSearchParams(window.location.search).get('ref')?.trim().toLowerCase() ?? '', [])
   const [form, setForm] = useState({ username: '', email: '', displayName: '', password: '', confirm: '' })
   const [visiblePasswords, setVisiblePasswords] = useState({ password: false, confirm: false })
-  const [acceptedTerms,setAcceptedTerms]=useState(false)
+  const [acceptedOffer,setAcceptedOffer]=useState(false)
+  const [acceptedPersonalData,setAcceptedPersonalData]=useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const submit = async (event: React.FormEvent) => {
@@ -980,7 +989,7 @@ function RegisterPage() {
     if (form.password !== form.confirm) { setError(t('passwordsMismatch')); return }
     setBusy(true); setError('')
     try {
-      const response = await fetch(`${API}/api/v1/auth/register`, { method: 'POST', credentials: 'include', headers: {'Content-Type':'application/json'}, body: JSON.stringify({...form, acceptedTerms, preferredLanguage:language, referralCode:referralCode||null}) })
+      const response = await fetch(`${API}/api/v1/auth/register`, { method: 'POST', credentials: 'include', headers: {'Content-Type':'application/json'}, body: JSON.stringify({...form, acceptedOffer, acceptedPersonalData, preferredLanguage:language, referralCode:referralCode||null}) })
       if (!response.ok) throw new Error(await responseMessage(response, t('accountCreateFailed')))
       window.location.assign('/account')
     } catch (reason) { setError(reason instanceof Error ? reason.message : t('accountCreateFailed')); setBusy(false) }
@@ -1008,8 +1017,9 @@ function RegisterPage() {
         <label htmlFor="register-confirm">{t('repeatPassword')}</label>
         <div className="login-field"><ShieldCheck/><input id="register-confirm" required type={visiblePasswords.confirm ? 'text' : 'password'} autoComplete="new-password" placeholder={t('repeatPassword')} value={form.confirm} onChange={event => setForm({...form, confirm: event.target.value})}/><button className="password-toggle" type="button" aria-label={visiblePasswords.confirm ? t('hidePassword') : t('showPassword')} aria-pressed={visiblePasswords.confirm} onClick={() => setVisiblePasswords(value => ({...value, confirm: !value.confirm}))}>{visiblePasswords.confirm ? <EyeOff/> : <Eye/>}</button></div>
       </div>
-      <label className="registration-consent"><input required type="checkbox" checked={acceptedTerms} onChange={event=>setAcceptedTerms(event.target.checked)}/><span className="ui-checkbox-mark" aria-hidden="true"><Check/></span><span>Я принимаю <a href="/offer" target="_blank">публичную оферту</a> и <a href="/privacy" target="_blank">политику конфиденциальности</a>.</span></label>
-      <button className="login-submit" disabled={busy||!acceptedTerms}>{busy ? t('creating') : t('createAccount')}</button>
+      <label className="registration-consent"><input className="ui-checkbox-input" required type="checkbox" checked={acceptedOffer} onChange={event=>setAcceptedOffer(event.target.checked)}/><span className="ui-checkbox-mark" aria-hidden="true"><Check/></span><span>Я принимаю <a href="/offer" target="_blank">публичную оферту</a> (редакция 2.0).</span></label>
+      <label className="registration-consent"><input className="ui-checkbox-input" required type="checkbox" checked={acceptedPersonalData} onChange={event=>setAcceptedPersonalData(event.target.checked)}/><span className="ui-checkbox-mark" aria-hidden="true"><Check/></span><span>Я отдельно даю <a href="/personal-data-consent" target="_blank">согласие на обработку персональных данных</a> и ознакомлен с <a href="/privacy" target="_blank">политикой обработки данных</a>.</span></label>
+      <button className="login-submit" disabled={busy||!acceptedOffer||!acceptedPersonalData}>{busy ? t('creating') : t('createAccount')}</button>
     </form><ToastSignal kind="error" message={error}/><div className="account-auth-footer registration-auth-footer"><span>{t('alreadyAccount')}</span><a href="/login">{t('signIn')}</a></div><a className="back-link" href="/">← {t('home')}</a>
   </AuthLayout>
 }

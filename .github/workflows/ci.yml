@@ -755,7 +755,7 @@ jobs:
           grep --ignore-case '^Set-Cookie: .*samesite=strict' "$security_headers"
           admin_cookie=$(grep --ignore-case '^Set-Cookie: ProxyHarbor.Session=' "$security_headers" | head -n 1 | sed -E 's/^Set-Cookie: ([^;]+).*/\1/I')
           registered=$(curl --fail --silent --request POST --header 'Content-Type: application/json' \
-            --data '{"username":"smoke.user","email":"smoke@example.com","displayName":"Smoke User","password":"Test-user-42!","acceptedTerms":true}' \
+            --data '{"username":"smoke.user","email":"smoke@example.com","displayName":"Smoke User","password":"Test-user-42!","acceptedOffer":true,"acceptedPersonalData":true}' \
             http://127.0.0.1:5080/api/v1/auth/register)
           echo "$registered" | jq --exit-status \
             '.username == "smoke.user" and .email == "smoke@example.com" and

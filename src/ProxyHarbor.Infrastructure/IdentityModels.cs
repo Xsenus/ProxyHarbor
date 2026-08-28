@@ -5,6 +5,14 @@ namespace ProxyHarbor.Infrastructure;
 /// <summary>Постоянная учётная запись оператора или клиента ProxyHarbor.</summary>
 public sealed class ApplicationUser : IdentityUser<Guid>
 {
+    /// <summary>Момент принятия публичной оферты при регистрации.</summary>
+    public DateTimeOffset? OfferAcceptedAt { get; set; }
+    /// <summary>Редакция принятой публичной оферты.</summary>
+    public string? OfferVersion { get; set; }
+    /// <summary>Момент выдачи отдельного согласия на обработку персональных данных.</summary>
+    public DateTimeOffset? PersonalDataConsentAcceptedAt { get; set; }
+    /// <summary>Редакция отдельного согласия на обработку персональных данных.</summary>
+    public string? PersonalDataConsentVersion { get; set; }
     /// <summary>Имя, показываемое в кабинете независимо от логина.</summary>
     public string? DisplayName { get; set; }
     /// <summary>Язык сайта, API, писем и привязанного Telegram-бота.</summary>
@@ -27,6 +35,15 @@ public sealed class ApplicationUser : IdentityUser<Guid>
     public ICollection<ReferralRelationship> Referrals { get; set; } = [];
     /// <summary>Реферальная связь, по которой был создан этот аккаунт.</summary>
     public ReferralRelationship? ReferredBy { get; set; }
+}
+
+/// <summary>Редакции документов, которые сервер фиксирует независимо от данных клиента.</summary>
+public static class LegalDocumentVersions
+{
+    /// <summary>Текущая редакция публичной оферты.</summary>
+    public const string Offer = "2.0";
+    /// <summary>Текущая редакция отдельного согласия на обработку данных.</summary>
+    public const string PersonalDataConsent = "1.0";
 }
 
 /// <summary>Неизменяемая связь пригласившего пользователя и нового клиента.</summary>

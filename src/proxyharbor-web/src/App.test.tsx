@@ -28,6 +28,7 @@ describe('ProxyHarbor UI', () => {
   beforeEach(() => {
     window.history.replaceState({}, '', '/')
     sessionStorage.clear()
+    localStorage.clear()
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
       if (url.includes('/api/v1/stats')) return jsonResponse(stats)
@@ -51,6 +52,22 @@ describe('ProxyHarbor UI', () => {
     expect(screen.queryByText(/независимых провайдеров/)).not.toBeInTheDocument()
     expect(screen.queryByRole('link', { name: 'Источники' })).not.toBeInTheDocument()
     expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).includes('/api/v1/sources'))).toBe(false)
+  })
+
+  it('does not send optional visit telemetry before consent', async () => {
+    const sendBeacon=vi.fn()
+    Object.defineProperty(navigator,'sendBeacon',{configurable:true,value:sendBeacon})
+    render(<App/>)
+    await screen.findByText('система активна')
+    expect(sendBeacon).not.toHaveBeenCalled()
+  })
+
+  it('sends page telemetry after explicit analytics consent', async () => {
+    const sendBeacon=vi.fn()
+    Object.defineProperty(navigator,'sendBeacon',{configurable:true,value:sendBeacon})
+    localStorage.setItem('proxyharbor.analytics-consent.v1','accepted')
+    render(<App/>)
+    await waitFor(()=>expect(sendBeacon).toHaveBeenCalledWith(expect.stringContaining('/api/v1/telemetry/visit'),expect.any(Blob)))
   })
 
   it('renders active duration and server pagination metadata', async () => {
@@ -266,15 +283,19 @@ describe('ProxyHarbor UI', () => {
     expect(confirmation).toHaveAttribute('type', 'text')
   })
 
-  it('requires the offer and privacy policy before account creation', () => {
+  it('requires separate offer acceptance and personal data consent before account creation', () => {
     window.history.replaceState({}, '', '/register')
     render(<App />)
-    const consent=screen.getByRole('checkbox',{name:/Я принимаю/})
+    const offer=screen.getByRole('checkbox',{name:/Я принимаю/})
+    const personalData=screen.getByRole('checkbox',{name:/Я отдельно даю/})
     const submit=screen.getByRole('button',{name:'Создать аккаунт'})
     expect(submit).toBeDisabled()
     expect(screen.getByRole('link',{name:'публичную оферту'})).toHaveAttribute('href','/offer')
-    expect(screen.getByRole('link',{name:'политику конфиденциальности'})).toHaveAttribute('href','/privacy')
-    fireEvent.click(consent)
+    expect(screen.getByRole('link',{name:'согласие на обработку персональных данных'})).toHaveAttribute('href','/personal-data-consent')
+    expect(screen.getByRole('link',{name:'политикой обработки данных'})).toHaveAttribute('href','/privacy')
+    fireEvent.click(offer)
+    expect(submit).toBeDisabled()
+    fireEvent.click(personalData)
     expect(submit).toBeEnabled()
   })
 
@@ -291,6 +312,12 @@ describe('ProxyHarbor UI', () => {
     expect(screen.getByRole('heading',{name:'Как оформить и получить доступ'})).toBeInTheDocument()
     cleanup();window.history.replaceState({},'', '/requisites');render(<App/>)
     expect(screen.getByText('890415962910')).toBeInTheDocument()
+    cleanup();window.history.replaceState({},'', '/legal');render(<App/>)
+    expect(screen.getByRole('heading',{name:'Документы ProxyHarbor'})).toBeInTheDocument()
+    cleanup();window.history.replaceState({},'', '/cookies');render(<App/>)
+    expect(screen.getByText('ProxyHarbor.Session')).toBeInTheDocument()
+    cleanup();window.history.replaceState({},'', '/refunds');render(<App/>)
+    expect(screen.getByRole('heading',{name:'Право на отказ'})).toBeInTheDocument()
   })
 
   it('organizes the account into focused tabs and sorts plans by duration', async () => {

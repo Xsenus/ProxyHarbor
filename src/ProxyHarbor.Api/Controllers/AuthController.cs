@@ -74,6 +74,10 @@ public sealed class AuthController(
                 DisplayName = request.DisplayName?.Trim(),
                 PreferredLanguage = SupportedLanguages.Normalize(request.PreferredLanguage),
                 IsActive = true,
+                OfferAcceptedAt = DateTimeOffset.UtcNow,
+                OfferVersion = LegalDocumentVersions.Offer,
+                PersonalDataConsentAcceptedAt = DateTimeOffset.UtcNow,
+                PersonalDataConsentVersion = LegalDocumentVersions.PersonalDataConsent,
                 ReferralCode = await CreateReferralCodeAsync()
             };
             var created = await users.CreateAsync(user, request.Password);
@@ -282,8 +286,10 @@ public sealed class RegisterAccountRequest
     [StringLength(120)] public string? DisplayName { get; set; }
     /// <summary>Пароль, дополнительно проверяемый Identity policy.</summary>
     [Required, StringLength(256, MinimumLength = 12)] public string Password { get; set; } = string.Empty;
-    /// <summary>Явное принятие актуальной публичной оферты и политики конфиденциальности.</summary>
-    [Range(typeof(bool), "true", "true")] public bool AcceptedTerms { get; set; }
+    /// <summary>Явное принятие актуальной публичной оферты.</summary>
+    [Range(typeof(bool), "true", "true")] public bool AcceptedOffer { get; set; }
+    /// <summary>Отдельное согласие на обработку персональных данных.</summary>
+    [Range(typeof(bool), "true", "true")] public bool AcceptedPersonalData { get; set; }
     /// <summary>Язык сайта, писем и привязанного Telegram-бота.</summary>
     [Required, StringLength(2, MinimumLength = 2)] public string PreferredLanguage { get; set; } = SupportedLanguages.Default;
     /// <summary>Необязательный код из персональной ссылки пригласившего пользователя.</summary>

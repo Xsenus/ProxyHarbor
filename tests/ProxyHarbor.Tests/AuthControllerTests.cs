@@ -32,10 +32,27 @@ public sealed class AuthControllerTests
     public void RegistrationRequiresPortableUsernameEmailAndLongPassword()
     {
         var invalid = new RegisterAccountRequest { Username = "bad user", Email = "not-email", Password = "short" };
-        var valid = new RegisterAccountRequest { Username = "proxy.user", Email = "user@example.com", DisplayName = "Proxy User", Password = "Long-password-123!", AcceptedTerms = true };
+        var valid = new RegisterAccountRequest { Username = "proxy.user", Email = "user@example.com", DisplayName = "Proxy User", Password = "Long-password-123!", AcceptedOffer = true, AcceptedPersonalData = true };
 
         Assert.NotEmpty(Validate(invalid));
         Assert.Empty(Validate(valid));
+    }
+
+    [Theory]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    public void RegistrationRequiresEachLegalAcceptanceSeparately(bool acceptedOffer, bool acceptedPersonalData)
+    {
+        var request = new RegisterAccountRequest
+        {
+            Username = "proxy.user",
+            Email = "user@example.com",
+            Password = "Long-password-123!",
+            AcceptedOffer = acceptedOffer,
+            AcceptedPersonalData = acceptedPersonalData
+        };
+
+        Assert.NotEmpty(Validate(request));
     }
 
     [Fact]

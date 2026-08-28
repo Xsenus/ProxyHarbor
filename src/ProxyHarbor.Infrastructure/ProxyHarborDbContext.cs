@@ -76,6 +76,8 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
         user.Property(x => x.ReferralCode).HasMaxLength(16);
         user.HasIndex(x => x.ReferralCode).IsUnique();
         user.Property(x => x.PreferredLanguage).HasMaxLength(2).HasDefaultValue(SupportedLanguages.Default);
+        user.Property(x => x.OfferVersion).HasMaxLength(16);
+        user.Property(x => x.PersonalDataConsentVersion).HasMaxLength(16);
         user.HasIndex(x => x.CreatedAt);
         user.ToTable(table =>
         {
