@@ -166,11 +166,11 @@ DB-IP Lite имеет пониженную относительно коммер
 | `RetentionDays` | 7 | 1..3650 |
 | `HistoryRetentionDays` | 365 в Compose | 1..3650 |
 | `EncryptionKey` | пусто | при Enabled: 32..1024 Unicode characters, без control/surrogate ошибок |
-| `TelegramBotToken` | пусто | 20..256 path-safe printable ASCII |
-| `TelegramChatId` | пусто | ненулевой signed 64-bit integer |
+| `TelegramBotToken` | пусто | legacy fallback; новые настройки используют token основного бота |
+| `TelegramChatId` | пусто | legacy fallback; новые настройки сохраняют выбранный CRM-диалог |
 | `MaxTelegramFileSizeMb` | 49 | 1..49; максимум 20 частей |
 
-Если backup включён, ключ и оба Telegram-параметра обязательны: приложение fail-closed не стартует с неполной конфигурацией. Полный runbook — [BACKUP_RESTORE.md](BACKUP_RESTORE.md).
+Для включённого backup обязателен PHB3-ключ. Telegram-доставка настраивается в админке выбором активного диалога основного бота; его token не дублируется в backup-конфигурации и перечитывается перед каждой отправкой. Deploy-пара `TelegramBotToken`/`TelegramChatId` сохранена только для обратной совместимости. Полный runbook — [BACKUP_RESTORE.md](BACKUP_RESTORE.md).
 
 ## Распределённые checker-узлы
 

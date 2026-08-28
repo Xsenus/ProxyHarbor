@@ -20,7 +20,8 @@ public sealed class BackupService(
     IOptions<CollectorOptions> collectorOptions,
     IConfiguration configuration,
     ILogger<BackupService> logger,
-    IBackupConfigurationStore? backupConfigurationStore = null) : IDisposable
+    IBackupConfigurationStore? backupConfigurationStore = null,
+    ITelegramBackupDeliveryResolver? telegramDeliveryResolver = null) : IDisposable
 {
     internal const string PipeCompletionFailureDataKey = "ProxyHarbor.BackupPipeCompletionFailure";
     private const string PublishedBackupPrefix = "proxyharbor-";
@@ -75,7 +76,12 @@ public sealed class BackupService(
                 throw new InvalidOperationException(
                     "Backup__Directory должен быть абсолютным безопасным путём длиной не более 1024 символов.");
 
-            var telegramConfigured = !string.IsNullOrWhiteSpace(options.TelegramBotToken) &&
+            TelegramBackupDelivery? resolvedDelivery = null;
+            if (options.TelegramRecipientId.HasValue && telegramDeliveryResolver is not null)
+                resolvedDelivery = await telegramDeliveryResolver.ResolveAsync(
+                    options.TelegramRecipientId.Value, cancellationToken);
+            var telegramConfigured = resolvedDelivery is not null ||
+                !string.IsNullOrWhiteSpace(options.TelegramBotToken) &&
                 !string.IsNullOrWhiteSpace(options.TelegramChatId);
             var backupRun = new BackupRun { TelegramConfigured = telegramConfigured };
             await using (var auditDb = await dbFactory.CreateDbContextAsync(cancellationToken))
@@ -123,7 +129,12 @@ public sealed class BackupService(
                 var sentToTelegram = false;
                 if (telegramConfigured)
                 {
-                    await SendToTelegramAsync(encryptedPath, options, cancellationToken);
+                    await SendToTelegramAsync(
+                        encryptedPath,
+                        options.MaxTelegramFileSizeMb,
+                        resolvedDelivery?.BotToken ?? options.TelegramBotToken!,
+                        resolvedDelivery?.ChatId ?? options.TelegramChatId!,
+                        cancellationToken);
                     // Значение становится true только после подтверждения ok=true для файла
                     // либо для каждой части; частичная отправка остаётся failed в audit.
                     sentToTelegram = true;
@@ -431,22 +442,27 @@ public sealed class BackupService(
         catch { }
     }
 
-    private async Task SendToTelegramAsync(string path, BackupOptions options, CancellationToken token)
+    private async Task SendToTelegramAsync(
+        string path,
+        int maxTelegramFileSizeMb,
+        string botToken,
+        string chatId,
+        CancellationToken token)
     {
-        var partLimit = options.MaxTelegramFileSizeMb * 1024L * 1024L;
+        var partLimit = maxTelegramFileSizeMb * 1024L * 1024L;
         var length = new FileInfo(path).Length;
         // Проверяем предел до создания первого temporary part: слишком большой локальный
         // encrypted backup сохраняется для ручного получения, но не создаёт upload storm.
         _ = BackupFileSplitter.RequiredPartCount(length, partLimit, MaximumTelegramParts);
         if (length <= partLimit)
         {
-            await SendDocumentAsync(path, "ProxyHarbor: зашифрованная резервная копия", options, token);
+            await SendDocumentAsync(path, "ProxyHarbor: зашифрованная резервная копия", botToken, chatId, token);
             return;
         }
 
         await foreach (var part in BackupFileSplitter.SplitAsync(
             path, partLimit, MaximumTelegramParts, token))
-            await SendDocumentAsync(part.Path, $"ProxyHarbor backup — часть {part.Number}/{part.Total}", options, token);
+            await SendDocumentAsync(part.Path, $"ProxyHarbor backup — часть {part.Number}/{part.Total}", botToken, chatId, token);
     }
 
     /// <summary>Публикует partial-файл атомарно только после полной криптографической проверки.</summary>
@@ -470,11 +486,16 @@ public sealed class BackupService(
         }
     }
 
-    private async Task SendDocumentAsync(string path, string caption, BackupOptions options, CancellationToken token)
+    private async Task SendDocumentAsync(
+        string path,
+        string caption,
+        string botToken,
+        string chatId,
+        CancellationToken token)
     {
         var client = httpClientFactory.CreateClient("telegram");
         await TelegramBackupSender.SendAsync(
-            client, path, caption, options.TelegramBotToken!, options.TelegramChatId!, token);
+            client, path, caption, botToken, chatId, token);
     }
 
     /// <summary>Ограничивает backup volume одновременно возрастом и ожидаемым числом плановых снимков.</summary>
@@ -677,7 +698,8 @@ internal sealed record BackupSettingsSnapshot(
     [
         nameof(BackupOptions.EncryptionKey),
         nameof(BackupOptions.TelegramBotToken),
-        nameof(BackupOptions.TelegramChatId)
+        nameof(BackupOptions.TelegramChatId),
+        nameof(BackupOptions.TelegramRecipientId)
     ];
 
     internal static BackupSettingsSnapshot FromOptions(BackupOptions options, bool telegramConfigured)

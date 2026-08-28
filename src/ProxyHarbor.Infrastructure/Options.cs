@@ -114,6 +114,8 @@ public sealed class BackupOptions
     public string? TelegramBotToken { get; set; }
     /// <summary>Числовой идентификатор администратора/группы для доставки архива.</summary>
     public string? TelegramChatId { get; set; }
+    /// <summary>Внутренний идентификатор CRM-диалога основного Telegram-бота.</summary>
+    public Guid? TelegramRecipientId { get; set; }
     /// <summary>Максимальный размер одного Telegram document перед разбиением.</summary>
     public int MaxTelegramFileSizeMb { get; set; } = 49;
 
