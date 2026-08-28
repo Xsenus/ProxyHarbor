@@ -390,7 +390,7 @@ jobs:
           echo "$metrics" | grep 'proxyharbor_http_request_duration_seconds_count{route="stats"} 1'
           echo "$metrics" | grep 'proxyharbor_sources_enabled 298'
           echo "$metrics" | grep 'proxyharbor_source_catalog_complete 1'
-          echo "$metrics" | grep 'proxyharbor_builtin_catalog_audit_timestamp_seconds 1787702400'
+          echo "$metrics" | grep 'proxyharbor_builtin_catalog_audit_timestamp_seconds 1787875200'
           echo "$metrics" | grep 'proxyharbor_builtin_sources_expected 298'
           echo "$metrics" | grep 'proxyharbor_builtin_providers_expected 75'
           echo "$metrics" | grep 'proxyharbor_sources_truncated 0'
@@ -825,7 +825,7 @@ jobs:
           metrics=$(curl --fail --silent http://127.0.0.1:5080/metrics)
           echo "$metrics" | grep 'proxyharbor_sources_enabled 298'
           echo "$metrics" | grep 'proxyharbor_source_catalog_complete 1'
-          echo "$metrics" | grep 'proxyharbor_builtin_catalog_audit_timestamp_seconds 1787702400'
+          echo "$metrics" | grep 'proxyharbor_builtin_catalog_audit_timestamp_seconds 1787875200'
           echo "$metrics" | grep 'proxyharbor_builtin_sources_present 298'
           echo "$metrics" | grep 'proxyharbor_builtin_providers_present 75'
           echo "$metrics" | grep 'proxyharbor_sources_truncated 0'
