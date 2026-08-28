@@ -275,9 +275,11 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
         telegramChat.HasIndex(x => x.TelegramUserId).IsUnique();
         telegramChat.HasIndex(x => x.UserId).IsUnique();
         telegramChat.HasIndex(x => new { x.NotificationsEnabled, x.IsBlocked, x.LastInteractionAt });
+        telegramChat.HasIndex(x => new { x.MarketingNotificationsEnabled, x.IsBlocked, x.LastInteractionAt });
         telegramChat.Property(x => x.Username).HasMaxLength(64);
         telegramChat.Property(x => x.DisplayName).HasMaxLength(160);
         telegramChat.Property(x => x.LanguageCode).HasMaxLength(16);
+        telegramChat.Property(x => x.MarketingConsentVersion).HasMaxLength(16);
         telegramChat.HasOne(x => x.User).WithOne(x => x.TelegramChat)
             .HasForeignKey<TelegramChat>(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
 

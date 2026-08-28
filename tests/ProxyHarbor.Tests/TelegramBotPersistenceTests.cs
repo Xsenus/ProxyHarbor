@@ -61,8 +61,10 @@ public sealed class TelegramBotPersistenceTests
     public async Task BroadcastQueuesOnlySubscribedUnblockedChatsWithCrmAudit()
     {
         await using var db = Database();
-        var allowed = Chat(100, true, false);
-        db.TelegramChats.AddRange(allowed, Chat(200, false, false), Chat(300, true, true));
+        var allowed = Chat(100, true, false, marketing: true);
+        var staleConsent = Chat(400, true, false, marketing: true);
+        staleConsent.MarketingConsentVersion = "obsolete";
+        db.TelegramChats.AddRange(allowed, Chat(200, true, false), Chat(300, true, true, marketing: true), staleConsent);
         await db.SaveChangesAsync();
 
         var count = await new TelegramDispatchService(db).EnqueueBroadcastAsync(
@@ -118,13 +120,16 @@ public sealed class TelegramBotPersistenceTests
     private static ProxyHarborDbContext Database() => new(new DbContextOptionsBuilder<ProxyHarborDbContext>()
         .UseInMemoryDatabase(Guid.NewGuid().ToString("N")).Options);
 
-    private static TelegramChat Chat(long id, bool notifications, bool blocked) => new()
+    private static TelegramChat Chat(long id, bool notifications, bool blocked, bool marketing = false) => new()
     {
         ChatId = id,
         TelegramUserId = id,
         UserId = Guid.NewGuid(),
         DisplayName = $"User {id}",
         NotificationsEnabled = notifications,
+        MarketingNotificationsEnabled = marketing,
+        MarketingConsentGrantedAt = marketing ? DateTimeOffset.UtcNow : null,
+        MarketingConsentVersion = marketing ? LegalDocumentVersions.MarketingConsent : null,
         IsBlocked = blocked
     };
 

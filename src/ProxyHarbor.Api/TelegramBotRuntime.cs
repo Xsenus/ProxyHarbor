@@ -94,7 +94,8 @@ public sealed class TelegramDispatchService(ProxyHarborDbContext db)
         while (queued < 100_000)
         {
             var query = db.TelegramChats.AsNoTracking()
-                .Where(x => x.NotificationsEnabled && !x.IsBlocked);
+                .Where(x => x.MarketingNotificationsEnabled &&
+                    x.MarketingConsentVersion == LegalDocumentVersions.MarketingConsent && !x.IsBlocked);
             if (cursor.HasValue) query = query.Where(x => x.Id.CompareTo(cursor.Value) > 0);
             var chats = await query.OrderBy(x => x.Id).Take(Math.Min(batchSize, 100_000 - queued)).ToArrayAsync(token);
             if (chats.Length == 0) break;
@@ -215,13 +216,22 @@ public sealed class TelegramUpdateProcessor(
         });
         await db.SaveChangesAsync(token);
         var command = text.Split(' ', 2)[0].Split('@', 2)[0].ToLowerInvariant();
+        if (!HasCurrentLegalAcceptance(chat) && command is not ("/start" or "/language" or "/help" or "/notifications" or "/promotions"))
+        {
+            await SendLegalOnboardingAsync(chat, options, token);
+            return;
+        }
         switch (command)
         {
-            case "/start": await SendMainMenuAsync(chat, token); break;
+            case "/start":
+                if (HasCurrentLegalAcceptance(chat)) await SendMainMenuAsync(chat, token);
+                else await SendLegalOnboardingAsync(chat, options, token);
+                break;
             case "/account": await SendAccountAsync(chat, token); break;
             case "/buy": await SendProductsAsync(chat, options, token); break;
             case "/proxies": await RequestProxyFileAsync(chat, options, token); break;
-            case "/notifications": await ToggleNotificationsAsync(chat, token); break;
+            case "/notifications":
+            case "/promotions": await SendNotificationSettingsAsync(chat, options.PublicBaseUrl, token); break;
             case "/language": await SendLanguageMenuAsync(chat, token); break;
             case "/support": await ReplyAsync(chat, TelegramLocalization.Get("supportForwarded", Language(chat), ("support", options.SupportText)), $"support:{chat.Id:N}:{Guid.NewGuid():N}", token); break;
             case "/help": await SendHelpAsync(chat, token); break;
@@ -240,14 +250,20 @@ public sealed class TelegramUpdateProcessor(
         }
         var chat = await EnsureChatAsync(chatElement, from, token);
         var data = callback.TryGetProperty("data", out var dataElement) ? dataElement.GetString() ?? string.Empty : string.Empty;
-        if (data.StartsWith("buy:", StringComparison.Ordinal))
+        if (data is "legal:offer" or "legal:personal-data")
+            await AcceptLegalDocumentAsync(chat, data, options, token);
+        else if (data == "language") await SendLanguageMenuAsync(chat, token);
+        else if (data.StartsWith("language:", StringComparison.Ordinal)) await ChangeLanguageAsync(chat, data[9..], token);
+        else if (data is "notifications" or "notifications:settings") await SendNotificationSettingsAsync(chat, options.PublicBaseUrl, token);
+        else if (data == "notifications:service") await ToggleServiceNotificationsAsync(chat, options.PublicBaseUrl, token);
+        else if (data == "notifications:marketing") await ToggleMarketingNotificationsAsync(chat, options.PublicBaseUrl, token);
+        else if (!HasCurrentLegalAcceptance(chat))
+            await SendLegalOnboardingAsync(chat, options, token);
+        else if (data.StartsWith("buy:", StringComparison.Ordinal))
             await CreateStarsInvoiceAsync(chat, data[4..], options, token);
         else if (data == "account") await SendAccountAsync(chat, token);
         else if (data == "products") await SendProductsAsync(chat, options, token);
         else if (data == "proxies") await RequestProxyFileAsync(chat, options, token);
-        else if (data == "notifications") await ToggleNotificationsAsync(chat, token);
-        else if (data == "language") await SendLanguageMenuAsync(chat, token);
-        else if (data.StartsWith("language:", StringComparison.Ordinal)) await ChangeLanguageAsync(chat, data[9..], token);
         else await SendMainMenuAsync(chat, token);
         await api.AnswerCallbackAsync(options, queryId, null, token);
     }
@@ -407,7 +423,9 @@ public sealed class TelegramUpdateProcessor(
                 ("status", TelegramLocalization.Get(active ? "activeSubscription" : "inactiveSubscription", language)),
                 ("plan", WebUtility.HtmlEncode(subscription.Plan)), ("expires", expires),
                 ("payments", paidOrders.Length), ("stars", paidStars), ("last", lastPayment),
-                ("files", deliveredFiles), ("notifications", TelegramLocalization.Get(chat.NotificationsEnabled ? "enabled" : "disabled", language))),
+                ("files", deliveredFiles),
+                ("notifications", TelegramLocalization.Get(chat.NotificationsEnabled ? "enabled" : "disabled", language)),
+                ("promotions", TelegramLocalization.Get(HasCurrentMarketingConsent(chat) ? "enabled" : "disabled", language))),
             $"account:{chat.Id:N}:{Guid.NewGuid():N}", replyMarkup: MainKeyboard(language), token: token);
     }
 
@@ -427,13 +445,90 @@ public sealed class TelegramUpdateProcessor(
             $"proxy-queued:{Guid.NewGuid():N}", token);
     }
 
-    private async Task ToggleNotificationsAsync(TelegramChat chat, CancellationToken token)
+    private async Task ToggleServiceNotificationsAsync(TelegramChat chat, string publicBaseUrl, CancellationToken token)
     {
         chat.NotificationsEnabled = !chat.NotificationsEnabled;
         await db.SaveChangesAsync(token);
         await ReplyAsync(chat, TelegramLocalization.Get(chat.NotificationsEnabled ? "notificationsOn" : "notificationsOff", Language(chat)),
             $"notifications:{chat.Id:N}:{Guid.NewGuid():N}", token);
+        await SendNotificationSettingsAsync(chat, publicBaseUrl, token);
     }
+
+    private async Task ToggleMarketingNotificationsAsync(TelegramChat chat, string publicBaseUrl, CancellationToken token)
+    {
+        var now = DateTimeOffset.UtcNow;
+        chat.MarketingNotificationsEnabled = !HasCurrentMarketingConsent(chat);
+        if (chat.MarketingNotificationsEnabled)
+        {
+            chat.MarketingConsentGrantedAt = now;
+            chat.MarketingConsentVersion = LegalDocumentVersions.MarketingConsent;
+            chat.MarketingConsentWithdrawnAt = null;
+        }
+        else
+        {
+            chat.MarketingConsentWithdrawnAt = now;
+        }
+        await db.SaveChangesAsync(token);
+        await ReplyAsync(chat, TelegramLocalization.Get(
+                chat.MarketingNotificationsEnabled ? "promotionsOn" : "promotionsOff", Language(chat)),
+            $"promotions:{chat.Id:N}:{Guid.NewGuid():N}", token);
+        await SendNotificationSettingsAsync(chat, publicBaseUrl, token);
+    }
+
+    private async Task SendNotificationSettingsAsync(TelegramChat chat, string publicBaseUrl, CancellationToken token)
+    {
+        var language = Language(chat);
+        await queue.EnqueueTextAsync(chat, TelegramLocalization.Get("notificationSettings", language,
+                ("service", TelegramLocalization.Get(chat.NotificationsEnabled ? "enabled" : "disabled", language)),
+                ("promotions", TelegramLocalization.Get(HasCurrentMarketingConsent(chat) ? "enabled" : "disabled", language))),
+            $"notification-settings:{chat.Id:N}:{Guid.NewGuid():N}",
+            replyMarkup: NotificationKeyboard(chat, publicBaseUrl, language), token: token);
+    }
+
+    private async Task AcceptLegalDocumentAsync(
+        TelegramChat chat, string document, TelegramBotOptions options, CancellationToken token)
+    {
+        var now = DateTimeOffset.UtcNow;
+        if (document == "legal:offer")
+        {
+            chat.User.OfferAcceptedAt = now;
+            chat.User.OfferVersion = LegalDocumentVersions.Offer;
+        }
+        else
+        {
+            chat.User.PersonalDataConsentAcceptedAt = now;
+            chat.User.PersonalDataConsentVersion = LegalDocumentVersions.PersonalDataConsent;
+        }
+        await db.SaveChangesAsync(token);
+        if (HasCurrentLegalAcceptance(chat)) await SendMainMenuAsync(chat, token);
+        else await SendLegalOnboardingAsync(chat, options, token);
+    }
+
+    private async Task SendLegalOnboardingAsync(
+        TelegramChat chat, TelegramBotOptions options, CancellationToken token)
+    {
+        var language = Language(chat);
+        await queue.EnqueueTextAsync(chat, TelegramLocalization.Get("legalOnboarding", language,
+                ("offer", TelegramLocalization.Get(IsOfferAccepted(chat) ? "accepted" : "notAccepted", language)),
+                ("personalData", TelegramLocalization.Get(IsPersonalDataAccepted(chat) ? "accepted" : "notAccepted", language))),
+            $"legal:{chat.Id:N}:{Guid.NewGuid():N}",
+            replyMarkup: LegalKeyboard(chat, options.PublicBaseUrl, language), token: token);
+    }
+
+    private static bool HasCurrentLegalAcceptance(TelegramChat chat) =>
+        IsOfferAccepted(chat) && IsPersonalDataAccepted(chat);
+
+    private static bool IsOfferAccepted(TelegramChat chat) =>
+        chat.User.OfferAcceptedAt.HasValue && chat.User.OfferVersion == LegalDocumentVersions.Offer;
+
+    private static bool IsPersonalDataAccepted(TelegramChat chat) =>
+        chat.User.PersonalDataConsentAcceptedAt.HasValue &&
+        chat.User.PersonalDataConsentVersion == LegalDocumentVersions.PersonalDataConsent;
+
+    private static bool HasCurrentMarketingConsent(TelegramChat chat) =>
+        chat.MarketingNotificationsEnabled &&
+        chat.MarketingConsentGrantedAt.HasValue &&
+        chat.MarketingConsentVersion == LegalDocumentVersions.MarketingConsent;
 
     private async Task SendMainMenuAsync(TelegramChat chat, CancellationToken token) =>
         await queue.EnqueueTextAsync(chat,
@@ -602,6 +697,28 @@ public sealed class TelegramUpdateProcessor(
             new[] { new { text = TelegramLocalization.Get("accountButton", language), callback_data = "account" }, new { text = TelegramLocalization.Get("buyButton", language), callback_data = "products" } },
             new[] { new { text = TelegramLocalization.Get("proxyButton", language), callback_data = "proxies" } },
             new[] { new { text = TelegramLocalization.Get("notificationsButton", language), callback_data = "notifications" }, new { text = TelegramLocalization.Get("languageButton", language), callback_data = "language" } }
+        }
+    };
+
+    private static object LegalKeyboard(TelegramChat chat, string publicBaseUrl, string language) => new
+    {
+        inline_keyboard = new object[]
+        {
+            new[] { new { text = TelegramLocalization.Get("readOfferButton", language), url = $"{publicBaseUrl.TrimEnd('/')}/offer" } },
+            new[] { new { text = TelegramLocalization.Get(IsOfferAccepted(chat) ? "offerAcceptedButton" : "acceptOfferButton", language), callback_data = "legal:offer" } },
+            new[] { new { text = TelegramLocalization.Get("readPersonalDataButton", language), url = $"{publicBaseUrl.TrimEnd('/')}/personal-data-consent" } },
+            new[] { new { text = TelegramLocalization.Get(IsPersonalDataAccepted(chat) ? "personalDataAcceptedButton" : "acceptPersonalDataButton", language), callback_data = "legal:personal-data" } },
+            new[] { new { text = TelegramLocalization.Get("languageButton", language), callback_data = "language" } }
+        }
+    };
+
+    private static object NotificationKeyboard(TelegramChat chat, string publicBaseUrl, string language) => new
+    {
+        inline_keyboard = new object[]
+        {
+            new[] { new { text = TelegramLocalization.Get(chat.NotificationsEnabled ? "disableServiceButton" : "enableServiceButton", language), callback_data = "notifications:service" } },
+            new[] { new { text = TelegramLocalization.Get(HasCurrentMarketingConsent(chat) ? "disablePromotionsButton" : "enablePromotionsButton", language), callback_data = "notifications:marketing" } },
+            new[] { new { text = TelegramLocalization.Get("readMarketingConsentButton", language), url = $"{publicBaseUrl.TrimEnd('/')}/marketing-consent" } }
         }
     };
 
