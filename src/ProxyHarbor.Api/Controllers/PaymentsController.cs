@@ -33,7 +33,7 @@ public sealed class PaymentsController(
         : this(users, db, gateways, new StaticPaymentConfigurationStore(configured)) { }
 
     /// <summary>Возвращает разрешённые продукты и состояние всех поддерживаемых шлюзов.</summary>
-    [Authorize, HttpGet("catalog"), EnableRateLimiting("account")]
+    [HttpGet("catalog"), EnableRateLimiting("public")]
     public async Task<IActionResult> Catalog(CancellationToken token = default)
     {
         var options = await configurations.GetAsync(token);

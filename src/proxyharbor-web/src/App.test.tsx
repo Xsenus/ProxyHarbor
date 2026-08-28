@@ -266,6 +266,33 @@ describe('ProxyHarbor UI', () => {
     expect(confirmation).toHaveAttribute('type', 'text')
   })
 
+  it('requires the offer and privacy policy before account creation', () => {
+    window.history.replaceState({}, '', '/register')
+    render(<App />)
+    const consent=screen.getByRole('checkbox',{name:/Я принимаю/})
+    const submit=screen.getByRole('button',{name:'Создать аккаунт'})
+    expect(submit).toBeDisabled()
+    expect(screen.getByRole('link',{name:'публичную оферту'})).toHaveAttribute('href','/offer')
+    expect(screen.getByRole('link',{name:'политику конфиденциальности'})).toHaveAttribute('href','/privacy')
+    fireEvent.click(consent)
+    expect(submit).toBeEnabled()
+  })
+
+  it('publishes tariffs, digital delivery terms and business requisites', async () => {
+    vi.mocked(fetch).mockImplementation(async input=>{
+      if(String(input).includes('/api/v1/payments/catalog'))return jsonResponse({enabled:true,providers:[],products:[{code:'unlimited-day',name:'Пробный · 1 день',durationDays:1,amountMinor:9900,discountPercent:0,fullDailyPriceMinor:9900,savingsMinor:0,currency:'RUB',description:'Полный доступ на один день.'}]})
+      return jsonResponse({title:'Unexpected request'},500)
+    })
+    window.history.replaceState({},'', '/pricing')
+    const {unmount}=render(<App/>)
+    expect(await screen.findByText(/99\s*₽/)).toBeInTheDocument()
+    expect(screen.getByText(/автоматического продления/)).toBeInTheDocument()
+    unmount();window.history.replaceState({},'', '/service');render(<App/>)
+    expect(screen.getByRole('heading',{name:'Как оформить и получить доступ'})).toBeInTheDocument()
+    cleanup();window.history.replaceState({},'', '/requisites');render(<App/>)
+    expect(screen.getByText('890415962910')).toBeInTheDocument()
+  })
+
   it('organizes the account into focused tabs and sorts plans by duration', async () => {
     window.history.replaceState({}, '', '/account')
     vi.mocked(fetch).mockImplementation(async input => {
