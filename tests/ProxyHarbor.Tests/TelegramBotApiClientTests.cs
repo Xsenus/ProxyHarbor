@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text;
+using System.Text.Json;
 using ProxyHarbor.Api;
 
 namespace ProxyHarbor.Tests;
@@ -144,10 +145,31 @@ public sealed class TelegramBotApiClientTests
         Assert.Equal("https://api.telegram.org/bot123:TEST_ONLY_NOT_A_REAL_TOKEN/deleteWebhook", factory.LastRequestUri);
     }
 
+    [Fact]
+    public async Task SendMessageOmitsNullReplyMarkupAndPreservesKeyboardObjects()
+    {
+        using var factory = new RecordingFactory(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("""{"ok":true,"result":{"message_id":17}}""", Encoding.UTF8, "application/json")
+        });
+        var client = new TelegramBotApiClient(factory);
+        var options = new TelegramBotOptions { BotToken = "123:TEST_ONLY_NOT_A_REAL_TOKEN" };
+
+        Assert.Equal(17, await client.SendMessageAsync(options, 42, "Без кнопок", null, CancellationToken.None));
+        using (var body = JsonDocument.Parse(factory.LastRequestBody!))
+            Assert.False(body.RootElement.TryGetProperty("reply_markup", out _));
+
+        var keyboard = new { inline_keyboard = new[] { new[] { new { text = "Открыть", callback_data = "open" } } } };
+        Assert.Equal(17, await client.SendMessageAsync(options, 42, "С кнопкой", keyboard, CancellationToken.None));
+        using (var body = JsonDocument.Parse(factory.LastRequestBody!))
+            Assert.Equal(JsonValueKind.Object, body.RootElement.GetProperty("reply_markup").ValueKind);
+    }
+
     private sealed class RecordingFactory(Func<HttpRequestMessage, HttpResponseMessage> response) : IHttpClientFactory, IDisposable
     {
         private readonly RecordingHandler _handler = new(response);
         public string? LastRequestUri => _handler.LastRequestUri;
+        public string? LastRequestBody => _handler.LastRequestBody;
         public HttpClient CreateClient(string name) => new(_handler, false);
         public void Dispose() => _handler.Dispose();
     }
@@ -155,10 +177,14 @@ public sealed class TelegramBotApiClientTests
     private sealed class RecordingHandler(Func<HttpRequestMessage, HttpResponseMessage> response) : HttpMessageHandler
     {
         public string? LastRequestUri { get; private set; }
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        public string? LastRequestBody { get; private set; }
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             LastRequestUri = request.RequestUri?.AbsoluteUri;
-            return Task.FromResult(response(request));
+            LastRequestBody = request.Content is null
+                ? null
+                : await request.Content.ReadAsStringAsync(cancellationToken);
+            return response(request);
         }
     }
 }

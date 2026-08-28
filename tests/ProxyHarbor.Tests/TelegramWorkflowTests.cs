@@ -86,6 +86,22 @@ public sealed class TelegramWorkflowTests
     }
 
     [Fact]
+    public async Task CallbackAcknowledgementFailureDoesNotReplayCompletedBusinessAction()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var processor = fixture.Processor();
+        await processor.ProcessAsync(Message(1, "/start"), TelegramUpdateModes.Polling, CancellationToken.None);
+        fixture.Telegram.FailMethod = "answerCallbackQuery";
+
+        await processor.ProcessAsync(
+            Callback(2, "notifications:marketing"), TelegramUpdateModes.Polling, CancellationToken.None);
+
+        var chat = await fixture.Db.TelegramChats.SingleAsync();
+        Assert.True(chat.MarketingNotificationsEnabled);
+        Assert.Contains(fixture.Db.TelegramUpdateReceipts, receipt => receipt.UpdateId == 2);
+    }
+
+    [Fact]
     public async Task DeployPolicyPreventsMarketingConsentAndBroadcast()
     {
         await using var fixture = await Fixture.CreateAsync(marketingBroadcastsEnabled: false);

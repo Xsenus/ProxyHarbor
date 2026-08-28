@@ -155,6 +155,10 @@ public sealed class TelegramUpdateProcessor(
     private static readonly Action<ILogger, Guid, string, Exception?> CheckoutFailed =
         LoggerMessage.Define<Guid, string>(LogLevel.Warning, new EventId(1702, nameof(CheckoutFailed)),
             "Не удалось создать Telegram checkout для заказа {OrderId} через {Provider}.");
+    private static readonly Action<ILogger, string, Exception?> CallbackAcknowledgementFailed =
+        LoggerMessage.Define<string>(LogLevel.Debug,
+            new EventId(1703, nameof(CallbackAcknowledgementFailed)),
+            "Telegram callback {QueryId} не удалось подтвердить; бизнес-операция уже обработана.");
 
     /// <summary>Обрабатывает update ровно один раз по update_id.</summary>
     public async Task ProcessAsync(JsonElement update, string transport, CancellationToken token)
@@ -250,7 +254,7 @@ public sealed class TelegramUpdateProcessor(
         if (!callback.TryGetProperty("from", out var from) || !callback.TryGetProperty("message", out var message) ||
             !message.TryGetProperty("chat", out var chatElement))
         {
-            await api.AnswerCallbackAsync(options, queryId, "Command expired.", token);
+            await AcknowledgeCallbackBestEffortAsync(options, queryId, "Command expired.", token);
             return;
         }
         var chat = await EnsureChatAsync(chatElement, from, token);
@@ -272,7 +276,23 @@ public sealed class TelegramUpdateProcessor(
         else if (data == "products") await SendProductsAsync(chat, options, token);
         else if (data == "proxies") await RequestProxyFileAsync(chat, options, token);
         else await SendMainMenuAsync(chat, token);
-        await api.AnswerCallbackAsync(options, queryId, null, token);
+        await AcknowledgeCallbackBestEffortAsync(options, queryId, null, token);
+    }
+
+    private async Task AcknowledgeCallbackBestEffortAsync(
+        TelegramBotOptions options, string queryId, string? text, CancellationToken token)
+    {
+        try
+        {
+            await api.AnswerCallbackAsync(options, queryId, text, token);
+        }
+        catch (TelegramBotApiException exception)
+        {
+            // Callback acknowledgements are cosmetic and expire quickly. Replaying an
+            // otherwise completed update can toggle settings twice or create duplicate
+            // work, so acknowledgement failures must not poison polling.
+            CallbackAcknowledgementFailed(logger, queryId, exception);
+        }
     }
 
     private async Task HandlePreCheckoutAsync(
@@ -976,7 +996,8 @@ public sealed class TelegramOutboundWorker(
         await db.TelegramOutboundMessages
             .Where(x => x.Status == TelegramOutboundStatuses.Failed &&
                 (x.LastError == TelegramBotApiClient.ProxyTransportUnavailable ||
-                 x.LastError == TelegramBotApiClient.DirectTransportUnavailable))
+                 x.LastError == TelegramBotApiClient.DirectTransportUnavailable ||
+                 x.LastError == "Bad Request: object expected as reply markup"))
             .ExecuteUpdateAsync(update => update
                 .SetProperty(message => message.Status, TelegramOutboundStatuses.Pending)
                 .SetProperty(message => message.AvailableAt, DateTimeOffset.UtcNow)
