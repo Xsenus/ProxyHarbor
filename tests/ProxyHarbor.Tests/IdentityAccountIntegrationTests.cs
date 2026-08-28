@@ -59,7 +59,8 @@ public sealed class IdentityAccountIntegrationTests
             Username = "proxy.user",
             Email = "user@example.com",
             DisplayName = "Proxy User",
-            Password = "Initial-user-42!"
+            Password = "Initial-user-42!",
+            AcceptedTerms = true
         });
 
         var created = Assert.IsType<ObjectResult>(registered);
@@ -151,6 +152,7 @@ public sealed class IdentityAccountIntegrationTests
             Username = "invited.user",
             Email = "invited@example.com",
             Password = "Initial-user-42!",
+            AcceptedTerms = true,
             ReferralCode = referrer.ReferralCode
         });
 
