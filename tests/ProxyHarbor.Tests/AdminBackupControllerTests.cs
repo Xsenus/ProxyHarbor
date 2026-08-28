@@ -20,20 +20,30 @@ public sealed class AdminBackupControllerTests
             db.TelegramChats.AddRange(
                 new TelegramChat
                 {
-                    ChatId = 1, TelegramUserId = 1, UserId = Guid.NewGuid(),
-                    DisplayName = "Другой администратор", Username = "recent",
+                    ChatId = 1,
+                    TelegramUserId = 1,
+                    UserId = Guid.NewGuid(),
+                    DisplayName = "Другой администратор",
+                    Username = "recent",
                     LastInteractionAt = DateTimeOffset.UtcNow
                 },
                 new TelegramChat
                 {
-                    ChatId = 2, TelegramUserId = 2, UserId = Guid.NewGuid(),
-                    DisplayName = "Илья Телятников", Username = "Xsenus",
+                    ChatId = 2,
+                    TelegramUserId = 2,
+                    UserId = Guid.NewGuid(),
+                    DisplayName = "Илья Телятников",
+                    Username = "Xsenus",
                     LastInteractionAt = DateTimeOffset.UtcNow.AddDays(-1)
                 },
                 new TelegramChat
                 {
-                    ChatId = 3, TelegramUserId = 3, UserId = Guid.NewGuid(),
-                    DisplayName = "Заблокирован", Username = "blocked", IsBlocked = true
+                    ChatId = 3,
+                    TelegramUserId = 3,
+                    UserId = Guid.NewGuid(),
+                    DisplayName = "Заблокирован",
+                    Username = "blocked",
+                    IsBlocked = true
                 });
             await db.SaveChangesAsync();
         }
@@ -58,18 +68,27 @@ public sealed class AdminBackupControllerTests
             db.TelegramChats.AddRange(
                 new TelegramChat
                 {
-                    ChatId = 11, TelegramUserId = 11, UserId = Guid.NewGuid(),
-                    DisplayName = "Илья Телятников", Username = null
+                    ChatId = 11,
+                    TelegramUserId = 11,
+                    UserId = Guid.NewGuid(),
+                    DisplayName = "Илья Телятников",
+                    Username = null
                 },
                 new TelegramChat
                 {
-                    ChatId = 12, TelegramUserId = 12, UserId = Guid.NewGuid(),
-                    DisplayName = "Оператор", Username = "Xsenus"
+                    ChatId = 12,
+                    TelegramUserId = 12,
+                    UserId = Guid.NewGuid(),
+                    DisplayName = "Оператор",
+                    Username = "Xsenus"
                 },
                 new TelegramChat
                 {
-                    ChatId = 13, TelegramUserId = 13, UserId = Guid.NewGuid(),
-                    DisplayName = "Не подходит", Username = "someone"
+                    ChatId = 13,
+                    TelegramUserId = 13,
+                    UserId = Guid.NewGuid(),
+                    DisplayName = "Не подходит",
+                    Username = "someone"
                 });
             await db.SaveChangesAsync();
         }

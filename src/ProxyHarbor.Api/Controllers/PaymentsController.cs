@@ -31,7 +31,8 @@ public sealed class PaymentsController(
         PaymentGatewayClient gateways,
         IOptions<PaymentOptions> configured)
         : this(users, db, gateways, new StaticPaymentConfigurationStore(configured),
-            new PaymentSettlementService(db, users)) { }
+            new PaymentSettlementService(db, users))
+    { }
 
     /// <summary>Возвращает разрешённые продукты и состояние всех поддерживаемых шлюзов.</summary>
     [HttpGet("catalog"), EnableRateLimiting("public")]

@@ -173,8 +173,14 @@ public sealed class PaymentGatewayTests
                 Success = true,
                 Model = new
                 {
-                    InvoiceId = order.Id.ToString("D"), TransactionId = 42001, Status = "Completed",
-                    Refunded = false, Amount = 499.00m, Currency = "RUB", CardType = "Visa", CardLastFour = "4242"
+                    InvoiceId = order.Id.ToString("D"),
+                    TransactionId = 42001,
+                    Status = "Completed",
+                    Refunded = false,
+                    Amount = 499.00m,
+                    Currency = "RUB",
+                    CardType = "Visa",
+                    CardLastFour = "4242"
                 }
             }),
             "robokassa" => """
@@ -185,21 +191,33 @@ public sealed class PaymentGatewayTests
                 """,
             "tbank" => JsonSerializer.Serialize(new
             {
-                Success = true, PaymentId = 88001, OrderId = order.Id.ToString("D"),
-                Status = "CONFIRMED", Amount = 49_900
+                Success = true,
+                PaymentId = 88001,
+                OrderId = order.Id.ToString("D"),
+                Status = "CONFIRMED",
+                Amount = 49_900
             }),
             "stripe" => JsonSerializer.Serialize(new
             {
-                id = providerPaymentId, payment_status = "paid", status = "complete",
-                amount_total = 49_900, currency = "rub", metadata = new { order_id = order.Id.ToString("D") }
+                id = providerPaymentId,
+                payment_status = "paid",
+                status = "complete",
+                amount_total = 49_900,
+                currency = "rub",
+                metadata = new { order_id = order.Id.ToString("D") }
             }),
             "cryptomus" => JsonSerializer.Serialize(new
             {
                 state = 0,
                 result = new
                 {
-                    uuid = providerPaymentId, order_id = order.Id.ToString("N"), status = "paid",
-                    amount = "499.00", currency = "RUB", payer_currency = "USDT", network = "TRON"
+                    uuid = providerPaymentId,
+                    order_id = order.Id.ToString("N"),
+                    status = "paid",
+                    amount = "499.00",
+                    currency = "RUB",
+                    payer_currency = "USDT",
+                    network = "TRON"
                 }
             }),
             _ => throw new InvalidOperationException("Unexpected provider")
@@ -248,7 +266,8 @@ public sealed class PaymentGatewayTests
         {
             "yookassa" => JsonSerializer.Serialize(new
             {
-                id = order.ProviderPaymentId, status = providerStatus,
+                id = order.ProviderPaymentId,
+                status = providerStatus,
                 amount = new { value = "499.00", currency = "RUB" },
                 metadata = new { order_id = order.Id.ToString("D") }
             }),
@@ -257,9 +276,12 @@ public sealed class PaymentGatewayTests
                 Success = true,
                 Model = new
                 {
-                    InvoiceId = order.Id.ToString("D"), TransactionId = order.ProviderPaymentId,
+                    InvoiceId = order.Id.ToString("D"),
+                    TransactionId = order.ProviderPaymentId,
                     Status = providerStatus == "Refunded" ? "Completed" : providerStatus,
-                    Refunded = providerStatus == "Refunded", Amount = 499.00m, Currency = "RUB"
+                    Refunded = providerStatus == "Refunded",
+                    Amount = 499.00m,
+                    Currency = "RUB"
                 }
             }),
             "robokassa" => $"""
@@ -270,21 +292,31 @@ public sealed class PaymentGatewayTests
                 """,
             "tbank" => JsonSerializer.Serialize(new
             {
-                Success = true, PaymentId = order.ProviderPaymentId, OrderId = order.Id.ToString("D"),
-                Status = providerStatus, Amount = 49_900
+                Success = true,
+                PaymentId = order.ProviderPaymentId,
+                OrderId = order.Id.ToString("D"),
+                Status = providerStatus,
+                Amount = 49_900
             }),
             "stripe" => JsonSerializer.Serialize(new
             {
-                id = order.ProviderPaymentId, payment_status = "unpaid", status = providerStatus,
-                amount_total = 49_900, currency = "rub", metadata = new { order_id = order.Id.ToString("D") }
+                id = order.ProviderPaymentId,
+                payment_status = "unpaid",
+                status = providerStatus,
+                amount_total = 49_900,
+                currency = "rub",
+                metadata = new { order_id = order.Id.ToString("D") }
             }),
             "cryptomus" => JsonSerializer.Serialize(new
             {
                 state = 0,
                 result = new
                 {
-                    uuid = order.ProviderPaymentId, order_id = order.Id.ToString("N"), status = providerStatus,
-                    amount = "499.00", currency = "RUB"
+                    uuid = order.ProviderPaymentId,
+                    order_id = order.Id.ToString("N"),
+                    status = providerStatus,
+                    amount = "499.00",
+                    currency = "RUB"
                 }
             }),
             _ => throw new InvalidOperationException("Unexpected provider")
