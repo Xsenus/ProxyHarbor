@@ -120,14 +120,26 @@ public sealed class TelegramBotApiClient
     public async Task<long> SendMessageAsync(
         TelegramBotOptions options, long chatId, string text, object? replyMarkup, CancellationToken token)
     {
-        var result = await CallAsync(options, "sendMessage", new
-        {
-            chat_id = chatId,
-            text,
-            parse_mode = "HTML",
-            disable_web_page_preview = true,
-            reply_markup = replyMarkup
-        }, token);
+        // Bot API validates reply_markup before interpreting its value and rejects an
+        // explicit JSON null with "object expected as reply markup". Omit the field
+        // entirely for messages that do not have a keyboard.
+        object payload = replyMarkup is null
+            ? new
+            {
+                chat_id = chatId,
+                text,
+                parse_mode = "HTML",
+                disable_web_page_preview = true
+            }
+            : new
+            {
+                chat_id = chatId,
+                text,
+                parse_mode = "HTML",
+                disable_web_page_preview = true,
+                reply_markup = replyMarkup
+            };
+        var result = await CallAsync(options, "sendMessage", payload, token);
         return result.GetProperty("message_id").GetInt64();
     }
 
