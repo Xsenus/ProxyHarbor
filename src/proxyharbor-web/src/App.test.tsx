@@ -461,6 +461,42 @@ describe('ProxyHarbor UI', () => {
     expect(screen.getByRole('button',{name:'Копировать конфигурацию VPN'})).toHaveAttribute('data-tooltip','Копировать полную конфигурацию')
   })
 
+  it('presents VPN sources with the same operational detail as proxy sources', async () => {
+    window.history.replaceState({}, '', '/admin/vpn?tab=sources')
+    vi.mocked(fetch).mockImplementation(async input => {
+      const url = String(input)
+      if (url.includes('/api/v1/admin/vpn/sources?')) return jsonResponse({
+        items:[{
+          id:'vpn-source-1',name:'VestraNet VLESS',provider:'VestraNet',url:'https://example.test/vless.txt',
+          defaultProtocol:'Vless',enabled:true,priority:42,license:'MIT',lastFetchedAt:new Date().toISOString(),
+          lastSucceededAt:new Date().toISOString(),lastItemCount:2231,consecutiveFailures:0,isBuiltIn:true,
+        }],
+        page:1,pageSize:10,total:149,
+      })
+      if (url.includes('/api/v1/admin/sources')) return jsonResponse({items:[],page:1,pageSize:10,total:0})
+      if (url.includes('/api/v1/admin/diagnostics')) return jsonResponse({serverTime:new Date().toISOString(),databaseBytes:0,validationQueue:{total:0,due:0},recentRuns:[],recentValidationRuns:[],recentBackups:[]})
+      return jsonResponse({title:'Unexpected request'},500)
+    })
+
+    const {container}=render(<App/>)
+    expect(await screen.findByRole('heading',{name:'Каталог 149'})).toBeInTheDocument()
+    expect(screen.getByText('VestraNet VLESS')).toBeInTheDocument()
+    expect(screen.getByText('VestraNet')).toHaveAttribute('title',expect.stringContaining('MIT'))
+    expect(screen.getByText('2 231 адресов')).toBeInTheDocument()
+    expect(screen.getByText(/успешно собрано/)).toBeInTheDocument()
+    expect(screen.getByText('https://example.test/vless.txt')).toBeInTheDocument()
+    expect(container.querySelector('.vpn-source-list .vpn-source-protocol')).toHaveTextContent('Vless')
+
+    fireEvent.change(screen.getByRole('searchbox',{name:'Поиск VPN-источников'}),{target:{value:'vestra'}})
+    fireEvent.submit(screen.getByRole('search'))
+    await waitFor(()=>expect(vi.mocked(fetch).mock.calls.some(([input])=>String(input).includes('search=vestra'))).toBe(true))
+    fireEvent.click(screen.getByRole('button',{name:'Очистить поиск VPN-источников'}))
+    await waitFor(()=>expect(vi.mocked(fetch).mock.calls.some(([input])=>{
+      const request=new URL(String(input),'https://example.test')
+      return request.pathname.endsWith('/api/v1/admin/vpn/sources')&&!request.searchParams.has('search')
+    })).toBe(true))
+  })
+
   it('creates sources in a modal editor', async () => {
     window.history.replaceState({}, '', '/admin/sources')
     vi.mocked(fetch).mockImplementation(async (input, options) => {
