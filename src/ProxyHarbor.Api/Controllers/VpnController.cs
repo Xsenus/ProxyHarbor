@@ -363,7 +363,7 @@ public sealed class AdminVpnController(IDbContextFactory<ProxyHarborDbContext> d
     [HttpPost("collect")]
     public async Task<ActionResult<VpnCollectionResult>> Collect(CancellationToken token)
     {
-        try { return Ok(await catalog.CollectAsync(token)); }
+        try { return Ok(await catalog.CollectAsync(forceAllSources: true, token: token)); }
         catch (OperationAlreadyRunningException exception) { return Conflict(new ProblemDetails { Detail = exception.Message }); }
     }
     [HttpPost("validate")]

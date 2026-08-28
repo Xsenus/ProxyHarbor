@@ -28,13 +28,18 @@ public sealed class VpnCatalogService(
         LoggerMessage.Define<Guid>(LogLevel.Warning, new EventId(1161, "VpnSourceFailed"), "VPN source {SourceId} failed");
 
     /// <summary>Загружает все включённые feed и сохраняет endpoint вместе с опубликованными URI.</summary>
-    public async Task<VpnCollectionResult> CollectAsync(CancellationToken token = default)
+    public async Task<VpnCollectionResult> CollectAsync(
+        bool forceAllSources = false, CancellationToken token = default)
     {
         await using var operationLock = await PostgresAdvisoryLock.TryAcquireAsync(dbFactory, PostgresAdvisoryLock.VpnCollectionKey, token);
         if (operationLock is null) throw new OperationAlreadyRunningException("VPN collection уже выполняется другой репликой.");
         await using var readDb = await dbFactory.CreateDbContextAsync(token);
-        var sources = await readDb.VpnSources.AsNoTracking().Where(x => x.Enabled)
+        var collectionStartedAt = DateTimeOffset.UtcNow;
+        var sources = await readDb.VpnSources.AsNoTracking().Where(x => x.Enabled &&
+                (forceAllSources || x.NextFetchAt == null || x.NextFetchAt <= collectionStartedAt))
             .OrderBy(x => x.Priority).ToArrayAsync(token);
+        if (sources.Length == 0)
+            return new VpnCollectionResult(0, 0, 0, 0);
         var results = await ParallelFetchAsync(sources, token);
         await using var db = await dbFactory.CreateDbContextAsync(token);
         // Каталог и provenance загружаются одним проходом. Это устраняет два SQL-запроса
@@ -54,12 +59,18 @@ public sealed class VpnCatalogService(
             {
                 source.ConsecutiveFailures++;
                 source.LastError = result.Error[..Math.Min(result.Error.Length, 500)];
+                source.NextFetchAt = SourceFetchSchedule.NextAttempt(
+                    collectionStartedAt,
+                    source.ConsecutiveFailures,
+                    options.Value.SourceFailureBackoffBaseMinutes,
+                    options.Value.SourceFailureBackoffMaxHours);
                 continue;
             }
             source.LastSucceededAt = now;
             source.LastItemCount = result.Candidates.Count;
             source.ConsecutiveFailures = 0;
             source.LastError = null;
+            source.NextFetchAt = null;
             foreach (var candidate in result.Candidates.Take(options.Value.MaxProxiesPerSource))
             {
                 var key = new { candidate.Host, candidate.Port, candidate.Protocol, candidate.Transport };
@@ -262,7 +273,7 @@ public sealed class VpnCollectorWorker(VpnCatalogService service, IOptions<Colle
         {
             try
             {
-                await service.CollectAsync(stoppingToken);
+                await service.CollectAsync(token: stoppingToken);
             }
             catch (Exception exception) when (!stoppingToken.IsCancellationRequested)
             {

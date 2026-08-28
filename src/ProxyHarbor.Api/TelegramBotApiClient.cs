@@ -7,9 +7,34 @@ using System.Text.Json.Serialization;
 namespace ProxyHarbor.Api;
 
 /// <summary>Безопасный минимальный клиент официального Telegram Bot API.</summary>
-public sealed class TelegramBotApiClient(IHttpClientFactory clients)
+public sealed class TelegramBotApiClient
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
+    internal const string ProxyTransportUnavailable =
+        "Не удалось подключиться к Telegram ни через один настроенный SOCKS5-прокси.";
+    internal const string DirectTransportUnavailable =
+        "Сервер не может установить соединение с Telegram Bot API.";
+    private readonly IHttpClientFactory clients;
+    private readonly ITelegramProxyCandidateProvider? candidates;
+    private readonly TelegramTransportHealth transportHealth;
+
+    /// <summary>Конструктор для изолированных вызовов и unit-тестов без каталога.</summary>
+    public TelegramBotApiClient(IHttpClientFactory clients)
+    {
+        this.clients = clients;
+        transportHealth = new TelegramTransportHealth();
+    }
+
+    /// <summary>Runtime-конструктор с динамическим резервом и общим circuit breaker.</summary>
+    public TelegramBotApiClient(
+        IHttpClientFactory clients,
+        ITelegramProxyCandidateProvider candidates,
+        TelegramTransportHealth transportHealth)
+    {
+        this.clients = clients;
+        this.candidates = candidates;
+        this.transportHealth = transportHealth;
+    }
 
     internal Task<TelegramBotIdentity> GetMeAsync(string botToken, CancellationToken token) =>
         GetMeAsync(botToken, [], TelegramTransportModes.Direct, token);
@@ -195,7 +220,7 @@ public sealed class TelegramBotApiClient(IHttpClientFactory clients)
             throw new TelegramBotApiException(400, "Некорректный token Telegram-бота.");
         var payload = await content.ReadAsByteArrayAsync(token);
         var contentHeaders = content.Headers.ToArray();
-        var attempts = ConnectionAttempts(options).ToArray();
+        var attempts = await ConnectionAttemptsAsync(options, token);
         Exception? lastTransportError = null;
         HttpResponseMessage? response = null;
         foreach (var proxy in attempts)
@@ -206,19 +231,19 @@ public sealed class TelegramBotApiClient(IHttpClientFactory clients)
                 foreach (var header in contentHeaders)
                     requestContent.Headers.TryAddWithoutValidation(header.Key, header.Value);
                 response = await PostAsync(proxy, tokenValue, method, requestContent, token);
+                transportHealth.MarkSucceeded(proxy);
                 break;
             }
             catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException)
             {
                 if (token.IsCancellationRequested) throw;
                 lastTransportError = exception;
+                transportHealth.MarkFailed(proxy, DateTimeOffset.UtcNow);
             }
         }
         if (response is null)
             throw new TelegramBotApiException(504,
-                attempts.Any(x => x is not null)
-                    ? "Не удалось подключиться к Telegram ни через один настроенный SOCKS5-прокси."
-                    : "Сервер не может установить соединение с Telegram Bot API.",
+                attempts.Any(x => x is not null) ? ProxyTransportUnavailable : DirectTransportUnavailable,
                 innerException: lastTransportError);
         using (response)
         {
@@ -254,8 +279,34 @@ public sealed class TelegramBotApiClient(IHttpClientFactory clients)
             AllowAutoRedirect = false,
             AutomaticDecompression = DecompressionMethods.All
         };
-        using var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(20) };
+        // getUpdates использует long polling до 30 секунд. Клиентский timeout обязан
+        // быть больше server-side timeout, иначе спокойный чат выглядит как авария сети.
+        using var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(45) };
         return await client.PostAsync($"https://api.telegram.org/bot{botToken}/{method}", content, token);
+    }
+
+    private async Task<TelegramProxyOptions?[]> ConnectionAttemptsAsync(
+        TelegramBotOptions options, CancellationToken token)
+    {
+        var result = ConnectionAttempts(options).ToList();
+        if (options.TransportMode == TelegramTransportModes.Auto && candidates is not null)
+        {
+            // Direct всегда остаётся последним. Каталожные кандидаты дополняют, но не
+            // подменяют явно сохранённые администратором маршруты.
+            if (result.Count > 0 && result[^1] is null) result.RemoveAt(result.Count - 1);
+            var known = result.Where(value => value is not null)
+                .Select(value => $"{value!.Host.ToLowerInvariant()}:{value.Port}")
+                .ToHashSet(StringComparer.Ordinal);
+            foreach (var candidate in await candidates.GetCandidatesAsync(token))
+                if (known.Add($"{candidate.Host.ToLowerInvariant()}:{candidate.Port}")) result.Add(candidate);
+            result.Add(null);
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        var available = result.Where(value => transportHealth.IsAvailable(value, now)).ToArray();
+        // Если cooldown одновременно затронул все маршруты, одна попытка всё равно
+        // разрешается: восстановление сети не должно ждать локального таймера.
+        return available.Length > 0 ? available : result.Take(1).ToArray();
     }
 
     internal static IEnumerable<TelegramProxyOptions?> ConnectionAttempts(TelegramBotOptions options)
