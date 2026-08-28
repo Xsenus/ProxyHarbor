@@ -497,6 +497,27 @@ describe('ProxyHarbor UI', () => {
     })).toBe(true))
   })
 
+  it('shows the actionable checker deployment error returned by the API', async () => {
+    window.history.replaceState({}, '', '/admin/checkers')
+    vi.mocked(fetch).mockImplementation(async (input, options) => {
+      const url=String(input)
+      if(url.includes('/api/v1/admin/checker-nodes/node-1/deploy')&&options?.method==='POST')
+        return jsonResponse({message:'VPS добавлен, но агент не запущен.',error:'Требуется curl или wget.'},502)
+      if(url.includes('/api/v1/admin/checker-nodes')) return jsonResponse({image:'checker:latest',nativeAssetBaseUrl:'https://example.test',items:[{id:'node-1',name:'VPS 1',host:'203.0.113.20',sshPort:22,sshUsername:'root',enabled:true,concurrency:100,batchSize:200,createdAt:new Date().toISOString(),updatedAt:new Date().toISOString(),deploymentStatus:'failed',completedChecks:0,aliveChecks:0,online:false,busy:false}]})
+      if(url.includes('/api/v1/admin/sources')) return jsonResponse({items:[],page:1,pageSize:10,total:0})
+      if(url.includes('/api/v1/admin/diagnostics')) return jsonResponse({serverTime:new Date().toISOString(),databaseBytes:0,validationQueue:{total:0,due:0},recentRuns:[],recentValidationRuns:[],recentBackups:[]})
+      return jsonResponse({title:'Unexpected request'},500)
+    })
+
+    render(<App/>)
+    fireEvent.click(await screen.findByRole('button',{name:'Переустановить агент VPS 1'}))
+    const dialog=screen.getByRole('dialog',{name:'Переустановить агент'})
+    fireEvent.change(within(dialog).getByPlaceholderText('Используется один раз и не сохраняется'),{target:{value:'correct-password'}})
+    fireEvent.click(within(dialog).getByRole('button',{name:'Переустановить агент'}))
+
+    expect(await screen.findByText('VPS добавлен, но агент не запущен. · Требуется curl или wget.')).toBeInTheDocument()
+  })
+
   it('creates sources in a modal editor', async () => {
     window.history.replaceState({}, '', '/admin/sources')
     vi.mocked(fetch).mockImplementation(async (input, options) => {

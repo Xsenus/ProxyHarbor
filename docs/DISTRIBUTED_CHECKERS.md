@@ -54,7 +54,7 @@ SSH-пароль существует только в памяти текуще�
 
 - Linux x64 или arm64 с systemd;
 - root SSH-доступ для управляемой установки в `/opt/proxyharbor-checker`;
-- `curl`, `tar`, `sha256sum`, `sha512sum`, `useradd` и `systemctl`;
+- `curl` или `wget`, а также `tar`, `sha256sum`, `sha512sum`, `useradd` и `systemctl`;
 - не менее `NativeMinimumFreeMegabytes` свободного места в файловой системе `/opt` (по умолчанию 300 МБ);
 - исходящий HTTPS к control plane, GitHub Releases и официальному Microsoft CDN runtime;
 - Docker необязателен; если он уже установлен и работает, используется опубликованный multi-arch образ.

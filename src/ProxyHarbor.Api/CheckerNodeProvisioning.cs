@@ -185,7 +185,19 @@ public sealed class CheckerNodeProvisioner(IOptions<CheckerAgentDeploymentOption
           exit 0
         fi
 
-        for tool in systemctl curl tar sha256sum sha512sum useradd; do
+        if command -v curl >/dev/null 2>&1; then
+          download() {
+            curl --fail --location --silent --show-error --retry 3 "$1" -o "$2"
+          }
+        elif command -v wget >/dev/null 2>&1; then
+          download() {
+            wget -q -T 30 -t 3 -O "$2" "$1"
+          }
+        else
+          echo 'Native checker deployment requires curl or wget when Docker is absent.' >&2
+          exit 43
+        fi
+        for tool in systemctl tar sha256sum sha512sum useradd; do
           if ! command -v "$tool" >/dev/null 2>&1; then
             echo "Native checker deployment requires $tool when Docker is absent." >&2
             exit 43
@@ -220,10 +232,8 @@ public sealed class CheckerNodeProvisioner(IOptions<CheckerAgentDeploymentOption
         cleanup() { rm -rf "$work"; }
         trap cleanup EXIT HUP INT TERM
         asset_base='__ASSET_BASE_URL__'
-        curl --fail --location --silent --show-error --retry 3 \
-          "$asset_base/proxyharbor-checker-agent.tar.gz" -o "$work/proxyharbor-checker-agent.tar.gz"
-        curl --fail --location --silent --show-error --retry 3 \
-          "$asset_base/proxyharbor-checker-agent.tar.gz.sha256" -o "$work/proxyharbor-checker-agent.tar.gz.sha256"
+        download "$asset_base/proxyharbor-checker-agent.tar.gz" "$work/proxyharbor-checker-agent.tar.gz"
+        download "$asset_base/proxyharbor-checker-agent.tar.gz.sha256" "$work/proxyharbor-checker-agent.tar.gz.sha256"
         (cd "$work" && sha256sum --check proxyharbor-checker-agent.tar.gz.sha256 >/dev/null)
         mkdir "$work/app"
         tar -xzf "$work/proxyharbor-checker-agent.tar.gz" -C "$work/app"
@@ -234,7 +244,7 @@ public sealed class CheckerNodeProvisioner(IOptions<CheckerAgentDeploymentOption
         runtime_existed=0
         if [ ! -x "$runtime_root/dotnet" ] || ! "$runtime_root/dotnet" --list-runtimes 2>/dev/null | grep -q '^Microsoft.AspNetCore.App __RUNTIME_VERSION__ '; then
           runtime_url="https://builds.dotnet.microsoft.com/dotnet/aspnetcore/Runtime/__RUNTIME_VERSION__/aspnetcore-runtime-__RUNTIME_VERSION__-$runtime_rid.tar.gz"
-          curl --fail --location --silent --show-error --retry 3 "$runtime_url" -o "$work/runtime.tar.gz"
+          download "$runtime_url" "$work/runtime.tar.gz"
           printf '%s  %s\n' "$runtime_sha" "$work/runtime.tar.gz" | sha512sum --check >/dev/null
           mkdir "$work/dotnet"
           tar -xzf "$work/runtime.tar.gz" -C "$work/dotnet"
