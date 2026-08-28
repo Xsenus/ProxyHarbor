@@ -187,9 +187,9 @@ public sealed class MetricsControllerTests
         Assert.Contains("proxyharbor_sources_truncated 1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_source_catalog_complete 0", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_source_catalog_healthy 0", metrics, StringComparison.Ordinal);
-        Assert.Contains("proxyharbor_builtin_catalog_audit_timestamp_seconds 1787702400", metrics,
+        Assert.Contains("proxyharbor_builtin_catalog_audit_timestamp_seconds 1787875200", metrics,
             StringComparison.Ordinal);
-        Assert.Contains("proxyharbor_builtin_sources_expected 198", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_builtin_sources_expected 298", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_builtin_sources_present 1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_builtin_sources_enabled 1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_builtin_sources_healthy 0", metrics, StringComparison.Ordinal);

@@ -25,11 +25,11 @@ public sealed class SourceCatalogHealthTests
 
         var snapshot = SourceCatalogHealth.Calculate(sources, AuditNow, FreshnessWindow);
 
-        Assert.Equal(198, snapshot.ExpectedSources);
-        Assert.Equal(new DateOnly(2026, 8, 26), snapshot.LastAuditedOn);
-        Assert.Equal(198, snapshot.PresentSources);
-        Assert.Equal(198, snapshot.EnabledSources);
-        Assert.Equal(198, snapshot.HealthySources);
+        Assert.Equal(298, snapshot.ExpectedSources);
+        Assert.Equal(new DateOnly(2026, 8, 28), snapshot.LastAuditedOn);
+        Assert.Equal(298, snapshot.PresentSources);
+        Assert.Equal(298, snapshot.EnabledSources);
+        Assert.Equal(298, snapshot.HealthySources);
         Assert.Equal(75, snapshot.ExpectedProviders);
         Assert.Equal(75, snapshot.PresentProviders);
         Assert.True(snapshot.IsComplete);
@@ -45,9 +45,9 @@ public sealed class SourceCatalogHealthTests
 
         var snapshot = SourceCatalogHealth.Calculate(sources, AuditNow, FreshnessWindow);
 
-        Assert.Equal(198, snapshot.PresentSources);
-        Assert.Equal(197, snapshot.EnabledSources);
-        Assert.Equal(197, snapshot.HealthySources);
+        Assert.Equal(298, snapshot.PresentSources);
+        Assert.Equal(297, snapshot.EnabledSources);
+        Assert.Equal(297, snapshot.HealthySources);
         Assert.Equal(0, snapshot.FailingSources);
         Assert.False(snapshot.IsComplete);
         Assert.False(snapshot.IsHealthy);
@@ -67,10 +67,10 @@ public sealed class SourceCatalogHealthTests
 
         var snapshot = SourceCatalogHealth.Calculate(sources, AuditNow, FreshnessWindow);
 
-        Assert.Equal(197, snapshot.PresentSources);
+        Assert.Equal(297, snapshot.PresentSources);
         Assert.Equal(74, snapshot.PresentProviders);
         Assert.Equal(1, snapshot.NeverAuditedSources);
-        Assert.Equal(196, snapshot.HealthySources);
+        Assert.Equal(296, snapshot.HealthySources);
         Assert.False(snapshot.IsComplete);
         Assert.False(snapshot.IsHealthy);
     }
@@ -86,7 +86,7 @@ public sealed class SourceCatalogHealthTests
 
         Assert.True(snapshot.IsComplete);
         Assert.Equal(1, snapshot.StaleSources);
-        Assert.Equal(197, snapshot.HealthySources);
+        Assert.Equal(297, snapshot.HealthySources);
         Assert.Equal(0, snapshot.FailingSources);
         Assert.Equal(0, snapshot.NeverAuditedSources);
         Assert.False(snapshot.IsHealthy);
@@ -102,7 +102,7 @@ public sealed class SourceCatalogHealthTests
 
         Assert.True(snapshot.IsComplete);
         Assert.Equal(1, snapshot.TruncatedSources);
-        Assert.Equal(197, snapshot.HealthySources);
+        Assert.Equal(297, snapshot.HealthySources);
         Assert.Equal(0, snapshot.FailingSources);
         Assert.False(snapshot.IsHealthy);
     }

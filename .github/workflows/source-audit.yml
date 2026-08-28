@@ -35,6 +35,9 @@ jobs:
         with: { dotnet-version: '10.0.302' }
       - run: dotnet restore ProxyHarbor.slnx --locked-mode
       - run: dotnet build ProxyHarbor.slnx -c Release --no-restore
+      - name: Audit all built-in VPN feeds
+        shell: pwsh
+        run: ./tools/Test-BuiltInVpnSourceEndpoints.ps1
       - name: Audit all built-in source feeds
         env:
           ASPNETCORE_ENVIRONMENT: Production
@@ -64,7 +67,7 @@ jobs:
             -ApiBaseUrl http://127.0.0.1:5080 \
             -AdminKey source-audit-admin-key-at-least-24-chars \
             -ReportPath source-audit.json \
-            -ExpectedBuiltInSources 198 \
+            -ExpectedBuiltInSources 298 \
             -ExpectedProviders 75 || source_status=$?
           validation_status=0
           pwsh -NoProfile -File ./tools/Audit-Validation.ps1 \
