@@ -27,6 +27,12 @@ describe('responsive accessibility stylesheet', () => {
     expect(stylesheet).toContain('0 0 0 1000px #091410 inset!important')
   })
 
+  it('keeps payment provider credentials aligned and setup help visible', () => {
+    expect(stylesheet).toContain('.provider-fields{align-items:start}')
+    expect(stylesheet).toContain('.provider-fields label{align-content:start;grid-template-rows:auto 44px auto}')
+    expect(stylesheet).toContain('.provider-help-heading{display:flex;align-items:flex-start')
+  })
+
   it('uses a full-width, full-height admin workspace with bottom-aligned registries', () => {
     expect(stylesheet).toContain('.admin-section{display:flex;flex-direction:column;width:100%;min-height:calc(100vh - 76px)')
     expect(stylesheet).toContain('.admin-page-heading{display:flex;align-items:center;justify-content:space-between;gap:20px;width:100%;height:auto;min-height:44px;max-width:none;padding:0;margin:0 0 16px;border:0}')
