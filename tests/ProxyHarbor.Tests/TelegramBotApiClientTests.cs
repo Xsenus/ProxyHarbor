@@ -45,6 +45,22 @@ public sealed class TelegramBotApiClientTests
     }
 
     [Fact]
+    public void TransportCircuitBreakerRecoversAfterCooldownAndSuccess()
+    {
+        var health = new TelegramTransportHealth();
+        var proxy = new TelegramProxyOptions { Host = "proxy.example", Port = 1080 };
+        var now = DateTimeOffset.UtcNow;
+
+        Assert.True(health.IsAvailable(proxy, now));
+        health.MarkFailed(proxy, now);
+        Assert.False(health.IsAvailable(proxy, now.AddMinutes(2)));
+        Assert.True(health.IsAvailable(proxy, now.AddMinutes(4)));
+        health.MarkFailed(proxy, now);
+        health.MarkSucceeded(proxy);
+        Assert.True(health.IsAvailable(proxy, now));
+    }
+
+    [Fact]
     public async Task GetMeUsesOfficialEndpointAndReadsIdentity()
     {
         using var factory = new RecordingFactory(_ => new HttpResponseMessage(HttpStatusCode.OK)

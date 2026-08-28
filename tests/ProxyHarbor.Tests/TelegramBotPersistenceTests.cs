@@ -117,6 +117,30 @@ public sealed class TelegramBotPersistenceTests
         Assert.DoesNotContain("192.0.2.12", text, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task TelegramFallbackPoolContainsOnlyFreshAliveSocks5InQualityOrder()
+    {
+        await using var db = Database();
+        var now = DateTimeOffset.UtcNow;
+        db.Proxies.AddRange(
+            Endpoint("192.0.2.30", 1080, ProxyStatus.Alive, now.AddMinutes(-2), 80, 12, ProxyProtocol.Socks5),
+            Endpoint("192.0.2.31", 1080, ProxyStatus.Alive, now.AddMinutes(-1), 20, 2, ProxyProtocol.Socks5),
+            Endpoint("192.0.2.32", 1080, ProxyStatus.Alive, now.AddMinutes(-30), 5, 40, ProxyProtocol.Socks5),
+            Endpoint("192.0.2.33", 1080, ProxyStatus.Dead, now, 1, 0, ProxyProtocol.Socks5),
+            Endpoint("192.0.2.34", 8080, ProxyStatus.Alive, now, 2, 20, ProxyProtocol.Http));
+        await db.SaveChangesAsync();
+
+        var candidates = await new TelegramProxyCandidateProvider(db,
+            Options.Create(new CollectorOptions { PublicFreshnessMinutes = 15 }))
+            .GetCandidatesAsync(CancellationToken.None);
+
+        Assert.Collection(candidates,
+            first => Assert.Equal("192.0.2.31", first.Host),
+            second => Assert.Equal("192.0.2.30", second.Host));
+        Assert.All(candidates, candidate => Assert.Equal(1080, candidate.Port));
+        Assert.All(candidates, candidate => Assert.Empty(candidate.Password));
+    }
+
     private static ProxyHarborDbContext Database() => new(new DbContextOptionsBuilder<ProxyHarborDbContext>()
         .UseInMemoryDatabase(Guid.NewGuid().ToString("N")).Options);
 

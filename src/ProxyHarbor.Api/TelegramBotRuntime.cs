@@ -970,6 +970,17 @@ public sealed class TelegramOutboundWorker(
         var db = scope.ServiceProvider.GetRequiredService<ProxyHarborDbContext>();
         var settings = await scope.ServiceProvider.GetRequiredService<ITelegramBotConfigurationStore>().GetAsync(token);
         if (!settings.Ready) return false;
+        // Старые версии после десяти сетевых ошибок переводили доставку в terminal
+        // failed. Возвращаем только доказуемо временные транспортные сбои в очередь;
+        // бизнес- и validation-ошибки остаются terminal для ручного разбора.
+        await db.TelegramOutboundMessages
+            .Where(x => x.Status == TelegramOutboundStatuses.Failed &&
+                (x.LastError == TelegramBotApiClient.ProxyTransportUnavailable ||
+                 x.LastError == TelegramBotApiClient.DirectTransportUnavailable))
+            .ExecuteUpdateAsync(update => update
+                .SetProperty(message => message.Status, TelegramOutboundStatuses.Pending)
+                .SetProperty(message => message.AvailableAt, DateTimeOffset.UtcNow)
+                .SetProperty(message => message.LeaseUntil, (DateTimeOffset?)null), token);
         await db.TelegramOutboundMessages.Where(x => x.Status == TelegramOutboundStatuses.Processing && x.LeaseUntil < DateTimeOffset.UtcNow)
             .ExecuteUpdateAsync(x => x.SetProperty(m => m.Status, TelegramOutboundStatuses.Pending)
                 .SetProperty(m => m.LeaseUntil, (DateTimeOffset?)null), token);
@@ -1045,7 +1056,9 @@ public sealed class TelegramOutboundWorker(
             var retry = exception is TelegramBotApiException apiError && apiError.RetryAfterSeconds.HasValue
                 ? TimeSpan.FromSeconds(Math.Clamp(apiError.RetryAfterSeconds.Value, 1, 3600))
                 : TimeSpan.FromSeconds(Math.Min(300, Math.Pow(2, Math.Min(message.Attempts, 8))));
-            message.Status = message.Attempts >= 10 ? TelegramOutboundStatuses.Failed : TelegramOutboundStatuses.Pending;
+            // Transport outage не теряет сообщение: после восьмой попытки интервал
+            // стабилизируется на пяти минутах и worker продолжает восстановление.
+            message.Status = TelegramOutboundStatuses.Pending;
             message.AvailableAt = DateTimeOffset.UtcNow.Add(retry);
             message.LeaseUntil = null;
             message.LastError = TelegramDispatchService.Limit(exception.Message, 1000);

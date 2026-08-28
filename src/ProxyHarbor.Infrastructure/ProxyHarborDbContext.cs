@@ -391,6 +391,7 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
         var vpnSource = builder.Entity<VpnSource>();
         vpnSource.HasIndex(x => x.Url).IsUnique();
         vpnSource.HasIndex(x => new { x.Enabled, x.Priority });
+        vpnSource.HasIndex(x => new { x.Enabled, x.NextFetchAt });
         vpnSource.Property(x => x.Name).HasMaxLength(120);
         vpnSource.Property(x => x.Provider).HasMaxLength(120);
         vpnSource.Property(x => x.Url).HasMaxLength(2048);
@@ -400,6 +401,7 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
         {
             table.HasCheckConstraint("CK_VpnSources_ProtocolPriority", "\"DefaultProtocol\" BETWEEN 0 AND 7 AND \"Priority\" BETWEEN -10000 AND 10000");
             table.HasCheckConstraint("CK_VpnSources_Counters", "\"LastItemCount\" >= 0 AND \"ConsecutiveFailures\" >= 0");
+            table.HasCheckConstraint("CK_VpnSources_FetchTimeline", "\"LastSucceededAt\" IS NULL OR (\"LastFetchedAt\" IS NOT NULL AND \"LastSucceededAt\" <= \"LastFetchedAt\")");
         });
 
         var vpnEndpoint = builder.Entity<VpnEndpoint>();

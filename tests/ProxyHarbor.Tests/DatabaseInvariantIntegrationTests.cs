@@ -70,6 +70,7 @@ public sealed class DatabaseInvariantIntegrationTests
         "CK_VpnEndpoints_Identity",
         "CK_VpnEndpoints_Timeline",
         "CK_VpnSources_Counters",
+        "CK_VpnSources_FetchTimeline",
         "CK_VpnSources_ProtocolPriority"
     ];
 
