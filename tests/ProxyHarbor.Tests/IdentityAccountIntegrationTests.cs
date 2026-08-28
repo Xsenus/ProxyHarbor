@@ -60,7 +60,8 @@ public sealed class IdentityAccountIntegrationTests
             Email = "user@example.com",
             DisplayName = "Proxy User",
             Password = "Initial-user-42!",
-            AcceptedTerms = true
+            AcceptedOffer = true,
+            AcceptedPersonalData = true
         });
 
         var created = Assert.IsType<ObjectResult>(registered);
@@ -69,6 +70,10 @@ public sealed class IdentityAccountIntegrationTests
         var user = await users.FindByNameAsync("proxy.user");
         Assert.NotNull(user);
         Assert.True(await users.IsInRoleAsync(user, UserRoles.User));
+        Assert.Equal(LegalDocumentVersions.Offer, user.OfferVersion);
+        Assert.NotNull(user.OfferAcceptedAt);
+        Assert.Equal(LegalDocumentVersions.PersonalDataConsent, user.PersonalDataConsentVersion);
+        Assert.NotNull(user.PersonalDataConsentAcceptedAt);
         Assert.Equal(SubscriptionPlans.Free,
             (await fixture.Get<ProxyHarborDbContext>().Subscriptions.SingleAsync()).Plan);
 
@@ -152,7 +157,8 @@ public sealed class IdentityAccountIntegrationTests
             Username = "invited.user",
             Email = "invited@example.com",
             Password = "Initial-user-42!",
-            AcceptedTerms = true,
+            AcceptedOffer = true,
+            AcceptedPersonalData = true,
             ReferralCode = referrer.ReferralCode
         });
 

@@ -1,51 +1,905 @@
-import { ArrowRight, Check, CreditCard, Mail, MapPin, Network, Phone, ShieldCheck } from 'lucide-react'
-import { useEffect, useState } from 'react'
-import type { PublicInfoKind } from './publicInfoRoutes'
+import {
+  ArrowRight,
+  Check,
+  CreditCard,
+  FileText,
+  Mail,
+  MapPin,
+  Network,
+  Phone,
+  ShieldCheck,
+} from "lucide-react";
+import { useEffect, useState } from "react";
+import type { PublicInfoKind } from "./publicInfoRoutes";
 
 type PaymentProduct = {
-  code:string
-  name:string
-  durationDays:number
-  amountMinor:number
-  discountPercent:number
-  fullDailyPriceMinor:number
-  savingsMinor:number
-  currency:string
-  description:string
+  code: string;
+  name: string;
+  durationDays: number;
+  amountMinor: number;
+  discountPercent: number;
+  fullDailyPriceMinor: number;
+  savingsMinor: number;
+  currency: string;
+  description: string;
+};
+
+type PaymentCatalog = { enabled: boolean; products: PaymentProduct[] };
+
+const effectiveDate = "28 августа 2026 года";
+const titles: Record<PublicInfoKind, string> = {
+  legal: "Правовая информация",
+  pricing: "Тарифы",
+  service: "Получение цифровой услуги",
+  offer: "Публичная оферта",
+  privacy: "Политика обработки персональных данных",
+  "personal-data-consent": "Согласие на обработку персональных данных",
+  cookies: "Политика cookies",
+  refunds: "Отмена и возврат",
+  requisites: "Контакты и реквизиты",
+};
+
+function rubles(value: number) {
+  return new Intl.NumberFormat("ru-RU", {
+    style: "currency",
+    currency: "RUB",
+    maximumFractionDigits: 0,
+  }).format(value / 100);
 }
 
-type PaymentCatalog = {enabled:boolean;products:PaymentProduct[]}
-
-const effectiveDate = '28 августа 2026 года'
-const titles:Record<PublicInfoKind,string>={pricing:'Тарифы',service:'Получение цифровой услуги',offer:'Публичная оферта',privacy:'Политика конфиденциальности',requisites:'Контакты и реквизиты'}
-
-function rubles(value:number){return new Intl.NumberFormat('ru-RU',{style:'currency',currency:'RUB',maximumFractionDigits:0}).format(value/100)}
-
-function PublicBrand(){return <a className="brand" href="/"><span className="brand-mark"><Network size={20}/></span><span>Proxy<span>Harbor</span></span></a>}
-
-function PublicInfoFooter(){return <footer className="legal-footer"><PublicBrand/><nav aria-label="Правовая информация"><a href="/pricing">Тарифы</a><a href="/service">Получение доступа</a><a href="/offer">Публичная оферта</a><a href="/privacy">Конфиденциальность</a><a href="/requisites">Контакты и реквизиты</a></nav><span>© {new Date().getFullYear()}</span></footer>}
-
-export function PublicPricingSection({apiBaseUrl,compact=false}:{apiBaseUrl:string;compact?:boolean}){
-  const [catalog,setCatalog]=useState<PaymentCatalog|null>(null)
-  const [error,setError]=useState('')
-  useEffect(()=>{const controller=new AbortController();void fetch(`${apiBaseUrl}/api/v1/payments/catalog`,{signal:controller.signal}).then(async response=>{if(!response.ok)throw new Error('Тарифы временно недоступны');setCatalog(await response.json() as PaymentCatalog)}).catch(reason=>{if(reason instanceof DOMException&&reason.name==='AbortError')return;setError('Тарифы временно недоступны')});return()=>controller.abort()},[apiBaseUrl])
-  const products=[...(catalog?.products??[])].sort((a,b)=>a.durationDays-b.durationDays)
-  return <section className={`public-pricing${compact?' compact':''}`} id="pricing" aria-labelledby="public-pricing-title"><div className="public-section-heading"><span>ТАРИФЫ</span><h2 id="public-pricing-title">Полный доступ к ProxyHarbor</h2><p>Один тариф Unlimited с разным сроком действия. Оплата разовая, автоматического продления и скрытых списаний нет.</p></div>{error&&<p className="public-pricing-error">{error}</p>}{!catalog&&!error&&<p className="public-pricing-loading">Загружаем актуальные цены…</p>}<div className="public-price-grid">{products.map(product=><article key={product.code} className={product.durationDays===30?'featured':''}>{product.durationDays===30&&<em>Популярный</em>}<small>{product.durationDays} {dayWord(product.durationDays)}</small><h3>{product.name}</h3><strong>{rubles(product.amountMinor)}</strong><p>{product.description}</p><ul><li><Check/>Все доступные прокси и VPN</li><li><Check/>Полные API-ответы и экспорт</li><li><Check/>Доступ сразу после подтверждения оплаты</li></ul>{product.savingsMinor>0&&<span><s>{rubles(product.fullDailyPriceMinor)}</s> · экономия {rubles(product.savingsMinor)}</span>}<a href="/register">Выбрать тариф <ArrowRight/></a></article>)}</div>{products.length>0&&<p className="public-price-note">Цены окончательные и указаны в рублях. Для оформления необходимо создать аккаунт; доступ активируется на оплаченный срок.</p>}</section>
+function PublicBrand() {
+  return (
+    <a className="brand" href="/">
+      <span className="brand-mark">
+        <Network size={20} />
+      </span>
+      <span>
+        Proxy<span>Harbor</span>
+      </span>
+    </a>
+  );
 }
 
-function dayWord(days:number){const lastTwo=days%100,last=days%10;return lastTwo>=11&&lastTwo<=14?'дней':last===1?'день':last>=2&&last<=4?'дня':'дней'}
-
-export function PublicInfoPage({kind,apiBaseUrl}:{kind:PublicInfoKind;apiBaseUrl:string}){
-  useEffect(()=>{document.title=`${titles[kind]} — ProxyHarbor`},[kind])
-  return <div className="public-info-shell"><header><PublicBrand/><nav><a href="/pricing">Тарифы</a><a href="/service">Получение доступа</a><a href="/offer">Оферта</a><a href="/requisites">Реквизиты</a></nav><a className="public-info-account" href="/login">Личный кабинет</a></header><main><div className="public-info-hero"><span>PROXYHARBOR · LEGAL</span><h1>{titles[kind]}</h1><p>Актуальная информация об услуге, оплате и исполнителе.</p></div>{kind==='pricing'&&<><PublicPricingSection apiBaseUrl={apiBaseUrl}/><ServiceSummary/></>}{kind==='service'&&<ServicePage/>}{kind==='offer'&&<OfferPage/>}{kind==='privacy'&&<PrivacyPage/>}{kind==='requisites'&&<RequisitesPage/>}</main><PublicInfoFooter/></div>
+function PublicInfoFooter() {
+  return (
+    <footer className="legal-footer">
+      <PublicBrand />
+      <nav aria-label="Правовая информация">
+        <a href="/legal">Документы</a>
+        <a href="/offer">Оферта</a>
+        <a href="/privacy">Персональные данные</a>
+        <a href="/cookies">Cookies</a>
+        <a href="/refunds">Возврат</a>
+        <a href="/requisites">Реквизиты</a>
+      </nav>
+      <span>© {new Date().getFullYear()}</span>
+    </footer>
+  );
 }
 
-function ServiceSummary(){return <section className="public-document public-service-summary"><h2>Что получает покупатель</h2><div className="public-feature-grid"><article><ShieldCheck/><h3>Проверяемый каталог</h3><p>Доступ к полному каталогу актуальных публичных прокси и VPN-конфигураций.</p></article><article><CreditCard/><h3>Разовая оплата</h3><p>Подписка действует выбранное количество дней и не продлевается автоматически.</p></article><article><ArrowRight/><h3>Мгновенное получение</h3><p>После подтверждения оплаты доступ появляется в личном кабинете и API.</p></article></div></section>}
+export function PublicPricingSection({
+  apiBaseUrl,
+  compact = false,
+}: {
+  apiBaseUrl: string;
+  compact?: boolean;
+}) {
+  const [catalog, setCatalog] = useState<PaymentCatalog | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    const controller = new AbortController();
+    void fetch(`${apiBaseUrl}/api/v1/payments/catalog`, {
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Тарифы временно недоступны");
+        setCatalog((await response.json()) as PaymentCatalog);
+      })
+      .catch((reason) => {
+        if (reason instanceof DOMException && reason.name === "AbortError")
+          return;
+        setError("Тарифы временно недоступны");
+      });
+    return () => controller.abort();
+  }, [apiBaseUrl]);
+  const products = [...(catalog?.products ?? [])].sort(
+    (a, b) => a.durationDays - b.durationDays,
+  );
+  return (
+    <section
+      className={`public-pricing${compact ? " compact" : ""}`}
+      id="pricing"
+      aria-labelledby="public-pricing-title"
+    >
+      <div className="public-section-heading">
+        <span>ТАРИФЫ</span>
+        <h2 id="public-pricing-title">Полный доступ к ProxyHarbor</h2>
+        <p>
+          Один тариф Unlimited с разным сроком действия. Оплата разовая,
+          автоматического продления и скрытых списаний нет.
+        </p>
+      </div>
+      {error && <p className="public-pricing-error">{error}</p>}
+      {!catalog && !error && (
+        <p className="public-pricing-loading">Загружаем актуальные цены…</p>
+      )}
+      <div className="public-price-grid">
+        {products.map((product) => (
+          <article
+            key={product.code}
+            className={product.durationDays === 30 ? "featured" : ""}
+          >
+            {product.durationDays === 30 && <em>Популярный</em>}
+            <small>
+              {product.durationDays} {dayWord(product.durationDays)}
+            </small>
+            <h3>{product.name}</h3>
+            <strong>{rubles(product.amountMinor)}</strong>
+            <p>{product.description}</p>
+            <ul>
+              <li>
+                <Check />
+                Все доступные прокси и VPN
+              </li>
+              <li>
+                <Check />
+                Полные API-ответы и экспорт
+              </li>
+              <li>
+                <Check />
+                Доступ сразу после подтверждения оплаты
+              </li>
+            </ul>
+            {product.savingsMinor > 0 && (
+              <span>
+                <s>{rubles(product.fullDailyPriceMinor)}</s> · экономия{" "}
+                {rubles(product.savingsMinor)}
+              </span>
+            )}
+            <a href="/register">
+              Выбрать тариф <ArrowRight />
+            </a>
+          </article>
+        ))}
+      </div>
+      {products.length > 0 && (
+        <p className="public-price-note">
+          Цены окончательные и указаны в рублях. Для оформления необходимо
+          создать аккаунт; доступ активируется на оплаченный срок.
+        </p>
+      )}
+    </section>
+  );
+}
 
-function ServicePage(){return <article className="public-document"><section><h2>Описание услуги</h2><p>ProxyHarbor — информационный онлайн-сервис. Платная подписка открывает полный каталог проверенных на момент последней проверки публично доступных прокси-адресов и VPN-конфигураций, фильтры, пагинацию, экспорт и доступ к API.</p><p>Исполнитель не продаёт и не передаёт в аренду отдельные серверы или IP-адреса. Доступность стороннего публичного узла может измениться после проверки; сервис регулярно обновляет результаты и исключает неработающие адреса.</p></section><section><h2>Как оформить и получить доступ</h2><ol><li>Создайте аккаунт или войдите в личный кабинет.</li><li>Откройте раздел «Тарифы и оплата», выберите срок подписки и доступный способ оплаты.</li><li>После успешной оплаты платёжный сервис возвращает подтверждение в ProxyHarbor.</li><li>Подписка активируется автоматически, обычно сразу и не позднее 5 минут после подтверждения.</li><li>Каталог, экспорт и API становятся доступны в личном кабинете на весь оплаченный срок.</li></ol></section><section><h2>Доставка</h2><p>Услуга полностью цифровая. Физическая доставка не осуществляется. Доступ предоставляется через сайт и API, а при подключённом Telegram-боте — также через команды бота.</p></section><section><h2>Если доступ не появился</h2><p>Напишите на <a href="mailto:ilel@list.ru">ilel@list.ru</a> или позвоните по номеру <a href="tel:+79130149349">+7 913 014-93-49</a>. Укажите e-mail аккаунта, дату, сумму и способ оплаты; не присылайте полные данные банковской карты.</p></section></article>}
+function dayWord(days: number) {
+  const lastTwo = days % 100,
+    last = days % 10;
+  return lastTwo >= 11 && lastTwo <= 14
+    ? "дней"
+    : last === 1
+      ? "день"
+      : last >= 2 && last <= 4
+        ? "дня"
+        : "дней";
+}
 
-function OfferPage(){return <article className="public-document"><p className="document-meta">Редакция 1.0 · действует с {effectiveDate}</p><section><h2>1. Общие положения</h2><p>Настоящий документ является предложением плательщика НПД Телятникова Ильи Александровича, ИНН 890415962910 (далее — Исполнитель), заключить договор возмездного оказания информационных услуг на изложенных ниже условиях. Пользователь принимает оферту при регистрации и подтверждает её при оплате тарифа.</p></section><section><h2>2. Предмет договора</h2><p>Исполнитель предоставляет Заказчику на выбранный срок доступ к функциям сервиса ProxyHarbor: полному каталогу проверенных публичных прокси и VPN-конфигураций, фильтрам, экспорту и API. Конкретный состав, срок и цена указаны на странице <a href="/pricing">тарифов</a> и в заказе до оплаты.</p></section><section><h2>3. Оформление, оплата и исполнение</h2><ol><li>Заказ оформляется в личном кабинете после регистрации.</li><li>Оплата производится через выбранного платёжного провайдера. Исполнитель не получает и не хранит реквизиты банковской карты.</li><li>Обязательство по предоставлению доступа считается начатым с момента автоматической активации подписки после подтверждения оплаты.</li><li>Подписка не продлевается автоматически. Новый период приобретается отдельным заказом.</li></ol></section><section><h2>4. Права и обязанности пользователя</h2><p>Заказчик обязан использовать сведения и функции сервиса законно, не нарушать права третьих лиц, не обходить ограничения доступа, не передавать аккаунт или API-токены посторонним и самостоятельно оценивать допустимость использования прокси/VPN в своей юрисдикции.</p></section><section><h2>5. Качество и ограничения</h2><p>Исполнитель поддерживает работоспособность сайта и регулярно перепроверяет каталог, однако не гарантирует бессрочную доступность конкретного стороннего адреса, определённую скорость, географию или пригодность для конкретного внешнего ресурса. При техническом сбое со стороны ProxyHarbor Исполнитель восстанавливает доступ либо продлевает подписку соразмерно периоду недоступности.</p></section><section><h2>6. Отказ и возврат</h2><p>Заказчик вправе отказаться от договора в порядке, предусмотренном законодательством РФ. Для возврата направьте заявление на <a href="mailto:ilel@list.ru">ilel@list.ru</a> с e-mail аккаунта и укажите номер заказа. До начала предоставления доступа возвращается уплаченная сумма. После активации сумма определяется с учётом фактически оказанной части услуги и документально подтверждённых расходов Исполнителя. Требования, связанные с недостатками услуги, рассматриваются по законодательству о защите прав потребителей. Ответ направляется не позднее 10 календарных дней; срок зачисления зависит от банка и платёжного провайдера.</p></section><section><h2>7. Ответственность</h2><p>Стороны отвечают в пределах, установленных законодательством РФ. Исполнитель не отвечает за действия третьих лиц, внешние сайты, блокировки сторонних публичных узлов и последствия незаконного использования сервиса Заказчиком.</p></section><section><h2>8. Персональные данные</h2><p>Обработка данных выполняется согласно <a href="/privacy">Политике конфиденциальности</a>. Платёжные данные карт обрабатывает выбранный платёжный провайдер.</p></section><section><h2>9. Обращения и споры</h2><p>Обращения принимаются по контактам Исполнителя. Стороны стремятся урегулировать спор претензионно; при невозможности спор разрешается по законодательству Российской Федерации с соблюдением обязательных правил подсудности для потребителей.</p></section><section><h2>10. Реквизиты</h2><p>Контакты и банковские реквизиты Исполнителя опубликованы на отдельной <a href="/requisites">странице реквизитов</a>.</p></section></article>}
+export function PublicInfoPage({
+  kind,
+  apiBaseUrl,
+}: {
+  kind: PublicInfoKind;
+  apiBaseUrl: string;
+}) {
+  useEffect(() => {
+    document.title = `${titles[kind]} — ProxyHarbor`;
+  }, [kind]);
+  return (
+    <div className="public-info-shell">
+      <header>
+        <PublicBrand />
+        <nav>
+          <a href="/pricing">Тарифы</a>
+          <a href="/service">Получение доступа</a>
+          <a href="/legal">Документы</a>
+          <a href="/requisites">Реквизиты</a>
+        </nav>
+        <a className="public-info-account" href="/login">
+          Личный кабинет
+        </a>
+      </header>
+      <main>
+        <div className="public-info-hero">
+          <span>PROXYHARBOR · LEGAL</span>
+          <h1>{titles[kind]}</h1>
+          <p>Актуальная информация об услуге, оплате и исполнителе.</p>
+        </div>
+        {kind === "legal" && <LegalIndex />}
+        {kind === "pricing" && (
+          <>
+            <PublicPricingSection apiBaseUrl={apiBaseUrl} />
+            <ServiceSummary />
+          </>
+        )}
+        {kind === "service" && <ServicePage />}
+        {kind === "offer" && <OfferPage />}
+        {kind === "privacy" && <PrivacyPage />}
+        {kind === "personal-data-consent" && <PersonalDataConsentPage />}
+        {kind === "cookies" && <CookiesPage />}
+        {kind === "refunds" && <RefundsPage />}
+        {kind === "requisites" && <RequisitesPage />}
+      </main>
+      <PublicInfoFooter />
+    </div>
+  );
+}
 
-function PrivacyPage(){return <article className="public-document"><p className="document-meta">Редакция 1.0 · действует с {effectiveDate}</p><section><h2>1. Оператор данных</h2><p>Оператор: Телятников Илья Александрович, ИНН 890415962910, плательщик налога на профессиональный доход. Контакт по вопросам персональных данных: <a href="mailto:ilel@list.ru">ilel@list.ru</a>.</p></section><section><h2>2. Какие данные обрабатываются</h2><p>Сервис может обрабатывать имя, логин, e-mail, хэш пароля, язык, данные подписки и заказов, технические IP-адреса, сведения о запросах к API, события безопасности и переписку с поддержкой или Telegram-ботом. Полные реквизиты банковских карт ProxyHarbor не получает и не хранит.</p></section><section><h2>3. Цели и основания</h2><p>Данные нужны для регистрации и аутентификации, исполнения договора, предоставления подписки, обработки оплаты и возвратов, поддержки, защиты от злоупотреблений, соблюдения требований бухгалтерского и налогового законодательства. Основания — заключение и исполнение договора, выполнение обязанностей по закону, законный интерес в обеспечении безопасности и согласие там, где оно требуется.</p></section><section><h2>4. Получатели</h2><p>В необходимом объёме данные могут обрабатываться хостинг-провайдером, выбранным платёжным провайдером, сервисом отправки почты и Telegram при использовании бота. Каждый получатель обрабатывает данные в рамках своей функции и применимых правил.</p></section><section><h2>5. Сроки и защита</h2><p>Данные аккаунта хранятся до его удаления и далее в пределах обязательных сроков. Платёжные и налоговые документы сохраняются в сроки, установленные законом. Техническая история IP и посещений в интерфейсе ограничена 90 днями. Используются разграничение доступа, шифрование соединения, хэширование паролей, отзыв токенов и журналирование операций.</p></section><section><h2>6. Права пользователя</h2><p>Пользователь может запросить сведения об обработке, исправление, ограничение или удаление данных, отозвать согласие и обратиться с возражением. Запрос направляется на <a href="mailto:ilel@list.ru">ilel@list.ru</a>; для защиты аккаунта может потребоваться подтверждение личности.</p></section><section><h2>7. Cookies</h2><p>Сайт использует технические cookies защищённой сессии и настройки языка. Рекламные cookies не используются. Сигнал Global Privacy Control учитывается для необязательной статистики посещений.</p></section></article>}
+function LegalIndex() {
+  const documents = [
+    ["/offer", "Публичная оферта", "Условия покупки и использования сервиса."],
+    [
+      "/privacy",
+      "Политика обработки персональных данных",
+      "Цели, состав, сроки обработки и права пользователя.",
+    ],
+    [
+      "/personal-data-consent",
+      "Согласие на обработку персональных данных",
+      "Отдельное согласие, выдаваемое при регистрации.",
+    ],
+    [
+      "/cookies",
+      "Политика cookies",
+      "Необходимые технологии и необязательная статистика.",
+    ],
+    [
+      "/refunds",
+      "Отмена и возврат",
+      "Как отказаться от услуги и направить требование.",
+    ],
+    [
+      "/service",
+      "Получение услуги",
+      "Состав и порядок предоставления цифрового доступа.",
+    ],
+    [
+      "/requisites",
+      "Контакты и реквизиты",
+      "Сведения об исполнителе и способы связи.",
+    ],
+  ] as const;
+  return (
+    <article className="public-document">
+      <p className="document-meta">
+        Комплект документов · актуален с {effectiveDate}
+      </p>
+      <section>
+        <h2>Документы ProxyHarbor</h2>
+        <p>
+          Перед регистрацией и оплатой ознакомьтесь с условиями. Редакция
+          принятой оферты и отдельного согласия фиксируется сервером вместе со
+          временем принятия.
+        </p>
+        <div className="legal-index-grid">
+          {documents.map(([href, title, description]) => (
+            <a href={href} key={href}>
+              <FileText />
+              <span>
+                <b>{title}</b>
+                <small>{description}</small>
+              </span>
+              <ArrowRight />
+            </a>
+          ))}
+        </div>
+      </section>
+    </article>
+  );
+}
 
-function RequisitesPage(){return <article className="public-document"><section className="requisites-intro"><ShieldCheck/><div><h2>Исполнитель</h2><p>Самозанятый гражданин Российской Федерации, плательщик налога на профессиональный доход.</p></div></section><dl className="requisites-grid"><div><dt>ФИО</dt><dd>Телятников Илья Александрович</dd></div><div><dt>ИНН</dt><dd>890415962910</dd></div><div><dt>Статус</dt><dd>Плательщик НПД (самозанятый)</dd></div><div><dt>Адрес для корреспонденции</dt><dd>633209, Новосибирская область, г. Искитим, ул. Терешковой, д. 35</dd></div><div><dt>E-mail</dt><dd><a href="mailto:ilel@list.ru"><Mail/>ilel@list.ru</a></dd></div><div><dt>Телефон</dt><dd><a href="tel:+79130149349"><Phone/>+7 913 014-93-49</a></dd></div></dl><section><h2>Банковские реквизиты</h2><dl className="bank-details"><div><dt>Получатель</dt><dd>Телятников Илья Александрович</dd></div><div><dt>Счёт</dt><dd>40817810507220051060</dd></div><div><dt>Банк</dt><dd>АО «Альфа-Банк», г. Москва</dd></div><div><dt>БИК</dt><dd>044525593</dd></div><div><dt>Корреспондентский счёт</dt><dd>30101810200000000593</dd></div><div><dt>ИНН банка</dt><dd>7728168971</dd></div><div><dt>КПП банка</dt><dd>770801001</dd></div></dl></section><aside className="requisites-note"><MapPin/><p>Для обращений по заказу используйте e-mail или телефон. Паспортные данные и реквизиты банковской карты клиента на сайте не публикуются и службой поддержки не запрашиваются.</p></aside></article>}
+function ServiceSummary() {
+  return (
+    <section className="public-document public-service-summary">
+      <h2>Что получает покупатель</h2>
+      <div className="public-feature-grid">
+        <article>
+          <ShieldCheck />
+          <h3>Проверяемый каталог</h3>
+          <p>
+            Доступ к полному каталогу актуальных публичных прокси и
+            VPN-конфигураций.
+          </p>
+        </article>
+        <article>
+          <CreditCard />
+          <h3>Разовая оплата</h3>
+          <p>
+            Подписка действует выбранное количество дней и не продлевается
+            автоматически.
+          </p>
+        </article>
+        <article>
+          <ArrowRight />
+          <h3>Мгновенное получение</h3>
+          <p>
+            После подтверждения оплаты доступ появляется в личном кабинете и
+            API.
+          </p>
+        </article>
+      </div>
+    </section>
+  );
+}
+
+function ServicePage() {
+  return (
+    <article className="public-document">
+      <section>
+        <h2>Описание услуги</h2>
+        <p>
+          ProxyHarbor — информационный онлайн-сервис. Платная подписка открывает
+          полный каталог проверенных на момент последней проверки публично
+          доступных прокси-адресов и VPN-конфигураций, фильтры, пагинацию,
+          экспорт и доступ к API.
+        </p>
+        <p>
+          Исполнитель не продаёт и не передаёт в аренду отдельные серверы или
+          IP-адреса. Доступность стороннего публичного узла может измениться
+          после проверки; сервис регулярно обновляет результаты и исключает
+          неработающие адреса.
+        </p>
+      </section>
+      <section>
+        <h2>Как оформить и получить доступ</h2>
+        <ol>
+          <li>Создайте аккаунт или войдите в личный кабинет.</li>
+          <li>
+            Откройте раздел «Тарифы и оплата», выберите срок подписки и
+            доступный способ оплаты.
+          </li>
+          <li>
+            После успешной оплаты платёжный сервис возвращает подтверждение в
+            ProxyHarbor.
+          </li>
+          <li>
+            Подписка активируется автоматически, обычно сразу и не позднее 5
+            минут после подтверждения.
+          </li>
+          <li>
+            Каталог, экспорт и API становятся доступны в личном кабинете на весь
+            оплаченный срок.
+          </li>
+        </ol>
+      </section>
+      <section>
+        <h2>Доставка</h2>
+        <p>
+          Услуга полностью цифровая. Физическая доставка не осуществляется.
+          Доступ предоставляется через сайт и API, а при подключённом
+          Telegram-боте — также через команды бота.
+        </p>
+      </section>
+      <section>
+        <h2>Если доступ не появился</h2>
+        <p>
+          Напишите на <a href="mailto:ilel@list.ru">ilel@list.ru</a> или
+          позвоните по номеру <a href="tel:+79130149349">+7 913 014-93-49</a>.
+          Укажите e-mail аккаунта, дату, сумму и способ оплаты; не присылайте
+          полные данные банковской карты.
+        </p>
+      </section>
+    </article>
+  );
+}
+
+function OfferPage() {
+  return (
+    <article className="public-document">
+      <p className="document-meta">
+        Редакция 2.0 · действует с {effectiveDate}
+      </p>
+      <section>
+        <h2>1. Общие положения</h2>
+        <p>
+          Настоящий документ является предложением плательщика НПД Телятникова
+          Ильи Александровича, ИНН 890415962910 (далее — Исполнитель), заключить
+          договор возмездного оказания информационных услуг на изложенных ниже
+          условиях. Пользователь принимает оферту при регистрации и подтверждает
+          её при оплате тарифа.
+        </p>
+      </section>
+      <section>
+        <h2>2. Предмет договора</h2>
+        <p>
+          Исполнитель предоставляет Заказчику на выбранный срок доступ к
+          функциям сервиса ProxyHarbor: полному каталогу проверенных публичных
+          прокси и VPN-конфигураций, фильтрам, экспорту и API. Конкретный
+          состав, срок и цена указаны на странице <a href="/pricing">тарифов</a>{" "}
+          и в заказе до оплаты.
+        </p>
+      </section>
+      <section>
+        <h2>3. Оформление, оплата и исполнение</h2>
+        <ol>
+          <li>Заказ оформляется в личном кабинете после регистрации.</li>
+          <li>
+            Оплата производится через выбранного платёжного провайдера.
+            Исполнитель не получает и не хранит реквизиты банковской карты.
+          </li>
+          <li>
+            Обязательство по предоставлению доступа считается начатым с момента
+            автоматической активации подписки после подтверждения оплаты.
+          </li>
+          <li>
+            Подписка не продлевается автоматически. Новый период приобретается
+            отдельным заказом.
+          </li>
+          <li>
+            Исполнитель формирует чек плательщика НПД и передаёт его покупателю
+            по электронному адресу или через платёжный сервис в установленный
+            законом срок.
+          </li>
+        </ol>
+      </section>
+      <section>
+        <h2>4. Права и обязанности пользователя</h2>
+        <p>
+          Заказчик обязан использовать сведения и функции сервиса законно, не
+          нарушать права третьих лиц, не обходить ограничения доступа, не
+          передавать аккаунт или API-токены посторонним и самостоятельно
+          оценивать допустимость использования прокси/VPN в своей юрисдикции.
+        </p>
+      </section>
+      <section>
+        <h2>5. Качество и ограничения</h2>
+        <p>
+          Исполнитель поддерживает работоспособность сайта и регулярно
+          перепроверяет каталог, однако не гарантирует бессрочную доступность
+          конкретного стороннего адреса, определённую скорость, географию или
+          пригодность для конкретного внешнего ресурса. При техническом сбое со
+          стороны ProxyHarbor Исполнитель восстанавливает доступ либо продлевает
+          подписку соразмерно периоду недоступности.
+        </p>
+      </section>
+      <section>
+        <h2>6. Отказ и возврат</h2>
+        <p>
+          Заказчик вправе отказаться от договора в порядке, предусмотренном
+          законодательством РФ. Для возврата направьте заявление на{" "}
+          <a href="mailto:ilel@list.ru">ilel@list.ru</a> с e-mail аккаунта и
+          укажите номер заказа. До начала предоставления доступа возвращается
+          уплаченная сумма. После активации Исполнитель вправе удержать только
+          фактически понесённые и подтверждаемые расходы, непосредственно
+          связанные с исполнением договора. Требования, связанные с недостатками
+          услуги, рассматриваются по законодательству о защите прав
+          потребителей. Ответ направляется не позднее 10 календарных дней; срок
+          зачисления зависит от банка и платёжного провайдера.
+        </p>
+      </section>
+      <section>
+        <h2>7. Ответственность</h2>
+        <p>
+          Стороны отвечают в пределах, установленных законодательством РФ.
+          Исполнитель не отвечает за действия третьих лиц, внешние сайты,
+          блокировки сторонних публичных узлов и последствия незаконного
+          использования сервиса Заказчиком.
+        </p>
+      </section>
+      <section>
+        <h2>8. Персональные данные</h2>
+        <p>
+          Обработка данных выполняется согласно{" "}
+          <a href="/privacy">Политике конфиденциальности</a>. Платёжные данные
+          карт обрабатывает выбранный платёжный провайдер.
+        </p>
+      </section>
+      <section>
+        <h2>9. Обращения и споры</h2>
+        <p>
+          Обращения принимаются по контактам Исполнителя. Стороны стремятся
+          урегулировать спор претензионно; при невозможности спор разрешается по
+          законодательству Российской Федерации с соблюдением обязательных
+          правил подсудности для потребителей.
+        </p>
+      </section>
+      <section>
+        <h2>10. Реквизиты</h2>
+        <p>
+          Контакты и банковские реквизиты Исполнителя опубликованы на отдельной{" "}
+          <a href="/requisites">странице реквизитов</a>.
+        </p>
+      </section>
+    </article>
+  );
+}
+
+function PrivacyPage() {
+  return (
+    <article className="public-document">
+      <p className="document-meta">
+        Редакция 2.0 · действует с {effectiveDate}
+      </p>
+      <section>
+        <h2>1. Оператор данных</h2>
+        <p>
+          Оператор: Телятников Илья Александрович, ИНН 890415962910, плательщик
+          налога на профессиональный доход. Контакт по вопросам персональных
+          данных: <a href="mailto:ilel@list.ru">ilel@list.ru</a>.
+        </p>
+      </section>
+      <section>
+        <h2>2. Какие данные обрабатываются</h2>
+        <p>
+          Сервис может обрабатывать имя, логин, e-mail, хэш пароля, язык, данные
+          подписки и заказов, технические IP-адреса, сведения о запросах к API,
+          события безопасности и переписку с поддержкой или Telegram-ботом.
+          Полные реквизиты банковских карт ProxyHarbor не получает и не хранит.
+        </p>
+      </section>
+      <section>
+        <h2>3. Цели и основания</h2>
+        <p>
+          Данные нужны для регистрации и аутентификации, исполнения договора,
+          предоставления подписки, обработки оплаты и возвратов, поддержки,
+          защиты от злоупотреблений, соблюдения требований бухгалтерского и
+          налогового законодательства. Основания — заключение и исполнение
+          договора, выполнение обязанностей по закону, законный интерес в
+          обеспечении безопасности и согласие там, где оно требуется.
+        </p>
+      </section>
+      <section>
+        <h2>4. Получатели</h2>
+        <p>
+          В необходимом объёме данные могут обрабатываться хостинг-провайдером,
+          выбранным платёжным провайдером, сервисом отправки почты и Telegram
+          при использовании бота. Каждый получатель обрабатывает данные в рамках
+          своей функции и применимых правил.
+        </p>
+      </section>
+      <section>
+        <h2>5. Сроки и защита</h2>
+        <p>
+          Данные аккаунта хранятся до его удаления и далее в пределах
+          обязательных сроков. Платёжные и налоговые документы сохраняются в
+          сроки, установленные законом. Техническая история IP и посещений в
+          интерфейсе ограничена 90 днями. Используются разграничение доступа,
+          шифрование соединения, хэширование паролей, отзыв токенов и
+          журналирование операций.
+        </p>
+      </section>
+      <section>
+        <h2>6. Права пользователя</h2>
+        <p>
+          Пользователь может запросить сведения об обработке, исправление,
+          ограничение или удаление данных, отозвать согласие и обратиться с
+          возражением. Запрос направляется на{" "}
+          <a href="mailto:ilel@list.ru">ilel@list.ru</a>; для защиты аккаунта
+          может потребоваться подтверждение личности.
+        </p>
+      </section>
+      <section>
+        <h2>7. Cookies</h2>
+        <p>
+          Сайт использует технические cookies защищённой сессии и настройки
+          языка. Рекламные cookies не используются. Сигнал Global Privacy
+          Control учитывается для необязательной статистики посещений.
+        </p>
+      </section>
+      <section>
+        <h2>8. Порядок обращений и удаления</h2>
+        <p>
+          Ответ на запрос о наличии и обработке данных направляется в течение 10
+          рабочих дней; при мотивированном продлении — не более чем ещё на 5
+          рабочих дней. Подтверждённые неточные данные исправляются, а незаконно
+          полученные или ненужные для заявленной цели данные уничтожаются в
+          сроки, установленные законом.
+        </p>
+      </section>
+      <section>
+        <h2>9. Локализация и передача за рубеж</h2>
+        <p>
+          При сборе данных граждан РФ оператор обеспечивает первичную запись,
+          систематизацию, накопление, хранение, уточнение и извлечение с
+          использованием базы данных на территории Российской Федерации в
+          случаях, предусмотренных законом. При добровольном использовании
+          Telegram данные могут передаваться иностранной платформе; такая
+          передача проводится только после выполнения применимых требований к
+          трансграничной передаче.
+        </p>
+      </section>
+      <section>
+        <h2>10. Специальные категории и дети</h2>
+        <p>
+          Сервис не предназначен для лиц младше 18 лет и не запрашивает
+          биометрические данные, сведения о здоровье, политических взглядах,
+          религии или интимной жизни. Не направляйте такие сведения в поддержку.
+        </p>
+      </section>
+      <section>
+        <h2>11. Изменения политики</h2>
+        <p>
+          Новая редакция публикуется на этой странице с датой вступления в силу.
+          Если изменение требует нового согласия, сервис запросит его отдельно
+          до продолжения соответствующей обработки.
+        </p>
+      </section>
+    </article>
+  );
+}
+
+function PersonalDataConsentPage() {
+  return (
+    <article className="public-document">
+      <p className="document-meta">
+        Редакция 1.0 · действует с {effectiveDate}
+      </p>
+      <section>
+        <h2>1. Согласие и оператор</h2>
+        <p>
+          Регистрируясь в ProxyHarbor и устанавливая отдельную отметку, я
+          свободно, своей волей и в своём интересе даю Телятникову Илье
+          Александровичу, ИНН 890415962910, адрес: 633209, Новосибирская
+          область, г. Искитим, ул. Терешковой, д. 35, согласие на обработку моих
+          персональных данных.
+        </p>
+      </section>
+      <section>
+        <h2>2. Данные и цели</h2>
+        <p>
+          Имя (если указано), логин, e-mail, язык, технические IP-адреса,
+          сведения об аккаунте, подписке, заказах, обращениях, использовании API
+          и событиях безопасности обрабатываются для создания и защиты аккаунта,
+          исполнения договора, оплаты и возвратов, поддержки, предотвращения
+          злоупотреблений и выполнения обязанностей по закону.
+        </p>
+      </section>
+      <section>
+        <h2>3. Действия и способ обработки</h2>
+        <p>
+          Разрешаются сбор, запись, систематизация, накопление, хранение,
+          уточнение, извлечение, использование, предоставление обработчикам в
+          необходимом объёме, блокирование, удаление и уничтожение с применением
+          автоматизированной обработки и без неё.
+        </p>
+      </section>
+      <section>
+        <h2>4. Получатели и срок</h2>
+        <p>
+          В необходимом объёме данные могут передаваться хостинг-провайдеру,
+          почтовому и выбранному платёжному сервису; при использовании
+          Telegram-бота — Telegram. Согласие действует до достижения целей,
+          удаления аккаунта либо отзыва, кроме данных, которые оператор обязан
+          хранить по закону.
+        </p>
+      </section>
+      <section>
+        <h2>5. Отзыв</h2>
+        <p>
+          Согласие можно отозвать письмом на{" "}
+          <a href="mailto:ilel@list.ru">ilel@list.ru</a> или по адресу
+          оператора. Укажите e-mail аккаунта и суть требования. Отзыв может
+          сделать невозможным дальнейшее использование аккаунта, но не
+          прекращает обработку, допускаемую законом без согласия. Подробнее — в{" "}
+          <a href="/privacy">политике обработки данных</a>.
+        </p>
+      </section>
+    </article>
+  );
+}
+
+function CookiesPage() {
+  const openSettings = () =>
+    window.dispatchEvent(new Event("proxyharbor:open-privacy-preferences"));
+  return (
+    <article className="public-document">
+      <p className="document-meta">
+        Редакция 1.0 · действует с {effectiveDate}
+      </p>
+      <section>
+        <h2>1. Что используется</h2>
+        <p>
+          Cookies и localStorage помогают сохранить защищённую сессию и
+          выбранный язык. Рекламные и межсайтовые отслеживающие cookies
+          ProxyHarbor не устанавливает.
+        </p>
+      </section>
+      <section>
+        <h2>2. Необходимые технологии</h2>
+        <div className="legal-table">
+          <p>
+            <b>ProxyHarbor.Session</b>
+            <span>
+              HttpOnly cookie авторизации: на время сессии или до 30 дней при
+              выборе «Запомнить меня».
+            </span>
+          </p>
+          <p>
+            <b>ProxyHarbor.Language</b>
+            <span>Cookie языка интерфейса, до 1 года.</span>
+          </p>
+          <p>
+            <b>proxyharbor.language</b>
+            <span>Локальное хранилище языка, до удаления пользователем.</span>
+          </p>
+          <p>
+            <b>proxyharbor.analytics-consent.v1</b>
+            <span>Локально хранит ваш выбор по необязательной статистике.</span>
+          </p>
+        </div>
+      </section>
+      <section>
+        <h2>3. Необязательная статистика</h2>
+        <p>
+          Только после разрешения сайт отправляет код посещённой страницы и
+          технический IP-адрес. Query-параметры, содержимое форм и рекламные
+          идентификаторы не передаются. История удаляется через 90 дней. Global
+          Privacy Control и Do Not Track отключают такую отправку.
+        </p>
+        <button
+          className="document-action"
+          type="button"
+          onClick={openSettings}
+        >
+          Изменить настройки cookies
+        </button>
+      </section>
+      <section>
+        <h2>4. Управление</h2>
+        <p>
+          Вы можете изменить выбор кнопкой «Cookies» на любой странице и удалить
+          данные сайта в настройках браузера. Блокировка необходимых cookies
+          может помешать входу и сохранению языка.
+        </p>
+      </section>
+    </article>
+  );
+}
+
+function RefundsPage() {
+  return (
+    <article className="public-document">
+      <p className="document-meta">
+        Редакция 1.0 · действует с {effectiveDate}
+      </p>
+      <section>
+        <h2>Право на отказ</h2>
+        <p>
+          Потребитель вправе отказаться от договора оказания услуг в любое время
+          при условии оплаты Исполнителю фактически понесённых расходов,
+          связанных с исполнением обязательств. Это право не ограничивается
+          правилами платёжного сервиса.
+        </p>
+      </section>
+      <section>
+        <h2>Как направить требование</h2>
+        <ol>
+          <li>
+            Отправьте письмо на <a href="mailto:ilel@list.ru">ilel@list.ru</a> с
+            e-mail вашего аккаунта.
+          </li>
+          <li>
+            Укажите ФИО, номер заказа, дату и сумму оплаты, причину обращения и
+            требование.
+          </li>
+          <li>
+            Не отправляйте полный номер карты, CVC/CVV, пароль или API-токен.
+          </li>
+        </ol>
+      </section>
+      <section>
+        <h2>Срок и способ возврата</h2>
+        <p>
+          Требование рассматривается в срок, установленный законодательством РФ.
+          Возврат выполняется тем же способом, которым была произведена оплата,
+          если иной законный способ не согласован сторонами. Срок фактического
+          зачисления после возврата зависит от банка и платёжного провайдера.
+        </p>
+      </section>
+      <section>
+        <h2>Недостатки услуги</h2>
+        <p>
+          При непредоставлении доступа или недостатках услуги пользователь
+          вправе заявить требования, предусмотренные законодательством о защите
+          прав потребителей. Приложите описание проблемы и, при наличии, снимок
+          экрана без секретов.
+        </p>
+      </section>
+    </article>
+  );
+}
+
+function RequisitesPage() {
+  return (
+    <article className="public-document">
+      <section className="requisites-intro">
+        <ShieldCheck />
+        <div>
+          <h2>Исполнитель</h2>
+          <p>
+            Самозанятый гражданин Российской Федерации, плательщик налога на
+            профессиональный доход.
+          </p>
+        </div>
+      </section>
+      <dl className="requisites-grid">
+        <div>
+          <dt>ФИО</dt>
+          <dd>Телятников Илья Александрович</dd>
+        </div>
+        <div>
+          <dt>ИНН</dt>
+          <dd>890415962910</dd>
+        </div>
+        <div>
+          <dt>Статус</dt>
+          <dd>Плательщик НПД (самозанятый)</dd>
+        </div>
+        <div>
+          <dt>Адрес для корреспонденции</dt>
+          <dd>
+            633209, Новосибирская область, г. Искитим, ул. Терешковой, д. 35
+          </dd>
+        </div>
+        <div>
+          <dt>E-mail</dt>
+          <dd>
+            <a href="mailto:ilel@list.ru">
+              <Mail />
+              ilel@list.ru
+            </a>
+          </dd>
+        </div>
+        <div>
+          <dt>Телефон</dt>
+          <dd>
+            <a href="tel:+79130149349">
+              <Phone />
+              +7 913 014-93-49
+            </a>
+          </dd>
+        </div>
+      </dl>
+      <section>
+        <h2>Банковские реквизиты</h2>
+        <dl className="bank-details">
+          <div>
+            <dt>Получатель</dt>
+            <dd>Телятников Илья Александрович</dd>
+          </div>
+          <div>
+            <dt>Счёт</dt>
+            <dd>40817810507220051060</dd>
+          </div>
+          <div>
+            <dt>Банк</dt>
+            <dd>АО «Альфа-Банк», г. Москва</dd>
+          </div>
+          <div>
+            <dt>БИК</dt>
+            <dd>044525593</dd>
+          </div>
+          <div>
+            <dt>Корреспондентский счёт</dt>
+            <dd>30101810200000000593</dd>
+          </div>
+          <div>
+            <dt>ИНН банка</dt>
+            <dd>7728168971</dd>
+          </div>
+          <div>
+            <dt>КПП банка</dt>
+            <dd>770801001</dd>
+          </div>
+        </dl>
+      </section>
+      <aside className="requisites-note">
+        <MapPin />
+        <p>
+          Для обращений по заказу используйте e-mail или телефон. Паспортные
+          данные и реквизиты банковской карты клиента на сайте не публикуются и
+          службой поддержки не запрашиваются.
+        </p>
+      </aside>
+    </article>
+  );
+}
