@@ -61,7 +61,7 @@ public sealed class PaymentsController(
             {
                 code,
                 name = options.Providers.TryGetValue(code, out var value) && !string.IsNullOrWhiteSpace(value.DisplayName)
-                    ? value.DisplayName : ProviderName(code),
+                    ? value.DisplayName : PaymentProviderConfiguration.DisplayName(code),
                 available = options.Enabled && value is not null && PaymentProviderConfiguration.IsReady(code, value)
             })
         });
@@ -93,8 +93,8 @@ public sealed class PaymentsController(
             Plan = product.Plan,
             Provider = providerCode,
             AmountMinor = product.AmountMinor,
-            PaymentMethod = DefaultPaymentMethod(providerCode),
-            PaymentInstrument = ProviderName(providerCode),
+            PaymentMethod = PaymentProviderConfiguration.DefaultPaymentMethod(providerCode),
+            PaymentInstrument = PaymentProviderConfiguration.DisplayName(providerCode, provider),
             Currency = product.Currency.ToUpperInvariant(),
             DurationDays = product.DurationDays
         };
@@ -254,26 +254,6 @@ public sealed class PaymentsController(
         "tbank" => Content("OK"),
         "cloudpayments" => Ok(new { code = 0 }),
         _ => Ok()
-    };
-
-    private static string ProviderName(string code) => code switch
-    {
-        "yookassa" => "ЮKassa",
-        "yoomoney" => "ЮMoney",
-        "cloudpayments" => "CloudPayments",
-        "robokassa" => "Robokassa",
-        "tbank" => "Т-Банк",
-        "stripe" => "Stripe",
-        "cryptomus" => "Cryptomus",
-        "nowpayments" => "NOWPayments",
-        _ => code
-    };
-
-    private static string DefaultPaymentMethod(string code) => code switch
-    {
-        "yoomoney" => "wallet",
-        "cryptomus" or "nowpayments" => "crypto",
-        _ => "payment_gateway"
     };
 
     private static bool FixedTokenEquals(string expected, string actual)

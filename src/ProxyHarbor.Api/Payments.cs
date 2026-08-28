@@ -89,6 +89,27 @@ internal static class PaymentProviderConfiguration
         _ => false
     };
 
+    internal static string DisplayName(string code, PaymentProviderOptions? value = null) =>
+        !string.IsNullOrWhiteSpace(value?.DisplayName) ? value.DisplayName : code switch
+        {
+            "yookassa" => "ЮKassa",
+            "yoomoney" => "ЮMoney",
+            "cloudpayments" => "CloudPayments",
+            "robokassa" => "Robokassa",
+            "tbank" => "Т-Банк",
+            "stripe" => "Stripe",
+            "cryptomus" => "Cryptomus",
+            "nowpayments" => "NOWPayments",
+            _ => code
+        };
+
+    internal static string DefaultPaymentMethod(string code) => code switch
+    {
+        "yoomoney" => "wallet",
+        "cryptomus" or "nowpayments" => "crypto",
+        _ => "payment_gateway"
+    };
+
     private static bool Present(string value) => !string.IsNullOrWhiteSpace(value);
 }
 
