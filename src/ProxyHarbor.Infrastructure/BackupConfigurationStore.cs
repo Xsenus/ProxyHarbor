@@ -53,7 +53,8 @@ public sealed class BackupConfigurationStore(
                 Directory = configured.Value.Directory,
                 EncryptionKey = configured.Value.EncryptionKey,
                 TelegramBotToken = secrets.TelegramBotToken,
-                TelegramChatId = secrets.TelegramChatId
+                TelegramChatId = secrets.TelegramChatId,
+                TelegramRecipientId = settings.TelegramRecipientId
             };
         }
         catch (Exception exception) when (exception is JsonException or System.Security.Cryptography.CryptographicException)
@@ -76,7 +77,8 @@ public sealed class BackupConfigurationStore(
         }
         entity.SettingsJson = JsonSerializer.Serialize(new StoredBackupSettings(
             options.Enabled, options.IntervalHours, options.RetentionDays,
-            options.HistoryRetentionDays, options.MaxTelegramFileSizeMb), Json);
+            options.HistoryRetentionDays, options.MaxTelegramFileSizeMb,
+            options.TelegramRecipientId), Json);
         entity.ProtectedSecrets = protector.Protect(JsonSerializer.Serialize(new StoredBackupSecrets(
             options.TelegramBotToken, options.TelegramChatId), Json));
         entity.UpdatedAt = DateTimeOffset.UtcNow;
@@ -93,11 +95,28 @@ public sealed class BackupConfigurationStore(
         EncryptionKey = configured.Value.EncryptionKey,
         TelegramBotToken = configured.Value.TelegramBotToken,
         TelegramChatId = configured.Value.TelegramChatId,
+        TelegramRecipientId = configured.Value.TelegramRecipientId,
         MaxTelegramFileSizeMb = configured.Value.MaxTelegramFileSizeMb
     };
 
     private sealed record StoredBackupSettings(
         bool Enabled, int IntervalHours, int RetentionDays,
-        int HistoryRetentionDays, int MaxTelegramFileSizeMb);
+        int HistoryRetentionDays, int MaxTelegramFileSizeMb,
+        Guid? TelegramRecipientId = null);
     private sealed record StoredBackupSecrets(string? TelegramBotToken, string? TelegramChatId);
+}
+
+/// <summary>Актуальные реквизиты основного бота и выбранного CRM-диалога.</summary>
+public sealed record TelegramBackupDelivery(
+    Guid RecipientId,
+    string BotToken,
+    string ChatId,
+    string DisplayName,
+    string? Username);
+
+/// <summary>Разрешает backup-получателя без копирования bot token в настройки backup.</summary>
+public interface ITelegramBackupDeliveryResolver
+{
+    /// <summary>Проверяет основной бот и возвращает реквизиты выбранного активного диалога.</summary>
+    Task<TelegramBackupDelivery> ResolveAsync(Guid recipientId, CancellationToken token = default);
 }

@@ -22,7 +22,8 @@ public sealed class AdminController(
     ISourceCatalogMutationCoordinator sourceMutationCoordinator,
     IOptions<BackupOptions> backupOptions,
     IOptions<CollectorOptions> collectorOptions,
-    IBackupConfigurationStore? backupConfigurationStore = null) : ControllerBase
+    IBackupConfigurationStore? backupConfigurationStore = null,
+    ITelegramBackupDeliveryResolver? telegramBackupDeliveryResolver = null) : ControllerBase
 {
     /// <summary>Возвращает стабильную bounded-страницу источников и их runtime-состояние.</summary>
     [HttpGet("sources")]
@@ -320,7 +321,8 @@ public sealed class AdminController(
             return Conflict(new ProblemDetails { Title = exception.Message, Status = 409 });
         }
         var current = await GetBackupOptionsAsync(token);
-        var sent = !string.IsNullOrWhiteSpace(current.TelegramBotToken) &&
+        var sent = current.TelegramRecipientId.HasValue ||
+            !string.IsNullOrWhiteSpace(current.TelegramBotToken) &&
             !string.IsNullOrWhiteSpace(current.TelegramChatId);
         return Ok(new BackupTriggerResponse(Path.GetFileName(path), sent));
     }
@@ -331,7 +333,38 @@ public sealed class AdminController(
     public async Task<ActionResult<BackupSettingsResponse>> BackupSettings(CancellationToken token)
     {
         var current = await GetBackupOptionsAsync(token);
-        return Ok(BackupSettingsResponse.From(current));
+        return Ok(await CreateBackupSettingsResponseAsync(current, token));
+    }
+
+    /// <summary>Возвращает активные личные диалоги основного бота для выбора получателя backup.</summary>
+    [HttpGet("backups/telegram-recipients")]
+    [ProducesResponseType<TelegramBackupRecipientResponse[]>(StatusCodes.Status200OK)]
+    public async Task<ActionResult<TelegramBackupRecipientResponse[]>> BackupTelegramRecipients(
+        [FromQuery] string? query = null,
+        CancellationToken token = default)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(token);
+        var chats = db.TelegramChats.AsNoTracking().Where(chat => !chat.IsBlocked);
+        if (!string.IsNullOrWhiteSpace(query))
+        {
+            var term = query.Trim()[..Math.Min(query.Trim().Length, 120)];
+            chats = chats.Where(chat => chat.DisplayName.Contains(term) ||
+                chat.Username != null && chat.Username.Contains(term));
+        }
+        // Эти ToLower overload'ы переводятся EF Core в SQL lower() и сохраняют
+        // одинаковое поведение InMemory-тестов; StringComparison SQL не переводит.
+#pragma warning disable CA1304, CA1311, CA1862
+        var items = await chats
+            .OrderByDescending(chat => chat.Username != null && chat.Username.ToLower() == "xsenus")
+            .ThenByDescending(chat => chat.LastInteractionAt)
+            .ThenBy(chat => chat.Id)
+            .Take(100)
+            .Select(chat => new TelegramBackupRecipientResponse(
+                chat.Id, chat.DisplayName, chat.Username, chat.LastInteractionAt,
+                chat.Username != null && chat.Username.ToLower() == "xsenus"))
+            .ToArrayAsync(token);
+#pragma warning restore CA1304, CA1311, CA1862
+        return Ok(items);
     }
 
     /// <summary>Сохраняет расписание, retention и защищённую Telegram-доставку.</summary>
@@ -351,24 +384,22 @@ public sealed class AdminController(
             return Problem("Проверьте границы интервала, сроков хранения и размера Telegram-файла.", statusCode: 400);
 
         var current = await backupConfigurationStore.GetAsync(token);
-        var tokenValue = request.ClearTelegramCredentials
-            ? null
-            : string.IsNullOrWhiteSpace(request.TelegramBotToken)
-                ? current.TelegramBotToken
-                : request.TelegramBotToken.Trim();
-        var chatId = request.ClearTelegramCredentials
-            ? null
-            : string.IsNullOrWhiteSpace(request.TelegramChatId)
-                ? current.TelegramChatId
-                : request.TelegramChatId.Trim();
-        if (!request.SendToTelegram)
+        if (request.SendToTelegram && !request.TelegramRecipientId.HasValue)
+            return Problem("Выберите получателя среди диалогов основного Telegram-бота.", statusCode: 400);
+        if (request.SendToTelegram)
         {
-            tokenValue = null;
-            chatId = null;
+            if (telegramBackupDeliveryResolver is null)
+                return Problem("Основной Telegram-бот недоступен.", statusCode: 503);
+            try
+            {
+                _ = await telegramBackupDeliveryResolver.ResolveAsync(
+                    request.TelegramRecipientId!.Value, token);
+            }
+            catch (InvalidOperationException exception)
+            {
+                return Problem(exception.Message, statusCode: 400);
+            }
         }
-        if (request.SendToTelegram &&
-            (!BackupOptions.IsTelegramBotTokenValid(tokenValue) || !BackupOptions.IsTelegramChatIdValid(chatId)))
-            return Problem("Для Telegram-доставки задайте корректные BotFather token и числовой chat ID.", statusCode: 400);
         if (request.Enabled && !request.SendToTelegram)
             return Problem("Для плановых резервных копий доставка администратору в Telegram обязательна.", statusCode: 400);
 
@@ -381,11 +412,14 @@ public sealed class AdminController(
             MaxTelegramFileSizeMb = request.MaxTelegramFileSizeMb,
             Directory = current.Directory,
             EncryptionKey = current.EncryptionKey,
-            TelegramBotToken = tokenValue,
-            TelegramChatId = chatId
+            // Token и числовой chat_id больше не копируются в backup-настройки.
+            // BackupService разрешает их из основного бота перед каждой отправкой.
+            TelegramBotToken = null,
+            TelegramChatId = null,
+            TelegramRecipientId = request.SendToTelegram ? request.TelegramRecipientId : null
         };
         await backupConfigurationStore.SaveAsync(updated, token);
-        return Ok(BackupSettingsResponse.From(updated));
+        return Ok(await CreateBackupSettingsResponseAsync(updated, token));
     }
 
     /// <summary>Возвращает страницу истории и актуальную доступность локальных encrypted-файлов.</summary>
@@ -461,6 +495,34 @@ public sealed class AdminController(
         backupConfigurationStore is null
             ? Task.FromResult(backupOptions.Value)
             : backupConfigurationStore.GetAsync(token);
+
+    private async Task<BackupSettingsResponse> CreateBackupSettingsResponseAsync(
+        BackupOptions options,
+        CancellationToken token)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(token);
+        // См. BackupTelegramRecipients: ToLower нужен для SQL/InMemory parity.
+#pragma warning disable CA1304, CA1311, CA1862
+        var recipient = options.TelegramRecipientId.HasValue
+            ? await db.TelegramChats.AsNoTracking()
+                .SingleOrDefaultAsync(chat => chat.Id == options.TelegramRecipientId.Value, token)
+            : await db.TelegramChats.AsNoTracking()
+                .Where(chat => !chat.IsBlocked && chat.Username != null && chat.Username.ToLower() == "xsenus")
+                .OrderByDescending(chat => chat.LastInteractionAt)
+                .FirstOrDefaultAsync(token);
+#pragma warning restore CA1304, CA1311, CA1862
+        var botConfigured = false;
+        if (recipient is not null && telegramBackupDeliveryResolver is not null)
+        {
+            try
+            {
+                _ = await telegramBackupDeliveryResolver.ResolveAsync(recipient.Id, token);
+                botConfigured = true;
+            }
+            catch (InvalidOperationException) { }
+        }
+        return BackupSettingsResponse.From(options, recipient, botConfigured);
+    }
 }
 
 /// <summary>Результат одного ручного validation batch.</summary>
@@ -477,9 +539,7 @@ public sealed record BackupSettingsRequest(
     int HistoryRetentionDays,
     int MaxTelegramFileSizeMb,
     bool SendToTelegram,
-    string? TelegramBotToken,
-    string? TelegramChatId,
-    bool ClearTelegramCredentials = false);
+    Guid? TelegramRecipientId);
 
 /// <summary>Безопасная проекция runtime-настроек для панели администратора.</summary>
 public sealed record BackupSettingsResponse(
@@ -489,24 +549,40 @@ public sealed record BackupSettingsResponse(
     int HistoryRetentionDays,
     int MaxTelegramFileSizeMb,
     bool SendToTelegram,
-    bool TelegramBotTokenConfigured,
-    string? TelegramChatId,
+    bool TelegramBotConfigured,
+    Guid? TelegramRecipientId,
+    string? TelegramRecipientDisplayName,
+    string? TelegramRecipientUsername,
     bool EncryptionConfigured,
     string Format)
 {
-    /// <summary>Секреты заменяются только признаками наличия.</summary>
-    public static BackupSettingsResponse From(BackupOptions options) => new(
+    /// <summary>Возвращает только безопасную ссылку на CRM-диалог, без token и chat_id.</summary>
+    public static BackupSettingsResponse From(
+        BackupOptions options,
+        TelegramChat? recipient,
+        bool telegramBotConfigured) => new(
         options.Enabled,
         options.IntervalHours,
         options.RetentionDays,
         options.HistoryRetentionDays,
         options.MaxTelegramFileSizeMb,
-        !string.IsNullOrWhiteSpace(options.TelegramBotToken) && !string.IsNullOrWhiteSpace(options.TelegramChatId),
-        !string.IsNullOrWhiteSpace(options.TelegramBotToken),
-        options.TelegramChatId,
+        options.TelegramRecipientId.HasValue ||
+            !string.IsNullOrWhiteSpace(options.TelegramBotToken) && !string.IsNullOrWhiteSpace(options.TelegramChatId),
+        telegramBotConfigured,
+        recipient?.Id,
+        recipient?.DisplayName,
+        recipient?.Username,
         BackupOptions.IsNewEncryptionKeyValid(options.EncryptionKey),
         "PHB3 (.phbackup)");
 }
+
+/// <summary>Безопасный вариант получателя из CRM основного Telegram-бота.</summary>
+public sealed record TelegramBackupRecipientResponse(
+    Guid Id,
+    string DisplayName,
+    string? Username,
+    DateTimeOffset LastInteractionAt,
+    bool IsDefault);
 
 /// <summary>Запись истории backup с вычисленной доступностью файла в локальном volume.</summary>
 public sealed record BackupFileResponse(

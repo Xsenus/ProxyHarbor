@@ -538,7 +538,8 @@ describe('ProxyHarbor UI', () => {
       const url = String(input)
       if (url.includes('/api/v1/admin/sources')) return jsonResponse({items:[],page:1,pageSize:10,total:0})
       if (url.includes('/api/v1/admin/diagnostics')) return jsonResponse({serverTime:new Date().toISOString(),databaseBytes:2048,validationQueue:{total:0,due:0},recentRuns:[],recentValidationRuns:[],recentBackups:[backup]})
-      if (url.endsWith('/api/v1/admin/backups/settings')) return jsonResponse({enabled:false,intervalHours:24,retentionDays:7,historyRetentionDays:365,maxTelegramFileSizeMb:49,sendToTelegram:true,telegramBotTokenConfigured:true,telegramChatId:'-1001234567890',encryptionConfigured:true,format:'PHB3 (.phbackup)'})
+      if (url.endsWith('/api/v1/admin/backups/settings')) return jsonResponse({enabled:false,intervalHours:24,retentionDays:7,historyRetentionDays:365,maxTelegramFileSizeMb:49,sendToTelegram:true,telegramBotConfigured:true,telegramRecipientId:'chat-1',telegramRecipientDisplayName:'Илья Телятников',telegramRecipientUsername:'Xsenus',encryptionConfigured:true,format:'PHB3 (.phbackup)'})
+      if (url.endsWith('/api/v1/admin/backups/telegram-recipients')) return jsonResponse([{id:'chat-1',displayName:'Илья Телятников',username:'Xsenus',lastInteractionAt:new Date().toISOString(),isDefault:true}])
       if (url.includes('/api/v1/admin/backups?')) return jsonResponse({items:deleted?[]:[backup],page:1,pageSize:10,total:deleted?0:1})
       if (url.endsWith('/api/v1/admin/backups/backup-1') && options?.method === 'DELETE') { deleted = true; return new Response(null,{status:204}) }
       return jsonResponse({title:'Unexpected request'},500)

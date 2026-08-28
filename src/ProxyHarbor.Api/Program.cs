@@ -119,6 +119,7 @@ builder.Services.AddOptions<TelegramBotHostOptions>()
         "TelegramBot:PublicBaseUrl должен быть абсолютным HTTPS URL")
     .ValidateOnStart();
 builder.Services.AddScoped<ITelegramBotConfigurationStore, TelegramBotConfigurationStore>();
+builder.Services.AddSingleton<ITelegramBackupDeliveryResolver, TelegramBackupDeliveryResolver>();
 builder.Services.AddScoped<TelegramBotApiClient>();
 builder.Services.AddScoped<TelegramDispatchService>();
 builder.Services.AddScoped<TelegramUpdateProcessor>();
