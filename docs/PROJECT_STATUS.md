@@ -6,7 +6,7 @@
 
 | Область | Реализовано |
 |---|---|
-| Источники | 298 встроенных proxy-feed от 75 providers и 116 VPN-feed от 9 providers, seed/synchronization и admin CRUD пользовательских feed |
+| Источники | 310 встроенных proxy-feed от 80 providers и 149 VPN-feed от 23 providers, seed/synchronization и admin CRUD пользовательских feed |
 | Сбор | Bounded parallel downloads, retry/backoff, conditional HTTP, лимиты размера/полноты, parser и глобальная дедупликация |
 | Хранение | PostgreSQL, EF Core migrations, constraints, индексы, COPY-ingestion и audit runs |
 | Проверка | HTTP CONNECT, SOCKS4a и SOCKS5 tunnel, TLS validation, exit IP, latency, success rate и Alive/Dead/Deferred evidence |
@@ -21,7 +21,7 @@
 
 ## Текущие проверенные свидетельства
 
-- Каталог release: 298 proxy-feed/75 providers и 116 VPN-feed/9 providers; последние 200 endpoint проверены live 28.08.2026, полный сетевой CI-аудит обязателен перед production.
+- Каталог release: 310 proxy-feed/80 providers и 149 VPN-feed/23 providers; все endpoint проверены live 28.08.2026, полный сетевой CI-аудит обязателен перед production.
 - Collection audit: 888 116 разобранных строк и 290 217 уникальных кандидатов за 4,965 секунды.
 - Validation sample: 1 600/1 600 объективных результатов без `Deferred`; Alive-множество совпало во всех export formats.
 - Backend: 714 tests; зафиксированный gate прошёл при 89,21% строк и 80,21% ветвей.

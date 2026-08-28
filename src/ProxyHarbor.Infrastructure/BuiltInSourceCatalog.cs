@@ -2,7 +2,7 @@ using ProxyHarbor.Domain;
 
 namespace ProxyHarbor.Infrastructure;
 
-/// <summary>Версионируемый каталог публичных proxy-feed endpoint'ов от 75 независимых провайдеров.</summary>
+/// <summary>Версионируемый каталог публичных proxy-feed endpoint'ов от 80 независимых провайдеров.</summary>
 public static class BuiltInSourceCatalog
 {
     /// <summary>Дата последнего полного production-аудита всех канонических feed'ов.</summary>
@@ -267,7 +267,7 @@ public static class BuiltInSourceCatalog
         Feed(239, "XYZS996 RU", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/ru/data.txt", ProxyProtocol.Http),
         Feed(240, "XYZS996 SE", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/se/data.txt", ProxyProtocol.Http),
         Feed(241, "XYZS996 SG", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/sg/data.txt", ProxyProtocol.Http),
-        Feed(242, "XYZS996 AF", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/af/data.txt", ProxyProtocol.Http),
+        Feed(242, "Proxio Mixed", "Proxio", "https://raw.githubusercontent.com/proxio-io/proxy-list/main/all.txt", ProxyProtocol.Http),
         Feed(243, "XYZS996 AL", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/al/data.txt", ProxyProtocol.Http),
         Feed(244, "XYZS996 AM", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/am/data.txt", ProxyProtocol.Http),
         Feed(245, "XYZS996 AZ", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/az/data.txt", ProxyProtocol.Http),
@@ -277,8 +277,8 @@ public static class BuiltInSourceCatalog
         Feed(249, "XYZS996 BT", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/bt/data.txt", ProxyProtocol.Http),
         Feed(250, "XYZS996 BW", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/bw/data.txt", ProxyProtocol.Http),
         Feed(251, "XYZS996 BY", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/by/data.txt", ProxyProtocol.Http),
-        Feed(252, "XYZS996 CD", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/cd/data.txt", ProxyProtocol.Http),
-        Feed(253, "XYZS996 CG", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/cg/data.txt", ProxyProtocol.Http),
+        Feed(252, "Proxio HTTP", "Proxio", "https://raw.githubusercontent.com/proxio-io/proxy-list/main/http.txt", ProxyProtocol.Http),
+        Feed(253, "Syscallh00k Mixed", "Syscallh00k", "https://raw.githubusercontent.com/Syscallh00k/proxy-list/main/all.txt", ProxyProtocol.Http),
         Feed(254, "XYZS996 CL", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/cl/data.txt", ProxyProtocol.Http),
         Feed(255, "XYZS996 CM", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/cm/data.txt", ProxyProtocol.Http),
         Feed(256, "XYZS996 CR", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/cr/data.txt", ProxyProtocol.Http),
@@ -288,7 +288,7 @@ public static class BuiltInSourceCatalog
         Feed(260, "XYZS996 EG", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/eg/data.txt", ProxyProtocol.Http),
         Feed(261, "XYZS996 GE", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/ge/data.txt", ProxyProtocol.Http),
         Feed(262, "XYZS996 GH", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/gh/data.txt", ProxyProtocol.Http),
-        Feed(263, "XYZS996 GM", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/gm/data.txt", ProxyProtocol.Http),
+        Feed(263, "Pxys Daily CSV", "Pxys", "https://raw.githubusercontent.com/Pxys-io/DailyProxyList/master/working_proxies.csv", ProxyProtocol.Http),
         Feed(264, "XYZS996 GQ", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/gq/data.txt", ProxyProtocol.Http),
         Feed(265, "XYZS996 GR", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/gr/data.txt", ProxyProtocol.Http),
         Feed(266, "XYZS996 GT", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/gt/data.txt", ProxyProtocol.Http),
@@ -324,6 +324,21 @@ public static class BuiltInSourceCatalog
         Feed(296, "HProxy IT", "HProxy", "https://raw.githubusercontent.com/hproxy-com/free-proxy-list/main/by-country/IT.txt", ProxyProtocol.Http),
         Feed(297, "HProxy ES", "HProxy", "https://raw.githubusercontent.com/hproxy-com/free-proxy-list/main/by-country/ES.txt", ProxyProtocol.Http),
         Feed(298, "HProxy CZ", "HProxy", "https://raw.githubusercontent.com/hproxy-com/free-proxy-list/main/by-country/CZ.txt", ProxyProtocol.Http),
+
+        // Новые независимые владельцы, найденные и проверенные 28.08.2026.
+        // Каждый URL отвечает по HTTPS и содержит хотя бы один разбираемый IP:port.
+        Feed(299, "Proxio HTTPS", "Proxio", "https://raw.githubusercontent.com/proxio-io/proxy-list/main/https.txt", ProxyProtocol.Https),
+        Feed(300, "Proxio SOCKS4", "Proxio", "https://raw.githubusercontent.com/proxio-io/proxy-list/main/socks4.txt", ProxyProtocol.Socks4),
+        Feed(301, "Proxio SOCKS5", "Proxio", "https://raw.githubusercontent.com/proxio-io/proxy-list/main/socks5.txt", ProxyProtocol.Socks5),
+        Feed(302, "Azest Kings Crown Mixed", "Azest Kings Crown", "https://raw.githubusercontent.com/azestkingscrown/Free_Proxy_List/main/working_proxies.txt", ProxyProtocol.Http),
+        Feed(303, "Pxys Daily Mixed", "Pxys", "https://raw.githubusercontent.com/Pxys-io/DailyProxyList/master/working_proxies.txt", ProxyProtocol.Http),
+        Feed(304, "Syscallh00k HTTP", "Syscallh00k", "https://raw.githubusercontent.com/Syscallh00k/proxy-list/main/http.txt", ProxyProtocol.Http),
+        Feed(305, "Syscallh00k HTTPS", "Syscallh00k", "https://raw.githubusercontent.com/Syscallh00k/proxy-list/main/https.txt", ProxyProtocol.Https),
+        Feed(306, "Syscallh00k SOCKS4", "Syscallh00k", "https://raw.githubusercontent.com/Syscallh00k/proxy-list/main/socks4.txt", ProxyProtocol.Socks4),
+        Feed(307, "Syscallh00k SOCKS5", "Syscallh00k", "https://raw.githubusercontent.com/Syscallh00k/proxy-list/main/socks5.txt", ProxyProtocol.Socks5),
+        Feed(308, "Free Proxy API HTTP", "Free Proxy API List", "https://raw.githubusercontent.com/gnxD3RfTT2WE/free-proxy-api-list/main/http.txt", ProxyProtocol.Http),
+        Feed(309, "Free Proxy API SOCKS4", "Free Proxy API List", "https://raw.githubusercontent.com/gnxD3RfTT2WE/free-proxy-api-list/main/socks4.txt", ProxyProtocol.Socks4),
+        Feed(310, "Free Proxy API SOCKS5", "Free Proxy API List", "https://raw.githubusercontent.com/gnxD3RfTT2WE/free-proxy-api-list/main/socks5.txt", ProxyProtocol.Socks5),
     ];
 
     private static readonly Dictionary<string, BuiltInSource> SourcesByUrl =

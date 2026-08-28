@@ -13,7 +13,7 @@ public sealed class SourcesController : ControllerBase
     // Каталог неизменяем в рамках процесса, поэтому агрегируем его один раз, а не на каждый запрос.
     private static readonly PublicSourceCatalogResponse Catalog = CreateCatalog();
 
-    /// <summary>Возвращает 75 независимых провайдеров и все их встроенные feed-endpoint.</summary>
+    /// <summary>Возвращает 80 независимых провайдеров и все их встроенные feed-endpoint.</summary>
     [HttpGet]
     [OutputCache(PolicyName = "public-summary")]
     public ActionResult<PublicSourceCatalogResponse> Get() => Ok(Catalog);
