@@ -137,8 +137,10 @@ public sealed class BuiltInVpnSourceCatalogTests
     {
         var sources = BuiltInVpnSourceCatalog.Sources;
 
-        Assert.Equal(16, sources.Count);
+        Assert.Equal(116, sources.Count);
+        Assert.Equal(new DateOnly(2026, 8, 28), BuiltInVpnSourceCatalog.LastAuditedOn);
         Assert.Equal(sources.Count, sources.Select(x => x.Url).Distinct(StringComparer.Ordinal).Count());
+        Assert.Equal(9, sources.Select(x => x.Provider).Distinct(StringComparer.Ordinal).Count());
         Assert.All(sources, source =>
         {
             Assert.StartsWith("https://", source.Url, StringComparison.Ordinal);

@@ -212,7 +212,7 @@ CSV нейтрализует spreadsheet formula injection и содержит `
 ```json
 {
   "lastAuditedOn": "2026-08-26",
-  "feedCount": 198,
+  "feedCount": 298,
   "providerCount": 75,
   "providers": [
     {

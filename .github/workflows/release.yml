@@ -62,6 +62,7 @@ jobs:
           ./tools/Invoke-Actionlint.ps1
           ./tools/Test-AuditSourceFeeds.ps1
           ./tools/Test-BuiltInSourceEndpoints.ps1 -CatalogOnly
+          ./tools/Test-BuiltInVpnSourceEndpoints.ps1 -CatalogOnly
           ./tools/Test-AuditValidation.ps1
           ./tools/Test-AuditBackup.ps1
           ./tools/Test-AuditPublicApiPerformance.ps1

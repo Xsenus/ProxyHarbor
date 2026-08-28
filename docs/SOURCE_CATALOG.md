@@ -1,10 +1,10 @@
 # Каталог 75 провайдеров бесплатных прокси
 
-Все 75 независимых провайдеров уже входят в `BuiltInSourceCatalog`, а их 198 HTTPS endpoint обрабатываются production collector. Документ предназначен оператору; публичная главная страница источники не раскрывает.
+Все 75 независимых провайдеров уже входят в `BuiltInSourceCatalog`, а их 298 HTTPS endpoint обрабатываются production collector. Документ предназначен оператору; публичная главная страница источники не раскрывает.
 
 Совместимый read-only endpoint `GET /api/v1/sources` пока сохраняется для API-клиентов, но обычный React-интерфейс его не запрашивает и не показывает. Runtime errors, backoff и внутреннее состояние доступны только администратору.
 
-Базовые 81 endpoint прошли полный end-to-end аудит 10 августа 2026 года. 24 августа дополнительно проверены 17 URL шести провайдеров. 26 августа проверены ещё 100 живых URL от 19 новых origin-владельцев; полный 198-feed прогон является обязательным release-gate и не подменяется URL-проверкой.
+Базовые 81 endpoint прошли полный end-to-end аудит 10 августа 2026 года. 24 августа дополнительно проверены 17 URL шести провайдеров, 26 августа — ещё 100 URL от 19 origin-владельцев. 28 августа проверены ещё 100 protocol- и country-feed; полный 298-feed прогон является обязательным release-gate и не подменяется URL-проверкой.
 
 | № | Провайдер | Feed'ов | Протоколы | Представительный источник |
 |---:|---|---:|---|---|
@@ -15,7 +15,7 @@
 | 5 | IPLocate | 3 | HTTP, SOCKS4, SOCKS5 | [GitHub](https://github.com/iplocate/free-proxy-list) |
 | 6 | Databay Labs | 3 | HTTP, SOCKS4, SOCKS5 | [GitHub](https://github.com/databay-labs/free-proxy-list) |
 | 7 | TuanMinPay | 3 | HTTP, SOCKS4, SOCKS5 | [GitHub](https://github.com/TuanMinPay/live-proxy) |
-| 8 | HProxy | 3 | HTTP, SOCKS4, SOCKS5 | [GitHub](https://github.com/hproxy-com/free-proxy-list) |
+| 8 | HProxy | 25 | Mixed, HTTP, HTTPS, SOCKS4, SOCKS5, country feeds | [GitHub](https://github.com/hproxy-com/free-proxy-list) |
 | 9 | ObcbO | 3 | HTTP, SOCKS4, SOCKS5 | [GitHub](https://github.com/ObcbO/getproxy) |
 | 10 | Abdal Proxy Hub | 3 | HTTPS, SOCKS4, SOCKS5 | [GitHub](https://github.com/ebrasha/abdal-proxy-hub) |
 | 11 | Dpangestuw Free-PROXY | 3 | HTTP, SOCKS4, SOCKS5 | [GitHub](https://github.com/dpangestuw/Free-PROXY) |
@@ -38,12 +38,12 @@
 | 28 | VMHeaven | 1 | Mixed | [GitHub](https://github.com/vmheaven/VMHeaven.io-Free-Proxy-List) |
 | 29 | GProxyNet | 1 | HTTP | [GitHub](https://github.com/gproxynet/free-proxy-list) |
 | 30 | Anutmagang | 1 | HTTP | [GitHub](https://github.com/anutmagang/Free-HighQuality-Proxy-Socks) |
-| 31 | ProxRipper | 1 | HTTP | [GitHub](https://github.com/Mohammedcha/ProxRipper) |
+| 31 | ProxRipper | 4 | HTTP, HTTPS, SOCKS4, SOCKS5 | [GitHub](https://github.com/Mohammedcha/ProxRipper) |
 | 32 | RoosterKid | 1 | HTTPS | [GitHub](https://github.com/roosterkid/openproxylist) |
 | 33 | Proxy-Free | 1 | HTTP | [GitHub](https://github.com/proxy-free/free-proxy-list) |
 | 34 | Ch4120N | 1 | HTTP | [GitHub](https://github.com/Ch4120N/Ch4120N-Proxy-List) |
-| 35 | XYZS996 | 1 | HTTP | [GitHub](https://github.com/xyzs996/free-proxy-health-list) |
-| 36 | Tianndev | 1 | Mixed | [GitHub](https://github.com/Tianndev/free-proxy) |
+| 35 | XYZS996 | 74 | Mixed, HTTP, HTTPS, country feeds | [GitHub](https://github.com/xyzs996/free-proxy-health-list) |
+| 36 | Tianndev | 5 | Mixed, HTTP, HTTPS, SOCKS4, SOCKS5 | [GitHub](https://github.com/Tianndev/free-proxy) |
 | 37 | KangProxy | 1 | HTTP | [GitHub](https://github.com/officialputuid/KangProxy) |
 | 38 | Thordata | 1 | HTTP | [GitHub](https://github.com/Thordata/awesome-free-proxy-list) |
 | 39 | ErcinDedeoglu | 1 | HTTP | [GitHub](https://github.com/ErcinDedeoglu/proxies) |
@@ -77,7 +77,7 @@
 | 67 | NoArche | 5 | Mixed, HTTP, HTTPS, SOCKS4, SOCKS5 | [GitHub](https://github.com/noarche/proxylist-socks5-sock4-exported-updates) |
 | 68 | ProxyGenerator | 19 | Mixed, HTTP, HTTPS, SOCKS4, SOCKS5, service-tested | [GitHub](https://github.com/proxygenerator1/ProxyGenerator) |
 | 69 | Seeh-Saah | 5 | Mixed, HTTP, HTTPS, SOCKS4, SOCKS5 | [GitHub](https://github.com/Seeh-Saah/awesome-free-proxy-list) |
-| 70 | 7and1 | 3 | HTTP, SOCKS4, SOCKS5 | [GitHub](https://github.com/7and1/free-proxy-list) |
+| 70 | 7and1 | 1 | HTTP | [GitHub](https://github.com/7and1/free-proxy-list) |
 | 71 | TomJiu | 4 | Mixed, HTTP, SOCKS4, SOCKS5 | [GitHub](https://github.com/tomjiu/proxy-pipeline) |
 | 72 | GHSTFACES | 5 | Mixed, HTTP, HTTPS, SOCKS4, SOCKS5 | [GitHub](https://github.com/GHSTFACES/PL) |
 | 73 | Andigwandi | 1 | Mixed | [GitHub](https://github.com/andigwandi/free-proxy) |
@@ -90,4 +90,4 @@
 
 Бесплатные прокси меняются каждую минуту, поэтому нельзя честно обещать, что все строки внешнего feed будут рабочими. Гарантия сервиса другая и проверяемая: все 75 провайдеров входят в сбор; неработающие адреса не публикуются; отказавший, пустой или усечённый feed сразу становится нездоровым в diagnostics, Prometheus и еженедельном CI-аудите.
 
-Полные 198 URL, их протоколы и эксплуатационный порядок находятся в [`BuiltInSourceCatalog.cs`](../src/ProxyHarbor.Infrastructure/BuiltInSourceCatalog.cs). Команда воспроизводимого production-аудита описана в [`SOURCES.md`](SOURCES.md).
+Полные 298 URL, их протоколы и эксплуатационный порядок находятся в [`BuiltInSourceCatalog.cs`](../src/ProxyHarbor.Infrastructure/BuiltInSourceCatalog.cs). Команда воспроизводимого production-аудита описана в [`SOURCES.md`](SOURCES.md).
