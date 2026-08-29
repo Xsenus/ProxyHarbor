@@ -62,6 +62,30 @@ public sealed class TelegramBotApiClientTests
     }
 
     [Fact]
+    public void ProvisioningWorkerDetectsOnlyUnappliedReadyConfiguration()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var options = new TelegramBotOptions
+        {
+            Enabled = true,
+            BotToken = "123:TEST_ONLY_NOT_A_REAL_TOKEN",
+            BotId = 42,
+            BotUsername = "ProxyHarborBot",
+            WebhookSecret = "test-webhook-secret",
+            UpdatedAt = now
+        };
+
+        Assert.True(TelegramProvisioningWorker.NeedsProvisioning(options));
+        options.ProvisionedAt = now.AddMinutes(-1);
+        Assert.True(TelegramProvisioningWorker.NeedsProvisioning(options));
+        options.ProvisionedAt = now.AddSeconds(-1);
+        Assert.False(TelegramProvisioningWorker.NeedsProvisioning(options));
+        options.Enabled = false;
+        options.ProvisionedAt = null;
+        Assert.False(TelegramProvisioningWorker.NeedsProvisioning(options));
+    }
+
+    [Fact]
     public async Task GetMeUsesOfficialEndpointAndReadsIdentity()
     {
         using var factory = new RecordingFactory(_ => new HttpResponseMessage(HttpStatusCode.OK)
