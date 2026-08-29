@@ -127,6 +127,7 @@ builder.Services.AddSingleton<TelegramTransportHealth>();
 builder.Services.AddScoped<TelegramBotApiClient>();
 builder.Services.AddScoped<TelegramDispatchService>();
 builder.Services.AddScoped<TelegramUpdateProcessor>();
+builder.Services.AddHostedService<TelegramProvisioningWorker>();
 builder.Services.AddHostedService<TelegramOutboundWorker>();
 builder.Services.AddHostedService<TelegramPollingWorker>();
 builder.Services.AddHostedService<TelegramSubscriptionReminderWorker>();

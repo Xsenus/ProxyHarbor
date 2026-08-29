@@ -138,6 +138,65 @@ public sealed class TelegramDispatchService(ProxyHarborDbContext db)
 internal sealed record TelegramTextPayload(string Text, JsonElement? ReplyMarkup);
 internal sealed record TelegramProxyFilePayload(int Count);
 
+/// <summary>
+/// Повторно применяет конфигурацию Telegram, если сохранение режима/профиля ранее
+/// не дошло до Bot API. Это устраняет ручное восстановление после сетевого сбоя.
+/// </summary>
+public sealed class TelegramProvisioningWorker(
+    IServiceScopeFactory scopes,
+    ILogger<TelegramProvisioningWorker> logger) : BackgroundService
+{
+    private static readonly Action<ILogger, string, Exception?> Provisioned =
+        LoggerMessage.Define<string>(LogLevel.Information,
+            new EventId(1710, nameof(Provisioned)),
+            "Конфигурация Telegram-бота @{BotUsername} автоматически применена.");
+    private static readonly Action<ILogger, Exception?> ProvisioningFailed =
+        LoggerMessage.Define(LogLevel.Warning,
+            new EventId(1711, nameof(ProvisioningFailed)),
+            "Автоматическое применение конфигурации Telegram временно не удалось.");
+
+    /// <inheritdoc />
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        await Task.Delay(TimeSpan.FromSeconds(2), stoppingToken);
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            var retryDelay = TimeSpan.FromMinutes(5);
+            try
+            {
+                using var scope = scopes.CreateScope();
+                var store = scope.ServiceProvider.GetRequiredService<ITelegramBotConfigurationStore>();
+                var options = await store.GetAsync(stoppingToken);
+                if (NeedsProvisioning(options))
+                {
+                    await scope.ServiceProvider.GetRequiredService<TelegramBotApiClient>()
+                        .ProvisionAsync(options, stoppingToken);
+                    options.ProvisionedAt = DateTimeOffset.UtcNow;
+                    await store.SaveAsync(options, stoppingToken);
+                    Provisioned(
+                        logger,
+                        options.BotUsername ?? options.BotId?.ToString(CultureInfo.InvariantCulture) ?? "unknown",
+                        null);
+                }
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (Exception exception)
+            {
+                ProvisioningFailed(logger, exception);
+                retryDelay = TimeSpan.FromMinutes(1);
+            }
+            await Task.Delay(retryDelay, stoppingToken);
+        }
+    }
+
+    internal static bool NeedsProvisioning(TelegramBotOptions options) =>
+        options.Ready && (!options.ProvisionedAt.HasValue ||
+            options.UpdatedAt - options.ProvisionedAt.Value > TimeSpan.FromSeconds(5));
+}
+
 /// <summary>Идемпотентно обрабатывает один update независимо от webhook/polling транспорта.</summary>
 public sealed class TelegramUpdateProcessor(
     ProxyHarborDbContext db,
