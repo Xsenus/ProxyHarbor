@@ -252,47 +252,153 @@ public sealed class VpnCatalogService(
         if (operationLock is null) throw new OperationAlreadyRunningException("VPN validation уже выполняется другой репликой.");
         await using var db = await dbFactory.CreateDbContextAsync(token);
         var now = DateTimeOffset.UtcNow;
-        var endpoints = await db.VpnEndpoints.Where(x => x.NextCheckAt == null || x.NextCheckAt <= now)
+        // Проверяем detached snapshot: результат сохраняется одним set-based UPDATE,
+        // поэтому tracking тысяч entity только раздувал память и DetectChanges CPU.
+        var endpoints = await db.VpnEndpoints.AsNoTracking()
+            .Where(x => x.NextCheckAt == null || x.NextCheckAt <= now)
             .OrderBy(x => x.NextCheckAt).ThenBy(x => x.LastCheckedAt)
-            .Take(Math.Min(options.Value.ValidationBatchSize, 5000)).ToArrayAsync(token);
-        var results = new System.Collections.Concurrent.ConcurrentBag<(Guid Id, bool? Reachable, int? Latency, string? Error)>();
+            .Take(Math.Clamp(options.Value.ValidationBatchSize, 1, 5000)).ToArrayAsync(token);
+        var results = new System.Collections.Concurrent.ConcurrentBag<VpnProbeResult>();
         await Parallel.ForEachAsync(endpoints, new ParallelOptions
         {
-            MaxDegreeOfParallelism = Math.Min(options.Value.ValidationConcurrency, 250),
+            MaxDegreeOfParallelism = Math.Clamp(options.Value.ValidationConcurrency, 1, 250),
             CancellationToken = token
         }, async (endpoint, cancellationToken) =>
         {
             if (endpoint.Transport == "udp")
             {
-                results.Add((endpoint.Id, null, null, "UDP требует протокольной проверки; credentials не используются"));
+                results.Add(new(
+                    endpoint.Id,
+                    null,
+                    null,
+                    "UDP требует протокольной проверки; credentials не используются"));
                 return;
             }
             var stopwatch = Stopwatch.StartNew();
             try
             {
                 await ConnectPublicAsync(endpoint.Host, endpoint.Port, options.Value.ProbeTimeoutSeconds, cancellationToken);
-                results.Add((endpoint.Id, true, (int)Math.Min(stopwatch.ElapsedMilliseconds, int.MaxValue), null));
+                results.Add(new(endpoint.Id, true, (int)Math.Min(stopwatch.ElapsedMilliseconds, int.MaxValue), null));
             }
             catch (Exception exception) when (exception is SocketException or IOException or OperationCanceledException)
             {
-                results.Add((endpoint.Id, false, null, exception is OperationCanceledException ? "timeout" : exception.GetType().Name));
+                results.Add(new(
+                    endpoint.Id,
+                    false,
+                    null,
+                    exception is OperationCanceledException ? "timeout" : exception.GetType().Name));
             }
         });
 
-        var endpointsById = endpoints.ToDictionary(x => x.Id);
-        foreach (var result in results)
+        var checkedAt = DateTimeOffset.UtcNow;
+        var updates = results.Select(result =>
+            ToValidationUpdate(result, checkedAt, options.Value.ValidationIntervalMinutes)).ToArray();
+        var persisted = await PersistValidationResultsAsync(updates, token);
+        EnsureCompletePersistence(persisted, updates.Length);
+        return new(
+            persisted,
+            updates.Count(x => x.Status == VpnEndpointStatus.Reachable),
+            updates.Count(x => x.Status == VpnEndpointStatus.UnsupportedTransport));
+    }
+
+    /// <summary>Нормализует probe outcome и единообразно назначает следующую проверку.</summary>
+    internal static VpnValidationUpdate ToValidationUpdate(
+        VpnProbeResult result,
+        DateTimeOffset checkedAt,
+        int validationIntervalMinutes)
+    {
+        var status = result.Reachable switch
         {
-            var endpoint = endpointsById[result.Id];
-            endpoint.LastCheckedAt = now;
-            endpoint.NextCheckAt = now.AddMinutes(result.Reachable == false ? 15 : options.Value.ValidationIntervalMinutes);
-            endpoint.LatencyMs = result.Latency;
-            endpoint.LastError = result.Error;
-            if (result.Reachable is null) endpoint.Status = VpnEndpointStatus.UnsupportedTransport;
-            else if (result.Reachable.Value) { endpoint.Status = VpnEndpointStatus.Reachable; endpoint.SuccessfulChecks++; }
-            else { endpoint.Status = VpnEndpointStatus.Unreachable; endpoint.FailedChecks++; }
-        }
-        await db.SaveChangesAsync(token);
-        return new(endpoints.Length, results.Count(x => x.Reachable == true), results.Count(x => x.Reachable is null));
+            true => VpnEndpointStatus.Reachable,
+            false => VpnEndpointStatus.Unreachable,
+            null => VpnEndpointStatus.UnsupportedTransport
+        };
+        var interval = result.Reachable == false ? 15 : Math.Max(1, validationIntervalMinutes);
+        return new(result.Id, status, result.Latency, result.Error, checkedAt, checkedAt.AddMinutes(interval));
+    }
+
+    /// <summary>Не позволяет молча потерять результат при неожиданном изменении каталога.</summary>
+    internal static void EnsureCompletePersistence(int persisted, int expected)
+    {
+        if (persisted != expected)
+            throw new InvalidOperationException(
+                $"VPN validation сохранила {persisted} из {expected} результатов.");
+    }
+
+    /// <summary>
+    /// Передаёт bounded-партию через binary COPY и изменяет каталог одним UPDATE.
+    /// Collection может параллельно обновлять LastSeenAt/URI: запрос намеренно касается
+    /// только validation-полей и не перезаписывает свежие данные источников.
+    /// </summary>
+    internal async Task<int> PersistValidationResultsAsync(
+        VpnValidationUpdate[] updates,
+        CancellationToken token = default)
+    {
+        if (updates.Length == 0) return 0;
+        await using var strategyDb = await dbFactory.CreateDbContextAsync(token);
+        var strategy = strategyDb.Database.CreateExecutionStrategy();
+        return await strategy.ExecuteAsync(async () =>
+        {
+            await using var writeDb = await dbFactory.CreateDbContextAsync(token);
+            var connection = (NpgsqlConnection)writeDb.Database.GetDbConnection();
+            await connection.OpenAsync(token);
+            await using var transaction = await connection.BeginTransactionAsync(token);
+            await using (var create = new NpgsqlCommand("""
+                CREATE TEMP TABLE vpn_check_update (
+                    id uuid PRIMARY KEY,
+                    status integer NOT NULL,
+                    latency_ms integer NULL,
+                    error text NULL,
+                    checked_at timestamptz NOT NULL,
+                    next_check_at timestamptz NOT NULL
+                ) ON COMMIT DROP
+                """, connection, transaction))
+                await create.ExecuteNonQueryAsync(token);
+
+            await using (var writer = await connection.BeginBinaryImportAsync("""
+                COPY vpn_check_update
+                    (id, status, latency_ms, error, checked_at, next_check_at)
+                FROM STDIN (FORMAT BINARY)
+                """, token))
+            {
+                foreach (var update in updates)
+                {
+                    await writer.StartRowAsync(token);
+                    await writer.WriteAsync(update.Id, NpgsqlDbType.Uuid, token);
+                    await writer.WriteAsync((int)update.Status, NpgsqlDbType.Integer, token);
+                    if (update.LatencyMs is null) await writer.WriteNullAsync(token);
+                    else await writer.WriteAsync(update.LatencyMs.Value, NpgsqlDbType.Integer, token);
+                    if (update.Error is null) await writer.WriteNullAsync(token);
+                    else await writer.WriteAsync(
+                        update.Error[..Math.Min(500, update.Error.Length)],
+                        NpgsqlDbType.Text,
+                        token);
+                    await writer.WriteAsync(update.CheckedAt, NpgsqlDbType.TimestampTz, token);
+                    await writer.WriteAsync(update.NextCheckAt, NpgsqlDbType.TimestampTz, token);
+                }
+                await writer.CompleteAsync(token);
+            }
+
+            await using var updateCommand = new NpgsqlCommand("""
+                UPDATE "VpnEndpoints" endpoint
+                SET "Status" = result.status,
+                    "LatencyMs" = result.latency_ms,
+                    "LastError" = result.error,
+                    "LastCheckedAt" = result.checked_at,
+                    "NextCheckAt" = result.next_check_at,
+                    "SuccessfulChecks" = LEAST(
+                        endpoint."SuccessfulChecks" + (result.status = 1)::integer,
+                        2147483647),
+                    "FailedChecks" = LEAST(
+                        endpoint."FailedChecks" + (result.status = 2)::integer,
+                        2147483647)
+                FROM vpn_check_update result
+                WHERE endpoint."Id" = result.id
+                """, connection, transaction);
+            var persisted = await updateCommand.ExecuteNonQueryAsync(token);
+            await transaction.CommitAsync(token);
+            return persisted;
+        });
     }
 
     private async Task<FetchResult[]> ParallelFetchAsync(VpnSource[] sources, CancellationToken token)
@@ -390,6 +496,18 @@ public sealed record VpnValidationResult
     public int UnsupportedTransport { get; }
 }
 
+/// <summary>Нормализованный результат одной VPN-проверки для set-based persistence.</summary>
+internal sealed record VpnValidationUpdate(
+    Guid Id,
+    VpnEndpointStatus Status,
+    int? LatencyMs,
+    string? Error,
+    DateTimeOffset CheckedAt,
+    DateTimeOffset NextCheckAt);
+
+/// <summary>Результат сетевого probe до нормализации статуса и расписания.</summary>
+internal sealed record VpnProbeResult(Guid Id, bool? Reachable, int? Latency, string? Error);
+
 /// <summary>Запускает сбор VPN feed независимо от более частой проверки endpoint.</summary>
 public sealed class VpnCollectorWorker(VpnCatalogService service, IOptions<CollectorOptions> options, ILogger<VpnCollectorWorker> logger) : BackgroundService
 {
@@ -465,6 +583,9 @@ public sealed class VpnCollectorWorker(VpnCatalogService service, IOptions<Colle
 /// <summary>Проверяет очередную VPN-партию с интервалом валидатора, не ожидая следующего сбора.</summary>
 public sealed class VpnValidatorWorker(VpnCatalogService service, IOptions<CollectorOptions> options, ILogger<VpnValidatorWorker> logger) : BackgroundService
 {
+    private static readonly TimeSpan QueueDrainDelay = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan IdleDelay = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan FailureDelay = TimeSpan.FromSeconds(15);
     private static readonly Action<ILogger, Exception?> CycleFailed =
         LoggerMessage.Define(LogLevel.Error, new EventId(1163, "VpnValidationCycleFailed"), "VPN validation cycle failed");
 
@@ -475,12 +596,29 @@ public sealed class VpnValidatorWorker(VpnCatalogService service, IOptions<Colle
         await Task.Delay(TimeSpan.FromSeconds(30), stoppingToken);
         while (!stoppingToken.IsCancellationRequested)
         {
-            try { await service.ValidateAsync(stoppingToken); }
+            var delay = FailureDelay;
+            try
+            {
+                var result = await service.ValidateAsync(stoppingToken);
+                delay = NextDelay(result.Checked);
+            }
+            catch (OperationAlreadyRunningException)
+            {
+                // Другая реплика уже обрабатывает очередь. Короткая пауза не даёт
+                // простаивать после освобождения advisory lock и не создаёт spin-loop.
+                delay = QueueDrainDelay;
+            }
             catch (Exception exception) when (!stoppingToken.IsCancellationRequested)
             {
                 OperationalLogBoundary.Write(() => CycleFailed(logger, exception));
             }
-            await Task.Delay(TimeSpan.FromMinutes(options.Value.ValidationIntervalMinutes), stoppingToken);
+            await Task.Delay(delay, stoppingToken);
         }
     }
+
+    /// <summary>
+    /// NextCheckAt задаёт частоту повторной проверки отдельного endpoint, поэтому worker
+    /// должен быстро выгребать непустые bounded-партии и замедляться только на пустой очереди.
+    /// </summary>
+    internal static TimeSpan NextDelay(int checkedCount) => checkedCount > 0 ? QueueDrainDelay : IdleDelay;
 }
