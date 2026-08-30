@@ -6,6 +6,8 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Npgsql;
+using NpgsqlTypes;
 using ProxyHarbor.Domain;
 
 namespace ProxyHarbor.Infrastructure;
@@ -181,36 +183,129 @@ public sealed class ProxyCountryWorker(
         // Перепроверяем и уже заполненные строки: выходной IP прокси может измениться,
         // поэтому сохранённая страна должна всегда соответствовать последней проверке.
         var candidates = await db.Proxies
+            .AsNoTracking()
             .Where(proxy => proxy.Status == ProxyStatus.Alive && proxy.ExitIp != null)
             .OrderByDescending(proxy => proxy.LastCheckedAt)
             .Take(options.Value.BackfillBatchSize)
+            .Select(proxy => new { proxy.Id, proxy.ExitIp, proxy.CountryCode })
             .ToListAsync(token);
-        var updated = 0;
-        foreach (var proxy in candidates)
-        {
-            var country = resolver.Resolve(proxy.ExitIp);
-            if (country is null || string.Equals(proxy.CountryCode, country, StringComparison.Ordinal)) continue;
-            proxy.CountryCode = country;
-            updated++;
-        }
+        var proxyUpdates = BuildCountryUpdates(
+            candidates.Select(proxy => new CountryCandidate(proxy.Id, proxy.ExitIp!, proxy.CountryCode)),
+            resolver.Resolve);
 
         // VPN использует ту же локальную GeoIP-базу. Никаких внешних запросов по
         // каждому адресу нет; DNS-имена останутся без страны до появления IP.
         var vpnCandidates = await db.VpnEndpoints
+            .AsNoTracking()
             .Where(endpoint => endpoint.Status == VpnEndpointStatus.Reachable)
             .OrderByDescending(endpoint => endpoint.LastCheckedAt)
             .Take(options.Value.BackfillBatchSize)
+            .Select(endpoint => new { endpoint.Id, endpoint.Host, endpoint.CountryCode })
             .ToListAsync(token);
-        foreach (var endpoint in vpnCandidates)
-        {
-            var country = resolver.Resolve(endpoint.Host);
-            if (country is null || string.Equals(endpoint.CountryCode, country, StringComparison.Ordinal)) continue;
-            endpoint.CountryCode = country;
-            updated++;
-        }
-        if (updated > 0) await db.SaveChangesAsync(token);
+        var vpnUpdates = BuildCountryUpdates(
+            vpnCandidates.Select(endpoint => new CountryCandidate(endpoint.Id, endpoint.Host, endpoint.CountryCode)),
+            resolver.Resolve);
+
+        // Proxy and VPN tables use separate short transactions. Validation can continue
+        // concurrently; rows already leased by another writer are skipped and retried by
+        // the next five-minute pass instead of forming a cross-batch deadlock.
+        var updated = await PersistCountryUpdatesAsync(dbFactory, CountryCatalog.Proxy, proxyUpdates, token);
+        updated += await PersistCountryUpdatesAsync(dbFactory, CountryCatalog.Vpn, vpnUpdates, token);
         return updated;
     }
+
+    /// <summary>Нормализует GeoIP-результаты и отбрасывает неизвестные либо неизменившиеся страны.</summary>
+    internal static CountryCodeUpdate[] BuildCountryUpdates(
+        IEnumerable<CountryCandidate> candidates,
+        Func<string, string?> resolve)
+    {
+        var updates = new List<CountryCodeUpdate>();
+        foreach (var candidate in candidates)
+        {
+            var country = resolve(candidate.Address)?.ToUpperInvariant();
+            if (country is not { Length: 2 } || string.Equals(candidate.CurrentCountryCode, country, StringComparison.Ordinal))
+                continue;
+            updates.Add(new CountryCodeUpdate(candidate.Id, country));
+        }
+        return updates.ToArray();
+    }
+
+    /// <summary>
+    /// Copies a bounded country batch into PostgreSQL and updates only rows that can be
+    /// locked immediately in stable ID order. A skipped row is deliberately not an error:
+    /// the periodic backfill will resolve it after the active validator releases its lock.
+    /// </summary>
+    internal static async Task<int> PersistCountryUpdatesAsync(
+        IDbContextFactory<ProxyHarborDbContext> factory,
+        CountryCatalog catalog,
+        CountryCodeUpdate[] updates,
+        CancellationToken token = default)
+    {
+        if (updates.Length == 0) return 0;
+        if (updates.Any(update => update.CountryCode is null || update.CountryCode.Length != 2 ||
+            update.CountryCode.Any(character => character is < 'A' or > 'Z')))
+            throw new ArgumentException("CountryCode должен быть ISO alpha-2 в верхнем регистре.", nameof(updates));
+        if (updates.Select(update => update.Id).Distinct().Count() != updates.Length)
+            throw new ArgumentException("Country update не должен содержать повторяющиеся ID.", nameof(updates));
+
+        await using var strategyDb = await factory.CreateDbContextAsync(token);
+        var strategy = strategyDb.Database.CreateExecutionStrategy();
+        return await strategy.ExecuteAsync(async () =>
+        {
+            await using var writeDb = await factory.CreateDbContextAsync(token);
+            var connection = (NpgsqlConnection)writeDb.Database.GetDbConnection();
+            await connection.OpenAsync(token);
+            await using var transaction = await connection.BeginTransactionAsync(token);
+            await using (var create = new NpgsqlCommand("""
+                CREATE TEMP TABLE geoip_country_update (
+                    id uuid PRIMARY KEY,
+                    country_code varchar(2) NOT NULL
+                ) ON COMMIT DROP
+                """, connection, transaction))
+                await create.ExecuteNonQueryAsync(token);
+
+            await using (var writer = await connection.BeginBinaryImportAsync("""
+                COPY geoip_country_update (id, country_code) FROM STDIN (FORMAT BINARY)
+                """, token))
+            {
+                foreach (var update in updates.OrderBy(update => update.Id))
+                {
+                    await writer.StartRowAsync(token);
+                    await writer.WriteAsync(update.Id, NpgsqlDbType.Uuid, token);
+                    await writer.WriteAsync(update.CountryCode, NpgsqlDbType.Varchar, token);
+                }
+                await writer.CompleteAsync(token);
+            }
+
+            var table = CountryTableName(catalog);
+            await using var merge = new NpgsqlCommand($$"""
+                WITH locked AS MATERIALIZED (
+                    SELECT target."Id"
+                    FROM "{{table}}" target
+                    JOIN geoip_country_update incoming ON incoming.id = target."Id"
+                    ORDER BY target."Id"
+                    FOR UPDATE OF target SKIP LOCKED
+                )
+                UPDATE "{{table}}" target
+                SET "CountryCode" = incoming.country_code
+                FROM geoip_country_update incoming
+                JOIN locked ON locked."Id" = incoming.id
+                WHERE target."Id" = incoming.id
+                  AND target."CountryCode" IS DISTINCT FROM incoming.country_code
+                """, connection, transaction);
+            var persisted = await merge.ExecuteNonQueryAsync(token);
+            await transaction.CommitAsync(token);
+            return persisted;
+        });
+    }
+
+    /// <summary>Возвращает только одно из двух заранее разрешённых имён таблиц для SQL merge.</summary>
+    internal static string CountryTableName(CountryCatalog catalog) => catalog switch
+    {
+        CountryCatalog.Proxy => "Proxies",
+        CountryCatalog.Vpn => "VpnEndpoints",
+        _ => throw new ArgumentOutOfRangeException(nameof(catalog))
+    };
 
     // Открыт внутри сборки для детерминированной проверки ограничения размера без сетевых запросов.
     internal static async Task CopyBoundedAsync(Stream input, Stream output, long maximumBytes, CancellationToken token)
@@ -226,3 +321,18 @@ public sealed class ProxyCountryWorker(
         }
     }
 }
+
+/// <summary>Каталог, которому принадлежит безопасное GeoIP-обновление.</summary>
+internal enum CountryCatalog
+{
+    /// <summary>Публичные proxy endpoint.</summary>
+    Proxy,
+    /// <summary>Публичные VPN endpoint.</summary>
+    Vpn
+}
+
+/// <summary>Минимальная строка пакетного обновления страны.</summary>
+internal readonly record struct CountryCodeUpdate(Guid Id, string? CountryCode);
+
+/// <summary>Минимальная входная строка для локального GeoIP lookup.</summary>
+internal readonly record struct CountryCandidate(Guid Id, string Address, string? CurrentCountryCode);
