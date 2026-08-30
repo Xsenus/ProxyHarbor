@@ -1211,10 +1211,16 @@ public sealed class TelegramPollingWorker(
     IServiceScopeFactory scopes,
     ILogger<TelegramPollingWorker> logger) : BackgroundService
 {
+    private static readonly TimeSpan HeartbeatInterval = TimeSpan.FromMinutes(10);
     private static readonly Action<ILogger, Exception?> PollingFailed = LoggerMessage.Define(
         LogLevel.Warning, new EventId(1703, nameof(PollingFailed)),
         "Telegram polling временно недоступен.");
+    private static readonly Action<ILogger, int, long, Exception?> PollingHealthy = LoggerMessage.Define<int, long>(
+        LogLevel.Information, new EventId(1712, nameof(PollingHealthy)),
+        "Telegram polling работает: получено updates {UpdateCount}, следующий offset {Offset}.");
     private long offset;
+    private bool healthy;
+    private DateTimeOffset nextHeartbeatAt;
 
     /// <inheritdoc />
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -1238,10 +1244,20 @@ public sealed class TelegramPollingWorker(
                         .ProcessAsync(update, TelegramUpdateModes.Polling, stoppingToken);
                     offset = Math.Max(offset, update.GetProperty("update_id").GetInt64() + 1);
                 }
+                var now = DateTimeOffset.UtcNow;
+                // Пишем первый успешный цикл после запуска/ошибки и затем редкий
+                // heartbeat. Так тихое зависание видно в журнале без спама каждые 30 секунд.
+                if (!healthy || now >= nextHeartbeatAt)
+                {
+                    PollingHealthy(logger, updates.Length, offset, null);
+                    nextHeartbeatAt = now.Add(HeartbeatInterval);
+                }
+                healthy = true;
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
             catch (Exception exception)
             {
+                healthy = false;
                 PollingFailed(logger, exception);
                 await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
             }
