@@ -18,6 +18,7 @@
 
 ### Fixed
 
+- GeoIP-обогащение proxy/VPN теперь использует PostgreSQL binary `COPY`, один set-based `UPDATE` и `FOR UPDATE SKIP LOCKED`; занятые валидаторами строки переносятся на следующий проход без deadlock и без сотен EF `UPDATE`.
 - Telegram polling and outbound delivery now fail over through fresh, validated SOCKS5 catalog routes, temporarily quarantine broken transports, preserve transiently failed queue items, and allow the full 30-second Telegram long-poll window.
 - Failed VPN feeds now use bounded exponential backoff during background collection while an explicit admin collection still retries every enabled source.
 - Восстановлено соответствие строгой проверке `dotnet format --verify-no-changes` в платёжном контроллере и тестах резервного копирования и платёжных шлюзов.

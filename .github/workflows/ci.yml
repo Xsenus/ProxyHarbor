@@ -678,7 +678,10 @@ jobs:
       - run: dotnet build ProxyHarbor.slnx -c Release --no-restore
       - name: Full suite with PostgreSQL and encrypted backup/restore integration
         env:
-          PROXYHARBOR_INTEGRATION_POSTGRES: Host=127.0.0.1;Port=5432;Database=proxyharbor;Username=proxyharbor;Password=integration-password
+          # Каждый PostgreSQL-тест использует отдельный SearchPath. Без общего пула
+          # закрытые контексты сразу освобождают backend-сессии и не исчерпывают
+          # max_connections при параллельном прогоне интеграционного набора.
+          PROXYHARBOR_INTEGRATION_POSTGRES: Host=127.0.0.1;Port=5432;Database=proxyharbor;Username=proxyharbor;Password=integration-password;Pooling=false
         run: dotnet test ProxyHarbor.slnx -c Release --no-build --collect:'XPlat Code Coverage' --results-directory IntegrationTestResults
       - name: Enforce coverage with production PostgreSQL paths
         shell: pwsh
