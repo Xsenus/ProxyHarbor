@@ -132,7 +132,13 @@ public static class VpnFeedParser
 
     private static bool IsSafe(VpnCandidate candidate)
     {
-        if (candidate.Port is < 1 or > 65_535 || candidate.Host.Length is 0 or > 253) return false;
+        // PostgreSQL text/json values cannot contain U+0000. Some public subscription
+        // files contain binary padding inside an otherwise parseable URI; Uri.TryCreate
+        // accepts a subset of those values, but one such row would abort the whole COPY.
+        // Reject the damaged candidate here so healthy neighbours still reach the catalog.
+        if (candidate.ConnectionUri?.Contains('\0') == true ||
+            candidate.Port is < 1 or > 65_535 || candidate.Host.Length is 0 or > 253)
+            return false;
         var host = candidate.Host.Trim('[', ']');
         if (IPAddress.TryParse(host, out var address)) return NetworkSafety.IsPublicAddress(address);
         if (host.Equals("localhost", StringComparison.OrdinalIgnoreCase) ||

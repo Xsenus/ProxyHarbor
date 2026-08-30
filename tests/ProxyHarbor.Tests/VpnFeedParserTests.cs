@@ -127,6 +127,18 @@ public sealed class VpnFeedParserTests
 
         Assert.Single(candidates);
     }
+
+    [Fact]
+    public void RejectsPostgresNullByteAndKeepsValidNeighbors()
+    {
+        const string content = "vless://broken@8.8.8.8:443#before\0after\n" +
+            "vless://healthy@1.1.1.1:443#valid";
+
+        var candidate = Assert.Single(VpnFeedParser.Parse(content, VpnProtocol.Vless));
+
+        Assert.Equal("1.1.1.1", candidate.Host);
+        Assert.DoesNotContain('\0', candidate.ConnectionUri!);
+    }
 }
 
 /// <summary>Защищает происхождение и целостность встроенного каталога VPN feed.</summary>
