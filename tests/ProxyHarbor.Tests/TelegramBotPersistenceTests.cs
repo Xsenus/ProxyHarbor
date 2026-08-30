@@ -96,6 +96,26 @@ public sealed class TelegramBotPersistenceTests
     }
 
     [Fact]
+    public async Task EnqueueAndIdempotentRetryWakeIdleOutboundWorker()
+    {
+        await using var db = Database();
+        var chat = Chat(401, true, false);
+        db.TelegramChats.Add(chat);
+        await db.SaveChangesAsync();
+        var wakeSignal = new TelegramOutboundWakeSignal();
+        var dispatch = new TelegramDispatchService(db, wakeSignal);
+
+        _ = await dispatch.EnqueueTextAsync(chat, "Сообщение", "wake-key");
+        await wakeSignal.WaitAsync(TimeSpan.FromMinutes(1), CancellationToken.None)
+            .WaitAsync(TimeSpan.FromSeconds(1));
+
+        _ = await dispatch.EnqueueTextAsync(chat, "Дубликат", "wake-key");
+        await wakeSignal.WaitAsync(TimeSpan.FromMinutes(1), CancellationToken.None)
+            .WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.Single(db.TelegramOutboundMessages);
+    }
+
+    [Fact]
     public async Task ProxyFileContainsOnlyFreshAliveEndpointsInPublicOrder()
     {
         await using var db = Database();

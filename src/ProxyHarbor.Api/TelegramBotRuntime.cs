@@ -4,6 +4,7 @@ using System.Net;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Threading.Channels;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using ProxyHarbor.Domain;
@@ -11,8 +12,42 @@ using ProxyHarbor.Infrastructure;
 
 namespace ProxyHarbor.Api;
 
+/// <summary>
+/// Передаёт локальному worker bounded-сигнал о новой записи persistent queue.
+/// Сама PostgreSQL-очередь остаётся источником истины, поэтому потеря процесса
+/// или работа нескольких реплик не может потерять сообщение.
+/// </summary>
+public sealed class TelegramOutboundWakeSignal
+{
+    private readonly Channel<byte> channel = Channel.CreateBounded<byte>(new BoundedChannelOptions(1)
+    {
+        FullMode = BoundedChannelFullMode.DropWrite,
+        SingleReader = true,
+        SingleWriter = false,
+        AllowSynchronousContinuations = false
+    });
+
+    /// <summary>Будит ближайшее idle-ожидание, не накапливая pulse для каждой записи broadcast.</summary>
+    internal void Pulse() => channel.Writer.TryWrite(0);
+
+    /// <summary>Ожидает новое задание либо fallback-проверку общей PostgreSQL-очереди.</summary>
+    internal async Task WaitAsync(TimeSpan timeout, CancellationToken token)
+    {
+        if (timeout <= TimeSpan.Zero) return;
+        using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(token);
+        timeoutSource.CancelAfter(timeout);
+        try { _ = await channel.Reader.ReadAsync(timeoutSource.Token); }
+        catch (OperationCanceledException) when (!token.IsCancellationRequested)
+        {
+            // Истечение fallback timeout — штатный повод снова проверить persistent queue.
+        }
+    }
+}
+
 /// <summary>Ставит сообщения в постоянную очередь и одновременно ведёт CRM-историю.</summary>
-public sealed class TelegramDispatchService(ProxyHarborDbContext db)
+public sealed class TelegramDispatchService(
+    ProxyHarborDbContext db,
+    TelegramOutboundWakeSignal? wakeSignal = null)
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
@@ -24,7 +59,7 @@ public sealed class TelegramDispatchService(ProxyHarborDbContext db)
     {
         var existing = await db.TelegramOutboundMessages.AsNoTracking()
             .Where(x => x.IdempotencyKey == idempotencyKey).Select(x => (Guid?)x.Id).SingleOrDefaultAsync(token);
-        if (existing.HasValue) return existing.Value;
+        if (existing.HasValue) { wakeSignal?.Pulse(); return existing.Value; }
         var payload = new TelegramTextPayload(text, replyMarkup is null
             ? null : JsonSerializer.SerializeToElement(replyMarkup, Json));
         var message = New(chat, TelegramOutboundKinds.Text, payload, idempotencyKey, availableAt);
@@ -38,6 +73,7 @@ public sealed class TelegramDispatchService(ProxyHarborDbContext db)
             OutboundMessageId = message.Id
         });
         await db.SaveChangesAsync(token);
+        wakeSignal?.Pulse();
         return message.Id;
     }
 
@@ -47,7 +83,7 @@ public sealed class TelegramDispatchService(ProxyHarborDbContext db)
     {
         var existing = await db.TelegramOutboundMessages.AsNoTracking()
             .Where(x => x.IdempotencyKey == idempotencyKey).Select(x => (Guid?)x.Id).SingleOrDefaultAsync(token);
-        if (existing.HasValue) return existing.Value;
+        if (existing.HasValue) { wakeSignal?.Pulse(); return existing.Value; }
         var message = New(chat, TelegramOutboundKinds.Invoice, payload, idempotencyKey, null);
         db.TelegramOutboundMessages.Add(message);
         db.TelegramConversationMessages.Add(new TelegramConversationMessage
@@ -58,6 +94,7 @@ public sealed class TelegramDispatchService(ProxyHarborDbContext db)
             OutboundMessageId = message.Id
         });
         await db.SaveChangesAsync(token);
+        wakeSignal?.Pulse();
         return message.Id;
     }
 
@@ -67,7 +104,7 @@ public sealed class TelegramDispatchService(ProxyHarborDbContext db)
     {
         var existing = await db.TelegramOutboundMessages.AsNoTracking()
             .Where(x => x.IdempotencyKey == idempotencyKey).Select(x => (Guid?)x.Id).SingleOrDefaultAsync(token);
-        if (existing.HasValue) return existing.Value;
+        if (existing.HasValue) { wakeSignal?.Pulse(); return existing.Value; }
         var message = New(chat, TelegramOutboundKinds.ProxyFile,
             new TelegramProxyFilePayload(Math.Clamp(count, 1, 10_000)), idempotencyKey, null);
         db.TelegramOutboundMessages.Add(message);
@@ -79,6 +116,7 @@ public sealed class TelegramDispatchService(ProxyHarborDbContext db)
             OutboundMessageId = message.Id
         });
         await db.SaveChangesAsync(token);
+        wakeSignal?.Pulse();
         return message.Id;
     }
 
@@ -115,6 +153,7 @@ public sealed class TelegramDispatchService(ProxyHarborDbContext db)
                 });
             }
             await db.SaveChangesAsync(token);
+            wakeSignal?.Pulse();
             queued += chats.Length;
             cursor = chats[^1].Id;
             db.ChangeTracker.Clear();
@@ -1016,13 +1055,17 @@ public sealed class TelegramUpdateProcessor(
 /// <summary>Доставляет persistent queue с free-tier лимитами Telegram и retry_after.</summary>
 public sealed class TelegramOutboundWorker(
     IServiceScopeFactory scopes,
+    TelegramOutboundWakeSignal wakeSignal,
     ILogger<TelegramOutboundWorker> logger) : BackgroundService
 {
+    private static readonly TimeSpan IdleDatabasePollInterval = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan QueueMaintenanceInterval = TimeSpan.FromMinutes(1);
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
     private static readonly Action<ILogger, Exception?> IterationFailed = LoggerMessage.Define(
         LogLevel.Error, new EventId(1702, nameof(IterationFailed)),
         "Telegram outbound worker завершил итерацию с ошибкой.");
     private readonly Dictionary<long, DateTimeOffset> lastPerChat = [];
+    private DateTimeOffset nextMaintenanceAt = DateTimeOffset.MinValue;
 
     /// <inheritdoc />
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -1032,7 +1075,13 @@ public sealed class TelegramOutboundWorker(
             try
             {
                 var processed = await ProcessOneAsync(stoppingToken);
-                await Task.Delay(processed ? TimeSpan.FromMilliseconds(40) : TimeSpan.FromSeconds(2), stoppingToken);
+                // Локальные enqueue будят worker немедленно. Периодический fallback нужен
+                // для заданий другой реплики и scheduled AvailableAt, но больше не создаёт
+                // три idle-запроса к PostgreSQL каждые две секунды.
+                if (processed)
+                    await Task.Delay(TimeSpan.FromMilliseconds(40), stoppingToken);
+                else
+                    await wakeSignal.WaitAsync(IdleDatabasePollInterval, stoppingToken);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
             catch (Exception exception)
@@ -1049,21 +1098,27 @@ public sealed class TelegramOutboundWorker(
         var db = scope.ServiceProvider.GetRequiredService<ProxyHarborDbContext>();
         var settings = await scope.ServiceProvider.GetRequiredService<ITelegramBotConfigurationStore>().GetAsync(token);
         if (!settings.Ready) return false;
-        // Старые версии после десяти сетевых ошибок переводили доставку в terminal
-        // failed. Возвращаем только доказуемо временные транспортные сбои в очередь;
-        // бизнес- и validation-ошибки остаются terminal для ручного разбора.
-        await db.TelegramOutboundMessages
-            .Where(x => x.Status == TelegramOutboundStatuses.Failed &&
-                (x.LastError == TelegramBotApiClient.ProxyTransportUnavailable ||
-                 x.LastError == TelegramBotApiClient.DirectTransportUnavailable ||
-                 x.LastError == "Bad Request: object expected as reply markup"))
-            .ExecuteUpdateAsync(update => update
-                .SetProperty(message => message.Status, TelegramOutboundStatuses.Pending)
-                .SetProperty(message => message.AvailableAt, DateTimeOffset.UtcNow)
-                .SetProperty(message => message.LeaseUntil, (DateTimeOffset?)null), token);
-        await db.TelegramOutboundMessages.Where(x => x.Status == TelegramOutboundStatuses.Processing && x.LeaseUntil < DateTimeOffset.UtcNow)
-            .ExecuteUpdateAsync(x => x.SetProperty(m => m.Status, TelegramOutboundStatuses.Pending)
-                .SetProperty(m => m.LeaseUntil, (DateTimeOffset?)null), token);
+        var now = DateTimeOffset.UtcNow;
+        if (now >= nextMaintenanceAt)
+        {
+            // Старые версии после десяти сетевых ошибок переводили доставку в terminal
+            // failed. Возвращаем только доказуемо временные транспортные сбои в очередь;
+            // бизнес- и validation-ошибки остаются terminal для ручного разбора.
+            await db.TelegramOutboundMessages
+                .Where(x => x.Status == TelegramOutboundStatuses.Failed &&
+                    (x.LastError == TelegramBotApiClient.ProxyTransportUnavailable ||
+                     x.LastError == TelegramBotApiClient.DirectTransportUnavailable ||
+                     x.LastError == "Bad Request: object expected as reply markup"))
+                .ExecuteUpdateAsync(update => update
+                    .SetProperty(message => message.Status, TelegramOutboundStatuses.Pending)
+                    .SetProperty(message => message.AvailableAt, now)
+                    .SetProperty(message => message.LeaseUntil, (DateTimeOffset?)null), token);
+            await db.TelegramOutboundMessages
+                .Where(x => x.Status == TelegramOutboundStatuses.Processing && x.LeaseUntil < now)
+                .ExecuteUpdateAsync(x => x.SetProperty(m => m.Status, TelegramOutboundStatuses.Pending)
+                    .SetProperty(m => m.LeaseUntil, (DateTimeOffset?)null), token);
+            nextMaintenanceAt = now.Add(QueueMaintenanceInterval);
+        }
         // PostgreSQL retry is enabled globally. A user transaction must therefore run
         // inside the provider execution strategy; otherwise the worker fails before it
         // can claim even the first queue item on production.

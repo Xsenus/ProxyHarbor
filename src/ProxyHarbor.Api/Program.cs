@@ -124,6 +124,7 @@ builder.Services.AddScoped<ITelegramBotConfigurationStore, TelegramBotConfigurat
 builder.Services.AddSingleton<ITelegramBackupDeliveryResolver, TelegramBackupDeliveryResolver>();
 builder.Services.AddScoped<ITelegramProxyCandidateProvider, TelegramProxyCandidateProvider>();
 builder.Services.AddSingleton<TelegramTransportHealth>();
+builder.Services.AddSingleton<TelegramOutboundWakeSignal>();
 builder.Services.AddScoped<TelegramBotApiClient>();
 builder.Services.AddScoped<TelegramDispatchService>();
 builder.Services.AddScoped<TelegramUpdateProcessor>();
