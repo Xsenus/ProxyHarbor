@@ -44,7 +44,24 @@ public sealed class VpnCatalogService(
         if (sources.Length == 0)
             return new VpnCollectionResult(0, 0, 0, 0);
         var results = await ParallelFetchAsync(sources, token);
+        // Production использует NpgsqlRetryingExecutionStrategy. Вся транзакция должна
+        // находиться внутри execution scope, а каждая retry-попытка — получать свежий
+        // DbContext: после rollback уже сохранённый tracker иначе считал бы source health
+        // неизменённым и не повторил UPDATE.
+        await using var strategyDb = await dbFactory.CreateDbContextAsync(token);
+        var strategy = strategyDb.Database.CreateExecutionStrategy();
+        return await strategy.ExecuteAsync(
+            () => PersistCollectionAsync(results, sources.Length, collectionStartedAt, token));
+    }
+
+    private async Task<VpnCollectionResult> PersistCollectionAsync(
+        FetchResult[] results,
+        int sourceCount,
+        DateTimeOffset collectionStartedAt,
+        CancellationToken token)
+    {
         await using var db = await dbFactory.CreateDbContextAsync(token);
+        await using var transaction = await db.Database.BeginTransactionAsync(token);
         var resultSourceIds = results.Select(result => result.Source.Id).ToArray();
         // В память попадают только источники текущего запуска. Каталог endpoint и provenance
         // может расти без ограничения, поэтому его нельзя материализовать и track'ать целиком.
@@ -86,7 +103,6 @@ public sealed class VpnCatalogService(
 
         // Source health и импорт составляют одну транзакцию: успешный источник не должен
         // отображаться обновлённым, если COPY/upsert каталога не завершился.
-        await using var transaction = await db.Database.BeginTransactionAsync(token);
         await db.SaveChangesAsync(token);
         var added = await BulkUpsertAsync(
             db,
@@ -95,7 +111,7 @@ public sealed class VpnCatalogService(
             options.Value.LastSeenRefreshMinutes,
             token);
         await transaction.CommitAsync(token);
-        return new(sources.Length, acceptedResults.Count, acceptedResults.Sum(x => x.Candidates.Count), added);
+        return new(sourceCount, acceptedResults.Count, acceptedResults.Sum(x => x.Candidates.Count), added);
     }
 
     /// <summary>

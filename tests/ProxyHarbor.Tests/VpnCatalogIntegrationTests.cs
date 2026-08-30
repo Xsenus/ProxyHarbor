@@ -28,7 +28,7 @@ public sealed class VpnCatalogIntegrationTests
         try
         {
             var dbOptions = new DbContextOptionsBuilder<ProxyHarborDbContext>()
-                .UseNpgsql(builder.ConnectionString)
+                .UseNpgsql(builder.ConnectionString, npgsql => npgsql.EnableRetryOnFailure())
                 .Options;
             var factory = new TestDbFactory(dbOptions);
             Guid preferredSourceId;
@@ -108,7 +108,7 @@ public sealed class VpnCatalogIntegrationTests
         try
         {
             var dbOptions = new DbContextOptionsBuilder<ProxyHarborDbContext>()
-                .UseNpgsql(builder.ConnectionString)
+                .UseNpgsql(builder.ConnectionString, npgsql => npgsql.EnableRetryOnFailure())
                 .Options;
             var factory = new TestDbFactory(dbOptions);
             await using (var seed = await factory.CreateDbContextAsync())
