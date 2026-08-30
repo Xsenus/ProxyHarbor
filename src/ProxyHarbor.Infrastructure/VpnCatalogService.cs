@@ -258,7 +258,7 @@ public sealed class VpnCatalogService(
             .Where(x => x.NextCheckAt == null || x.NextCheckAt <= now)
             .OrderBy(x => x.NextCheckAt).ThenBy(x => x.LastCheckedAt)
             .Take(Math.Clamp(options.Value.ValidationBatchSize, 1, 5000)).ToArrayAsync(token);
-        var results = new System.Collections.Concurrent.ConcurrentBag<(Guid Id, bool? Reachable, int? Latency, string? Error)>();
+        var results = new System.Collections.Concurrent.ConcurrentBag<VpnProbeResult>();
         await Parallel.ForEachAsync(endpoints, new ParallelOptions
         {
             MaxDegreeOfParallelism = Math.Clamp(options.Value.ValidationConcurrency, 1, 250),
@@ -267,43 +267,62 @@ public sealed class VpnCatalogService(
         {
             if (endpoint.Transport == "udp")
             {
-                results.Add((endpoint.Id, null, null, "UDP требует протокольной проверки; credentials не используются"));
+                results.Add(new(
+                    endpoint.Id,
+                    null,
+                    null,
+                    "UDP требует протокольной проверки; credentials не используются"));
                 return;
             }
             var stopwatch = Stopwatch.StartNew();
             try
             {
                 await ConnectPublicAsync(endpoint.Host, endpoint.Port, options.Value.ProbeTimeoutSeconds, cancellationToken);
-                results.Add((endpoint.Id, true, (int)Math.Min(stopwatch.ElapsedMilliseconds, int.MaxValue), null));
+                results.Add(new(endpoint.Id, true, (int)Math.Min(stopwatch.ElapsedMilliseconds, int.MaxValue), null));
             }
             catch (Exception exception) when (exception is SocketException or IOException or OperationCanceledException)
             {
-                results.Add((endpoint.Id, false, null, exception is OperationCanceledException ? "timeout" : exception.GetType().Name));
+                results.Add(new(
+                    endpoint.Id,
+                    false,
+                    null,
+                    exception is OperationCanceledException ? "timeout" : exception.GetType().Name));
             }
         });
 
         var checkedAt = DateTimeOffset.UtcNow;
-        var validationInterval = Math.Max(1, options.Value.ValidationIntervalMinutes);
-        var updates = results.Select(result => new VpnValidationUpdate(
-            result.Id,
-            result.Reachable switch
-            {
-                true => VpnEndpointStatus.Reachable,
-                false => VpnEndpointStatus.Unreachable,
-                null => VpnEndpointStatus.UnsupportedTransport
-            },
-            result.Latency,
-            result.Error,
-            checkedAt,
-            checkedAt.AddMinutes(result.Reachable == false ? 15 : validationInterval))).ToArray();
+        var updates = results.Select(result =>
+            ToValidationUpdate(result, checkedAt, options.Value.ValidationIntervalMinutes)).ToArray();
         var persisted = await PersistValidationResultsAsync(updates, token);
-        if (persisted != updates.Length)
-            throw new InvalidOperationException(
-                $"VPN validation сохранила {persisted} из {updates.Length} результатов.");
+        EnsureCompletePersistence(persisted, updates.Length);
         return new(
             persisted,
             updates.Count(x => x.Status == VpnEndpointStatus.Reachable),
             updates.Count(x => x.Status == VpnEndpointStatus.UnsupportedTransport));
+    }
+
+    /// <summary>Нормализует probe outcome и единообразно назначает следующую проверку.</summary>
+    internal static VpnValidationUpdate ToValidationUpdate(
+        VpnProbeResult result,
+        DateTimeOffset checkedAt,
+        int validationIntervalMinutes)
+    {
+        var status = result.Reachable switch
+        {
+            true => VpnEndpointStatus.Reachable,
+            false => VpnEndpointStatus.Unreachable,
+            null => VpnEndpointStatus.UnsupportedTransport
+        };
+        var interval = result.Reachable == false ? 15 : Math.Max(1, validationIntervalMinutes);
+        return new(result.Id, status, result.Latency, result.Error, checkedAt, checkedAt.AddMinutes(interval));
+    }
+
+    /// <summary>Не позволяет молча потерять результат при неожиданном изменении каталога.</summary>
+    internal static void EnsureCompletePersistence(int persisted, int expected)
+    {
+        if (persisted != expected)
+            throw new InvalidOperationException(
+                $"VPN validation сохранила {persisted} из {expected} результатов.");
     }
 
     /// <summary>
@@ -485,6 +504,9 @@ internal sealed record VpnValidationUpdate(
     string? Error,
     DateTimeOffset CheckedAt,
     DateTimeOffset NextCheckAt);
+
+/// <summary>Результат сетевого probe до нормализации статуса и расписания.</summary>
+internal sealed record VpnProbeResult(Guid Id, bool? Reachable, int? Latency, string? Error);
 
 /// <summary>Запускает сбор VPN feed независимо от более частой проверки endpoint.</summary>
 public sealed class VpnCollectorWorker(VpnCatalogService service, IOptions<CollectorOptions> options, ILogger<VpnCollectorWorker> logger) : BackgroundService

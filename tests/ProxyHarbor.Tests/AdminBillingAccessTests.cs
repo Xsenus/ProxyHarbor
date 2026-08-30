@@ -281,9 +281,16 @@ public sealed class AdminBillingAccessTests
         var other = Context("/health/live", "192.0.2.1");
         await middleware.InvokeAsync(other, monitor);
         var allowed = Context("/api/v1/proxies", "192.0.2.2");
+        allowed.User = new ClaimsPrincipal(new ClaimsIdentity(
+            [new Claim(ClaimTypes.NameIdentifier, admin.Id.ToString())],
+            "test"));
         await middleware.InvokeAsync(allowed, monitor);
         var export = Context("/api/v1/export/txt", "192.0.2.3");
         await middleware.InvokeAsync(export, monitor);
+        // Пустой ответ без item metrics — допустимый сценарий и не должен
+        // ломать неблокирующий access counter.
+        var empty = Context("/api/v1/proxies", "192.0.2.4");
+        await new ProxyAccessMiddleware(_ => Task.CompletedTask).InvokeAsync(empty, monitor);
         var blocked = Context("/api/v1/proxies/seek", "203.0.113.5");
         await middleware.InvokeAsync(blocked, monitor);
 
