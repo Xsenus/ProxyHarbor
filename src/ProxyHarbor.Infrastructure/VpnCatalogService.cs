@@ -393,6 +393,15 @@ public sealed record VpnValidationResult
 /// <summary>Запускает сбор VPN feed независимо от более частой проверки endpoint.</summary>
 public sealed class VpnCollectorWorker(VpnCatalogService service, IOptions<CollectorOptions> options, ILogger<VpnCollectorWorker> logger) : BackgroundService
 {
+    internal enum CycleOutcome { Succeeded, PeerOwned, Failed }
+    private static readonly TimeSpan FailureRetryDelay = TimeSpan.FromMinutes(1);
+    private static readonly TimeSpan OverrunCooldown = TimeSpan.FromSeconds(30);
+    private static readonly Action<ILogger, int, int, int, int, double, Exception?> CycleCompleted =
+        LoggerMessage.Define<int, int, int, int, double>(
+            LogLevel.Information,
+            new EventId(1160, "VpnCycleCompleted"),
+            "VPN catalog cycle завершён: источников {SourceCount}, успешно {SucceededCount}, " +
+            "кандидатов {CandidateCount}, добавлено {AddedCount}, время {ElapsedMilliseconds:F0} мс");
     private static readonly Action<ILogger, Exception?> CycleFailed =
         LoggerMessage.Define(LogLevel.Error, new EventId(1162, "VpnCycleFailed"), "VPN catalog cycle failed");
     /// <inheritdoc />
@@ -402,16 +411,54 @@ public sealed class VpnCollectorWorker(VpnCatalogService service, IOptions<Colle
         await Task.Delay(TimeSpan.FromSeconds(20), stoppingToken);
         while (!stoppingToken.IsCancellationRequested)
         {
+            var startedAt = Stopwatch.GetTimestamp();
+            var outcome = CycleOutcome.Failed;
             try
             {
-                await service.CollectAsync(token: stoppingToken);
+                var result = await service.CollectAsync(token: stoppingToken);
+                var elapsed = Stopwatch.GetElapsedTime(startedAt);
+                CycleCompleted(
+                    logger,
+                    result.Sources,
+                    result.Succeeded,
+                    result.Candidates,
+                    result.Added,
+                    elapsed.TotalMilliseconds,
+                    null);
+                outcome = CycleOutcome.Succeeded;
+            }
+            catch (OperationAlreadyRunningException)
+            {
+                // Ручной запуск или другая API-реплика уже владеет advisory lock.
+                // Это штатная координация, а не ошибка production-цикла.
+                outcome = CycleOutcome.PeerOwned;
             }
             catch (Exception exception) when (!stoppingToken.IsCancellationRequested)
             {
                 OperationalLogBoundary.Write(() => CycleFailed(logger, exception));
             }
-            await Task.Delay(TimeSpan.FromMinutes(options.Value.CollectionIntervalMinutes), stoppingToken);
+            var elapsedAfterCycle = Stopwatch.GetElapsedTime(startedAt);
+            await Task.Delay(
+                NextDelay(options.Value.CollectionIntervalMinutes, outcome, elapsedAfterCycle),
+                stoppingToken);
         }
+    }
+
+    /// <summary>
+    /// Поддерживает start-to-start cadence успешного сбора, не создаёт lock storm при
+    /// другой реплике и быстрее восстанавливается после настоящего transient-сбоя.
+    /// </summary>
+    internal static TimeSpan NextDelay(int intervalMinutes, CycleOutcome outcome, TimeSpan elapsed)
+    {
+        var regularDelay = TimeSpan.FromMinutes(Math.Max(1, intervalMinutes));
+        return outcome switch
+        {
+            CycleOutcome.Succeeded when elapsed < regularDelay => regularDelay - elapsed,
+            CycleOutcome.Succeeded => OverrunCooldown,
+            CycleOutcome.PeerOwned => regularDelay,
+            CycleOutcome.Failed => regularDelay <= FailureRetryDelay ? regularDelay : FailureRetryDelay,
+            _ => throw new ArgumentOutOfRangeException(nameof(outcome))
+        };
     }
 }
 
