@@ -100,6 +100,47 @@ public sealed class TelegramBotApiClientTests
     }
 
     [Fact]
+    public async Task PollingDeadlineBoundsTheWholeTransportAttempt()
+    {
+        using var factory = new RecordingFactory(async (_, token) =>
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, token);
+            return new HttpResponseMessage(HttpStatusCode.OK);
+        });
+        var client = new TelegramBotApiClient(factory);
+
+        var error = await Assert.ThrowsAsync<TelegramBotApiException>(() =>
+            client.GetUpdatesAsync(
+                new TelegramBotOptions { BotToken = "123:TEST_ONLY_NOT_A_REAL_TOKEN" },
+                0,
+                TimeSpan.FromMilliseconds(50),
+                CancellationToken.None));
+
+        Assert.Equal(504, error.ErrorCode);
+        Assert.True(error.Transient);
+        Assert.Contains("failover", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task PollingPreservesHostCancellation()
+    {
+        using var factory = new RecordingFactory(async (_, token) =>
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, token);
+            return new HttpResponseMessage(HttpStatusCode.OK);
+        });
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            new TelegramBotApiClient(factory).GetUpdatesAsync(
+                new TelegramBotOptions { BotToken = "123:TEST_ONLY_NOT_A_REAL_TOKEN" },
+                0,
+                TimeSpan.FromSeconds(1),
+                cancellation.Token));
+    }
+
+    [Fact]
     public async Task ApiErrorPreservesRetryAfterForPersistentQueue()
     {
         using var factory = new RecordingFactory(_ => new HttpResponseMessage((HttpStatusCode)429)
@@ -189,16 +230,24 @@ public sealed class TelegramBotApiClientTests
             Assert.Equal(JsonValueKind.Object, body.RootElement.GetProperty("reply_markup").ValueKind);
     }
 
-    private sealed class RecordingFactory(Func<HttpRequestMessage, HttpResponseMessage> response) : IHttpClientFactory, IDisposable
+    private sealed class RecordingFactory : IHttpClientFactory, IDisposable
     {
-        private readonly RecordingHandler _handler = new(response);
+        private readonly RecordingHandler _handler;
+
+        public RecordingFactory(Func<HttpRequestMessage, HttpResponseMessage> response)
+            : this((request, _) => Task.FromResult(response(request))) { }
+
+        public RecordingFactory(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> response) =>
+            _handler = new(response);
+
         public string? LastRequestUri => _handler.LastRequestUri;
         public string? LastRequestBody => _handler.LastRequestBody;
         public HttpClient CreateClient(string name) => new(_handler, false);
         public void Dispose() => _handler.Dispose();
     }
 
-    private sealed class RecordingHandler(Func<HttpRequestMessage, HttpResponseMessage> response) : HttpMessageHandler
+    private sealed class RecordingHandler(
+        Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> response) : HttpMessageHandler
     {
         public string? LastRequestUri { get; private set; }
         public string? LastRequestBody { get; private set; }
@@ -208,7 +257,7 @@ public sealed class TelegramBotApiClientTests
             LastRequestBody = request.Content is null
                 ? null
                 : await request.Content.ReadAsStringAsync(cancellationToken);
-            return response(request);
+            return await response(request, cancellationToken);
         }
     }
 }

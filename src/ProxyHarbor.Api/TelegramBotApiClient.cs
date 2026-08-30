@@ -10,6 +10,7 @@ namespace ProxyHarbor.Api;
 public sealed class TelegramBotApiClient
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
+    internal static readonly TimeSpan PollingRequestDeadline = TimeSpan.FromSeconds(90);
     internal const string ProxyTransportUnavailable =
         "Не удалось подключиться к Telegram ни через один настроенный SOCKS5-прокси.";
     internal const string DirectTransportUnavailable =
@@ -104,16 +105,39 @@ public sealed class TelegramBotApiClient
 
     /// <summary>Получает update long polling; вызывается только polling worker.</summary>
     public async Task<JsonElement[]> GetUpdatesAsync(
-        TelegramBotOptions options, long offset, CancellationToken token)
+        TelegramBotOptions options, long offset, CancellationToken token) =>
+        await GetUpdatesAsync(options, offset, PollingRequestDeadline, token);
+
+    /// <summary>
+    /// Ограничивает не только один HTTP-запрос, но и всю цепочку SOCKS5 failover.
+    /// Без общего deadline несколько зависших маршрутов могли последовательно
+    /// удерживать единственный polling worker минутами, хотя API-процесс оставался healthy.
+    /// </summary>
+    internal async Task<JsonElement[]> GetUpdatesAsync(
+        TelegramBotOptions options, long offset, TimeSpan deadline, CancellationToken token)
     {
-        var result = await CallAsync(options, "getUpdates", new
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(deadline, TimeSpan.Zero);
+        using var deadlineSource = CancellationTokenSource.CreateLinkedTokenSource(token);
+        deadlineSource.CancelAfter(deadline);
+        try
         {
-            offset,
-            limit = 100,
-            timeout = 30,
-            allowed_updates = AllowedUpdates
-        }, token);
-        return result.EnumerateArray().Select(x => x.Clone()).ToArray();
+            var result = await CallAsync(options, "getUpdates", new
+            {
+                offset,
+                limit = 100,
+                timeout = 30,
+                allowed_updates = AllowedUpdates
+            }, deadlineSource.Token);
+            return result.EnumerateArray().Select(x => x.Clone()).ToArray();
+        }
+        catch (OperationCanceledException exception)
+            when (!token.IsCancellationRequested && deadlineSource.IsCancellationRequested)
+        {
+            throw new TelegramBotApiException(
+                504,
+                "Telegram polling превысил допустимое время failover.",
+                innerException: exception);
+        }
     }
 
     /// <summary>Отправляет текст с опциональной inline-клавиатурой.</summary>
