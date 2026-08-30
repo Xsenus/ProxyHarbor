@@ -178,6 +178,113 @@ public sealed class VpnCatalogIntegrationTests
         }
     }
 
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
+    public async Task ValidationBulkUpdatePreservesCatalogFieldsAndAppliesCountersOnce()
+    {
+        var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
+        if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
+
+        var schema = $"proxyharbor_vpn_validation_{Guid.NewGuid():N}";
+        var builder = new NpgsqlConnectionStringBuilder(baseConnectionString) { SearchPath = schema };
+        await using var admin = new NpgsqlConnection(baseConnectionString);
+        await admin.OpenAsync();
+        await using (var create = new NpgsqlCommand($"CREATE SCHEMA {schema}", admin))
+            await create.ExecuteNonQueryAsync();
+        try
+        {
+            var dbOptions = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+                .UseNpgsql(builder.ConnectionString, npgsql => npgsql.EnableRetryOnFailure())
+                .Options;
+            var factory = new TestDbFactory(dbOptions);
+            var first = new VpnEndpoint
+            {
+                Host = "8.8.8.8",
+                Port = 443,
+                Protocol = VpnProtocol.Trojan,
+                ConnectionUri = "trojan://public@8.8.8.8:443",
+                CountryCode = "US",
+                Status = VpnEndpointStatus.Unreachable,
+                SuccessfulChecks = 4,
+                FailedChecks = 2,
+                FirstSeenAt = new DateTimeOffset(2026, 8, 1, 0, 0, 0, TimeSpan.Zero),
+                LastSeenAt = new DateTimeOffset(2026, 8, 29, 0, 0, 0, TimeSpan.Zero)
+            };
+            var second = new VpnEndpoint
+            {
+                Host = "1.1.1.1",
+                Port = 8443,
+                Protocol = VpnProtocol.Vless,
+                Status = VpnEndpointStatus.Reachable,
+                SuccessfulChecks = 8,
+                FailedChecks = 1,
+                FirstSeenAt = new DateTimeOffset(2026, 8, 2, 0, 0, 0, TimeSpan.Zero),
+                LastSeenAt = new DateTimeOffset(2026, 8, 28, 0, 0, 0, TimeSpan.Zero)
+            };
+            await using (var seed = await factory.CreateDbContextAsync())
+            {
+                await seed.Database.MigrateAsync();
+                seed.VpnEndpoints.AddRange(first, second);
+                await seed.SaveChangesAsync();
+            }
+
+            using var clients = new TestHttpClientFactory(new DelegateHandler(_ =>
+                new HttpResponseMessage(HttpStatusCode.OK)));
+            var service = new VpnCatalogService(
+                factory,
+                clients,
+                Options.Create(new CollectorOptions()),
+                NullLogger<VpnCatalogService>.Instance);
+            var checkedAt = new DateTimeOffset(2026, 8, 30, 12, 0, 0, TimeSpan.Zero);
+            var persisted = await service.PersistValidationResultsAsync(
+            [
+                new VpnValidationUpdate(
+                    first.Id,
+                    VpnEndpointStatus.Reachable,
+                    42,
+                    null,
+                    checkedAt,
+                    checkedAt.AddMinutes(5)),
+                new VpnValidationUpdate(
+                    second.Id,
+                    VpnEndpointStatus.Unreachable,
+                    null,
+                    new string('x', 600),
+                    checkedAt,
+                    checkedAt.AddMinutes(15))
+            ]);
+
+            Assert.Equal(2, persisted);
+            await using var verify = await factory.CreateDbContextAsync();
+            var endpoints = await verify.VpnEndpoints.AsNoTracking()
+                .OrderBy(x => x.Host).ToArrayAsync();
+            var failed = endpoints[0];
+            var alive = endpoints[1];
+            Assert.Equal(VpnEndpointStatus.Unreachable, failed.Status);
+            Assert.Null(failed.LatencyMs);
+            Assert.Equal(8, failed.SuccessfulChecks);
+            Assert.Equal(2, failed.FailedChecks);
+            Assert.Equal(500, failed.LastError?.Length);
+            Assert.Equal(checkedAt.AddMinutes(15), failed.NextCheckAt);
+
+            Assert.Equal(VpnEndpointStatus.Reachable, alive.Status);
+            Assert.Equal(42, alive.LatencyMs);
+            Assert.Equal(5, alive.SuccessfulChecks);
+            Assert.Equal(2, alive.FailedChecks);
+            Assert.Null(alive.LastError);
+            Assert.Equal(checkedAt, alive.LastCheckedAt);
+            Assert.Equal(checkedAt.AddMinutes(5), alive.NextCheckAt);
+            Assert.Equal("trojan://public@8.8.8.8:443", alive.ConnectionUri);
+            Assert.Equal("US", alive.CountryCode);
+            Assert.Equal(new DateTimeOffset(2026, 8, 29, 0, 0, 0, TimeSpan.Zero), alive.LastSeenAt);
+        }
+        finally
+        {
+            await using var drop = new NpgsqlCommand($"DROP SCHEMA IF EXISTS {schema} CASCADE", admin);
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
+
     private static async Task<(string Endpoint, string Provenance)> ReadCatalogVersionsAsync(
         string connectionString,
         Guid endpointId,
