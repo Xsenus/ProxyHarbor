@@ -123,6 +123,11 @@ jobs:
     Assert-GateRejected 'mutable container reference node:22-alpine'
     [IO.File]::Delete($variantDockerfile)
 
+    Set-Content -LiteralPath $variantDockerfile -Value 'FROM scratch' -Encoding utf8NoBOM
+    & $gate -RepositoryRoot $fixtureRoot -MinimumPinnedContainerReferences 0 `
+        -MinimumSynchronizedPostgresReferences 0 *> $null
+    [IO.File]::Delete($variantDockerfile)
+
     $composePath = Join-Path $fixtureRoot 'compose.test.yaml'
     Set-Content -LiteralPath $composePath -Value @'
 services:

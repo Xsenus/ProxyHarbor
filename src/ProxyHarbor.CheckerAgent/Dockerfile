@@ -15,7 +15,8 @@ RUN dotnet publish src/ProxyHarbor.CheckerAgent/ProxyHarbor.CheckerAgent.csproj 
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0.11-alpine3.23@sha256:4d5339ac9814f1a033a09e664bcf159e9fb386c89b6e7917b3dca7254e656027
 WORKDIR /app
-RUN addgroup -S checker && adduser -S checker -G checker
+RUN apk upgrade --no-cache libcrypto3 libssl3 && \
+    addgroup -S checker && adduser -S checker -G checker
 COPY --from=build --chown=checker:checker /app/publish ./
 USER checker
 ENV DOTNET_EnableDiagnostics=0 DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=true

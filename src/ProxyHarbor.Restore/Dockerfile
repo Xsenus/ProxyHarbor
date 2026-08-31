@@ -16,6 +16,7 @@ RUN dotnet publish "src/ProxyHarbor.Restore/ProxyHarbor.Restore.csproj" -c Relea
     /p:UseAppHost=false /p:Version="$VERSION" /p:SourceRevisionId="$SOURCE_REVISION" /p:ContinuousIntegrationBuild=true
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0.11-alpine3.23@sha256:4d5339ac9814f1a033a09e664bcf159e9fb386c89b6e7917b3dca7254e656027 AS runtime
+RUN apk upgrade --no-cache libcrypto3 libssl3
 # Restore работает без root. Отдельная точка монтирования получает временный
 # расшифрованный ZIP и удаляется вместе с одноразовым контейнером.
 RUN apk add --no-cache krb5-libs && \

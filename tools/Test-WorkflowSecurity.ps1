@@ -110,6 +110,9 @@ foreach ($file in $containerFiles) {
         # Release overlay получает собственные GHCR-образы пользователя и проверяет
         # их digest через release metadata/attestation, а не фиксирует чужой namespace.
         if ($reference.Contains('${PROXYHARBOR_IMAGE_PREFIX', [StringComparison]::Ordinal)) { continue }
+        # `scratch` is Docker's empty, immutable base marker rather than a
+        # registry reference. It is used to flatten a hardened final filesystem.
+        if ($reference.Equals('scratch', [StringComparison]::Ordinal)) { continue }
         if ($reference -match '^[^@\s]+:[^@\s]+@sha256:[0-9a-f]{64}$') {
             $pinnedImages++
             continue

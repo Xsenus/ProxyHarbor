@@ -330,11 +330,17 @@ jobs:
           trap cleanup EXIT
           docker compose up --detach --build
           docker compose --profile tools build restore
-          docker compose --profile tools create restore
+          # Создаём one-shot restore без повторного reconcile зависимостей:
+          # recreate PostgreSQL здесь оборвёт lifetime-lock уже запущенного API.
+          restore_id=$(docker compose --profile tools run --detach --no-deps restore --help)
           api_id=$(docker compose ps --quiet api)
           web_id=$(docker compose ps --quiet web)
           postgres_id=$(docker compose ps --quiet postgres)
-          restore_id=$(docker compose --profile tools ps --all --quiet restore)
+          test -n "$restore_id"
+          api_image=$(docker inspect --format '{{.Config.Image}}' "$api_id")
+          web_image=$(docker inspect --format '{{.Config.Image}}' "$web_id")
+          postgres_image=$(docker inspect --format '{{.Config.Image}}' "$postgres_id")
+          restore_image=$(docker inspect --format '{{.Config.Image}}' "$restore_id")
           assert_secret_values_absent() {
             container_id=$1
             environment=$(docker inspect --format '{{json .Config.Env}}' "$container_id")
@@ -373,7 +379,15 @@ jobs:
           test "$(docker inspect --format '{{.HostConfig.PidsLimit}}' "$restore_id")" = '256'
           test "$(docker inspect --format '{{.HostConfig.Init}}' "$restore_id")" = 'true'
           docker inspect --format '{{json .HostConfig.CapDrop}}' "$restore_id" | grep --ignore-case 'ALL'
-          docker compose --profile tools rm --force --volumes restore
+          mkdir -p "$RUNNER_TEMP/trivy-cache"
+          for image in "$api_image" "$web_image" "$postgres_image" "$restore_image"; do
+            docker run --rm \
+              --volume /var/run/docker.sock:/var/run/docker.sock \
+              --volume "$RUNNER_TEMP/trivy-cache:/root/.cache/trivy" \
+              aquasec/trivy:0.74.0@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969 \
+              image --scanners vuln,secret --severity HIGH,CRITICAL --exit-code 1 "$image"
+          done
+          docker rm --force --volumes "$restore_id"
           docker compose --profile tools run --rm --no-deps restore --help | grep 'ProxyHarbor restore'
           for attempt in {1..90}; do
             if curl --fail --silent http://127.0.0.1:8080/health/ready; then break; fi
@@ -428,6 +442,11 @@ jobs:
           index_html=$(curl --fail --silent http://127.0.0.1:8080/)
           asset_path=$(echo "$index_html" | grep --only-matching --extended-regexp '/assets/[^" ]+\.js' | head --lines 1)
           test -n "$asset_path"
+          private_headers=$(mktemp)
+          curl --fail --silent --dump-header "$private_headers" --output /dev/null \
+            'http://127.0.0.1:8080/account?from=ci'
+          grep --ignore-case '^X-Robots-Tag: noindex, nofollow, noarchive' "$private_headers"
+          rm "$private_headers"
           asset_headers=$(mktemp)
           curl --fail --silent --dump-header "$asset_headers" --output /dev/null "http://127.0.0.1:8080$asset_path"
           grep --ignore-case '^Content-Security-Policy:' "$asset_headers"
@@ -659,7 +678,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+        image: postgres:18-alpine@sha256:d3e1620b530c944afa6e887d22eb899824da68e19c52024bf98f5220c88a65b2
         env:
           POSTGRES_DB: proxyharbor
           POSTGRES_USER: proxyharbor
