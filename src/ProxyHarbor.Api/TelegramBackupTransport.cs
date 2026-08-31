@@ -13,6 +13,8 @@ public sealed class TelegramBackupTransport(
     TelegramTransportHealth transportHealth,
     TelegramProxyHttpClientPool proxyClients) : ITelegramBackupTransport
 {
+    private static readonly TimeSpan BackupUploadTimeout = TimeSpan.FromMinutes(5);
+
     /// <inheritdoc />
     public async Task SendAsync(
         string path,
@@ -32,7 +34,7 @@ public sealed class TelegramBackupTransport(
             {
                 var client = proxy is null
                     ? clients.CreateClient("telegram")
-                    : (lease = proxyClients.Acquire(proxy)).Client;
+                    : (lease = proxyClients.Acquire(proxy, BackupUploadTimeout)).Client;
                 await TelegramBackupSender.SendAsync(
                     client, path, caption, botToken, chatId, token);
                 transportHealth.MarkSucceeded(proxy);

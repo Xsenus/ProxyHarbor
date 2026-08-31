@@ -118,9 +118,18 @@ public sealed class TelegramBotApiClientTests
             Username = "user",
             Password = "changed"
         });
+        using var longUploadLease = pool.Acquire(new TelegramProxyOptions
+        {
+            Host = "proxy.example",
+            Port = 1080,
+            Username = "user",
+            Password = "secret"
+        }, TimeSpan.FromMinutes(5));
 
         Assert.Same(firstLease.Client, sameLease.Client);
         Assert.NotSame(firstLease.Client, changedCredentialsLease.Client);
+        Assert.NotSame(firstLease.Client, longUploadLease.Client);
+        Assert.Equal(TimeSpan.FromMinutes(5), longUploadLease.Client.Timeout);
         for (var index = 0; index < 40; index++)
             pool.Acquire(new TelegramProxyOptions { Host = $"192.0.2.{index + 1}", Port = 1080 }).Dispose();
         pool.Acquire(new TelegramProxyOptions { Host = "2001:db8::1", Port = 1080 }).Dispose();
