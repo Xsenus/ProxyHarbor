@@ -93,6 +93,7 @@ public sealed class PaymentReconciliationWorker(
     private static readonly TimeSpan InitialAge = TimeSpan.FromMinutes(2);
     private static readonly TimeSpan Interval = TimeSpan.FromMinutes(1);
     private const int BatchSize = 50;
+    private const int MaxParallelism = 8;
     private static readonly Action<ILogger, Exception?> CycleFailed = LoggerMessage.Define(
         LogLevel.Error, new EventId(1801, nameof(CycleFailed)),
         "Сверка зависших платежей завершила цикл с ошибкой; следующий цикл продолжит работу.");
@@ -114,38 +115,79 @@ public sealed class PaymentReconciliationWorker(
 
     internal async Task<int> RunOnceAsync(CancellationToken token)
     {
-        using var scope = scopes.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<ProxyHarborDbContext>();
-        var gateway = scope.ServiceProvider.GetRequiredService<PaymentGatewayClient>();
-        var settlement = scope.ServiceProvider.GetRequiredService<PaymentSettlementService>();
         var now = DateTimeOffset.UtcNow;
         var cutoff = now - InitialAge;
-        var candidates = await db.PaymentOrders.AsNoTracking()
-            .Where(x => x.Status == PaymentStatuses.Pending && x.UpdatedAt <= cutoff &&
-                (x.Provider == "yookassa" || x.Provider == "cloudpayments" || x.Provider == "robokassa" ||
-                 x.Provider == "tbank" || x.Provider == "stripe" || x.Provider == "cryptomus"))
-            .OrderBy(x => x.UpdatedAt).Take(BatchSize)
-            .Select(x => new { x.Id, x.UpdatedAt }).ToArrayAsync(token);
-        var checkedCount = 0;
-        foreach (var candidate in candidates)
+        PaymentReconciliationCandidate[] candidates;
+        using (var discoveryScope = scopes.CreateScope())
         {
+            var discoveryDb = discoveryScope.ServiceProvider.GetRequiredService<ProxyHarborDbContext>();
+            candidates = await discoveryDb.PaymentOrders.AsNoTracking()
+                .Where(x => x.Status == PaymentStatuses.Pending && x.UpdatedAt <= cutoff &&
+                    (x.Provider == "yookassa" || x.Provider == "cloudpayments" || x.Provider == "robokassa" ||
+                     x.Provider == "tbank" || x.Provider == "stripe" || x.Provider == "cryptomus"))
+                .OrderBy(x => x.UpdatedAt).Take(BatchSize)
+                .Select(x => new PaymentReconciliationCandidate(x.Id, x.UpdatedAt, x.Provider)).ToArrayAsync(token);
+        }
+
+        // Внешняя проверка статуса может занимать секунды. Изолированный scope на
+        // заказ делает DbContext/UserManager thread-safe, а небольшой предел не
+        // создаёт всплеск запросов к платёжным шлюзам. Compare-and-swap по UpdatedAt
+        // ниже по-прежнему гарантирует, что несколько API-реплик не сверят один заказ.
+        return await ProcessBoundedAsync(candidates, MaxParallelism,
+            candidate => ReconcileAsync(candidate, now, token), token);
+    }
+
+    private async Task<bool> ReconcileAsync(
+        PaymentReconciliationCandidate candidate,
+        DateTimeOffset claimedAt,
+        CancellationToken token)
+    {
+        try
+        {
+            using var scope = scopes.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<ProxyHarborDbContext>();
             var claimed = await db.PaymentOrders
                 .Where(x => x.Id == candidate.Id && x.Status == PaymentStatuses.Pending && x.UpdatedAt == candidate.UpdatedAt)
-                .ExecuteUpdateAsync(update => update.SetProperty(x => x.UpdatedAt, now), token);
-            if (claimed != 1) continue;
-            db.ChangeTracker.Clear();
+                .ExecuteUpdateAsync(update => update.SetProperty(x => x.UpdatedAt, claimedAt), token);
+            if (claimed != 1) return false;
+
             var order = await db.PaymentOrders.AsNoTracking().SingleAsync(x => x.Id == candidate.Id, token);
-            try
+            var gateway = scope.ServiceProvider.GetRequiredService<PaymentGatewayClient>();
+            var notification = await gateway.CheckStatusAsync(order, token);
+            if (notification is not null)
             {
-                var notification = await gateway.CheckStatusAsync(order, token);
-                if (notification is not null)
-                    await settlement.ApplyAsync(order.Provider, notification, token);
-                checkedCount++;
+                var settlement = scope.ServiceProvider.GetRequiredService<PaymentSettlementService>();
+                await settlement.ApplyAsync(order.Provider, notification, token);
             }
-            catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
-            catch (Exception exception) { OrderFailed(logger, order.Id, order.Provider, exception); }
-            db.ChangeTracker.Clear();
+            return true;
         }
-        return checkedCount;
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+        catch (Exception exception)
+        {
+            OrderFailed(logger, candidate.Id, candidate.Provider, exception);
+            return false;
+        }
     }
+
+    /// <summary>Выполняет I/O-операции с фиксированным пределом и без общей mutable state.</summary>
+    internal static async Task<int> ProcessBoundedAsync<T>(
+        IReadOnlyCollection<T> items,
+        int maxParallelism,
+        Func<T, Task<bool>> process,
+        CancellationToken token)
+    {
+        ArgumentNullException.ThrowIfNull(items);
+        ArgumentNullException.ThrowIfNull(process);
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxParallelism, 1);
+        var completed = 0;
+        await Parallel.ForEachAsync(items,
+            new ParallelOptions { MaxDegreeOfParallelism = maxParallelism, CancellationToken = token },
+            async (item, _) =>
+            {
+                if (await process(item)) Interlocked.Increment(ref completed);
+            });
+        return completed;
+    }
+
+    private readonly record struct PaymentReconciliationCandidate(Guid Id, DateTimeOffset UpdatedAt, string Provider);
 }
