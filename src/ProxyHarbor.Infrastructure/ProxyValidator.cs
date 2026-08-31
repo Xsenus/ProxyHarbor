@@ -230,18 +230,39 @@ public sealed class ProxyValidator(
     internal async Task<int> RenewLeaseAsync(Guid leaseId, DateTimeOffset leaseUntil, CancellationToken token)
     {
         await using var db = await dbFactory.CreateDbContextAsync(token);
-        return await db.Proxies.Where(proxy => proxy.CheckLeaseId == leaseId)
-            .ExecuteUpdateAsync(setters => setters.SetProperty(proxy => proxy.CheckLeaseUntil, leaseUntil), token);
+        return await db.Database.ExecuteSqlInterpolatedAsync($"""
+            WITH locked AS MATERIALIZED (
+                SELECT proxy."Id"
+                FROM "Proxies" AS proxy
+                WHERE proxy."CheckLeaseId" = {leaseId}
+                ORDER BY proxy."Id"
+                FOR UPDATE OF proxy
+            )
+            UPDATE "Proxies" AS proxy
+            SET "CheckLeaseUntil" = {leaseUntil}
+            FROM locked
+            WHERE proxy."Id" = locked."Id"
+            """, token);
     }
 
     /// <summary>Освобождает пакет по точному lease token, не затрагивая аренду другой реплики.</summary>
     internal async Task<int> ReleaseLeaseAsync(Guid leaseId, CancellationToken token)
     {
         await using var db = await dbFactory.CreateDbContextAsync(token);
-        return await db.Proxies.Where(proxy => proxy.CheckLeaseId == leaseId)
-            .ExecuteUpdateAsync(setters => setters
-                .SetProperty(proxy => proxy.CheckLeaseUntil, (DateTimeOffset?)null)
-                .SetProperty(proxy => proxy.CheckLeaseId, (Guid?)null), token);
+        return await db.Database.ExecuteSqlInterpolatedAsync($"""
+            WITH locked AS MATERIALIZED (
+                SELECT proxy."Id"
+                FROM "Proxies" AS proxy
+                WHERE proxy."CheckLeaseId" = {leaseId}
+                ORDER BY proxy."Id"
+                FOR UPDATE OF proxy
+            )
+            UPDATE "Proxies" AS proxy
+            SET "CheckLeaseUntil" = NULL,
+                "CheckLeaseId" = NULL
+            FROM locked
+            WHERE proxy."Id" = locked."Id"
+            """, token);
     }
 
     private Task MaintainLeaseAsync(Guid leaseId, TimeSpan duration, CancellationToken token) =>
@@ -350,6 +371,14 @@ public sealed class ProxyValidator(
             }
 
             await using var merge = new NpgsqlCommand("""
+                WITH locked AS MATERIALIZED (
+                    SELECT proxy."Id"
+                    FROM "Proxies" AS proxy
+                    JOIN proxy_check_update AS incoming
+                      ON proxy."Id" = incoming.id AND proxy."CheckLeaseId" = incoming.lease_id
+                    ORDER BY proxy."Id"
+                    FOR UPDATE OF proxy
+                )
                 UPDATE "Proxies" AS proxy SET
                     "LastCheckedAt" = CASE WHEN incoming.outcome = 2 THEN proxy."LastCheckedAt" ELSE incoming.checked_at END,
                     "LastValidationAttemptAt" = incoming.checked_at,
@@ -384,8 +413,10 @@ public sealed class ProxyValidator(
                     "SuccessfulChecks" = proxy."SuccessfulChecks" + CASE WHEN incoming.outcome = 1 THEN 1 ELSE 0 END,
                     "FailedChecks" = proxy."FailedChecks" + CASE WHEN incoming.outcome = 0 THEN 1 ELSE 0 END,
                     "ConsecutiveFailedChecks" = incoming.failure_streak
-                FROM proxy_check_update AS incoming
-                WHERE proxy."Id" = incoming.id AND proxy."CheckLeaseId" = incoming.lease_id
+                FROM proxy_check_update AS incoming, locked
+                WHERE proxy."Id" = locked."Id"
+                  AND incoming.id = locked."Id"
+                  AND proxy."CheckLeaseId" = incoming.lease_id
                 RETURNING incoming.outcome
                 """, connection, transaction);
             var checkedCount = 0;

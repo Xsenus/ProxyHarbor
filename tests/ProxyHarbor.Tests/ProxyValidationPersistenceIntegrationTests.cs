@@ -15,6 +15,107 @@ public sealed class ProxyValidationPersistenceIntegrationTests
 {
     [Fact]
     [Trait("Category", "PostgresIntegration")]
+    public async Task HeartbeatAndCompletionLockLeaseRowsInStableIdOrder()
+    {
+        var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
+        if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
+
+        var suffix = Guid.NewGuid().ToString("N");
+        var schema = $"proxyharbor_lease_lock_order_{suffix}";
+        var applicationName = $"proxyharbor-lease-lock-order-{suffix}";
+        var builder = new NpgsqlConnectionStringBuilder(baseConnectionString)
+        {
+            SearchPath = schema,
+            ApplicationName = applicationName
+        };
+        await using var admin = new NpgsqlConnection(baseConnectionString);
+        await admin.OpenAsync();
+        await using (var create = new NpgsqlCommand($"CREATE SCHEMA {schema}", admin))
+            await create.ExecuteNonQueryAsync();
+
+        try
+        {
+            var dbOptions = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+                .UseNpgsql(builder.ConnectionString, postgres => postgres.EnableRetryOnFailure()).Options;
+            var factory = new TestDbFactory(dbOptions);
+            await using (var migrationDb = await factory.CreateDbContextAsync())
+                await migrationDb.Database.MigrateAsync();
+
+            var lowerId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+            var higherId = Guid.Parse("00000000-0000-0000-0000-000000000002");
+            var leaseId = Guid.NewGuid();
+            var now = DateTimeOffset.UtcNow;
+            await using (var seed = await factory.CreateDbContextAsync())
+            {
+                // Физически добавляем higher первым, чтобы SQL обязан был полагаться
+                // именно на ORDER BY Id, а не на случайный heap/input order.
+                seed.Proxies.AddRange(
+                    new ProxyEndpoint
+                    {
+                        Id = higherId,
+                        Host = "198.51.100.102",
+                        Port = 8102,
+                        CheckLeaseId = leaseId,
+                        CheckLeaseUntil = now.AddMinutes(5)
+                    },
+                    new ProxyEndpoint
+                    {
+                        Id = lowerId,
+                        Host = "198.51.100.101",
+                        Port = 8101,
+                        CheckLeaseId = leaseId,
+                        CheckLeaseUntil = now.AddMinutes(5)
+                    });
+                await seed.SaveChangesAsync();
+            }
+
+            var settings = new CollectorOptions();
+            using var clients = new StubHttpClientFactory();
+            using var origin = new OriginIpProvider(clients, Options.Create(settings), new ProbeControlHealth());
+            using var validator = new ProxyValidator(
+                factory,
+                new ProxyProbeService(Options.Create(settings), origin),
+                Options.Create(settings),
+                NullLogger<ProxyValidator>.Instance);
+
+            await AssertWaitsOnLowerBeforeLockingHigherAsync(
+                builder.ConnectionString,
+                admin,
+                applicationName,
+                lowerId,
+                higherId,
+                () => validator.RenewLeaseAsync(leaseId, now.AddMinutes(6), CancellationToken.None));
+
+            var updates = new[]
+            {
+                ProxyCheckScheduler.Create(
+                    new ProxyCheckResult(higherId, false, null, null, false, "control unavailable", true),
+                    0, leaseId, now, settings),
+                ProxyCheckScheduler.Create(
+                    new ProxyCheckResult(lowerId, false, null, null, false, "control unavailable", true),
+                    0, leaseId, now, settings)
+            };
+            await AssertWaitsOnLowerBeforeLockingHigherAsync(
+                builder.ConnectionString,
+                admin,
+                applicationName,
+                lowerId,
+                higherId,
+                async () =>
+                {
+                    var result = await validator.PersistResultsAsync(updates, CancellationToken.None);
+                    return result.Deferred;
+                });
+        }
+        finally
+        {
+            await using var drop = new NpgsqlCommand($"DROP SCHEMA IF EXISTS {schema} CASCADE", admin);
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
     public async Task CancellationAfterClaimImmediatelyReleasesLeaseWithoutChangingQuality()
     {
         var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
@@ -441,6 +542,60 @@ public sealed class ProxyValidationPersistenceIntegrationTests
             await using var cleanup = await factory.CreateDbContextAsync();
             await cleanup.Proxies.Where(x => x.Id == proxyId).ExecuteDeleteAsync();
         }
+    }
+
+    private static async Task AssertWaitsOnLowerBeforeLockingHigherAsync(
+        string connectionString,
+        NpgsqlConnection admin,
+        string applicationName,
+        Guid lowerId,
+        Guid higherId,
+        Func<Task<int>> operation)
+    {
+        await using var blocker = new NpgsqlConnection(connectionString);
+        await blocker.OpenAsync();
+        await using var blockerTransaction = await blocker.BeginTransactionAsync();
+        await using (var lockLower = new NpgsqlCommand(
+            "SELECT \"Id\" FROM \"Proxies\" WHERE \"Id\" = @id FOR UPDATE", blocker, blockerTransaction))
+        {
+            lockLower.Parameters.AddWithValue("id", lowerId);
+            Assert.Equal(lowerId, await lockLower.ExecuteScalarAsync());
+        }
+
+        var operationTask = operation();
+        var waitingForLower = false;
+        for (var attempt = 0; attempt < 100 && !waitingForLower; attempt++)
+        {
+            await using var activity = new NpgsqlCommand("""
+                SELECT EXISTS (
+                    SELECT 1 FROM pg_stat_activity
+                    WHERE application_name = @application_name
+                      AND wait_event_type = 'Lock'
+                      AND query LIKE '%Proxies%')
+                """, admin);
+            activity.Parameters.AddWithValue("application_name", applicationName);
+            waitingForLower = (bool)(await activity.ExecuteScalarAsync())!;
+            if (!waitingForLower) await Task.Delay(50);
+        }
+
+        var probeBuilder = new NpgsqlConnectionStringBuilder(connectionString)
+        {
+            ApplicationName = $"{applicationName}-probe"
+        };
+        await using var probe = new NpgsqlConnection(probeBuilder.ConnectionString);
+        await probe.OpenAsync();
+        await using var probeTransaction = await probe.BeginTransactionAsync();
+        await using var probeHigher = new NpgsqlCommand(
+            "SELECT \"Id\" FROM \"Proxies\" WHERE \"Id\" = @id FOR UPDATE SKIP LOCKED", probe, probeTransaction);
+        probeHigher.Parameters.AddWithValue("id", higherId);
+        var unlockedHigherId = await probeHigher.ExecuteScalarAsync();
+        await probeTransaction.RollbackAsync();
+
+        await blockerTransaction.CommitAsync();
+        var affected = await operationTask.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.True(waitingForLower);
+        Assert.Equal(higherId, unlockedHigherId);
+        Assert.Equal(2, affected);
     }
 
     private sealed class TestDbFactory(DbContextOptions<ProxyHarborDbContext> options)

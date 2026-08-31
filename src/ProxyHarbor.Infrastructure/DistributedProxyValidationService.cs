@@ -137,8 +137,22 @@ public sealed class DistributedProxyValidationService(
                 .SetProperty(x => x.AgentVersion, Bounded(heartbeat.Version, 80))
                 .SetProperty(x => x.LastError, Bounded(heartbeat.Error, 1000)), token);
         if (nodeUpdated != 1) return false;
-        var proxiesUpdated = await db.Proxies.Where(x => x.CheckLeaseId == leaseId)
-            .ExecuteUpdateAsync(setters => setters.SetProperty(x => x.CheckLeaseUntil, until), token);
+        // Heartbeat и completion могут прийти почти одновременно от одного агента.
+        // Оба пути блокируют строки партии по Id, поэтому продление не образует
+        // обратный порядок с массовым сохранением результатов.
+        var proxiesUpdated = await db.Database.ExecuteSqlInterpolatedAsync($"""
+            WITH locked AS MATERIALIZED (
+                SELECT p."Id"
+                FROM "Proxies" p
+                WHERE p."CheckLeaseId" = {leaseId}
+                ORDER BY p."Id"
+                FOR UPDATE OF p
+            )
+            UPDATE "Proxies" p
+            SET "CheckLeaseUntil" = {until}
+            FROM locked
+            WHERE p."Id" = locked."Id"
+            """, token);
         return proxiesUpdated > 0;
     }
 

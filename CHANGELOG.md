@@ -18,6 +18,7 @@
 
 ### Fixed
 
+- Продление, освобождение checker lease и сохранение результатов теперь заранее блокируют строки одной партии в одинаковом порядке proxy ID, исключая deadlock между heartbeat, cleanup и completion одного агента.
 - Массовое обновление `LastSeenAt` сборщиком proxy-feed'ов теперь пропускает занятые валидаторами строки через `FOR UPDATE SKIP LOCKED` и переносит их безопасное обновление на следующий collection-цикл.
 - Возврат просроченных checker-партий теперь блокирует proxy rows раньше audit rows и упорядочивает блокировки `ValidationRuns`, устраняя deadlock при одновременной выдаче заданий множеству VPS.
 - Запись VPN collection и validation теперь разделяет короткий transaction-level advisory lock: сетевые этапы остаются параллельными, а пересекающиеся set-based `UPDATE` больше не образуют deadlock под нагрузкой.
