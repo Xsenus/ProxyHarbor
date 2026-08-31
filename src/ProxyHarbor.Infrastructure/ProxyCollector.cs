@@ -442,55 +442,71 @@ public sealed class ProxyCollector(
         int lastSeenRefreshMinutes,
         CancellationToken token)
     {
-        var connection = (NpgsqlConnection)db.Database.GetDbConnection();
-        if (connection.State != System.Data.ConnectionState.Open) await connection.OpenAsync(token);
-        await using var transaction = await connection.BeginTransactionAsync(token);
-        await using (var create = new NpgsqlCommand(
-            "CREATE TEMP TABLE proxy_import (host text NOT NULL, port integer NOT NULL, protocol integer NOT NULL, seen_at timestamptz NOT NULL) ON COMMIT DROP",
-            connection, transaction))
-            await create.ExecuteNonQueryAsync(token);
-
-        await using (var writer = await connection.BeginBinaryImportAsync(
-            "COPY proxy_import (host, port, protocol, seen_at) FROM STDIN (FORMAT BINARY)", token))
+        var candidateSnapshot = candidates.ToArray();
+        // Production включает retry execution strategy. Вся временная таблица и обе
+        // мутации входят в повторяемую транзакцию, поэтому transient PostgreSQL-сбой
+        // не теряет целиком уже загруженный collection-цикл.
+        return await db.Database.CreateExecutionStrategy().ExecuteAsync(async () =>
         {
-            foreach (var candidate in candidates)
+            var connection = (NpgsqlConnection)db.Database.GetDbConnection();
+            if (connection.State != System.Data.ConnectionState.Open) await connection.OpenAsync(token);
+            await using var transaction = await connection.BeginTransactionAsync(token);
+            await using (var create = new NpgsqlCommand(
+                "CREATE TEMP TABLE proxy_import (host text NOT NULL, port integer NOT NULL, protocol integer NOT NULL, seen_at timestamptz NOT NULL) ON COMMIT DROP",
+                connection, transaction))
+                await create.ExecuteNonQueryAsync(token);
+
+            await using (var writer = await connection.BeginBinaryImportAsync(
+                "COPY proxy_import (host, port, protocol, seen_at) FROM STDIN (FORMAT BINARY)", token))
             {
-                await writer.StartRowAsync(token);
-                await writer.WriteAsync(candidate.Host, NpgsqlDbType.Text, token);
-                await writer.WriteAsync(candidate.Port, NpgsqlDbType.Integer, token);
-                await writer.WriteAsync((int)candidate.Protocol, NpgsqlDbType.Integer, token);
-                await writer.WriteAsync(now, NpgsqlDbType.TimestampTz, token);
+                foreach (var candidate in candidateSnapshot)
+                {
+                    await writer.StartRowAsync(token);
+                    await writer.WriteAsync(candidate.Host, NpgsqlDbType.Text, token);
+                    await writer.WriteAsync(candidate.Port, NpgsqlDbType.Integer, token);
+                    await writer.WriteAsync((int)candidate.Protocol, NpgsqlDbType.Integer, token);
+                    await writer.WriteAsync(now, NpgsqlDbType.TimestampTz, token);
+                }
+                await writer.CompleteAsync(token);
             }
-            await writer.CompleteAsync(token);
-        }
 
-        // Отдельный INSERT возвращает точное число новых строк и не заставляет PostgreSQL
-        // выполнять бесполезный UPDATE каждого существующего proxy на каждом 15-минутном цикле.
-        await using var insert = new NpgsqlCommand("""
-            INSERT INTO "Proxies" ("Id", "Host", "Port", "Protocol", "Status", "IsAnonymous", "FirstSeenAt", "LastSeenAt", "SuccessfulChecks", "FailedChecks")
-            SELECT gen_random_uuid(), i.host, i.port, i.protocol, 0, false, i.seen_at, i.seen_at, 0, 0
-            FROM proxy_import i
-            WHERE NOT EXISTS (
-                SELECT 1 FROM "Proxies" p
-                WHERE p."Host" = i.host AND p."Port" = i.port AND p."Protocol" = i.protocol)
-            ON CONFLICT ("Host", "Port", "Protocol") DO NOTHING
-            """, connection, transaction);
-        var added = await insert.ExecuteNonQueryAsync(token);
+            // Отдельный INSERT возвращает точное число новых строк и не заставляет PostgreSQL
+            // выполнять бесполезный UPDATE каждого существующего proxy на каждом 15-минутном цикле.
+            await using var insert = new NpgsqlCommand("""
+                INSERT INTO "Proxies" ("Id", "Host", "Port", "Protocol", "Status", "IsAnonymous", "FirstSeenAt", "LastSeenAt", "SuccessfulChecks", "FailedChecks")
+                SELECT gen_random_uuid(), i.host, i.port, i.protocol, 0, false, i.seen_at, i.seen_at, 0, 0
+                FROM proxy_import i
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM "Proxies" p
+                    WHERE p."Host" = i.host AND p."Port" = i.port AND p."Protocol" = i.protocol)
+                ON CONFLICT ("Host", "Port", "Protocol") DO NOTHING
+                """, connection, transaction);
+            var added = await insert.ExecuteNonQueryAsync(token);
 
-        // LastSeenAt нужен для retention, но точность до каждого цикла не нужна. Ограничение
-        // частоты резко сокращает WAL и перезапись индекса на сотнях тысяч строк.
-        await using var refresh = new NpgsqlCommand("""
-            UPDATE "Proxies" p
-            SET "LastSeenAt" = i.seen_at
-            FROM proxy_import i
-            WHERE p."Host" = i.host AND p."Port" = i.port AND p."Protocol" = i.protocol
-              AND p."LastSeenAt" < @refresh_before
-            """, connection, transaction);
-        refresh.Parameters.AddWithValue("refresh_before", NpgsqlDbType.TimestampTz,
-            now.AddMinutes(-Math.Max(1, lastSeenRefreshMinutes)));
-        await refresh.ExecuteNonQueryAsync(token);
-        await transaction.CommitAsync(token);
-        return added;
+            // LastSeenAt не является срочной мутацией: строки, занятые проверкой, безопасно
+            // пропускаются и обновятся на следующем collection-цикле. Это не даёт collector'у
+            // ждать validator locks и образовывать с ними обратный порядок блокировок.
+            await using var refresh = new NpgsqlCommand("""
+                WITH locked AS MATERIALIZED (
+                    SELECT p."Id", i.seen_at
+                    FROM "Proxies" p
+                    JOIN proxy_import i
+                      ON p."Host" = i.host AND p."Port" = i.port AND p."Protocol" = i.protocol
+                    WHERE p."LastSeenAt" < @refresh_before
+                    ORDER BY p."Id"
+                    FOR UPDATE OF p SKIP LOCKED
+                )
+                UPDATE "Proxies" p
+                SET "LastSeenAt" = locked.seen_at
+                FROM locked
+                WHERE p."Id" = locked."Id"
+                """, connection, transaction);
+            refresh.Parameters.AddWithValue("refresh_before", NpgsqlDbType.TimestampTz,
+                now.AddMinutes(-Math.Max(1, lastSeenRefreshMinutes)));
+            await refresh.ExecuteNonQueryAsync(token);
+            await transaction.CommitAsync(token);
+            return added;
+        });
     }
 
     private static async Task<string> ReadLimitedAsync(HttpContent content, int maxBytes, CancellationToken token)

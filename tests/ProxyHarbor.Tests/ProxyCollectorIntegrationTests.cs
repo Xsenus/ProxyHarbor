@@ -14,6 +14,91 @@ public sealed class ProxyCollectorIntegrationTests
 {
     [Fact]
     [Trait("Category", "PostgresIntegration")]
+    public async Task LastSeenRefreshSkipsValidatorLockedProxyAndRetriesItNextCycle()
+    {
+        var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
+        if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
+
+        var schema = $"proxyharbor_collection_proxy_lock_{Guid.NewGuid():N}";
+        var builder = new NpgsqlConnectionStringBuilder(baseConnectionString) { SearchPath = schema };
+        await using var admin = new NpgsqlConnection(baseConnectionString);
+        await admin.OpenAsync();
+        await using (var create = new NpgsqlCommand($"CREATE SCHEMA {schema}", admin))
+            await create.ExecuteNonQueryAsync();
+
+        try
+        {
+            var dbOptions = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+                .UseNpgsql(builder.ConnectionString, postgres => postgres.EnableRetryOnFailure())
+                .Options;
+            var factory = new TestDbFactory(dbOptions);
+            var proxyId = Guid.NewGuid();
+            var oldLastSeenAt = DateTimeOffset.UtcNow.AddMinutes(-10);
+            await using (var seed = await factory.CreateDbContextAsync())
+            {
+                await seed.Database.MigrateAsync();
+                seed.Sources.Add(new ProxySource
+                {
+                    Name = "Locked proxy feed",
+                    Url = "https://8.8.8.8/locked.txt",
+                    DefaultProtocol = ProxyProtocol.Http
+                });
+                seed.Proxies.Add(new ProxyEndpoint
+                {
+                    Id = proxyId,
+                    Host = "1.1.1.1",
+                    Port = 80,
+                    Protocol = ProxyProtocol.Http,
+                    FirstSeenAt = oldLastSeenAt,
+                    LastSeenAt = oldLastSeenAt
+                });
+                await seed.SaveChangesAsync();
+            }
+
+            await using var blocker = new NpgsqlConnection(builder.ConnectionString);
+            await blocker.OpenAsync();
+            await using var blockerTransaction = await blocker.BeginTransactionAsync();
+            await using (var lockProxy = new NpgsqlCommand(
+                "SELECT \"Id\" FROM \"Proxies\" WHERE \"Id\" = @id FOR UPDATE", blocker, blockerTransaction))
+            {
+                lockProxy.Parameters.AddWithValue("id", proxyId);
+                Assert.Equal(proxyId, await lockProxy.ExecuteScalarAsync());
+            }
+
+            using var clients = new TestHttpClientFactory(new StaticFeedHandler());
+            using var collector = new ProxyCollector(
+                factory,
+                clients,
+                Options.Create(new CollectorOptions
+                {
+                    SourceRetryCount = 0,
+                    LastSeenRefreshMinutes = 1
+                }),
+                NullLogger<ProxyCollector>.Instance);
+
+            var skippedRun = await collector.CollectAsync(CancellationToken.None, forceAllSources: true)
+                .WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.Equal("completed", skippedRun.Status);
+            await using (var skippedVerify = await factory.CreateDbContextAsync())
+                Assert.Equal(oldLastSeenAt, await skippedVerify.Proxies.Where(x => x.Id == proxyId)
+                    .Select(x => x.LastSeenAt).SingleAsync());
+
+            await blockerTransaction.CommitAsync();
+            var refreshedRun = await collector.CollectAsync(CancellationToken.None, forceAllSources: true);
+            Assert.Equal("completed", refreshedRun.Status);
+            await using var refreshedVerify = await factory.CreateDbContextAsync();
+            Assert.True(await refreshedVerify.Proxies.Where(x => x.Id == proxyId)
+                .Select(x => x.LastSeenAt).SingleAsync() > oldLastSeenAt);
+        }
+        finally
+        {
+            await using var drop = new NpgsqlCommand($"DROP SCHEMA IF EXISTS {schema} CASCADE", admin);
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
     public async Task FailedFeedRemainsLocalFailureWhenLoggerThrows()
     {
         var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
