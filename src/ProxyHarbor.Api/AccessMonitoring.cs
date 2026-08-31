@@ -12,19 +12,40 @@ namespace ProxyHarbor.Api;
 /// <summary>Неблокирующий приём метрик выдачи и посещений с периодическим агрегированным flush.</summary>
 public sealed class ProxyAccessMonitor(
     IDbContextFactory<ProxyHarborDbContext> dbFactory,
-    ILogger<ProxyAccessMonitor> logger) : BackgroundService
+    ILogger<ProxyAccessMonitor> logger,
+    int maximumBufferedSiteVisits = 50_000,
+    int maximumBufferedAccessCounters = 100_000) : BackgroundService
 {
     /// <summary>Префикс отделяет посещения сайта от запросов каталога и экспорта.</summary>
     public const string SitePagePrefix = "page:";
+    private const int AccessCounterFlushBatchSize = 10_000;
+    private const int SiteVisitFlushBatchSize = 5_000;
     private static readonly Action<ILogger, Exception?> FlushFailed = LoggerMessage.Define(
         LogLevel.Error, new EventId(1501, "ProxyAccessFlushFailed"),
         "Не удалось сохранить агрегат доступа к proxy API.");
     private static readonly Action<ILogger, Exception?> MaintenanceFailed = LoggerMessage.Define(
         LogLevel.Error, new EventId(1502, "ProxyAccessMaintenanceFailed"),
         "Не удалось выполнить обслуживание правил/retention proxy API; worker продолжит работу.");
+    private static readonly Action<ILogger, long, int, Exception?> SiteVisitsDropped = LoggerMessage.Define<long, int>(
+        LogLevel.Warning, new EventId(1503, "SiteVisitsDropped"),
+        "Отброшено {Dropped} событий посещения: защитный буфер достиг предела {Capacity}.");
+    private static readonly Action<ILogger, long, int, Exception?> AccessCountersDropped = LoggerMessage.Define<long, int>(
+        LogLevel.Warning, new EventId(1504, "AccessCountersDropped"),
+        "Отброшено {Dropped} новых access-bucket: защитный буфер достиг предела {Capacity}.");
     private readonly ConcurrentDictionary<AccessKey, AccessCounter> counters = new();
     private readonly ConcurrentQueue<SiteVisitLog> siteVisits = new();
+    private readonly int siteVisitCapacity = Math.Clamp(maximumBufferedSiteVisits, 1, 1_000_000);
+    private readonly int accessCounterCapacity = Math.Clamp(maximumBufferedAccessCounters, 1, 1_000_000);
+    private int bufferedSiteVisitCount;
+    private int bufferedAccessCounterCount;
+    private long droppedSiteVisitCount;
+    private long droppedAccessCounterCount;
     private volatile AccessRuleSnapshot rules = AccessRuleSnapshot.Empty;
+
+    internal int BufferedSiteVisitCount => Volatile.Read(ref bufferedSiteVisitCount);
+    internal int BufferedAccessCounterCount => Volatile.Read(ref bufferedAccessCounterCount);
+    internal long DroppedSiteVisitCount => Interlocked.Read(ref droppedSiteVisitCount);
+    internal long DroppedAccessCounterCount => Interlocked.Read(ref droppedAccessCounterCount);
 
     /// <summary>Добавляет запрос к текущему агрегату без обращения к БД.</summary>
     public void Record(HttpContext context, string endpoint, bool blocked)
@@ -40,7 +61,7 @@ public sealed class ProxyAccessMonitor(
             BytesSent = context.Response.ContentLength is > 0 ? context.Response.ContentLength.Value : 0,
             ProxyItems = context.Items.TryGetValue("ProxyHarbor.ProxyItems", out var itemCount) && itemCount is int count ? count : 0
         };
-        MergeCounter(key, increment);
+        MergeCounter(key, increment, enforceCapacity: true);
     }
 
     /// <summary>Учитывает один просмотр нормализованной страницы без сохранения URL-параметров.</summary>
@@ -48,7 +69,7 @@ public sealed class ProxyAccessMonitor(
     {
         Record(context, SitePagePrefix + normalizedPage, blocked: false);
         Guid? userId = Guid.TryParse(context.User.FindFirstValue(ClaimTypes.NameIdentifier), out var parsed) ? parsed : null;
-        siteVisits.Enqueue(new SiteVisitLog
+        TryBufferSiteVisit(new SiteVisitLog
         {
             IpAddress = NormalizeAddress(context.Connection.RemoteIpAddress),
             UserId = userId,
@@ -132,8 +153,13 @@ public sealed class ProxyAccessMonitor(
 
     internal async Task FlushOnceAsync(CancellationToken token)
     {
-        var snapshot = counters.ToArray();
-        if (snapshot.Length == 0 && siteVisits.IsEmpty) return;
+        var dropped = Interlocked.Exchange(ref droppedSiteVisitCount, 0);
+        if (dropped > 0) SiteVisitsDropped(logger, dropped, siteVisitCapacity, null);
+        dropped = Interlocked.Exchange(ref droppedAccessCounterCount, 0);
+        if (dropped > 0) AccessCountersDropped(logger, dropped, accessCounterCapacity, null);
+        // Один flush не должен создавать неограниченный массив при всплеске уникальных IP.
+        var snapshot = counters.Take(AccessCounterFlushBatchSize).ToArray();
+        if (snapshot.Length == 0 && BufferedSiteVisitCount == 0) return;
         await using var db = await dbFactory.CreateDbContextAsync(token);
         var drained = new List<(AccessKey Key, AccessCounter Value)>(snapshot.Length);
         foreach (var pair in snapshot)
@@ -142,6 +168,7 @@ public sealed class ProxyAccessMonitor(
             {
                 if (!counters.TryGetValue(pair.Key, out var current) || !ReferenceEquals(current, pair.Value) ||
                     !counters.TryRemove(pair.Key, out _)) continue;
+                Interlocked.Decrement(ref bufferedAccessCounterCount);
                 drained.Add((pair.Key, pair.Value.Copy()));
             }
         }
@@ -151,22 +178,95 @@ public sealed class ProxyAccessMonitor(
             {
                 // Вся import-транзакция атомарна: при её откате возвращаем каждый
                 // отсоединённый increment, включая запись, пришедшую во время flush.
-                foreach (var item in drained) MergeCounter(item.Key, item.Value);
+                foreach (var item in drained) MergeCounter(item.Key, item.Value, enforceCapacity: false);
                 FlushFailed(logger, exception);
             }
-        var visits = new List<SiteVisitLog>(Math.Min(siteVisits.Count, 5_000));
-        while (visits.Count < 5_000 && siteVisits.TryDequeue(out var visit)) visits.Add(visit);
+        // Count у ConcurrentQueue может обходить сегменты. Отдельный атомарный счётчик
+        // одновременно даёт O(1) capacity и не задерживает HTTP request thread.
+        var visits = new List<SiteVisitLog>(Math.Min(BufferedSiteVisitCount, SiteVisitFlushBatchSize));
+        while (visits.Count < SiteVisitFlushBatchSize && siteVisits.TryDequeue(out var visit))
+        {
+            Interlocked.Decrement(ref bufferedSiteVisitCount);
+            visits.Add(visit);
+        }
         if (visits.Count == 0) return;
         try
         {
-            db.SiteVisitLogs.AddRange(visits);
-            await db.SaveChangesAsync(token);
+            await BulkInsertSiteVisitsAsync(db, visits, token);
         }
         catch
         {
-            foreach (var visit in visits) siteVisits.Enqueue(visit);
+            // Принятые до flush события не теряются. Пока партия находится в БД,
+            // новые события могут заполнить основной лимит, поэтому retry-партия даёт
+            // небольшой, но всё равно строго ограниченный запас максимум в один batch.
+            foreach (var visit in visits) RequeueSiteVisit(visit);
             throw;
         }
+    }
+
+    /// <summary>
+    /// Ограничивает best-effort телеметрию независимо от доступности PostgreSQL.
+    /// Переполнение не влияет на выдачу каталога и никогда не раздувает память процесса.
+    /// </summary>
+    private bool TryBufferSiteVisit(SiteVisitLog visit)
+    {
+        var buffered = Interlocked.Increment(ref bufferedSiteVisitCount);
+        if (buffered <= siteVisitCapacity)
+        {
+            siteVisits.Enqueue(visit);
+            return true;
+        }
+
+        Interlocked.Decrement(ref bufferedSiteVisitCount);
+        Interlocked.Increment(ref droppedSiteVisitCount);
+        return false;
+    }
+
+    private void RequeueSiteVisit(SiteVisitLog visit)
+    {
+        Interlocked.Increment(ref bufferedSiteVisitCount);
+        siteVisits.Enqueue(visit);
+    }
+
+    /// <summary>
+    /// PostgreSQL получает всю партию одним binary COPY без change tracking и без
+    /// тысяч параметризованных INSERT. SQLite fallback сохраняет быстрые unit-тесты
+    /// и локальные диагностические окружения, не меняя production-путь.
+    /// </summary>
+    private static async Task BulkInsertSiteVisitsAsync(
+        ProxyHarborDbContext db,
+        IReadOnlyCollection<SiteVisitLog> visits,
+        CancellationToken token)
+    {
+        if (!db.Database.IsNpgsql())
+        {
+            db.SiteVisitLogs.AddRange(visits);
+            await db.SaveChangesAsync(token);
+            return;
+        }
+
+        var connection = (NpgsqlConnection)db.Database.GetDbConnection();
+        if (connection.State != System.Data.ConnectionState.Open) await connection.OpenAsync(token);
+        await using var transaction = await connection.BeginTransactionAsync(token);
+        await using (var writer = await connection.BeginBinaryImportAsync("""
+            COPY "SiteVisitLogs" ("IpAddress", "UserId", "Page", "VisitedAt")
+            FROM STDIN (FORMAT BINARY)
+            """, token))
+        {
+            foreach (var visit in visits)
+            {
+                await writer.StartRowAsync(token);
+                await writer.WriteAsync(visit.IpAddress, NpgsqlDbType.Varchar, token);
+                if (visit.UserId.HasValue)
+                    await writer.WriteAsync(visit.UserId.Value, NpgsqlDbType.Uuid, token);
+                else
+                    await writer.WriteNullAsync(token);
+                await writer.WriteAsync(visit.Page, NpgsqlDbType.Varchar, token);
+                await writer.WriteAsync(visit.VisitedAt, NpgsqlDbType.TimestampTz, token);
+            }
+            await writer.CompleteAsync(token);
+        }
+        await transaction.CommitAsync(token);
     }
 
     /// <summary>
@@ -245,15 +345,43 @@ public sealed class ProxyAccessMonitor(
     /// Повторяет получение bucket, если flush успел удалить его до захвата lock.
     /// Так request никогда не инкрементирует уже отсоединённый объект счётчика.
     /// </summary>
-    private void MergeCounter(AccessKey key, AccessCounter increment)
+    private void MergeCounter(AccessKey key, AccessCounter increment, bool enforceCapacity)
     {
         while (true)
         {
-            var current = counters.GetOrAdd(key, _ => new AccessCounter());
-            lock (current)
+            if (counters.TryGetValue(key, out var current))
             {
-                if (!counters.TryGetValue(key, out var attached) || !ReferenceEquals(attached, current)) continue;
-                current.Add(increment);
+                lock (current)
+                {
+                    if (!counters.TryGetValue(key, out var attached) || !ReferenceEquals(attached, current)) continue;
+                    current.Add(increment);
+                    return;
+                }
+            }
+
+            // Сначала резервируем слот, затем публикуем новый bucket. Конкурентный
+            // GetOrAdd без резерва мог бы превысить лимит на число request threads.
+            var reserved = Interlocked.Increment(ref bufferedAccessCounterCount);
+            if (enforceCapacity && reserved > accessCounterCapacity)
+            {
+                Interlocked.Decrement(ref bufferedAccessCounterCount);
+                Interlocked.Increment(ref droppedAccessCounterCount);
+                return;
+            }
+
+            var candidate = new AccessCounter();
+            if (!counters.TryAdd(key, candidate))
+            {
+                Interlocked.Decrement(ref bufferedAccessCounterCount);
+                continue;
+            }
+
+            lock (candidate)
+            {
+                // Flush мог отсоединить только что добавленный bucket до захвата lock.
+                // В этом случае счётчик уже уменьшен удаляющей стороной и нужен retry.
+                if (!counters.TryGetValue(key, out var attached) || !ReferenceEquals(attached, candidate)) continue;
+                candidate.Add(increment);
                 return;
             }
         }

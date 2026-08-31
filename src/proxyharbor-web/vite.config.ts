@@ -26,4 +26,16 @@ export default defineConfig({
     allowedHosts: ['host.docker.internal'],
     proxy: { '/api': 'http://localhost:8080', '/healthz': 'http://localhost:8080' },
   },
+  build: {
+    rolldownOptions: {
+      output: {
+        // React, renderer и иконки меняются значительно реже прикладного кода.
+        // Отдельный content-hashed chunk переживает обычные релизы в browser cache,
+        // уменьшая повторную загрузку без дублирования модулей между маршрутами.
+        codeSplitting: {
+          groups: [{ name: 'vendor', test: /[\\/]node_modules[\\/]/ }],
+        },
+      },
+    },
+  },
 })
