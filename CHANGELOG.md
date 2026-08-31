@@ -6,6 +6,7 @@
 ## [Unreleased]
 
 ### Changed
+- Pending-payment reconciliation now checks up to eight gateways concurrently with an isolated dependency/DbContext scope per order, while retaining atomic cross-replica claims.
 - Distributed checker leases preserve Alive/Pending/Dead priority with bounded per-priority and null/due index ranges, avoiding full-catalog scans when fewer due proxies exist than the requested batch.
 - Access telemetry flush теперь загружает все пятиминутные IP/user/endpoint-счётчики через PostgreSQL binary `COPY` и один упорядоченный set-based `UPSERT` вместо отдельного запроса на каждый bucket; откат атомарно возвращает всю партию в память.
 - VPN-валидатор сохраняет результаты партии через PostgreSQL binary `COPY` и один set-based `UPDATE`, не track'ит тысячи EF entity и непрерывно разгребает просроченную очередь вместо полного интервала после каждой партии.
