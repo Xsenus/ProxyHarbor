@@ -60,21 +60,11 @@ public sealed class TelegramDispatchService(
         var existing = await db.TelegramOutboundMessages.AsNoTracking()
             .Where(x => x.IdempotencyKey == idempotencyKey).Select(x => (Guid?)x.Id).SingleOrDefaultAsync(token);
         if (existing.HasValue) { wakeSignal?.Pulse(); return existing.Value; }
-        var payload = new TelegramTextPayload(text, replyMarkup is null
-            ? null : JsonSerializer.SerializeToElement(replyMarkup, Json));
-        var message = New(chat, TelegramOutboundKinds.Text, payload, idempotencyKey, availableAt);
-        db.TelegramOutboundMessages.Add(message);
-        db.TelegramConversationMessages.Add(new TelegramConversationMessage
-        {
-            TelegramChatId = chat.Id,
-            Direction = direction,
-            Text = Limit(text, 4096),
-            AdministratorId = administratorId,
-            OutboundMessageId = message.Id
-        });
+        var messageId = StageText(chat, text, idempotencyKey, direction,
+            administratorId, replyMarkup, availableAt);
         await db.SaveChangesAsync(token);
         wakeSignal?.Pulse();
-        return message.Id;
+        return messageId;
     }
 
     /// <summary>Ставит счёт Stars в очередь.</summary>
@@ -160,6 +150,32 @@ public sealed class TelegramDispatchService(
         }
         return queued;
     }
+
+    /// <summary>
+    /// Добавляет текст и CRM-аудит в текущий unit of work без отдельного SELECT или
+    /// COMMIT. Вызывающий обязан заранее проверить ключи и сохранить общий batch.
+    /// </summary>
+    internal Guid StageText(
+        TelegramChat chat, string text, string idempotencyKey, string direction = "bot",
+        Guid? administratorId = null, object? replyMarkup = null, DateTimeOffset? availableAt = null)
+    {
+        var payload = new TelegramTextPayload(text, replyMarkup is null
+            ? null : JsonSerializer.SerializeToElement(replyMarkup, Json));
+        var message = New(chat, TelegramOutboundKinds.Text, payload, idempotencyKey, availableAt);
+        db.TelegramOutboundMessages.Add(message);
+        db.TelegramConversationMessages.Add(new TelegramConversationMessage
+        {
+            TelegramChatId = chat.Id,
+            Direction = direction,
+            Text = Limit(text, 4096),
+            AdministratorId = administratorId,
+            OutboundMessageId = message.Id
+        });
+        return message.Id;
+    }
+
+    /// <summary>Будит доставку после успешного внешнего batch commit.</summary>
+    internal void Pulse() => wakeSignal?.Pulse();
 
     private static TelegramOutboundMessage New<T>(
         TelegramChat chat, string kind, T payload, string key, DateTimeOffset? availableAt) => new()
@@ -1323,95 +1339,268 @@ public sealed class TelegramPollingWorker(
     }
 }
 
-/// <summary>Напоминания о продлении и единая обработка истёкших подписок.</summary>
-public sealed class TelegramSubscriptionReminderWorker(
-    IServiceScopeFactory scopes,
-    ILogger<TelegramSubscriptionReminderWorker> logger) : BackgroundService
+internal sealed record SubscriptionReminderRunResult(
+    int Expired, int Upcoming, int Notifications, int TelegramMessages, int Pruned);
+
+/// <summary>
+/// Выполняет один bounded-цикл подписок. PostgreSQL row locks не допускают, чтобы
+/// две реплики одновременно отправили одно напоминание или перезаписали продление.
+/// </summary>
+internal sealed class SubscriptionReminderProcessor
 {
-    private static readonly Action<ILogger, Exception?> ReminderFailed = LoggerMessage.Define(
-        LogLevel.Error, new EventId(1704, nameof(ReminderFailed)),
-        "Telegram reminders завершили цикл с ошибкой.");
+    private const int DefaultBatchSize = 500;
+    private const int DefaultMaximumBatches = 10;
+    private const int DefaultCleanupBatchSize = 5_000;
+    private readonly ProxyHarborDbContext db;
+    private readonly TelegramDispatchService queue;
+    private readonly int batchSize;
+    private readonly int maximumBatches;
+    private readonly int cleanupBatchSize;
 
-    /// <inheritdoc />
-    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    public SubscriptionReminderProcessor(ProxyHarborDbContext db, TelegramDispatchService queue)
+        : this(db, queue, DefaultBatchSize, DefaultMaximumBatches, DefaultCleanupBatchSize) { }
+
+    internal SubscriptionReminderProcessor(
+        ProxyHarborDbContext db,
+        TelegramDispatchService queue,
+        int batchSize,
+        int maximumBatches,
+        int cleanupBatchSize)
     {
-        while (!stoppingToken.IsCancellationRequested)
-        {
-            try { await RunAsync(stoppingToken); }
-            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
-            catch (Exception exception) { ReminderFailed(logger, exception); }
-            await Task.Delay(TimeSpan.FromMinutes(5), stoppingToken);
-        }
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(batchSize, 0);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(maximumBatches, 0);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(cleanupBatchSize, 0);
+        this.db = db;
+        this.queue = queue;
+        this.batchSize = batchSize;
+        this.maximumBatches = maximumBatches;
+        this.cleanupBatchSize = cleanupBatchSize;
     }
 
-    private async Task RunAsync(CancellationToken token)
+    internal async Task<SubscriptionReminderRunResult> RunAsync(
+        DateTimeOffset now,
+        CancellationToken token)
     {
-        using var scope = scopes.CreateScope();
-        var settings = await scope.ServiceProvider.GetRequiredService<ITelegramBotConfigurationStore>().GetAsync(token);
-        var db = scope.ServiceProvider.GetRequiredService<ProxyHarborDbContext>();
-        var users = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
-        var queue = scope.ServiceProvider.GetRequiredService<TelegramDispatchService>();
-        var now = DateTimeOffset.UtcNow;
-        var expired = await db.Subscriptions.Include(x => x.User).ThenInclude(x => x.TelegramChat)
-            .Where(x => x.Status == SubscriptionStatuses.Active && x.ExpiresAt != null && x.ExpiresAt <= now)
-            .ToArrayAsync(token);
-        foreach (var subscription in expired)
+        var normalizedSubscriber = UserRoles.Subscriber.ToUpperInvariant();
+        var subscriberRoleId = await db.Roles.AsNoTracking()
+            .Where(role => role.NormalizedName == normalizedSubscriber)
+            .Select(role => (Guid?)role.Id).SingleOrDefaultAsync(token);
+        var expired = new ReminderBatchResult();
+        var upcoming = new ReminderBatchResult();
+        for (var index = 0; index < maximumBatches; index++)
         {
-            var expiredAt = subscription.ExpiresAt!.Value;
-            subscription.Status = SubscriptionStatuses.Expired;
-            subscription.UpdatedAt = now;
-            if (await users.IsInRoleAsync(subscription.User, UserRoles.Subscriber))
-                await users.RemoveFromRoleAsync(subscription.User, UserRoles.Subscriber);
-            var expiredKey = $"subscription-expired:{subscription.Id:N}:{subscription.ExpiresAt:yyyyMMddHHmm}";
-            if (!await db.UserNotifications.AnyAsync(x => x.DeduplicationKey == expiredKey, token))
-                db.UserNotifications.Add(new UserNotification
-                {
-                    UserId = subscription.UserId,
-                    Kind = "subscription_expired",
-                    Message = ReminderText(subscription.User.PreferredLanguage, "expired", expiredAt),
-                    ActionUrl = "/account?tab=billing",
-                    DeduplicationKey = expiredKey
-                });
-            if (settings.Ready && subscription.User.TelegramChat is { NotificationsEnabled: true, IsBlocked: false } chat)
-                await queue.EnqueueTextAsync(chat,
-                    ReminderText(subscription.User.PreferredLanguage, "expired", expiredAt),
-                    expiredKey, token: token);
+            var batch = await ProcessExpiredBatchAsync(now, subscriberRoleId, token);
+            expired += batch;
+            if (batch.Rows < batchSize) break;
         }
-        await db.SaveChangesAsync(token);
-
-        var upcoming = await db.Subscriptions.AsNoTracking().Include(x => x.User).ThenInclude(x => x.TelegramChat)
-            .Where(x => x.Status == SubscriptionStatuses.Active && x.ExpiresAt > now && x.ExpiresAt <= now.AddHours(12))
-            .ToArrayAsync(token);
-        foreach (var subscription in upcoming)
+        for (var index = 0; index < maximumBatches; index++)
         {
-            var remaining = subscription.ExpiresAt!.Value - now;
-            var window = remaining <= TimeSpan.FromHours(1) ? "1h" : "12h";
-            var key = $"subscription-reminder:{subscription.Id:N}:{subscription.ExpiresAt:yyyyMMddHHmm}:{window}";
-            var text = ReminderText(subscription.User.PreferredLanguage, window, subscription.ExpiresAt.Value);
-            if (!await db.UserNotifications.AnyAsync(x => x.DeduplicationKey == key, token))
-                db.UserNotifications.Add(new UserNotification
-                {
-                    UserId = subscription.UserId,
-                    Kind = $"subscription_expires_{window}",
-                    Message = text,
-                    ActionUrl = "/account?tab=billing",
-                    DeduplicationKey = key
-                });
-            if (settings.Ready && subscription.User.TelegramChat is { NotificationsEnabled: true, IsBlocked: false } chat)
-                await queue.EnqueueTextAsync(chat, text, key,
-                    replyMarkup: new { inline_keyboard = new[] { new[] { new { text = "⭐ Продлить", callback_data = "products" } } } }, token: token);
+            var batch = await ProcessUpcomingBatchAsync(now, token);
+            upcoming += batch;
+            if (batch.Rows < batchSize) break;
         }
-        await db.SaveChangesAsync(token);
-
-        await db.TelegramUpdateReceipts.Where(x => x.ReceivedAt < now.AddDays(-30)).ExecuteDeleteAsync(token);
-        await db.TelegramOutboundMessages.Where(x => x.CreatedAt < now.AddDays(-90) &&
-            (x.Status == TelegramOutboundStatuses.Sent || x.Status == TelegramOutboundStatuses.Canceled || x.Status == TelegramOutboundStatuses.Failed))
-            .ExecuteDeleteAsync(token);
-        await db.UserNotifications.Where(x => x.DeliveredAt != null && x.DeliveredAt < now.AddDays(-90))
-            .ExecuteDeleteAsync(token);
+        var pruned = await PruneHistoryAsync(now, token);
+        return new SubscriptionReminderRunResult(
+            expired.Rows,
+            upcoming.Rows,
+            expired.Notifications + upcoming.Notifications,
+            expired.TelegramMessages + upcoming.TelegramMessages,
+            pruned);
     }
 
-    private static string ReminderText(string? language, string window, DateTimeOffset expiresAt)
+    private async Task<ReminderBatchResult> ProcessExpiredBatchAsync(
+        DateTimeOffset now,
+        Guid? subscriberRoleId,
+        CancellationToken token)
+    {
+        var strategy = db.Database.CreateExecutionStrategy();
+        var result = await strategy.ExecuteAsync(async () =>
+        {
+            db.ChangeTracker.Clear();
+            await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, token);
+            var subscriptions = await db.Subscriptions.FromSqlInterpolated($$"""
+                    SELECT subscription.* FROM "Subscriptions" AS subscription
+                    WHERE subscription."Status" = 'active'
+                      AND subscription."ExpiresAt" IS NOT NULL
+                      AND subscription."ExpiresAt" <= {{now}}
+                    ORDER BY subscription."ExpiresAt", subscription."Id"
+                    FOR UPDATE OF subscription SKIP LOCKED LIMIT {{batchSize}}
+                    """)
+                .Include(subscription => subscription.User).ThenInclude(user => user.TelegramChat)
+                .ToArrayAsync(token);
+            if (subscriptions.Length == 0)
+            {
+                await transaction.CommitAsync(token);
+                return new ReminderBatchResult();
+            }
+
+            var events = subscriptions.Select(subscription =>
+            {
+                var expiresAt = subscription.ExpiresAt!.Value;
+                return new ReminderEvent(
+                    subscription,
+                    $"subscription-expired:{subscription.Id:N}:{expiresAt:yyyyMMddHHmm}",
+                    "subscription_expired",
+                    ReminderText(subscription.User.PreferredLanguage, "expired", expiresAt),
+                    "expired");
+            }).ToArray();
+            var existingNotifications = await ExistingNotificationKeysAsync(events, token);
+            var existingOutbound = await ExistingOutboundKeysAsync(events, token);
+            var notifications = 0;
+            var telegramMessages = 0;
+            foreach (var reminder in events)
+            {
+                reminder.Subscription.Status = SubscriptionStatuses.Expired;
+                reminder.Subscription.UpdatedAt = now;
+                notifications += StageNotificationIfMissing(reminder, existingNotifications);
+                telegramMessages += StageTelegramIfMissing(reminder, existingOutbound, replyMarkup: null);
+            }
+            await db.SaveChangesAsync(token);
+            if (subscriberRoleId.HasValue)
+            {
+                var userIds = subscriptions.Select(subscription => subscription.UserId).ToArray();
+                _ = await db.UserRoles.Where(role => role.RoleId == subscriberRoleId.Value && userIds.Contains(role.UserId))
+                    .ExecuteDeleteAsync(token);
+            }
+            await transaction.CommitAsync(token);
+            return new ReminderBatchResult(subscriptions.Length, notifications, telegramMessages);
+        });
+        db.ChangeTracker.Clear();
+        if (result.TelegramMessages > 0) queue.Pulse();
+        return result;
+    }
+
+    private async Task<ReminderBatchResult> ProcessUpcomingBatchAsync(
+        DateTimeOffset now,
+        CancellationToken token)
+    {
+        var oneHourCutoff = now.AddHours(1);
+        var twelveHourCutoff = now.AddHours(12);
+        var strategy = db.Database.CreateExecutionStrategy();
+        var result = await strategy.ExecuteAsync(async () =>
+        {
+            db.ChangeTracker.Clear();
+            await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, token);
+            var subscriptions = await db.Subscriptions.FromSqlInterpolated($$"""
+                    SELECT subscription.* FROM "Subscriptions" AS subscription
+                    WHERE subscription."Status" = 'active'
+                      AND subscription."ExpiresAt" > {{now}}
+                      AND subscription."ExpiresAt" <= {{twelveHourCutoff}}
+                      AND (
+                        (subscription."ExpiresAt" <= {{oneHourCutoff}}
+                         AND subscription."Reminder1HourForExpiresAt" IS DISTINCT FROM subscription."ExpiresAt")
+                        OR
+                        (subscription."ExpiresAt" > {{oneHourCutoff}}
+                         AND subscription."Reminder12HoursForExpiresAt" IS DISTINCT FROM subscription."ExpiresAt")
+                      )
+                    ORDER BY subscription."ExpiresAt", subscription."Id"
+                    FOR UPDATE OF subscription SKIP LOCKED LIMIT {{batchSize}}
+                    """)
+                .Include(subscription => subscription.User).ThenInclude(user => user.TelegramChat)
+                .ToArrayAsync(token);
+            if (subscriptions.Length == 0)
+            {
+                await transaction.CommitAsync(token);
+                return new ReminderBatchResult();
+            }
+
+            var events = subscriptions.Select(subscription =>
+            {
+                var expiresAt = subscription.ExpiresAt!.Value;
+                var window = expiresAt <= oneHourCutoff ? "1h" : "12h";
+                return new ReminderEvent(
+                    subscription,
+                    $"subscription-reminder:{subscription.Id:N}:{expiresAt:yyyyMMddHHmm}:{window}",
+                    $"subscription_expires_{window}",
+                    ReminderText(subscription.User.PreferredLanguage, window, expiresAt),
+                    window);
+            }).ToArray();
+            var existingNotifications = await ExistingNotificationKeysAsync(events, token);
+            var existingOutbound = await ExistingOutboundKeysAsync(events, token);
+            var notifications = 0;
+            var telegramMessages = 0;
+            var replyMarkup = new
+            {
+                inline_keyboard = new[] { new[] { new { text = "⭐ Продлить", callback_data = "products" } } }
+            };
+            foreach (var reminder in events)
+            {
+                if (reminder.Window == "1h")
+                    reminder.Subscription.Reminder1HourForExpiresAt = reminder.Subscription.ExpiresAt;
+                else
+                    reminder.Subscription.Reminder12HoursForExpiresAt = reminder.Subscription.ExpiresAt;
+                notifications += StageNotificationIfMissing(reminder, existingNotifications);
+                telegramMessages += StageTelegramIfMissing(reminder, existingOutbound, replyMarkup);
+            }
+            await db.SaveChangesAsync(token);
+            await transaction.CommitAsync(token);
+            return new ReminderBatchResult(subscriptions.Length, notifications, telegramMessages);
+        });
+        db.ChangeTracker.Clear();
+        if (result.TelegramMessages > 0) queue.Pulse();
+        return result;
+    }
+
+    private async Task<HashSet<string>> ExistingNotificationKeysAsync(
+        ReminderEvent[] events,
+        CancellationToken token)
+    {
+        var keys = events.Select(reminder => reminder.Key).ToArray();
+        return await db.UserNotifications.AsNoTracking().Where(notification => keys.Contains(notification.DeduplicationKey))
+            .Select(notification => notification.DeduplicationKey).ToHashSetAsync(token);
+    }
+
+    private async Task<HashSet<string>> ExistingOutboundKeysAsync(
+        ReminderEvent[] events,
+        CancellationToken token)
+    {
+        var keys = events.Select(reminder => reminder.Key).ToArray();
+        return await db.TelegramOutboundMessages.AsNoTracking().Where(message => keys.Contains(message.IdempotencyKey))
+            .Select(message => message.IdempotencyKey).ToHashSetAsync(token);
+    }
+
+    private int StageNotificationIfMissing(ReminderEvent reminder, HashSet<string> existing)
+    {
+        if (existing.Contains(reminder.Key)) return 0;
+        db.UserNotifications.Add(new UserNotification
+        {
+            UserId = reminder.Subscription.UserId,
+            Kind = reminder.Kind,
+            Message = reminder.Text,
+            ActionUrl = "/account?tab=billing",
+            DeduplicationKey = reminder.Key
+        });
+        return 1;
+    }
+
+    private int StageTelegramIfMissing(ReminderEvent reminder, HashSet<string> existing, object? replyMarkup)
+    {
+        if (existing.Contains(reminder.Key) ||
+            reminder.Subscription.User.TelegramChat is not { NotificationsEnabled: true, IsBlocked: false } chat)
+            return 0;
+        // Persistent queue принимает событие даже во время временной остановки Bot API;
+        // outbound worker доставит его после восстановления конфигурации/сети.
+        _ = queue.StageText(chat, reminder.Text, reminder.Key, replyMarkup: replyMarkup);
+        return 1;
+    }
+
+    private async Task<int> PruneHistoryAsync(DateTimeOffset now, CancellationToken token)
+    {
+        var updateReceipts = await db.TelegramUpdateReceipts
+            .Where(receipt => receipt.ReceivedAt < now.AddDays(-30))
+            .OrderBy(receipt => receipt.ReceivedAt).Take(cleanupBatchSize).ExecuteDeleteAsync(token);
+        var outbound = await db.TelegramOutboundMessages.Where(message => message.CreatedAt < now.AddDays(-90) &&
+                (message.Status == TelegramOutboundStatuses.Sent ||
+                 message.Status == TelegramOutboundStatuses.Canceled ||
+                 message.Status == TelegramOutboundStatuses.Failed))
+            .OrderBy(message => message.CreatedAt).Take(cleanupBatchSize).ExecuteDeleteAsync(token);
+        var notifications = await db.UserNotifications
+            .Where(notification => notification.DeliveredAt != null && notification.DeliveredAt < now.AddDays(-90))
+            .OrderBy(notification => notification.DeliveredAt).Take(cleanupBatchSize).ExecuteDeleteAsync(token);
+        return updateReceipts + outbound + notifications;
+    }
+
+    internal static string ReminderText(string? language, string window, DateTimeOffset expiresAt)
     {
         var expiry = expiresAt.ToString("dd.MM.yyyy HH:mm 'UTC'", CultureInfo.InvariantCulture);
         return (SupportedLanguages.Normalize(language), window) switch
@@ -1432,5 +1621,58 @@ public sealed class TelegramSubscriptionReminderWorker(
             (_, "1h") => $"⏰ Подписка закончится через 1 час ({expiry}). Продлите её, чтобы сохранить доступ без перерыва.",
             _ => "⏰ Подписка закончилась. Продлите её, чтобы восстановить полный доступ."
         };
+    }
+
+    private sealed record ReminderEvent(
+        UserSubscription Subscription,
+        string Key,
+        string Kind,
+        string Text,
+        string Window);
+
+    private readonly record struct ReminderBatchResult(
+        int Rows = 0,
+        int Notifications = 0,
+        int TelegramMessages = 0)
+    {
+        public static ReminderBatchResult operator +(ReminderBatchResult left, ReminderBatchResult right) =>
+            new(left.Rows + right.Rows,
+                left.Notifications + right.Notifications,
+                left.TelegramMessages + right.TelegramMessages);
+    }
+}
+
+/// <summary>Напоминания о продлении и единая обработка истёкших подписок.</summary>
+public sealed class TelegramSubscriptionReminderWorker(
+    IServiceScopeFactory scopes,
+    ILogger<TelegramSubscriptionReminderWorker> logger) : BackgroundService
+{
+    private static readonly Action<ILogger, int, int, int, int, int, Exception?> ReminderCompleted =
+        LoggerMessage.Define<int, int, int, int, int>(LogLevel.Information,
+            new EventId(1713, nameof(ReminderCompleted)),
+            "Subscription reminders завершены: истекло {Expired}, обработано будущих {Upcoming}, " +
+            "web-уведомлений {Notifications}, Telegram-заданий {TelegramMessages}, удалено истории {Pruned}.");
+    private static readonly Action<ILogger, Exception?> ReminderFailed = LoggerMessage.Define(
+        LogLevel.Error, new EventId(1704, nameof(ReminderFailed)),
+        "Telegram reminders завершили цикл с ошибкой.");
+
+    /// <inheritdoc />
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            try
+            {
+                using var scope = scopes.CreateScope();
+                var result = await scope.ServiceProvider.GetRequiredService<SubscriptionReminderProcessor>()
+                    .RunAsync(DateTimeOffset.UtcNow, stoppingToken);
+                if (result.Expired + result.Upcoming + result.Pruned > 0)
+                    ReminderCompleted(logger, result.Expired, result.Upcoming,
+                        result.Notifications, result.TelegramMessages, result.Pruned, null);
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
+            catch (Exception exception) { ReminderFailed(logger, exception); }
+            await Task.Delay(TimeSpan.FromMinutes(5), stoppingToken);
+        }
     }
 }

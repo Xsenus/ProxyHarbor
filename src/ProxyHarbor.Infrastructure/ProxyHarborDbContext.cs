@@ -88,6 +88,12 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
         var subscription = builder.Entity<UserSubscription>();
         subscription.HasIndex(x => x.UserId).IsUnique();
         subscription.HasIndex(x => new { x.Plan, x.Status, x.ExpiresAt });
+        // Reminder worker фильтрует только активный временной диапазон и читает
+        // его по ExpiresAt/Id ограниченными блокируемыми партиями.
+        subscription.HasIndex(x => new { x.ExpiresAt, x.Id })
+            .HasDatabaseName("IX_Subscriptions_Active_ExpiresAt_Id")
+            .HasFilter("\"Status\" = 'active' AND \"ExpiresAt\" IS NOT NULL")
+            .IsCreatedConcurrently();
         subscription.Property(x => x.Plan).HasMaxLength(32);
         subscription.Property(x => x.Status).HasMaxLength(32);
         subscription.Property(x => x.ExternalCustomerId).HasMaxLength(255);
