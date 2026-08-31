@@ -90,6 +90,9 @@ jobs:
       - name: Verify IndexNow submission contracts
         shell: pwsh
         run: ./tools/Test-SubmitIndexNow.ps1
+      - name: Verify payment readiness audit contracts
+        shell: pwsh
+        run: ./tools/Test-AuditPaymentReadiness.ps1
       - name: Verify release metadata contracts
         shell: pwsh
         run: ./tools/Test-ReleaseMetadata.ps1

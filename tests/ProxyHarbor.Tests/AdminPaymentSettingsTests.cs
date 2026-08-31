@@ -144,6 +144,45 @@ public sealed class AdminPaymentSettingsTests
         Assert.Contains("\"directReconciliationSupported\":false", serialized, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task AdminSnapshotRequiresSuccessfulPaymentAfterLatestConfigurationSave()
+    {
+        await using var fixture = Fixture.Create();
+        var configured = DefaultOptions();
+        configured.Enabled = true;
+        configured.Providers["yookassa"] = new PaymentProviderOptions
+        {
+            Enabled = true,
+            DisplayName = "ЮKassa",
+            MerchantId = "shop-id",
+            SecretKey = "production-secret"
+        };
+        var store = new PaymentConfigurationStore(
+            fixture.Db, Options.Create(configured), fixture.Protection);
+        var beforeConfiguration = DateTimeOffset.UtcNow.AddHours(-1);
+        fixture.Db.PaymentOrders.Add(PaidOrder("yookassa", beforeConfiguration));
+        await fixture.Db.SaveChangesAsync();
+        await store.SaveAsync(configured);
+
+        var staleEvidence = Assert.IsType<OkObjectResult>(
+            await Controller(store, fixture.Db).Get(default));
+        var staleJson = JsonSerializer.Serialize(staleEvidence.Value);
+        Assert.Contains("\"state\":\"retest_required\"", staleJson, StringComparison.Ordinal);
+        Assert.Contains("\"paidAfterConfigurationUpdate\":0", staleJson, StringComparison.Ordinal);
+
+        var configuredAt = await fixture.Db.PaymentConfigurations.AsNoTracking()
+            .Select(configuration => configuration.UpdatedAt).SingleAsync();
+        fixture.Db.PaymentOrders.Add(PaidOrder("yookassa", configuredAt.AddSeconds(1)));
+        await fixture.Db.SaveChangesAsync();
+
+        var currentEvidence = Assert.IsType<OkObjectResult>(
+            await Controller(store, fixture.Db).Get(default));
+        var currentJson = JsonSerializer.Serialize(currentEvidence.Value);
+        Assert.Contains("\"state\":\"healthy\"", currentJson, StringComparison.Ordinal);
+        Assert.Contains("\"paidAfterConfigurationUpdate\":1", currentJson, StringComparison.Ordinal);
+        Assert.Contains("\"configurationUpdatedAt\":", currentJson, StringComparison.Ordinal);
+    }
+
     private static AdminPaymentsController Controller(
         IPaymentConfigurationStore store,
         ProxyHarborDbContext db) =>
@@ -155,6 +194,21 @@ public sealed class AdminPaymentSettingsTests
         BotId = 1,
         BotToken = "token",
         WebhookSecret = "secret"
+    };
+
+    private static PaymentOrder PaidOrder(string provider, DateTimeOffset createdAt) => new()
+    {
+        UserId = Guid.NewGuid(),
+        ProductCode = "pro-monthly",
+        Plan = SubscriptionPlans.Pro,
+        Provider = provider,
+        AmountMinor = 49_900,
+        Currency = "RUB",
+        DurationDays = 30,
+        Status = PaymentStatuses.Paid,
+        CreatedAt = createdAt,
+        PaidAt = createdAt.AddMinutes(1),
+        UpdatedAt = createdAt.AddMinutes(1)
     };
 
     private sealed class TelegramStore(TelegramBotOptions value) : ITelegramBotConfigurationStore

@@ -21,7 +21,8 @@ public sealed class AdminPaymentsController(
     public async Task<IActionResult> Get(CancellationToken token)
     {
         var options = await configurations.GetAsync(token);
-        return Ok(ToResponse(options, await OperationalSummariesAsync(token)));
+        var configurationUpdatedAt = await ConfigurationUpdatedAtAsync(token);
+        return Ok(ToResponse(options, await OperationalSummariesAsync(configurationUpdatedAt, token), configurationUpdatedAt));
     }
 
     /// <summary>Проверяет и атомарно применяет полный снимок настроек без рестарта.</summary>
@@ -116,12 +117,19 @@ public sealed class AdminPaymentsController(
             Providers = providers
         };
         await configurations.SaveAsync(next, token);
-        return Ok(ToResponse(next, await OperationalSummariesAsync(token)));
+        var configurationUpdatedAt = await ConfigurationUpdatedAtAsync(token);
+        return Ok(ToResponse(next, await OperationalSummariesAsync(configurationUpdatedAt, token), configurationUpdatedAt));
     }
 
+    private Task<DateTimeOffset?> ConfigurationUpdatedAtAsync(CancellationToken token) =>
+        db.PaymentConfigurations.AsNoTracking().Where(configuration => configuration.Id == 1)
+            .Select(configuration => (DateTimeOffset?)configuration.UpdatedAt).SingleOrDefaultAsync(token);
+
     private async Task<IReadOnlyDictionary<string, PaymentProviderOperationalSummary>> OperationalSummariesAsync(
+        DateTimeOffset? configurationUpdatedAt,
         CancellationToken token)
     {
+        var configuredSince = configurationUpdatedAt ?? DateTimeOffset.MaxValue;
         var values = await db.PaymentOrders.AsNoTracking()
             .Where(order => PaymentProviderConfiguration.Codes.Contains(order.Provider))
             .GroupBy(order => order.Provider)
@@ -133,6 +141,7 @@ public sealed class AdminPaymentsController(
                 group.Count(order => order.Status == PaymentStatuses.Failed),
                 group.Count(order => order.Status == PaymentStatuses.Canceled),
                 group.Count(order => order.Status == PaymentStatuses.Refunded),
+                group.Count(order => order.Status == PaymentStatuses.Paid && order.CreatedAt >= configuredSince),
                 group.Max(order => (DateTimeOffset?)order.CreatedAt),
                 group.Max(order => order.PaidAt)))
             .ToArrayAsync(token);
@@ -141,9 +150,11 @@ public sealed class AdminPaymentsController(
 
     private static object ToResponse(
         PaymentOptions options,
-        IReadOnlyDictionary<string, PaymentProviderOperationalSummary> operational) => new
+        IReadOnlyDictionary<string, PaymentProviderOperationalSummary> operational,
+        DateTimeOffset? configurationUpdatedAt) => new
         {
             options.Enabled,
+            configurationUpdatedAt,
             products = options.Products.OrderBy(x => x.Key).Select(x => new
             {
                 code = x.Key,
@@ -212,11 +223,12 @@ internal sealed record PaymentProviderOperationalSummary(
     int FailedOrders,
     int CanceledOrders,
     int RefundedOrders,
+    int PaidAfterConfigurationUpdate,
     DateTimeOffset? LastOrderAt,
     DateTimeOffset? LastPaidAt)
 {
     internal static PaymentProviderOperationalSummary Empty(string provider) =>
-        new(provider, 0, 0, 0, 0, 0, 0, null, null);
+        new(provider, 0, 0, 0, 0, 0, 0, 0, null, null);
 }
 
 /// <summary>Не выдаёт предположение за подтверждённый callback, но явно показывает отсутствие успешной оплаты.</summary>
@@ -233,13 +245,16 @@ internal static class PaymentProviderOperationalHealth
         var ready = PaymentProviderConfiguration.IsReady(code, provider);
         var state = !provider.Enabled ? "disabled"
             : !ready ? "configuration_required"
-            : summary.PaidOrders > 0 ? "healthy"
+            : summary.PaidAfterConfigurationUpdate > 0 ? "healthy"
             : summary.PendingOrders > 0 ? "pending"
+            : summary.PaidOrders > 0 ? "retest_required"
             : summary.TotalOrders == 0 ? "awaiting_first_payment"
             : code is "yoomoney" or "nowpayments" ? "webhook_attention"
             : "no_successful_payments";
         var attention = state switch
         {
+            "retest_required" =>
+                "После последнего сохранения настроек ещё не было подтверждённой оплаты. Выполните минимальный production-платёж и проверьте начисление подписки.",
             "webhook_attention" when code == "yoomoney" =>
                 "Нет подтверждённых оплат. Включите HTTP-уведомления в кошельке ЮMoney, укажите этот webhook URL и тот же секрет, затем выполните тест из кабинета ЮMoney.",
             "webhook_attention" =>
@@ -258,6 +273,7 @@ internal static class PaymentProviderOperationalHealth
             failedOrders = summary.FailedOrders,
             canceledOrders = summary.CanceledOrders,
             refundedOrders = summary.RefundedOrders,
+            paidAfterConfigurationUpdate = summary.PaidAfterConfigurationUpdate,
             lastOrderAt = summary.LastOrderAt,
             lastPaidAt = summary.LastPaidAt,
             webhookRequired = true,

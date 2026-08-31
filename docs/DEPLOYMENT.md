@@ -27,6 +27,17 @@ curl --fail https://proxy.example.com/api/v1/stats
   -ReportPath artifacts/public-launch-audit.json
 ```
 
+Перед включением реальных продаж отдельно подтвердите, что каждый включённый внешний шлюз работает не только по конфигурации, но уже имеет успешную production-оплату, не оставил pending-заказы и использует HTTPS webhook текущего домена. Передайте ключ через закрытый файл, а не через аргумент процесса:
+
+```powershell
+./tools/Audit-PaymentReadiness.ps1 `
+  -ApiBaseUrl https://proxy.blagodaty.ru `
+  -AdminKeyFile /opt/proxyharbor/.secrets/admin_api_key `
+  -ReportPath artifacts/payment-readiness.json
+```
+
+Состояния `webhook_attention`, `no_successful_payments`, `pending`, тестовый режим или отсутствие обязательных реквизитов завершают аудит ошибкой. Для первоначальной настройки без приёма денег можно временно передать `-AllowAwaitingFirstPayment`, но это не является production acceptance: перед продажами всё равно нужна реальная минимальная оплата, корректное начисление подписки, чек и проверенный возврат.
+
 Успешный результат подтверждает наблюдаемое техническое состояние сайта, но не заменяет внешние уведомления Роскомнадзора, договоры с обработчиками, чек НПД и юридическую квалификацию сервиса.
 
 Не добавляйте `https://` в `PUBLIC_HOST`. Первый выпуск сертификата требует корректного DNS и доступности портов 80/443. Named volumes `caddy-data` и `caddy-config` содержат сертификаты и ACME-состояние; не удаляйте их при обычном обновлении.

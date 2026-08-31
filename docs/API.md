@@ -384,6 +384,10 @@ DNS проверяется до сохранения. Collection/source mutation
 - последние collection, validation и backup run’ы;
 - `TelegramConfigured`/`SentToTelegram` и `ObjectStorageConfigured`/`SentToObjectStorage` для backup.
 
+## GET `/api/v1/admin/payments`
+
+Возвращает редактируемые тарифы, `configurationUpdatedAt` и несекретное состояние каждого шлюза: `ready`, признаки наличия секретов, HTTPS webhook URL и агрегат `operational` со счётчиками pending/paid/failed/canceled/refunded. `paidAfterConfigurationUpdate`, `state`, `attention` и `directReconciliationSupported` отделяют заполненную конфигурацию от production-платежа, выполненного уже после её последнего сохранения. Секреты и идентификаторы отдельных заказов не возвращаются. Для приёмочного аудита используйте `tools/Audit-PaymentReadiness.ps1` с ключом из закрытого файла.
+
 ## POST `/api/v1/admin/collect`
 
 Принудительный полный collection. Игнорирует source backoff и conditional validators, требует новый body каждого включённого feed’а. Возвращает `CollectionRun`; concurrent collection/restore даёт `409`.
