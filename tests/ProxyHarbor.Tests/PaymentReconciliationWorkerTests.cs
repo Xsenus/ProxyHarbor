@@ -89,6 +89,22 @@ public sealed class PaymentReconciliationWorkerTests
                 Array.Empty<int>(), 0, _ => Task.FromResult(true), CancellationToken.None));
     }
 
+    [Theory]
+    [InlineData(null, true)]
+    [InlineData(PaymentStatuses.Pending, true)]
+    [InlineData(PaymentStatuses.Paid, false)]
+    [InlineData(PaymentStatuses.Failed, false)]
+    public void StaleReconciliationNeverLeavesCheckoutHanging(
+        string? providerStatus, bool expected)
+    {
+        var now = new DateTimeOffset(2026, 9, 1, 0, 0, 0, TimeSpan.Zero);
+
+        Assert.Equal(expected, PaymentReconciliationWorker.ShouldCancelAfterReconciliation(
+            now.AddHours(-25), providerStatus, now));
+        Assert.False(PaymentReconciliationWorker.ShouldCancelAfterReconciliation(
+            now.AddHours(-23), providerStatus, now));
+    }
+
     private static void UpdateMaximum(ref int target, int value)
     {
         var current = Volatile.Read(ref target);

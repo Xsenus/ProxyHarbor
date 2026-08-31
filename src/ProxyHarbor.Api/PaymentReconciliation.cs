@@ -154,7 +154,7 @@ public sealed class PaymentReconciliationWorker(
         try { completed = await ReconcileTelegramStarsAsync(now, cutoff, token); }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
         catch (Exception exception) { TelegramHistoryFailed(logger, exception); }
-        completed += await CancelStaleYooMoneyAsync(now, token);
+        completed += await CancelStaleWebhookOnlyAsync(now, token);
         PaymentReconciliationCandidate[] candidates;
         using (var discoveryScope = scopes.CreateScope())
         {
@@ -257,21 +257,27 @@ public sealed class PaymentReconciliationWorker(
 
     /// <summary>
     /// YooMoney не предоставляет безопасную проверку исходной списанной суммы без
-    /// отдельного OAuth-контура. После суточного окна неподтверждённые формы считаются
-    /// оставленными; подписанный webhook по-прежнему имеет право восстановить оплату.
+    /// отдельного OAuth-контура. NOWPayments invoice не сообщает payment ID до первого
+    /// IPN. После суточного окна неподтверждённые формы считаются оставленными;
+    /// подписанный поздний webhook по-прежнему имеет право восстановить оплату.
     /// </summary>
-    private async Task<int> CancelStaleYooMoneyAsync(DateTimeOffset now, CancellationToken token)
+    private async Task<int> CancelStaleWebhookOnlyAsync(DateTimeOffset now, CancellationToken token)
     {
         using var scope = scopes.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<ProxyHarborDbContext>();
         var cutoff = now - StalePendingAge;
-        var canceled = await db.PaymentOrders
-            .Where(x => x.Status == PaymentStatuses.Pending && x.Provider == "yoomoney" &&
-                x.UpdatedAt <= cutoff)
-            .ExecuteUpdateAsync(update => update
-                .SetProperty(x => x.Status, PaymentStatuses.Canceled)
-                .SetProperty(x => x.UpdatedAt, now), token);
-        if (canceled > 0) StaleCanceled(logger, "yoomoney", canceled, null);
+        var canceled = 0;
+        foreach (var provider in new[] { "yoomoney", "nowpayments" })
+        {
+            var providerCanceled = await db.PaymentOrders
+                .Where(x => x.Status == PaymentStatuses.Pending && x.Provider == provider &&
+                    x.UpdatedAt <= cutoff)
+                .ExecuteUpdateAsync(update => update
+                    .SetProperty(x => x.Status, PaymentStatuses.Canceled)
+                    .SetProperty(x => x.UpdatedAt, now), token);
+            if (providerCanceled > 0) StaleCanceled(logger, provider, providerCanceled, null);
+            canceled += providerCanceled;
+        }
         return canceled;
     }
 
@@ -314,6 +320,14 @@ public sealed class PaymentReconciliationWorker(
                 var settlement = scope.ServiceProvider.GetRequiredService<PaymentSettlementService>();
                 await settlement.ApplyAsync(order.Provider, notification, token);
             }
+            if (ShouldCancelAfterReconciliation(order.CreatedAt, notification?.Status, claimedAt))
+            {
+                await db.PaymentOrders
+                    .Where(x => x.Id == order.Id && x.Status == PaymentStatuses.Pending && x.UpdatedAt == claimedAt)
+                    .ExecuteUpdateAsync(update => update
+                        .SetProperty(x => x.Status, PaymentStatuses.Canceled)
+                        .SetProperty(x => x.UpdatedAt, claimedAt), token);
+            }
             return true;
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
@@ -323,6 +337,16 @@ public sealed class PaymentReconciliationWorker(
             return false;
         }
     }
+
+    /// <summary>
+    /// Убирает локально зависший checkout только после успешного ответа шлюза
+    /// (null = операция не найдена). Ошибка сети бросает исключение раньше и никогда
+    /// не превращается в отмену. Late paid/refunded затем разрешён transition policy.
+    /// </summary>
+    internal static bool ShouldCancelAfterReconciliation(
+        DateTimeOffset createdAt, string? providerStatus, DateTimeOffset now) =>
+        createdAt <= now - StalePendingAge &&
+        (providerStatus is null || providerStatus == PaymentStatuses.Pending);
 
     /// <summary>Выполняет I/O-операции с фиксированным пределом и без общей mutable state.</summary>
     internal static async Task<int> ProcessBoundedAsync<T>(
