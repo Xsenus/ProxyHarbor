@@ -37,7 +37,7 @@ ProxyHarbor загружает 310 HTTPS-feed от 80 независимых п�
 - реферальная программа на 10 приглашений: день доступа за регистрацию, дополнительные 1/7/30/90 дней за оплаченные рефералом периоды 30/90/180/365 дней и прозрачная история начислений в профиле и админке;
 - реестр подписок со сроками, статусом `suspended`, ручным продлением и неизменяемым аудитом; агрегированная статистика выдачи по IP/аккаунту и мгновенные блокировки точного IP, CIDR или пользователя;
 - OpenAPI, Prometheus-метрики, готовые alerts и operator diagnostics;
-- PHB3 backup БД и безопасных настроек: diskless ZIP → AES-256-GCM → self-verification → atomic publish → Telegram;
+- PHB3 backup БД и безопасных настроек: diskless ZIP → AES-256-GCM → self-verification → atomic publish → проверяемое S3-совместимое хранилище и/или Telegram;
 - транзакционный restore proxy-данных, audit-истории, аккаунтов, ролей и подписок с проверкой архива и полным rollback при ошибке;
 - hardened Docker deployment: non-root, read-only root filesystem, dropped capabilities, healthchecks и resource ceilings;
 - multi-architecture GHCR release workflow с SBOM, provenance и immutable image digests.
@@ -127,7 +127,7 @@ curl --fail https://proxy.example.com/health/ready
 
 Production overlay:
 
-- принудительно включает encrypted backup и Telegram delivery;
+- принудительно включает encrypted backup и начальную Telegram-доставку; после первого запуска основным каналом можно сделать S3 в админке;
 - убирает прямую публикацию frontend-порта `8080`;
 - оставляет единственной публичной точкой входа hardened Caddy;
 - автоматически получает и продлевает TLS-сертификаты;
@@ -214,7 +214,7 @@ Backup содержит:
 - полные безопасные `Collector`/`Backup`/runtime-настройки;
 - manifest версии 7 с явным `secretsIncluded=false`.
 
-В архив никогда не входят admin password/API key, data-protection keys, PostgreSQL connection string/password, credentials Telegram-доставки backup и encryption key. Token commerce-бота входит только в уже защищённом Data Protection виде; без независимо сохранённых Data Protection keys расшифровать его после переноса невозможно.
+В архив никогда не входят admin password/API key, data-protection keys, PostgreSQL connection string/password, credentials Telegram/S3-доставки backup и encryption key. Token commerce-бота входит только в уже защищённом Data Protection виде; без независимо сохранённых Data Protection keys расшифровать его после переноса невозможно.
 
 Ручной backup:
 

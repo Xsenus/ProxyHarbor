@@ -203,6 +203,40 @@ public sealed class PaymentControllerTests
         Assert.IsType<NotFoundResult>(await controller.YooMoneyHosted(order.Id, token, default));
     }
 
+    [Fact]
+    public async Task YooMoneyConnectivityTestAcknowledgesWithoutActivatingPayment()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var order = new PaymentOrder
+        {
+            UserId = fixture.User.Id,
+            ProductCode = "pro-monthly",
+            Plan = SubscriptionPlans.Pro,
+            Provider = "yoomoney",
+            AmountMinor = 49_900,
+            Currency = "RUB",
+            DurationDays = 30
+        };
+        fixture.Db.PaymentOrders.Add(order);
+        await fixture.Db.SaveChangesAsync();
+        var subscriptionBefore = await fixture.Db.Subscriptions.AsNoTracking().SingleAsync();
+        var controller = fixture.Controller(OptionsFor("yoomoney"));
+        var body = $"test_notification=true&label={order.Id:D}&amount=499.00";
+        controller.Request.Method = "POST";
+        controller.Request.ContentType = "application/x-www-form-urlencoded";
+        controller.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(body));
+
+        Assert.IsType<OkResult>(await controller.Webhook("yoomoney", default));
+
+        fixture.Db.ChangeTracker.Clear();
+        Assert.Equal(PaymentStatuses.Pending,
+            (await fixture.Db.PaymentOrders.AsNoTracking().SingleAsync()).Status);
+        var subscriptionAfter = await fixture.Db.Subscriptions.AsNoTracking().SingleAsync();
+        Assert.Equal(subscriptionBefore.Plan, subscriptionAfter.Plan);
+        Assert.Equal(subscriptionBefore.Status, subscriptionAfter.Status);
+        Assert.Equal(subscriptionBefore.ExpiresAt, subscriptionAfter.ExpiresAt);
+    }
+
     private static PaymentOptions OptionsFor(string provider) => new()
     {
         Enabled = true,

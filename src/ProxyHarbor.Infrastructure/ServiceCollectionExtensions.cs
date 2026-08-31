@@ -69,6 +69,10 @@ public static class ServiceCollectionExtensions
             .Validate(x => string.IsNullOrWhiteSpace(x.TelegramChatId) ||
                 BackupOptions.IsTelegramChatIdValid(x.TelegramChatId),
                 "TelegramChatId должен быть ненулевым signed 64-bit числом")
+            // Как и Telegram, S3 может быть сохранён в runtime-конфигурации. Но явно
+            // включённая deploy-конфигурация обязана быть полной уже при startup.
+            .Validate(x => !x.SendToObjectStorage || BackupOptions.IsObjectStorageConfigurationValid(x),
+                "Для S3 backup нужны безопасный HTTPS endpoint, region, bucket, prefix и оба ключа")
             .ValidateOnStart();
         services.AddOptions<GeoIpOptions>().Bind(configuration.GetSection(GeoIpOptions.Section))
             .Validate(x => x.RefreshHours is >= 1 and <= 720, "RefreshHours: 1..720")
@@ -123,6 +127,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<VpnCatalogService>();
         services.AddSingleton<IBackupConfigurationStore, BackupConfigurationStore>();
         services.AddSingleton<BackupService>();
+        services.AddSingleton<IBackupObjectStorageTransport, S3BackupObjectStorageTransport>();
         services.AddSingleton<DatabaseReadinessProbe>();
         services.AddSingleton<OperationalMaintenanceService>();
         services.AddSingleton<ProxyCountryResolver>();

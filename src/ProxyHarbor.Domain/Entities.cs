@@ -389,6 +389,12 @@ public sealed class BackupRun
     public bool TelegramConfigured { get; set; }
     /// <summary>Telegram подтвердил ok=true для файла или каждой его части.</summary>
     public bool SentToTelegram { get; set; }
+    /// <summary>Для попытки было включено и полностью настроено S3-совместимое хранилище.</summary>
+    public bool ObjectStorageConfigured { get; set; }
+    /// <summary>Object storage подтвердил размер и SHA-256 загруженного PHB3.</summary>
+    public bool SentToObjectStorage { get; set; }
+    /// <summary>Безопасный object key без bucket, endpoint и реквизитов.</summary>
+    public string? ObjectStorageKey { get; set; }
     /// <summary>Bounded-диагностика отказа или null при полном успехе.</summary>
     public string? Error { get; set; }
 }

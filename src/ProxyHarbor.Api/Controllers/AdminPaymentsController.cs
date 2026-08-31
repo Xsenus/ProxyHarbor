@@ -2,6 +2,7 @@ using System.ComponentModel.DataAnnotations;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.EntityFrameworkCore;
 using ProxyHarbor.Infrastructure;
 
 namespace ProxyHarbor.Api.Controllers;
@@ -12,12 +13,16 @@ namespace ProxyHarbor.Api.Controllers;
 [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
 public sealed class AdminPaymentsController(
     IPaymentConfigurationStore configurations,
-    ITelegramBotConfigurationStore telegramConfigurations) : ControllerBase
+    ITelegramBotConfigurationStore telegramConfigurations,
+    ProxyHarborDbContext db) : ControllerBase
 {
     /// <summary>Возвращает настройки и только признаки наличия секретов.</summary>
     [HttpGet]
-    public async Task<IActionResult> Get(CancellationToken token) =>
-        Ok(ToResponse(await configurations.GetAsync(token)));
+    public async Task<IActionResult> Get(CancellationToken token)
+    {
+        var options = await configurations.GetAsync(token);
+        return Ok(ToResponse(options, await OperationalSummariesAsync(token)));
+    }
 
     /// <summary>Проверяет и атомарно применяет полный снимок настроек без рестарта.</summary>
     [HttpPut]
@@ -111,47 +116,72 @@ public sealed class AdminPaymentsController(
             Providers = providers
         };
         await configurations.SaveAsync(next, token);
-        return Ok(ToResponse(next));
+        return Ok(ToResponse(next, await OperationalSummariesAsync(token)));
     }
 
-    private static object ToResponse(PaymentOptions options) => new
+    private async Task<IReadOnlyDictionary<string, PaymentProviderOperationalSummary>> OperationalSummariesAsync(
+        CancellationToken token)
     {
-        options.Enabled,
-        products = options.Products.OrderBy(x => x.Key).Select(x => new
+        var values = await db.PaymentOrders.AsNoTracking()
+            .Where(order => PaymentProviderConfiguration.Codes.Contains(order.Provider))
+            .GroupBy(order => order.Provider)
+            .Select(group => new PaymentProviderOperationalSummary(
+                group.Key,
+                group.Count(),
+                group.Count(order => order.Status == PaymentStatuses.Pending),
+                group.Count(order => order.Status == PaymentStatuses.Paid),
+                group.Count(order => order.Status == PaymentStatuses.Failed),
+                group.Count(order => order.Status == PaymentStatuses.Canceled),
+                group.Count(order => order.Status == PaymentStatuses.Refunded),
+                group.Max(order => (DateTimeOffset?)order.CreatedAt),
+                group.Max(order => order.PaidAt)))
+            .ToArrayAsync(token);
+        return values.ToDictionary(value => value.Provider, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static object ToResponse(
+        PaymentOptions options,
+        IReadOnlyDictionary<string, PaymentProviderOperationalSummary> operational) => new
         {
-            code = x.Key,
-            x.Value.Enabled,
-            x.Value.Name,
-            x.Value.Plan,
-            x.Value.DurationDays,
-            x.Value.AmountMinor,
-            x.Value.DiscountPercent,
-            x.Value.Currency,
-            x.Value.Description,
-            fullDailyPriceMinor = checked(x.Value.DurationDays * options.Products.Values
-                .Single(product => product.DurationDays == 1).AmountMinor),
-            savingsMinor = checked(x.Value.DurationDays * options.Products.Values
-                .Single(product => product.DurationDays == 1).AmountMinor) - x.Value.AmountMinor
-        }),
-        providers = PaymentProviderConfiguration.Codes.Select(code =>
-        {
-            options.Providers.TryGetValue(code, out var value);
-            value ??= new PaymentProviderOptions { DisplayName = ProviderName(code) };
-            return new
+            options.Enabled,
+            products = options.Products.OrderBy(x => x.Key).Select(x => new
             {
-                code,
-                name = ProviderName(code),
-                value.Enabled,
-                value.MerchantId,
-                value.PublicId,
-                value.TestMode,
-                secretConfigured = !string.IsNullOrWhiteSpace(value.SecretKey),
-                secondarySecretConfigured = !string.IsNullOrWhiteSpace(value.SecondarySecret),
-                ready = PaymentProviderConfiguration.IsReady(code, value),
-                webhookUrl = $"{options.PublicBaseUrl.TrimEnd('/')}/api/v1/payments/webhooks/{code}"
-            };
-        })
-    };
+                code = x.Key,
+                x.Value.Enabled,
+                x.Value.Name,
+                x.Value.Plan,
+                x.Value.DurationDays,
+                x.Value.AmountMinor,
+                x.Value.DiscountPercent,
+                x.Value.Currency,
+                x.Value.Description,
+                fullDailyPriceMinor = checked(x.Value.DurationDays * options.Products.Values
+                    .Single(product => product.DurationDays == 1).AmountMinor),
+                savingsMinor = checked(x.Value.DurationDays * options.Products.Values
+                    .Single(product => product.DurationDays == 1).AmountMinor) - x.Value.AmountMinor
+            }),
+            providers = PaymentProviderConfiguration.Codes.Select(code =>
+            {
+                options.Providers.TryGetValue(code, out var value);
+                value ??= new PaymentProviderOptions { DisplayName = ProviderName(code) };
+                operational.TryGetValue(code, out var summary);
+                summary ??= PaymentProviderOperationalSummary.Empty(code);
+                return new
+                {
+                    code,
+                    name = ProviderName(code),
+                    value.Enabled,
+                    value.MerchantId,
+                    value.PublicId,
+                    value.TestMode,
+                    secretConfigured = !string.IsNullOrWhiteSpace(value.SecretKey),
+                    secondarySecretConfigured = !string.IsNullOrWhiteSpace(value.SecondarySecret),
+                    ready = PaymentProviderConfiguration.IsReady(code, value),
+                    webhookUrl = $"{options.PublicBaseUrl.TrimEnd('/')}/api/v1/payments/webhooks/{code}",
+                    operational = PaymentProviderOperationalHealth.Create(code, value, summary)
+                };
+            })
+        };
 
     private static string MergeSecret(string? previous, string? replacement, bool clear) =>
         clear ? string.Empty : replacement is null ? previous ?? string.Empty : replacement;
@@ -171,6 +201,69 @@ public sealed class AdminPaymentsController(
         "nowpayments" => "NOWPayments",
         _ => code
     };
+}
+
+/// <summary>Агрегированная эксплуатационная статистика шлюза без данных клиента и платёжных идентификаторов.</summary>
+internal sealed record PaymentProviderOperationalSummary(
+    string Provider,
+    int TotalOrders,
+    int PendingOrders,
+    int PaidOrders,
+    int FailedOrders,
+    int CanceledOrders,
+    int RefundedOrders,
+    DateTimeOffset? LastOrderAt,
+    DateTimeOffset? LastPaidAt)
+{
+    internal static PaymentProviderOperationalSummary Empty(string provider) =>
+        new(provider, 0, 0, 0, 0, 0, 0, null, null);
+}
+
+/// <summary>Не выдаёт предположение за подтверждённый callback, но явно показывает отсутствие успешной оплаты.</summary>
+internal static class PaymentProviderOperationalHealth
+{
+    private static readonly HashSet<string> DirectReconciliationProviders =
+        ["yookassa", "cloudpayments", "robokassa", "tbank", "stripe", "cryptomus"];
+
+    internal static object Create(
+        string code,
+        PaymentProviderOptions provider,
+        PaymentProviderOperationalSummary summary)
+    {
+        var ready = PaymentProviderConfiguration.IsReady(code, provider);
+        var state = !provider.Enabled ? "disabled"
+            : !ready ? "configuration_required"
+            : summary.PaidOrders > 0 ? "healthy"
+            : summary.PendingOrders > 0 ? "pending"
+            : summary.TotalOrders == 0 ? "awaiting_first_payment"
+            : code is "yoomoney" or "nowpayments" ? "webhook_attention"
+            : "no_successful_payments";
+        var attention = state switch
+        {
+            "webhook_attention" when code == "yoomoney" =>
+                "Нет подтверждённых оплат. Включите HTTP-уведомления в кошельке ЮMoney, укажите этот webhook URL и тот же секрет, затем выполните тест из кабинета ЮMoney.",
+            "webhook_attention" =>
+                "Нет подтверждённых оплат. Проверьте IPN/webhook в кабинете провайдера: этот шлюз нельзя безопасно сверить без входящего уведомления.",
+            "no_successful_payments" =>
+                "Счета создавались, но подтверждённых оплат пока нет. Проверьте webhook и журнал счетов.",
+            _ => null
+        };
+        return new
+        {
+            state,
+            attention,
+            totalOrders = summary.TotalOrders,
+            pendingOrders = summary.PendingOrders,
+            paidOrders = summary.PaidOrders,
+            failedOrders = summary.FailedOrders,
+            canceledOrders = summary.CanceledOrders,
+            refundedOrders = summary.RefundedOrders,
+            lastOrderAt = summary.LastOrderAt,
+            lastPaidAt = summary.LastPaidAt,
+            webhookRequired = true,
+            directReconciliationSupported = DirectReconciliationProviders.Contains(code)
+        };
+    }
 }
 
 /// <summary>Полный административный снимок биллинга.</summary>

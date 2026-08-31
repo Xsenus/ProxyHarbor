@@ -382,7 +382,7 @@ DNS проверяется до сохранения. Collection/source mutation
 - checks per second и estimated drain;
 - source catalog completeness/health/staleness/truncation;
 - последние collection, validation и backup run’ы;
-- `TelegramConfigured`/`SentToTelegram` для backup.
+- `TelegramConfigured`/`SentToTelegram` и `ObjectStorageConfigured`/`SentToObjectStorage` для backup.
 
 ## POST `/api/v1/admin/collect`
 
@@ -451,11 +451,11 @@ Host должен быть публичным IP. Пароль не сохран
 }
 ```
 
-Повторный локальный/cluster-wide запуск даёт `409`. Ошибка Telegram не возвращает ложный success; локальный encrypted file и failed audit сохраняются.
+Повторный локальный/cluster-wide запуск даёт `409`. Ошибка включённого Telegram или S3-канала не возвращает ложный success; локальный encrypted file, failed audit и уже подтверждённые доставки сохраняются.
 
 ## GET/PUT `/api/v1/admin/backups/settings`
 
-Читает и меняет расписание, сроки хранения и Telegram-доставку. Для новых настроек браузер передаёт только `telegramRecipientId` — внутренний UUID активного CRM-диалога. Bot token и числовой Telegram `chat_id` в этот API не принимаются и не возвращаются: перед каждой отправкой сервер использует актуальный token основного бота и заново разрешает выбранный диалог.
+Читает и меняет расписание, сроки хранения, Telegram-доставку и S3-совместимое хранилище. Для Telegram браузер передаёт только `telegramRecipientId` — внутренний UUID активного CRM-диалога. Для S3 ответ содержит безопасные endpoint/region/bucket/prefix, path-style и `objectStorageCredentialsConfigured`; access/secret key никогда не возвращаются. Bot token и числовой Telegram `chat_id` в API не принимаются и не возвращаются.
 
 ## GET `/api/v1/admin/backups/telegram-recipients`
 
@@ -463,7 +463,7 @@ Host должен быть публичным IP. Пароль не сохран
 
 ## GET `/api/v1/admin/backups`
 
-Возвращает постраничную историю резервного копирования (`page`, `pageSize`, `total`). У каждой записи есть вычисляемый флаг `available`: он равен `true`, когда опубликованный зашифрованный файл ещё находится в локальном volume. Это включает корректный локальный файл при отдельной ошибке Telegram-доставки. Старые audit-записи могут сохраняться дольше файлов согласно отдельным срокам хранения.
+Возвращает постраничную историю резервного копирования (`page`, `pageSize`, `total`). У каждой записи есть вычисляемый флаг `available`, подтверждения Telegram/S3 и безопасный `objectStorageKey`. `available` равен `true`, когда опубликованный зашифрованный файл ещё находится в локальном volume. Старые audit-записи и удалённые из volume архивы могут оставаться во внешнем immutable object storage.
 
 ## GET `/api/v1/admin/backups/{id}/download`
 

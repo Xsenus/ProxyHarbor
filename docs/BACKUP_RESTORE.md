@@ -14,13 +14,21 @@ Manifest v7 содержит согласованный repeatable-read snapshot
 - внешние checker-узлы, их несекретные SSH-реквизиты, fingerprint, состояние lease и счётчики;
 - UTC-время, версии manifest/settings schema и `secretsIncluded=false`.
 
-В архив никогда не входят PostgreSQL connection string/password, admin password, admin API key, credentials бота доставки backup, data-protection keys или encryption key. Token commerce-бота сохраняется только как Data Protection ciphertext. Без независимо сохранённого volume ключей он после переноса не расшифруется, поэтому ключи и исходный token необходимо хранить во внешнем secret manager.
+В архив никогда не входят PostgreSQL connection string/password, admin password, admin API key, credentials Telegram/S3-доставки backup, data-protection keys или encryption key. Token commerce-бота сохраняется только как Data Protection ciphertext. Без независимо сохранённого volume ключей он после переноса не расшифруется, поэтому ключи и исходный token необходимо хранить во внешнем secret manager.
 
 ## Создание и доставка
 
-Snapshot сериализуется в ZIP-поток и сразу шифруется в PHB3: plaintext ZIP не записывается в backup volume. Результат проверяется, атомарно публикуется и затем отправляется Telegram document. Файлы крупнее настроенного лимита делятся максимум на 20 частей; части имеют общий идентификатор и могут быть объединены скриптом.
+Snapshot сериализуется в ZIP-поток и сразу шифруется в PHB3: plaintext ZIP не записывается в backup volume. Результат проверяется, атомарно публикуется и затем сначала загружается в настроенный S3-совместимый bucket. После `PUT` выполняется `HEAD`, сверяются размер и сохранённый SHA-256. Дополнительно архив может отправляться Telegram document; файлы крупнее настроенного лимита делятся максимум на 20 частей.
 
-Production запуск требует backup key и выбранного активного получателя из CRM основного Telegram-бота. Отдельный token для backup не создаётся: актуальный token основного бота разрешается перед каждой отправкой. Ошибка доставки завершает audit неуспешно, но уже созданный локальный шифротекст сохраняется согласно retention policy.
+Production запуск требует backup key и хотя бы один внешний канал: S3-совместимое хранилище либо активного получателя из CRM основного Telegram-бота. Для больших архивов S3 является основным каналом. Endpoint обязан быть HTTPS; bucket должен быть непубличным, с versioning и по возможности Object Lock. Access/secret key защищаются ASP.NET Core Data Protection и никогда не возвращаются в браузер. Ошибка любого включённого канала завершает audit неуспешно, но уже созданный локальный шифротекст и подтверждение успешно доставленного канала сохраняются.
+
+### Настройка S3-совместимого хранилища
+
+1. Создайте отдельный приватный bucket в российском регионе второго провайдера, включите versioning и retention/Object Lock.
+2. Создайте service account с минимальными правами `PutObject` и `HeadObject` только на этот bucket/prefix.
+3. В `/admin/backups` включите S3, укажите HTTPS endpoint, region, bucket, prefix и пару access/secret key. Для Yandex Object Storage endpoint — `https://storage.yandexcloud.net`, регион подписи — `ru-central1`.
+4. Создайте ручной backup и убедитесь, что в истории указано `доставлен: S3`; затем скачайте объект и выполните пробное восстановление в отдельную БД.
+5. Храните PHB3 encryption key и S3 credentials в независимом secret manager. Потеря PHB3-ключа делает внешний объект невосстановимым.
 
 Ручной запуск:
 

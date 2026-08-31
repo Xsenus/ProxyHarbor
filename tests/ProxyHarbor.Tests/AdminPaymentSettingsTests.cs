@@ -27,7 +27,7 @@ public sealed class AdminPaymentSettingsTests
         Assert.DoesNotContain("merchant-secret-never-plaintext", row.SettingsJson, StringComparison.Ordinal);
         Assert.Equal("merchant-secret-never-plaintext", (await store.GetAsync()).Providers["yookassa"].SecretKey);
 
-        var response = Assert.IsType<OkObjectResult>(await Controller(store).Get(default));
+        var response = Assert.IsType<OkObjectResult>(await Controller(store, fixture.Db).Get(default));
         Assert.DoesNotContain("merchant-secret-never-plaintext", JsonSerializer.Serialize(response.Value), StringComparison.Ordinal);
     }
 
@@ -36,7 +36,7 @@ public sealed class AdminPaymentSettingsTests
     {
         await using var fixture = Fixture.Create();
         var store = new PaymentConfigurationStore(fixture.Db, Options.Create(DefaultOptions()), fixture.Protection);
-        var controller = Controller(store);
+        var controller = Controller(store, fixture.Db);
         var request = Request(enabled: true, secret: null);
         Assert.IsType<BadRequestObjectResult>(await controller.Update(request, default));
 
@@ -66,7 +66,7 @@ public sealed class AdminPaymentSettingsTests
     {
         await using var fixture = Fixture.Create();
         var controller = Controller(new PaymentConfigurationStore(
-            fixture.Db, Options.Create(DefaultOptions()), fixture.Protection));
+            fixture.Db, Options.Create(DefaultOptions()), fixture.Protection), fixture.Db);
 
         var empty = Request(false, null);
         empty.Products.Clear();
@@ -98,7 +98,7 @@ public sealed class AdminPaymentSettingsTests
         telegram.AutomaticProductCodes = SubscriptionPricingPolicy.Periods
             .Select(period => $"unlimited-{period.Code}")
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var controller = new AdminPaymentsController(store, new TelegramStore(telegram));
+        var controller = new AdminPaymentsController(store, new TelegramStore(telegram), fixture.Db);
         var request = Request(true, null);
         request.Providers.ForEach(provider => provider.Enabled = false);
 
@@ -106,8 +106,48 @@ public sealed class AdminPaymentSettingsTests
         Assert.True((await store.GetAsync()).Enabled);
     }
 
-    private static AdminPaymentsController Controller(IPaymentConfigurationStore store) =>
-        new(store, new TelegramStore(new TelegramBotOptions()));
+    [Fact]
+    public async Task AdminSnapshotHighlightsWebhookOnlyProviderWithoutSuccessfulPayments()
+    {
+        await using var fixture = Fixture.Create();
+        var configured = DefaultOptions();
+        configured.Enabled = true;
+        configured.Providers["yoomoney"] = new PaymentProviderOptions
+        {
+            Enabled = true,
+            DisplayName = "ЮMoney",
+            MerchantId = "410011234567",
+            SecretKey = "notification-secret"
+        };
+        fixture.Db.PaymentOrders.Add(new PaymentOrder
+        {
+            UserId = Guid.NewGuid(),
+            ProductCode = "pro-monthly",
+            Plan = SubscriptionPlans.Pro,
+            Provider = "yoomoney",
+            AmountMinor = 49_900,
+            Currency = "RUB",
+            DurationDays = 30,
+            Status = PaymentStatuses.Canceled
+        });
+        await fixture.Db.SaveChangesAsync();
+        var store = new PaymentConfigurationStore(
+            fixture.Db, Options.Create(configured), fixture.Protection);
+
+        var response = Assert.IsType<OkObjectResult>(
+            await Controller(store, fixture.Db).Get(default));
+        var serialized = JsonSerializer.Serialize(response.Value);
+
+        Assert.Contains("\"state\":\"webhook_attention\"", serialized, StringComparison.Ordinal);
+        Assert.Contains("\"totalOrders\":1", serialized, StringComparison.Ordinal);
+        Assert.Contains("webhook URL", serialized, StringComparison.Ordinal);
+        Assert.Contains("\"directReconciliationSupported\":false", serialized, StringComparison.Ordinal);
+    }
+
+    private static AdminPaymentsController Controller(
+        IPaymentConfigurationStore store,
+        ProxyHarborDbContext db) =>
+        new(store, new TelegramStore(new TelegramBotOptions()), db);
 
     private static TelegramBotOptions ReadyTelegram() => new()
     {

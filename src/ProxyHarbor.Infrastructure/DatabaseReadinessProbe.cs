@@ -24,7 +24,8 @@ public sealed class DatabaseReadinessProbe(IDbContextFactory<ProxyHarborDbContex
                     source."LastContentFetchedAt",
                     run."CandidateLimitReached",
                     validation."LeaseId",
-                    backup."SentToTelegram"
+                    backup."SentToTelegram",
+                    backup."SentToObjectStorage"
                 FROM "Proxies" AS proxy
                 CROSS JOIN "Sources" AS source
                 CROSS JOIN "Runs" AS run

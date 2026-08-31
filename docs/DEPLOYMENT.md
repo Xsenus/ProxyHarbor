@@ -5,7 +5,7 @@
 1. Установите Docker Engine 26+ и Docker Compose 2.24.4+.
 2. Направьте DNS A/AAAA для выбранного имени на сервер. Если IPv6 фактически не маршрутизируется, не создавайте AAAA-запись.
 3. Разрешите входящие TCP 80/443 и UDP 443. PostgreSQL, API и порт frontend наружу не публикуются.
-4. Скопируйте `.env.example` в `.env`, замените все обязательные ключи и задайте `PUBLIC_HOST` без схемы/пути и `ACME_EMAIL`. Production overlay принудительно включает backup, поэтому пустые `BACKUP_ENCRYPTION_KEY`, `TELEGRAM_BOT_TOKEN` или `TELEGRAM_CHAT_ID` fail-closed остановят API. Compose смонтирует чувствительные значения как read-only secrets; в environment контейнеров они не передаются.
+4. Скопируйте `.env.example` в `.env`, замените все обязательные ключи и задайте `PUBLIC_HOST` без схемы/пути и `ACME_EMAIL`. Production overlay принудительно включает backup и использует Telegram как безопасный bootstrap-канал, поэтому пустые `BACKUP_ENCRYPTION_KEY`, `TELEGRAM_BOT_TOKEN` или `TELEGRAM_CHAT_ID` fail-closed остановят первый запуск. После сохранения runtime-настроек в `/admin/backups` основным каналом может быть S3, а Telegram — отключён. Compose смонтирует чувствительные значения как read-only secrets; в environment контейнеров они не передаются.
 5. До публичного запуска проверьте условия использования всех источников и ограничьте admin routes дополнительным firewall/WAF, если панель не должна быть общедоступной.
 
 ## Запуск и проверка
@@ -33,7 +33,7 @@ curl --fail https://proxy.example.com/api/v1/stats
 
 Миграции и синхронизация встроенного source-каталога сериализованы PostgreSQL session advisory lock. Если startup завершается ошибкой, первичная migration/seed-ошибка не заменяется вторичным сбоем unlock/close; сессия с неподтверждённым освобождением немедленно удаляется из Npgsql pool и физически закрывается, поэтому следующая реплика не наследует залипший lock. Диагностируйте исходную startup-ошибку и повторяйте запуск только после устранения её причины.
 
-Проверьте отдельно admin-аутентификацию, создание зашифрованного backup, подтверждённую Telegram-доставку, расшифровку и пробное восстановление в отдельную БД. Команда `./tools/Audit-Backup.ps1 -ApiBaseUrl https://proxy.example.com -AdminKey $ADMIN_KEY -ReportPath artifacts/backup-audit.json` запускает конкретный backup и fail-closed требует канонический непустой PHB3, завершённый persisted audit и `sentToTelegram=true`; `-AllowLocalOnly` предназначен только для явно выбранного локального canary. Настройте внешний мониторинг `/health/ready`, срока TLS-сертификата, свободного диска, PostgreSQL и ключевых Prometheus-метрик.
+Проверьте отдельно admin-аутентификацию, создание зашифрованного backup, подтверждённую внешнюю доставку, расшифровку и пробное восстановление в отдельную БД. Команда `./tools/Audit-Backup.ps1 -ApiBaseUrl https://proxy.example.com -AdminKey $ADMIN_KEY -ReportPath artifacts/backup-audit.json` запускает конкретный backup и fail-closed требует канонический непустой PHB3, завершённый persisted audit и подтверждение хотя бы одного внешнего канала (`sentToObjectStorage` либо `sentToTelegram`); `-AllowLocalOnly` предназначен только для явно выбранного локального canary. Настройте внешний мониторинг `/health/ready`, срока TLS-сертификата, свободного диска, PostgreSQL и ключевых Prometheus-метрик.
 
 До аварийной замены данных извлеките безопасную конфигурацию из backup v7 без подключения к БД и сохраните её вне временного restore-контейнера:
 

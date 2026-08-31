@@ -260,6 +260,57 @@ public sealed class AdminBackupControllerTests
     }
 
     [Fact]
+    public async Task SettingsPersistObjectStorageCredentialsOnlyInProtectedPayload()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"proxyharbor-backup-s3-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var factory = Factory($"admin-backup-s3-{Guid.NewGuid():N}");
+            var configured = Options.Create(new BackupOptions
+            {
+                Directory = directory,
+                EncryptionKey = new string('k', BackupOptions.MinimumEncryptionKeyLength)
+            });
+            var store = new BackupConfigurationStore(factory, configured, DataProtectionProvider.Create(directory));
+            var controller = new AdminController(factory, null!, null!, null!, null!, configured,
+                Options.Create(new CollectorOptions()), store);
+            const string accessKey = "s3-test-access-key";
+            const string secretKey = "s3-test-secret-key";
+
+            var result = await controller.UpdateBackupSettings(new BackupSettingsRequest(
+                Enabled: true, IntervalHours: 24, RetentionDays: 7, HistoryRetentionDays: 365,
+                MaxTelegramFileSizeMb: 49, SendToTelegram: false, TelegramRecipientId: null,
+                SendToObjectStorage: true,
+                ObjectStorageEndpoint: "https://storage.yandexcloud.net",
+                ObjectStorageRegion: "ru-central1",
+                ObjectStorageBucket: "proxyharbor-backups",
+                ObjectStoragePrefix: "production/backups",
+                ObjectStorageUsePathStyle: true,
+                ObjectStorageAccessKey: accessKey,
+                ObjectStorageSecretKey: secretKey), CancellationToken.None);
+
+            var response = Assert.IsType<BackupSettingsResponse>(
+                Assert.IsType<OkObjectResult>(result.Result).Value);
+            Assert.True(response.SendToObjectStorage);
+            Assert.True(response.ObjectStorageCredentialsConfigured);
+            var persisted = await store.GetAsync();
+            Assert.Equal(accessKey, persisted.ObjectStorageAccessKey);
+            Assert.Equal(secretKey, persisted.ObjectStorageSecretKey);
+            await using var db = await factory.CreateDbContextAsync();
+            var entity = await db.BackupConfigurations.SingleAsync();
+            Assert.DoesNotContain(accessKey, entity.ProtectedSecrets, StringComparison.Ordinal);
+            Assert.DoesNotContain(secretKey, entity.ProtectedSecrets, StringComparison.Ordinal);
+            Assert.DoesNotContain(accessKey, entity.SettingsJson, StringComparison.Ordinal);
+            Assert.DoesNotContain(secretKey, entity.SettingsJson, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task SettingsValidateEveryPolicyBoundaryAndAllowClearingTelegram()
     {
         var directory = Path.Combine(Path.GetTempPath(), $"proxyharbor-backup-policy-{Guid.NewGuid():N}");
