@@ -23,7 +23,7 @@ public sealed class MetricsController(
     /// <summary>Возвращает согласованный Prometheus text exposition operational-метрик.</summary>
     [HttpGet]
     [Produces("text/plain")]
-    [OutputCache(PolicyName = "public-summary")]
+    [OutputCache(PolicyName = PublicOutputCachePolicies.Metrics)]
     public async Task<IActionResult> Get(CancellationToken requestToken)
     {
         await using var db = await dbFactory.CreateDbContextAsync(requestToken);

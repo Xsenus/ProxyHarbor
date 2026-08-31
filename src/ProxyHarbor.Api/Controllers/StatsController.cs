@@ -16,7 +16,7 @@ public sealed class StatsController(
 {
     /// <summary>Возвращает согласованный snapshot proxy/source/run агрегатов.</summary>
     [HttpGet]
-    [OutputCache(PolicyName = "public-summary")]
+    [OutputCache(PolicyName = PublicOutputCachePolicies.Summary)]
     [ProducesResponseType<StatsResponse>(StatusCodes.Status200OK)]
     public async Task<ActionResult<StatsResponse>> Get(CancellationToken cancellationToken)
     {

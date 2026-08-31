@@ -15,7 +15,7 @@ public sealed class SourcesController : ControllerBase
 
     /// <summary>Возвращает 80 независимых провайдеров и все их встроенные feed-endpoint.</summary>
     [HttpGet]
-    [OutputCache(PolicyName = "public-summary")]
+    [OutputCache(PolicyName = PublicOutputCachePolicies.Summary)]
     public ActionResult<PublicSourceCatalogResponse> Get() => Ok(Catalog);
 
     private static PublicSourceCatalogResponse CreateCatalog()
