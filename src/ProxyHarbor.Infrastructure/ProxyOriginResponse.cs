@@ -144,17 +144,7 @@ internal static class ProxyOriginResponse
 
         try
         {
-            // JSON string tokens декодируются лениво; заранее проверяем весь body.
-            _ = StrictUtf8.GetCharCount(body.Span);
-            using var json = JsonDocument.Parse(body);
-            var exitIp = json.RootElement.ValueKind == JsonValueKind.Object &&
-                json.RootElement.TryGetProperty("ip", out var ipElement) &&
-                ipElement.ValueKind == JsonValueKind.String
-                    ? ipElement.GetString()
-                    : null;
-            if (!IPAddress.TryParse(exitIp, out var exitAddress) || !NetworkSafety.IsPublicAddress(exitAddress))
-                throw new ProbeControlResponseException("Контрольный сервер не вернул внешний IP.");
-            return exitAddress.ToString();
+            return ParsePublicIpBody(body);
         }
         catch (JsonException exception)
         {
@@ -166,6 +156,32 @@ internal static class ProxyOriginResponse
                 "Контрольный сервер вернул HTTP-ответ с некорректным UTF-8.",
                 exception);
         }
+    }
+
+    /// <summary>Поддерживает JSON ip, plain IP и диагностический Cloudflare trace.</summary>
+    internal static string ParsePublicIpBody(ReadOnlyMemory<byte> body)
+    {
+        // JSON string tokens декодируются лениво; заранее проверяем весь body.
+        _ = StrictUtf8.GetCharCount(body.Span);
+        string? value = null;
+        try
+        {
+            using var json = JsonDocument.Parse(body);
+            if (json.RootElement.ValueKind == JsonValueKind.Object &&
+                json.RootElement.TryGetProperty("ip", out var ipElement) &&
+                ipElement.ValueKind == JsonValueKind.String)
+                value = ipElement.GetString();
+        }
+        catch (JsonException)
+        {
+            var text = StrictUtf8.GetString(body.Span).Trim();
+            value = text.Split('\n', StringSplitOptions.TrimEntries)
+                .FirstOrDefault(line => line.StartsWith("ip=", StringComparison.Ordinal))?[3..] ?? text;
+        }
+
+        if (!IPAddress.TryParse(value, out var address) || !NetworkSafety.IsPublicAddress(address))
+            throw new ProbeControlResponseException("Контрольный сервер не вернул внешний IP.");
+        return address.ToString();
     }
 
     private static ReadOnlyMemory<byte> Snapshot(ReadOnlySpan<byte> value) => value.ToArray();

@@ -188,6 +188,16 @@ public sealed class ProxyOriginResponseTests
         Assert.Equal("2606:4700:4700::1111", ProxyOriginResponse.ParseExitIp(response));
     }
 
+    [Theory]
+    [InlineData("8.8.4.4\n", "8.8.4.4")]
+    [InlineData("fl=29f50\nip=1.1.1.1\nwarp=off\n", "1.1.1.1")]
+    public void ParsesBoundedPlainAndTraceControlBodies(string body, string expected)
+    {
+        var response = $"HTTP/1.1 200 OK\r\nContent-Length: {Encoding.UTF8.GetByteCount(body)}\r\n\r\n{body}";
+
+        Assert.Equal(expected, ProxyOriginResponse.ParseExitIp(response));
+    }
+
     [Fact]
     public void DecodesChunkedResponseWithExtensions()
     {

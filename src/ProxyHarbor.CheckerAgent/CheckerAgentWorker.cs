@@ -101,6 +101,7 @@ public sealed class CheckerAgentWorker(
             ProbeHost = lease.ProbeHost,
             ProbePort = lease.ProbePort,
             ProbePath = lease.ProbePath,
+            ProbeFallbackUrls = CollectorOptions.CreateDefaultProbeFallbackUrls(),
             ProbeTimeoutSeconds = lease.ProbeTimeoutSeconds
         };
         var collectorOptions = Options.Create(collector);

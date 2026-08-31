@@ -650,6 +650,7 @@ export default function App() {
   if (resetPasswordPage) return <ResetPasswordPage/>
   if (accountOpen) return <AccountPage/>
   if (publicInfoPage) return <Suspense fallback={<main className="route-loading" aria-live="polite"><RefreshCw className="spin"/> Загружаем страницу…</main>}><PublicInfoPage kind={publicInfoPage} apiBaseUrl={API}/></Suspense>
+  if (currentPath !== '/' && !adminOpen) return <NotFoundPage/>
 
   return <div className="app-shell">
     {!adminOpen && <><header>
@@ -803,6 +804,18 @@ export default function App() {
     </div>}
     {backupDeleteTarget && <div className="source-editor-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget && !backupBusy) setBackupDeleteTarget(null) }}><section className="source-editor-modal backup-delete-modal" role="dialog" aria-modal="true" aria-labelledby="backup-delete-title"><div className="source-editor-heading"><div><span className="kicker">ОПАСНОЕ ДЕЙСТВИЕ</span><h2 id="backup-delete-title">Удалить резервную копию?</h2><p>Файл <b>{backupDeleteTarget.fileName ?? 'без имени'}</b> и его запись в истории будут удалены без возможности восстановления.</p></div><button className="icon-button" aria-label="Отмена" onClick={() => setBackupDeleteTarget(null)} disabled={!!backupBusy}><X/></button></div><div className="source-editor-actions"><span/><button className="secondary-admin-button" onClick={() => setBackupDeleteTarget(null)} disabled={!!backupBusy}>Отмена</button><button className="danger-link" onClick={() => void deleteBackup()} disabled={!!backupBusy}><Trash2/>{backupBusy ? 'Удаляем…' : 'Удалить навсегда'}</button></div></section></div>}
   </div>
+}
+
+function NotFoundPage() {
+  return <main className="login-page not-found-page">
+    <a className="brand" href="/"><span className="brand-mark"><Network size={20}/></span><span>Proxy<span>Harbor</span></span></a>
+    <section className="login-card account-auth-card" aria-labelledby="not-found-title">
+      <span className="kicker">404 · NOT FOUND</span>
+      <h1 id="not-found-title">Страница не найдена</h1>
+      <p>Адрес мог измениться или был введён с ошибкой.</p>
+      <a className="primary" href="/">Вернуться на главную</a>
+    </section>
+  </main>
 }
 
 /** Публичный VPN-каталог отдаёт готовые опубликованные URI без раскрытия внутренних feed. */

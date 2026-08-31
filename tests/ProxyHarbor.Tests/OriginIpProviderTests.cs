@@ -125,6 +125,21 @@ public sealed class OriginIpProviderTests
         Assert.Equal(path, provider.GetRequiredService<IOptions<CollectorOptions>>().Value.ProbePath);
     }
 
+    [Theory]
+    [InlineData("http://probe.example/ip")]
+    [InlineData("https://user:password@probe.example/ip")]
+    [InlineData("https://127.0.0.1/ip")]
+    [InlineData("https://probe.example/ip#fragment")]
+    public void InfrastructureOptionsRejectUnsafeFallbackUrl(string url)
+    {
+        using var provider = BuildOptionsProvider("Collector:ProbeFallbackUrls:0", url);
+
+        var exception = Assert.Throws<OptionsValidationException>(() =>
+            _ = provider.GetRequiredService<IOptions<CollectorOptions>>().Value);
+
+        Assert.Contains("ProbeFallbackUrls", exception.Message, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task UsesConfiguredHttpsEndpointAndCachesSuccessfulHealthCheck()
     {
@@ -151,6 +166,37 @@ public sealed class OriginIpProviderTests
         Assert.Equal("https://probe.example:8443/who?format=json&escaped=%2F", handler.LastRequestUri?.AbsoluteUri);
         Assert.Equal(1, health.Availability);
         Assert.True(health.CheckedAtUnixSeconds > 0);
+    }
+
+    [Fact]
+    public async Task FallsBackToIndependentEndpointAndCachesEndpointWithOriginIp()
+    {
+        var handler = new StubHandler(request =>
+            request.RequestUri?.Host == "primary.example"
+                ? new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+                : new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("ip=8.8.4.4\nwarp=off\n")
+                });
+        using var factory = new StubHttpClientFactory(handler);
+        var health = new ProbeControlHealth();
+        using var provider = new OriginIpProvider(
+            factory,
+            Options.Create(new CollectorOptions
+            {
+                ProbeHost = "primary.example",
+                ProbePath = "/control",
+                ProbeFallbackUrls = ["https://backup.example/cdn-cgi/trace"]
+            }),
+            health);
+
+        var first = await provider.GetRequiredTargetAsync(CancellationToken.None);
+        var second = await provider.GetRequiredTargetAsync(CancellationToken.None);
+
+        Assert.Equal(new ResolvedProbeControl("backup.example", 443, "/cdn-cgi/trace", "8.8.4.4"), first);
+        Assert.Same(first, second);
+        Assert.Equal(2, handler.RequestCount);
+        Assert.Equal(1, health.Availability);
     }
 
     [Fact]
