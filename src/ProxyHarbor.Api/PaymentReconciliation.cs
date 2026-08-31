@@ -31,8 +31,7 @@ public sealed class PaymentSettlementService(
         if (order.Provider != providerCode || order.AmountMinor != notification.AmountMinor ||
             !string.Equals(order.Currency, notification.Currency, StringComparison.OrdinalIgnoreCase))
             return PaymentSettlementResult.Mismatch;
-        if (order.Status == notification.Status ||
-            order.Status == PaymentStatuses.Paid && notification.Status != PaymentStatuses.Refunded)
+        if (!CanApplyTransition(order.Status, notification.Status))
         {
             await transaction.CommitAsync(token);
             return PaymentSettlementResult.Unchanged;
@@ -80,6 +79,24 @@ public sealed class PaymentSettlementService(
         await transaction.CommitAsync(token);
         return PaymentSettlementResult.Applied;
     }
+
+    /// <summary>
+    /// Не позволяет запоздалому pending/failed откатить подтверждённые деньги.
+    /// Служебно завершённый заказ при этом можно восстановить доверенным paid-событием.
+    /// Refunded является окончательным состоянием.
+    /// </summary>
+    internal static bool CanApplyTransition(string current, string incoming)
+    {
+        if (string.Equals(current, incoming, StringComparison.Ordinal)) return false;
+        return current switch
+        {
+            PaymentStatuses.Paid => incoming == PaymentStatuses.Refunded,
+            PaymentStatuses.Refunded => false,
+            PaymentStatuses.Canceled or PaymentStatuses.Failed =>
+                incoming is PaymentStatuses.Paid or PaymentStatuses.Refunded,
+            _ => true
+        };
+    }
 }
 
 /// <summary>
@@ -91,15 +108,31 @@ public sealed class PaymentReconciliationWorker(
     ILogger<PaymentReconciliationWorker> logger) : BackgroundService
 {
     private static readonly TimeSpan InitialAge = TimeSpan.FromMinutes(2);
+    // YooMoney прекращает автоматические повторы HTTP-уведомления через час.
+    // Сутки дают большой запас для временного простоя и отделяют незавершённый
+    // checkout от актуальных заказов. Доверенное позднее уведомление всё равно
+    // может перевести canceled-заказ в paid через PaymentSettlementService.
+    private static readonly TimeSpan StalePendingAge = TimeSpan.FromHours(24);
     private static readonly TimeSpan Interval = TimeSpan.FromMinutes(1);
     private const int BatchSize = 50;
     private const int MaxParallelism = 8;
+    private const int TelegramHistoryPageSize = 100;
+    private const int TelegramHistoryMaxPages = 20;
     private static readonly Action<ILogger, Exception?> CycleFailed = LoggerMessage.Define(
         LogLevel.Error, new EventId(1801, nameof(CycleFailed)),
         "Сверка зависших платежей завершила цикл с ошибкой; следующий цикл продолжит работу.");
     private static readonly Action<ILogger, Guid, string, Exception?> OrderFailed =
         LoggerMessage.Define<Guid, string>(LogLevel.Warning, new EventId(1802, nameof(OrderFailed)),
             "Не удалось сверить заказ {OrderId} через {Provider}; он останется pending до следующей попытки.");
+    private static readonly Action<ILogger, int, Exception?> TelegramRecovered = LoggerMessage.Define<int>(
+        LogLevel.Information, new EventId(1803, nameof(TelegramRecovered)),
+        "По журналу Telegram Stars восстановлено платежей: {Count}.");
+    private static readonly Action<ILogger, int, string, Exception?> StaleCanceled = LoggerMessage.Define<int, string>(
+        LogLevel.Information, new EventId(1804, nameof(StaleCanceled)),
+        "Завершено устаревших неподтверждённых заказов через {Provider}: {Count}.");
+    private static readonly Action<ILogger, Exception?> TelegramHistoryFailed = LoggerMessage.Define(
+        LogLevel.Warning, new EventId(1805, nameof(TelegramHistoryFailed)),
+        "Журнал Telegram Stars временно недоступен; сверка остальных шлюзов продолжится.");
 
     /// <inheritdoc />
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -117,6 +150,11 @@ public sealed class PaymentReconciliationWorker(
     {
         var now = DateTimeOffset.UtcNow;
         var cutoff = now - InitialAge;
+        var completed = 0;
+        try { completed = await ReconcileTelegramStarsAsync(now, cutoff, token); }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+        catch (Exception exception) { TelegramHistoryFailed(logger, exception); }
+        completed += await CancelStaleYooMoneyAsync(now, token);
         PaymentReconciliationCandidate[] candidates;
         using (var discoveryScope = scopes.CreateScope())
         {
@@ -133,8 +171,125 @@ public sealed class PaymentReconciliationWorker(
         // заказ делает DbContext/UserManager thread-safe, а небольшой предел не
         // создаёт всплеск запросов к платёжным шлюзам. Compare-and-swap по UpdatedAt
         // ниже по-прежнему гарантирует, что несколько API-реплик не сверят один заказ.
-        return await ProcessBoundedAsync(candidates, MaxParallelism,
+        completed += await ProcessBoundedAsync(candidates, MaxParallelism,
             candidate => ReconcileAsync(candidate, now, token), token);
+        return completed;
+    }
+
+    /// <summary>
+    /// Восстанавливает потерянные successful_payment по официальному журналу Stars.
+    /// Один постраничный снимок обслуживает сразу весь batch и не создаёт N запросов
+    /// к Telegram для N заказов.
+    /// </summary>
+    private async Task<int> ReconcileTelegramStarsAsync(
+        DateTimeOffset now, DateTimeOffset initialCutoff, CancellationToken token)
+    {
+        using var scope = scopes.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ProxyHarborDbContext>();
+        var candidates = await db.PaymentOrders.AsNoTracking()
+            .Where(x => x.Status == PaymentStatuses.Pending && x.Provider == "telegram_stars" &&
+                x.UpdatedAt <= initialCutoff)
+            .OrderBy(x => x.UpdatedAt).Take(BatchSize)
+            .Select(x => new TelegramPaymentCandidate(
+                x.Id, x.AmountMinor, x.CreatedAt, x.UpdatedAt,
+                x.User.TelegramChat == null ? null : x.User.TelegramChat.TelegramUserId))
+            .ToArrayAsync(token);
+        if (candidates.Length == 0) return 0;
+
+        var options = await scope.ServiceProvider.GetRequiredService<ITelegramBotConfigurationStore>().GetAsync(token);
+        if (!options.Ready) return 0;
+        var api = scope.ServiceProvider.GetRequiredService<TelegramBotApiClient>();
+        var oldestRequired = candidates.Min(x => x.CreatedAt);
+        var transactions = new List<TelegramStarTransaction>();
+        var historyCoversBatch = false;
+        for (var page = 0; page < TelegramHistoryMaxPages; page++)
+        {
+            var values = await api.GetStarTransactionsAsync(
+                options, page * TelegramHistoryPageSize, TelegramHistoryPageSize, token);
+            transactions.AddRange(values);
+            if (values.Length < TelegramHistoryPageSize)
+            {
+                historyCoversBatch = true;
+                break;
+            }
+            if (values.Min(x => x.CreatedAt) <= oldestRequired)
+            {
+                historyCoversBatch = true;
+                break;
+            }
+        }
+
+        var recovered = 0;
+        var recoveredOrders = new HashSet<Guid>();
+        var settlement = scope.ServiceProvider.GetRequiredService<PaymentSettlementService>();
+        foreach (var candidate in candidates)
+        {
+            PaymentNotification? notification = null;
+            foreach (var transaction in transactions)
+                if (TryCreateTelegramNotification(candidate, transaction, out notification)) break;
+            if (notification is null) continue;
+            var result = await settlement.ApplyAsync("telegram_stars", notification, token);
+            if (result is PaymentSettlementResult.Applied or PaymentSettlementResult.Unchanged)
+            {
+                recoveredOrders.Add(candidate.Id);
+                recovered++;
+            }
+        }
+        if (recovered > 0) TelegramRecovered(logger, recovered, null);
+
+        // Не отменяем старые invoice, пока лимит страниц не покрыл дату самого
+        // раннего кандидата: высокая активность бота не должна создавать false negative.
+        if (!historyCoversBatch) return recovered;
+        var staleCutoff = now - StalePendingAge;
+        var canceled = 0;
+        foreach (var candidate in candidates.Where(x => x.CreatedAt <= staleCutoff && !recoveredOrders.Contains(x.Id)))
+        {
+            canceled += await db.PaymentOrders
+                .Where(x => x.Id == candidate.Id && x.Status == PaymentStatuses.Pending &&
+                    x.UpdatedAt == candidate.UpdatedAt)
+                .ExecuteUpdateAsync(update => update
+                    .SetProperty(x => x.Status, PaymentStatuses.Canceled)
+                    .SetProperty(x => x.UpdatedAt, now), token);
+        }
+        if (canceled > 0) StaleCanceled(logger, canceled, "telegram_stars", null);
+        return recovered + canceled;
+    }
+
+    /// <summary>
+    /// YooMoney не предоставляет безопасную проверку исходной списанной суммы без
+    /// отдельного OAuth-контура. После суточного окна неподтверждённые формы считаются
+    /// оставленными; подписанный webhook по-прежнему имеет право восстановить оплату.
+    /// </summary>
+    private async Task<int> CancelStaleYooMoneyAsync(DateTimeOffset now, CancellationToken token)
+    {
+        using var scope = scopes.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ProxyHarborDbContext>();
+        var cutoff = now - StalePendingAge;
+        var canceled = await db.PaymentOrders
+            .Where(x => x.Status == PaymentStatuses.Pending && x.Provider == "yoomoney" &&
+                x.UpdatedAt <= cutoff)
+            .ExecuteUpdateAsync(update => update
+                .SetProperty(x => x.Status, PaymentStatuses.Canceled)
+                .SetProperty(x => x.UpdatedAt, now), token);
+        if (canceled > 0) StaleCanceled(logger, canceled, "yoomoney", null);
+        return canceled;
+    }
+
+    /// <summary>Строго связывает операцию Stars с заказом, суммой и Telegram-пользователем.</summary>
+    internal static bool TryCreateTelegramNotification(
+        TelegramPaymentCandidate candidate,
+        TelegramStarTransaction transaction,
+        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out PaymentNotification? notification)
+    {
+        notification = null;
+        if (candidate.TelegramUserId is null || transaction.UserId != candidate.TelegramUserId ||
+            transaction.Stars != candidate.AmountMinor ||
+            !Guid.TryParseExact(transaction.InvoicePayload, "N", out var orderId) || orderId != candidate.Id)
+            return false;
+        notification = new PaymentNotification(
+            candidate.Id, transaction.Id, PaymentStatuses.Paid, candidate.AmountMinor, "XTR",
+            "telegram_stars", "Telegram Stars");
+        return true;
     }
 
     private async Task<bool> ReconcileAsync(
@@ -190,4 +345,7 @@ public sealed class PaymentReconciliationWorker(
     }
 
     private readonly record struct PaymentReconciliationCandidate(Guid Id, DateTimeOffset UpdatedAt, string Provider);
+
+    internal readonly record struct TelegramPaymentCandidate(
+        Guid Id, long AmountMinor, DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt, long? TelegramUserId);
 }

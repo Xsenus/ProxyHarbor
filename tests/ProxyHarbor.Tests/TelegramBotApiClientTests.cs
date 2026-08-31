@@ -230,6 +230,72 @@ public sealed class TelegramBotApiClientTests
             Assert.Equal(JsonValueKind.Object, body.RootElement.GetProperty("reply_markup").ValueKind);
     }
 
+    [Fact]
+    public async Task StarHistoryUsesOfficialPagingAndPreservesInvoiceIdentity()
+    {
+        var createdAt = DateTimeOffset.FromUnixTimeSeconds(1788163200);
+        using var factory = new RecordingFactory(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent($$$"""
+                {"ok":true,"result":{"transactions":[
+                  {"id":"star-charge-1","amount":100,"date":{{{createdAt.ToUnixTimeSeconds()}}},
+                   "source":{"type":"user","user":{"id":9001},"invoice_payload":"0123456789abcdef0123456789abcdef"}},
+                  {"id":"withdrawal-1","amount":-50,"date":{{{createdAt.AddMinutes(-1).ToUnixTimeSeconds()}}},
+                   "receiver":{"type":"fragment"}}
+                ]}}
+                """, Encoding.UTF8, "application/json")
+        });
+        var options = new TelegramBotOptions { BotToken = "123:TEST_ONLY_NOT_A_REAL_TOKEN" };
+
+        var transactions = await new TelegramBotApiClient(factory)
+            .GetStarTransactionsAsync(options, 100, 25, CancellationToken.None);
+
+        Assert.Equal("https://api.telegram.org/bot123:TEST_ONLY_NOT_A_REAL_TOKEN/getStarTransactions", factory.LastRequestUri);
+        using (var request = JsonDocument.Parse(factory.LastRequestBody!))
+        {
+            Assert.Equal(100, request.RootElement.GetProperty("offset").GetInt32());
+            Assert.Equal(25, request.RootElement.GetProperty("limit").GetInt32());
+        }
+        var payment = Assert.Single(transactions, x => x.InvoicePayload is not null);
+        Assert.Equal("star-charge-1", payment.Id);
+        Assert.Equal(100, payment.Stars);
+        Assert.Equal(9001, payment.UserId);
+        Assert.Equal(createdAt, payment.CreatedAt);
+        Assert.Equal("0123456789abcdef0123456789abcdef", payment.InvoicePayload);
+    }
+
+    [Theory]
+    [InlineData(-1, 10)]
+    [InlineData(0, 0)]
+    [InlineData(0, 101)]
+    public async Task StarHistoryRejectsInvalidPagingBeforeNetworkCall(int offset, int limit)
+    {
+        using var factory = new RecordingFactory(_ => throw new InvalidOperationException("network must not run"));
+        var options = new TelegramBotOptions { BotToken = "123:TEST_ONLY_NOT_A_REAL_TOKEN" };
+
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
+            new TelegramBotApiClient(factory).GetStarTransactionsAsync(options, offset, limit, CancellationToken.None));
+        Assert.Null(factory.LastRequestUri);
+    }
+
+    [Fact]
+    public async Task StarHistoryRejectsIncompletePageInsteadOfAssumingCoverage()
+    {
+        using var factory = new RecordingFactory(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(
+                """{"ok":true,"result":{"transactions":[{"id":"missing-date","amount":100}]}}""",
+                Encoding.UTF8, "application/json")
+        });
+
+        var error = await Assert.ThrowsAsync<TelegramBotApiException>(() =>
+            new TelegramBotApiClient(factory).GetStarTransactionsAsync(
+                new TelegramBotOptions { BotToken = "123:TEST_ONLY_NOT_A_REAL_TOKEN" },
+                0, 100, CancellationToken.None));
+
+        Assert.Equal(502, error.ErrorCode);
+    }
+
     private sealed class RecordingFactory : IHttpClientFactory, IDisposable
     {
         private readonly RecordingHandler _handler;

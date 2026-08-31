@@ -1,9 +1,58 @@
 using ProxyHarbor.Api;
+using ProxyHarbor.Infrastructure;
 
 namespace ProxyHarbor.Tests;
 
 public sealed class PaymentReconciliationWorkerTests
 {
+    [Theory]
+    [InlineData(PaymentStatuses.Canceled, PaymentStatuses.Paid, true)]
+    [InlineData(PaymentStatuses.Failed, PaymentStatuses.Paid, true)]
+    [InlineData(PaymentStatuses.Paid, PaymentStatuses.Refunded, true)]
+    [InlineData(PaymentStatuses.Paid, PaymentStatuses.Failed, false)]
+    [InlineData(PaymentStatuses.Canceled, PaymentStatuses.Pending, false)]
+    [InlineData(PaymentStatuses.Refunded, PaymentStatuses.Paid, false)]
+    [InlineData(PaymentStatuses.Pending, PaymentStatuses.Pending, false)]
+    public void SettlementTransitionPolicyProtectsMoneyAndAllowsLateConfirmation(
+        string current, string incoming, bool expected) =>
+        Assert.Equal(expected, PaymentSettlementService.CanApplyTransition(current, incoming));
+
+    [Fact]
+    public void TelegramHistoryRequiresOrderAmountAndUserToMatch()
+    {
+        var orderId = Guid.NewGuid();
+        var candidate = new PaymentReconciliationWorker.TelegramPaymentCandidate(
+            orderId, 100, DateTimeOffset.UtcNow.AddHours(-1), DateTimeOffset.UtcNow.AddMinutes(-5), 9001);
+        var transaction = new TelegramStarTransaction(
+            "charge-1", 100, DateTimeOffset.UtcNow, orderId.ToString("N"), 9001);
+
+        Assert.True(PaymentReconciliationWorker.TryCreateTelegramNotification(
+            candidate, transaction, out var notification));
+        Assert.NotNull(notification);
+        Assert.Equal(orderId, notification.OrderId);
+        Assert.Equal("charge-1", notification.ProviderPaymentId);
+        Assert.Equal(PaymentStatuses.Paid, notification.Status);
+        Assert.Equal("XTR", notification.Currency);
+    }
+
+    [Theory]
+    [InlineData("other-order", 100, 9001)]
+    [InlineData("same-order", 99, 9001)]
+    [InlineData("same-order", 100, 9002)]
+    public void TelegramHistoryRejectsMismatchedTransaction(string payloadMode, long stars, long userId)
+    {
+        var orderId = Guid.NewGuid();
+        var payload = payloadMode == "same-order" ? orderId.ToString("N") : Guid.NewGuid().ToString("N");
+        var candidate = new PaymentReconciliationWorker.TelegramPaymentCandidate(
+            orderId, 100, DateTimeOffset.UtcNow.AddHours(-1), DateTimeOffset.UtcNow.AddMinutes(-5), 9001);
+        var transaction = new TelegramStarTransaction(
+            "charge-1", stars, DateTimeOffset.UtcNow, payload, userId);
+
+        Assert.False(PaymentReconciliationWorker.TryCreateTelegramNotification(
+            candidate, transaction, out var notification));
+        Assert.Null(notification);
+    }
+
     [Fact]
     public async Task BoundedProcessorUsesConfiguredParallelismAndCountsOnlyCompletedItems()
     {
@@ -50,4 +99,5 @@ public sealed class PaymentReconciliationWorkerTests
             current = observed;
         }
     }
+
 }
