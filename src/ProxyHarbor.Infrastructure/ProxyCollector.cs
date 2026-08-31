@@ -477,14 +477,23 @@ public sealed class ProxyCollector(
             """, connection, transaction);
         var added = await insert.ExecuteNonQueryAsync(token);
 
-        // LastSeenAt нужен для retention, но точность до каждого цикла не нужна. Ограничение
-        // частоты резко сокращает WAL и перезапись индекса на сотнях тысяч строк.
+        // LastSeenAt не является срочной мутацией: строки, занятые проверкой, безопасно
+        // пропускаются и обновятся на следующем collection-цикле. Это не даёт collector'у
+        // ждать validator locks и образовывать с ними обратный порядок блокировок.
         await using var refresh = new NpgsqlCommand("""
+            WITH locked AS MATERIALIZED (
+                SELECT p."Id", i.seen_at
+                FROM "Proxies" p
+                JOIN proxy_import i
+                  ON p."Host" = i.host AND p."Port" = i.port AND p."Protocol" = i.protocol
+                WHERE p."LastSeenAt" < @refresh_before
+                ORDER BY p."Id"
+                FOR UPDATE OF p SKIP LOCKED
+            )
             UPDATE "Proxies" p
-            SET "LastSeenAt" = i.seen_at
-            FROM proxy_import i
-            WHERE p."Host" = i.host AND p."Port" = i.port AND p."Protocol" = i.protocol
-              AND p."LastSeenAt" < @refresh_before
+            SET "LastSeenAt" = locked.seen_at
+            FROM locked
+            WHERE p."Id" = locked."Id"
             """, connection, transaction);
         refresh.Parameters.AddWithValue("refresh_before", NpgsqlDbType.TimestampTz,
             now.AddMinutes(-Math.Max(1, lastSeenRefreshMinutes)));
