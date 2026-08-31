@@ -35,6 +35,67 @@ public sealed class AdminBillingAccessTests
     }
 
     [Fact]
+    public async Task SiteVisitBufferIsBoundedWithoutBlockingRequestProcessing()
+    {
+        await using var fixture = new Fixture();
+        var monitor = new ProxyAccessMonitor(
+            fixture.Factory,
+            NullLogger<ProxyAccessMonitor>.Instance,
+            maximumBufferedSiteVisits: 3);
+        var context = Context("/api/v1/telemetry/visit", "192.0.2.56");
+
+        for (var index = 0; index < 5; index++) monitor.RecordSiteVisit(context, "account");
+
+        Assert.Equal(3, monitor.BufferedSiteVisitCount);
+        Assert.Equal(2, monitor.DroppedSiteVisitCount);
+        await monitor.FlushOnceAsync(CancellationToken.None);
+
+        Assert.Equal(0, monitor.BufferedSiteVisitCount);
+        Assert.Equal(0, monitor.DroppedSiteVisitCount);
+        Assert.Equal(3, await fixture.Db.SiteVisitLogs.CountAsync());
+    }
+
+    [Fact]
+    public async Task AccessCounterBufferRejectsOnlyNewBucketsAtCapacity()
+    {
+        await using var fixture = new Fixture();
+        var monitor = new ProxyAccessMonitor(
+            fixture.Factory,
+            NullLogger<ProxyAccessMonitor>.Instance,
+            maximumBufferedAccessCounters: 3);
+
+        for (var index = 1; index <= 5; index++)
+            monitor.Record(Context("/api/v1/proxies", $"192.0.2.{index}"), "catalog", blocked: false);
+
+        // Повтор уже принятого ключа продолжает агрегироваться и не требует нового слота.
+        monitor.Record(Context("/api/v1/proxies", "192.0.2.1"), "catalog", blocked: true);
+
+        Assert.Equal(3, monitor.BufferedAccessCounterCount);
+        Assert.Equal(2, monitor.DroppedAccessCounterCount);
+    }
+
+    [Fact]
+    public async Task AccessCounterCapacityRemainsStrictUnderConcurrentWriters()
+    {
+        await using var fixture = new Fixture();
+        const int capacity = 64;
+        const int attempts = 1_000;
+        var monitor = new ProxyAccessMonitor(
+            fixture.Factory,
+            NullLogger<ProxyAccessMonitor>.Instance,
+            maximumBufferedAccessCounters: capacity);
+
+        Parallel.For(0, attempts, index =>
+        {
+            var address = $"198.51.{index / 250}.{index % 250 + 1}";
+            monitor.Record(Context("/api/v1/proxies", address), "catalog", blocked: false);
+        });
+
+        Assert.Equal(capacity, monitor.BufferedAccessCounterCount);
+        Assert.Equal(attempts - capacity, monitor.DroppedAccessCounterCount);
+    }
+
+    [Fact]
     public async Task PaymentOrderRegistryFiltersAndReturnsGlobalSummary()
     {
         await using var fixture = new Fixture();

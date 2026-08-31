@@ -122,6 +122,25 @@ public sealed class ProxyAccessMonitorIntegrationTests
             Assert.Equal(bucketCount, await accumulated.ProxyAccessBuckets.SumAsync(x => x.BlockedRequests));
             Assert.Equal(bucketCount * 8L, await accumulated.ProxyAccessBuckets.SumAsync(x => x.ProxyItems));
             Assert.Equal(expectedBytes, await accumulated.ProxyAccessBuckets.SumAsync(x => x.BytesSent));
+            Assert.Equal(0, monitor.BufferedAccessCounterCount);
+
+            // Отдельно подтверждаем production-путь binary COPY: identity Id выдаётся
+            // PostgreSQL, nullable UserId сохраняется, а вся партия исчезает из буфера.
+            const int visitCount = 1_000;
+            for (var index = 0; index < visitCount; index++)
+                monitor.RecordSiteVisit(Context(index, contentLength: 0, proxyItems: 0), "home");
+            await monitor.FlushOnceAsync(CancellationToken.None);
+
+            await using var visitsDb = await factory.CreateDbContextAsync();
+            Assert.Equal(visitCount, await visitsDb.SiteVisitLogs.CountAsync());
+            Assert.All(await visitsDb.SiteVisitLogs.AsNoTracking().ToArrayAsync(), visit =>
+            {
+                Assert.True(visit.Id > 0);
+                Assert.Null(visit.UserId);
+                Assert.Equal("home", visit.Page);
+            });
+            Assert.Equal(0, monitor.BufferedSiteVisitCount);
+            Assert.Equal(0, monitor.BufferedAccessCounterCount);
         }
         finally
         {

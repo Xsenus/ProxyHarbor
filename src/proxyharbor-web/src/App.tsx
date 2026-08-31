@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Activity, ArrowDownToLine, ArrowRight, Ban, Bell, Bot, CalendarClock, Check, ChevronDown, Clock3, Copy, CreditCard, Database, Eye, EyeOff, Gauge, Globe2, HardDriveDownload, HelpCircle, LayoutDashboard, LockKeyhole, LogOut, Mail, MessageCircle, MousePointerClick, Network, Pencil, Play, Plus, Radio, Receipt, RefreshCw, Search, Send, Server, Settings2, ShieldCheck, ShieldOff, Star, Trash2, User, Users, Wifi, Workflow, X } from 'lucide-react'
 import { currentLocale, LanguageSwitcher, type Language, useI18n } from './i18n'
 import { StyledSelect } from './components/StyledSelect'
 import { ToastSignal } from './components/Toasts'
-import { PublicInfoPage, PublicPricingSection } from './PublicInfo'
+import { PublicPricingSection } from './PublicPricingSection'
 import { publicInfoPaths } from './publicInfoRoutes'
 import { analyticsAllowed, privacyPreferenceChanged } from './privacyPreferences'
 
@@ -34,6 +34,7 @@ type Diagnostics = {
 
 const API = import.meta.env.VITE_API_URL ?? ''
 const APP_VERSION = import.meta.env.VITE_APP_VERSION ?? '0.0.0-local'
+const PublicInfoPage = lazy(() => import('./PublicInfo').then(module => ({default: module.PublicInfoPage})))
 const protocols: Protocol[] = ['Http', 'Https', 'Socks4', 'Socks5']
 type AdminSection = 'overview' | 'operations' | 'checkers' | 'proxies' | 'vpn' | 'sources' | 'backups' | 'users' | 'payments' | 'telegram' | 'subscriptions' | 'access'
 type CheckerNode = {id:string;name:string;host:string;sshPort:number;sshUsername:string;enabled:boolean;concurrency:number;batchSize:number;createdAt:string;updatedAt:string;lastHeartbeatAt?:string;lastLeaseAt?:string;lastCompletedAt?:string;currentLeaseId?:string;currentLeaseUntil?:string;agentVersion?:string;remoteAddress?:string;deploymentStatus:string;lastError?:string;completedChecks:number;aliveChecks:number;hostKeyFingerprint?:string;online:boolean;busy:boolean}
@@ -648,7 +649,7 @@ export default function App() {
   if (forgotPasswordPage) return <ForgotPasswordPage/>
   if (resetPasswordPage) return <ResetPasswordPage/>
   if (accountOpen) return <AccountPage/>
-  if (publicInfoPage) return <PublicInfoPage kind={publicInfoPage} apiBaseUrl={API}/>
+  if (publicInfoPage) return <Suspense fallback={<main className="route-loading" aria-live="polite"><RefreshCw className="spin"/> Загружаем страницу…</main>}><PublicInfoPage kind={publicInfoPage} apiBaseUrl={API}/></Suspense>
 
   return <div className="app-shell">
     {!adminOpen && <><header>
