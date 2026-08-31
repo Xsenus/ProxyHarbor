@@ -87,6 +87,9 @@ jobs:
       - name: Verify public launch-audit contracts
         shell: pwsh
         run: ./tools/Test-AuditPublicLaunch.ps1
+      - name: Verify IndexNow submission contracts
+        shell: pwsh
+        run: ./tools/Test-SubmitIndexNow.ps1
       - name: Verify release metadata contracts
         shell: pwsh
         run: ./tools/Test-ReleaseMetadata.ps1

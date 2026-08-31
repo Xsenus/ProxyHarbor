@@ -144,6 +144,20 @@ try {
         catch { Add-Check 'sitemap.xml' $false "Некорректный XML: $($_.Exception.Message)" }
     }
 
+    $indexNowKeyPath = Join-Path (Split-Path -Parent $PSScriptRoot) 'src/proxyharbor-web/public/indexnow-key.txt'
+    if (Test-Path -LiteralPath $indexNowKeyPath) {
+        $expectedIndexNowKey = (Get-Content -LiteralPath $indexNowKeyPath -Raw).Trim()
+        $indexNowKey = Invoke-AuditRequest '/indexnow-key.txt'
+        if ($indexNowKey) {
+            $publishedIndexNowKey = ([string]$indexNowKey.Content).Trim()
+            Add-Check 'IndexNow ownership key' `
+                ($indexNowKey.StatusCode -eq 200 -and $expectedIndexNowKey -match '^[A-Za-z0-9-]{8,128}$' -and
+                    $publishedIndexNowKey -ceq $expectedIndexNowKey) `
+                "HTTP $($indexNowKey.StatusCode); published key must exactly match the repository key."
+        }
+    }
+    else { Add-Check 'IndexNow ownership key' $false "Repository key file is missing: $indexNowKeyPath" }
+
     foreach ($path in $privateRoutes) {
         $response = Invoke-AuditRequest "$path`?launch-audit=1"
         if (-not $response) { continue }

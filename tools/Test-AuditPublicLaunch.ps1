@@ -20,7 +20,7 @@ function Start-LaunchMock([int]$Port, [ValidateSet('success', 'failure')][string
         $listener.Start()
         $handled = 0
         try {
-            while ($handled -lt 23) {
+            while ($handled -lt 24) {
                 $context = $listener.GetContext()
                 if ($context.Request.Url.AbsolutePath -eq '/mock-ready') {
                     $body = '{}'
@@ -44,6 +44,9 @@ function Start-LaunchMock([int]$Port, [ValidateSet('success', 'failure')][string
                         $urls = $public | ForEach-Object { if ($_ -eq '/') { "$base/" } else { "$base$_" } }
                         $body = '<?xml version="1.0"?><urlset>' + (($urls | ForEach-Object { "<url><loc>$_</loc></url>" }) -join '') + '</urlset>'
                         $context.Response.ContentType = 'application/xml'
+                    } elseif ($path -eq '/indexnow-key.txt') {
+                        $body = 'proxyharbor-public-indexnow-key-2026'
+                        $context.Response.ContentType = 'text/plain'
                     } elseif ($path -in $private) {
                         $body = '<html>private</html>'
                         $context.Response.ContentType = 'text/html'
@@ -95,7 +98,7 @@ function Invoke-LaunchCase([string]$Mode, [bool]$ShouldSucceed) {
         if (-not $completed) { throw "Launch mock $Mode не завершил ожидаемые запросы." }
         Receive-Job $job -ErrorAction Stop | Out-Null
         $report = Get-Content $reportPath -Raw | ConvertFrom-Json
-        if ($ShouldSucceed -and ($rejected -or -not $report.success -or $report.summary.failed -ne 0 -or $report.summary.total -lt 30)) {
+        if ($ShouldSucceed -and ($rejected -or -not $report.success -or $report.summary.failed -ne 0 -or $report.summary.total -lt 31)) {
             throw 'Положительный launch-аудит contract нарушен.'
         }
         if (-not $ShouldSucceed -and (-not $rejected -or $report.success -or $report.summary.failed -lt 2)) {
@@ -119,7 +122,7 @@ try {
             throw "$workflowPath не запускает public launch audit contracts."
         }
     }
-    Write-Host 'Public launch audit contracts пройдены: SEO, private noindex, security headers, sitemap, readiness и payment availability.' -ForegroundColor Green
+    Write-Host 'Public launch audit contracts пройдены: SEO, private noindex, security headers, sitemap, IndexNow, readiness и payment availability.' -ForegroundColor Green
 }
 finally {
     if ([IO.Directory]::Exists($fixtureRoot)) {

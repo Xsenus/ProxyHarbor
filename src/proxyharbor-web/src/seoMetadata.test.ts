@@ -24,4 +24,9 @@ describe("SEO source of truth", () => {
     expect(script).toContain('writeFile(join(dist, "robots.txt")');
     expect(script).toContain('`${path.slice(1)}.html`');
   });
+
+  it("publishes a valid IndexNow ownership key for automated search notifications", () => {
+    const key = readFileSync(join(process.cwd(), "public", "indexnow-key.txt"), "utf8").trim();
+    expect(key).toMatch(/^[A-Za-z0-9-]{8,128}$/);
+  });
 });
