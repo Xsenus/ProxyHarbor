@@ -40,27 +40,13 @@ public sealed class MetricsController(
         var validationWindowStart = now.AddMinutes(-5);
         var sourceFreshAfter = now.Subtract(
             SourceCatalogHealth.FreshnessWindow(collectorOptions.Value.CollectionIntervalMinutes));
-        var proxyCounts = await db.Proxies.AsNoTracking()
-            .GroupBy(x => new { x.Status, x.Protocol })
-            .Select(x => new { x.Key.Status, x.Key.Protocol, Count = x.Count() })
-            .ToListAsync(token);
-        var queue = await db.Proxies.AsNoTracking().GroupBy(_ => 1).Select(x => new
-        {
-            Due = x.Count(proxy => (proxy.NextCheckAt == null || proxy.NextCheckAt <= now) &&
-                (proxy.CheckLeaseUntil == null || proxy.CheckLeaseUntil < now)),
-            Leased = x.Count(proxy => proxy.CheckLeaseUntil >= now),
-            NeverAttempted = x.Count(proxy => proxy.LastValidationAttemptAt == null),
-            StaleUnseen = x.Count(proxy =>
-                (proxy.Status == ProxyStatus.Pending || proxy.Status == ProxyStatus.Dead) &&
-                proxy.LastSeenAt < unseenRetentionCutoff &&
-                (proxy.CheckLeaseUntil == null || proxy.CheckLeaseUntil < now)),
-            LastAttemptAt = x.Max(proxy => proxy.LastValidationAttemptAt)
-        }).SingleOrDefaultAsync(token);
+        var proxySnapshot = await ProxyMetricsSnapshotReader.ReadAsync(
+            db, now, unseenRetentionCutoff, freshAfter, token);
         var validationRuns = await db.ValidationRuns.AsNoTracking()
             .Where(run => run.FinishedAt >= validationWindowStart || run.Status == "running")
             .ToListAsync(token);
         var validationTelemetry = ValidationTelemetry.Calculate(
-            validationRuns, validationWindowStart, queue?.Due ?? 0);
+            validationRuns, validationWindowStart, proxySnapshot.Due);
         var sources = await db.Sources.AsNoTracking().GroupBy(_ => 1).Select(group => new
         {
             Enabled = group.Count(source => source.Enabled),
@@ -101,16 +87,16 @@ public sealed class MetricsController(
         (httpTelemetry ?? new HttpRequestTelemetry()).AppendPrometheus(output);
         output.AppendLine("# HELP proxyharbor_proxies Number of known proxies by status and protocol.");
         output.AppendLine("# TYPE proxyharbor_proxies gauge");
-        foreach (var row in proxyCounts.OrderBy(x => x.Status).ThenBy(x => x.Protocol))
+        foreach (var row in proxySnapshot.Groups)
             output.Append("proxyharbor_proxies{status=\"").Append(row.Status.ToString().ToLowerInvariant())
                 .Append("\",protocol=\"").Append(row.Protocol.ToString().ToLowerInvariant()).Append("\"} ")
                 .AppendLine(row.Count.ToString(CultureInfo.InvariantCulture));
-        Gauge(output, "proxyharbor_validation_due", "Unleased proxy records currently eligible for validation.", queue?.Due ?? 0);
-        Gauge(output, "proxyharbor_validation_leased", "Proxy records currently leased by validators.", queue?.Leased ?? 0);
+        Gauge(output, "proxyharbor_validation_due", "Unleased proxy records currently eligible for validation.", proxySnapshot.Due);
+        Gauge(output, "proxyharbor_validation_leased", "Proxy records currently leased by validators.", proxySnapshot.Leased);
         Gauge(output, "proxyharbor_validation_never_attempted", "Proxy records that have never completed a validation attempt.",
-            queue?.NeverAttempted ?? 0);
+            proxySnapshot.NeverAttempted);
         Gauge(output, "proxyharbor_proxies_stale_unseen", "Unleased Pending or Dead proxies past source-membership retention and awaiting cleanup.",
-            queue?.StaleUnseen ?? 0);
+            proxySnapshot.StaleUnseen);
         Gauge(output, "proxyharbor_validation_attempts_last_5m", "Validation attempts completed during the last five minutes.",
             validationTelemetry.Attempts);
         Gauge(output, "proxyharbor_validation_checked_last_5m", "Non-deferred proxy checks completed during the last five minutes.",
@@ -151,7 +137,7 @@ public sealed class MetricsController(
         Gauge(output, "proxyharbor_validation_estimated_drain_seconds", "Estimated seconds to drain the currently due validation queue; zero means unavailable or empty.",
             validationTelemetry.EstimatedDrainSeconds ?? 0);
         Gauge(output, "proxyharbor_validation_last_attempt_timestamp_seconds", "Unix timestamp of the latest completed validation attempt.",
-            queue?.LastAttemptAt?.ToUnixTimeSeconds() ?? 0);
+            proxySnapshot.LastAttemptAt?.ToUnixTimeSeconds() ?? 0);
         Gauge(output, "proxyharbor_probe_control_available", "Control endpoint health: 1 available, 0 unavailable, -1 not checked.",
             probeControlHealth.Availability);
         Gauge(output, "proxyharbor_probe_control_last_check_timestamp_seconds", "Unix timestamp of the latest control endpoint health check.",
@@ -196,7 +182,7 @@ public sealed class MetricsController(
         Gauge(output, "proxyharbor_builtin_providers_enabled", "Independent built-in providers with at least one enabled feed.",
             sourceCatalog.EnabledProviders);
         Gauge(output, "proxyharbor_proxies_published", "Alive proxies fresh enough for public API and exports.",
-            await db.Proxies.AsNoTracking().CountAsync(x => x.Status == ProxyStatus.Alive && x.LastCheckedAt >= freshAfter, token));
+            proxySnapshot.Published);
         Gauge(output, "proxyharbor_collection_runs_active", "Collection runs currently marked as active.", activeRuns);
         Gauge(output, "proxyharbor_last_collection_success", "Whether the latest finished collection completed successfully.",
             lastFinishedRun?.Status == "completed" ? 1 : 0);

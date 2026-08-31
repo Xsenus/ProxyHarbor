@@ -20,7 +20,7 @@ public static class ValidationTelemetry
     public static ValidationTelemetrySnapshot Calculate(
         IEnumerable<ValidationRun> runs,
         DateTimeOffset windowStart,
-        int due)
+        long due)
     {
         var materialized = runs.ToArray();
         var completed = materialized.Where(run => run.Status == "completed" &&

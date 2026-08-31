@@ -64,6 +64,20 @@ public sealed class ValidationTelemetryTests
         Assert.Equal(50, snapshot.EstimatedDrainSeconds);
     }
 
+    [Fact]
+    public void DueQueueLargerThanInt32KeepsExactDrainEstimate()
+    {
+        var finishedAt = DateTimeOffset.UtcNow;
+        var due = (long)int.MaxValue + 42;
+
+        var snapshot = ValidationTelemetry.Calculate(
+            [Completed(finishedAt, 10, 0, 1, 10)],
+            finishedAt.AddMinutes(-5),
+            due);
+
+        Assert.Equal(due, snapshot.EstimatedDrainSeconds);
+    }
+
     private static ValidationRun Completed(
         DateTimeOffset finishedAt,
         int checkedCount,

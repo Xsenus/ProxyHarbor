@@ -200,6 +200,7 @@ public sealed class MetricsControllerTests
         Assert.Contains("proxyharbor_collection_runs_active 1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_validation_never_attempted 1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_proxies_stale_unseen 1", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_proxies_published 1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_validation_due 3", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_validation_leased 1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_validation_attempts_last_5m 2", metrics, StringComparison.Ordinal);
