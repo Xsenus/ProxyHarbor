@@ -18,6 +18,7 @@ public sealed class TelegramBotApiClient
     private readonly IHttpClientFactory clients;
     private readonly ITelegramProxyCandidateProvider? candidates;
     private readonly TelegramTransportHealth transportHealth;
+    private readonly TelegramProxyHttpClientPool? proxyClients;
 
     /// <summary>Конструктор для изолированных вызовов и unit-тестов без каталога.</summary>
     public TelegramBotApiClient(IHttpClientFactory clients)
@@ -30,11 +31,13 @@ public sealed class TelegramBotApiClient
     public TelegramBotApiClient(
         IHttpClientFactory clients,
         ITelegramProxyCandidateProvider candidates,
-        TelegramTransportHealth transportHealth)
+        TelegramTransportHealth transportHealth,
+        TelegramProxyHttpClientPool proxyClients)
     {
         this.clients = clients;
         this.candidates = candidates;
         this.transportHealth = transportHealth;
+        this.proxyClients = proxyClients;
     }
 
     internal Task<TelegramBotIdentity> GetMeAsync(string botToken, CancellationToken token) =>
@@ -341,22 +344,9 @@ public sealed class TelegramBotApiClient
         if (proxy is null)
             return await clients.CreateClient("telegram").PostAsync(
                 $"https://api.telegram.org/bot{botToken}/{method}", content, token);
-        var webProxy = new WebProxy(new Uri($"socks5://{proxy.Host}:{proxy.Port}"))
-        {
-            Credentials = new NetworkCredential(proxy.Username, proxy.Password)
-        };
-        using var handler = new SocketsHttpHandler
-        {
-            Proxy = webProxy,
-            UseProxy = true,
-            ConnectTimeout = TimeSpan.FromSeconds(8),
-            AllowAutoRedirect = false,
-            AutomaticDecompression = DecompressionMethods.All
-        };
-        // getUpdates использует long polling до 30 секунд. Клиентский timeout обязан
-        // быть больше server-side timeout, иначе спокойный чат выглядит как авария сети.
-        using var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(45) };
-        return await client.PostAsync($"https://api.telegram.org/bot{botToken}/{method}", content, token);
+        using var lease = proxyClients?.Acquire(proxy)
+            ?? throw new InvalidOperationException("Пул SOCKS5-клиентов Telegram не настроен.");
+        return await lease.Client.PostAsync($"https://api.telegram.org/bot{botToken}/{method}", content, token);
     }
 
     private async Task<TelegramProxyOptions?[]> ConnectionAttemptsAsync(

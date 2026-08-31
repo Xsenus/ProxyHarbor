@@ -122,8 +122,10 @@ builder.Services.AddOptions<TelegramBotHostOptions>()
     .ValidateOnStart();
 builder.Services.AddScoped<ITelegramBotConfigurationStore, TelegramBotConfigurationStore>();
 builder.Services.AddSingleton<ITelegramBackupDeliveryResolver, TelegramBackupDeliveryResolver>();
+builder.Services.AddSingleton<TelegramProxyCandidateCache>();
 builder.Services.AddScoped<ITelegramProxyCandidateProvider, TelegramProxyCandidateProvider>();
 builder.Services.AddSingleton<TelegramTransportHealth>();
+builder.Services.AddSingleton<TelegramProxyHttpClientPool>();
 builder.Services.AddSingleton<TelegramOutboundWakeSignal>();
 builder.Services.AddScoped<TelegramBotApiClient>();
 builder.Services.AddScoped<TelegramDispatchService>();

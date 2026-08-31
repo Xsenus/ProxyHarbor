@@ -151,7 +151,8 @@ public sealed class TelegramBotPersistenceTests
         await db.SaveChangesAsync();
 
         var candidates = await new TelegramProxyCandidateProvider(db,
-            Options.Create(new CollectorOptions { PublicFreshnessMinutes = 15 }))
+            Options.Create(new CollectorOptions { PublicFreshnessMinutes = 15 }),
+            new TelegramProxyCandidateCache())
             .GetCandidatesAsync(CancellationToken.None);
 
         Assert.Collection(candidates,
