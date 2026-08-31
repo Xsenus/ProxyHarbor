@@ -16,6 +16,9 @@ RUN dotnet publish "src/ProxyHarbor.Api/ProxyHarbor.Api.csproj" -c Release -o /a
     /p:UseAppHost=false /p:Version="$VERSION" /p:SourceRevisionId="$SOURCE_REVISION" /p:ContinuousIntegrationBuild=true
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0.11-alpine3.23@sha256:4d5339ac9814f1a033a09e664bcf159e9fb386c89b6e7917b3dca7254e656027 AS runtime
+# The immutable .NET digest can lag Alpine repository security rebuilds.
+# Refresh only the TLS runtime libraries to pick up CVE fixes at build time.
+RUN apk upgrade --no-cache libcrypto3 libssl3
 # ICU нужен RequestLocalization и корректному форматированию ru/en/de/fr/zh в Alpine.
 # krb5-libs содержит libgssapi_krb5, которую Npgsql загружает при потоковом чтении
 # PostgreSQL во время создания резервной копии (даже без Kerberos-аутентификации).

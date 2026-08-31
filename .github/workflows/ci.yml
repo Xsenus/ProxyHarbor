@@ -335,6 +335,9 @@ jobs:
           web_id=$(docker compose ps --quiet web)
           postgres_id=$(docker compose ps --quiet postgres)
           restore_id=$(docker compose --profile tools ps --all --quiet restore)
+          api_image=$(docker inspect --format '{{.Config.Image}}' "$api_id")
+          web_image=$(docker inspect --format '{{.Config.Image}}' "$web_id")
+          restore_image=$(docker inspect --format '{{.Config.Image}}' "$restore_id")
           assert_secret_values_absent() {
             container_id=$1
             environment=$(docker inspect --format '{{json .Config.Env}}' "$container_id")
@@ -373,6 +376,14 @@ jobs:
           test "$(docker inspect --format '{{.HostConfig.PidsLimit}}' "$restore_id")" = '256'
           test "$(docker inspect --format '{{.HostConfig.Init}}' "$restore_id")" = 'true'
           docker inspect --format '{{json .HostConfig.CapDrop}}' "$restore_id" | grep --ignore-case 'ALL'
+          mkdir -p "$RUNNER_TEMP/trivy-cache"
+          for image in "$api_image" "$web_image" "$restore_image"; do
+            docker run --rm \
+              --volume /var/run/docker.sock:/var/run/docker.sock \
+              --volume "$RUNNER_TEMP/trivy-cache:/root/.cache/trivy" \
+              aquasec/trivy:0.74.0@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969 \
+              image --scanners vuln,secret --severity HIGH,CRITICAL --exit-code 1 "$image"
+          done
           docker compose --profile tools rm --force --volumes restore
           docker compose --profile tools run --rm --no-deps restore --help | grep 'ProxyHarbor restore'
           for attempt in {1..90}; do
