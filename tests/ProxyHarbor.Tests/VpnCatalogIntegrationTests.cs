@@ -285,6 +285,82 @@ public sealed class VpnCatalogIntegrationTests
         }
     }
 
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
+    public async Task ValidationWriteWaitsForSharedVpnMutationGate()
+    {
+        var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
+        if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
+
+        var schema = $"proxyharbor_vpn_mutation_gate_{Guid.NewGuid():N}";
+        var builder = new NpgsqlConnectionStringBuilder(baseConnectionString) { SearchPath = schema };
+        await using var admin = new NpgsqlConnection(baseConnectionString);
+        await admin.OpenAsync();
+        await using (var create = new NpgsqlCommand($"CREATE SCHEMA {schema}", admin))
+            await create.ExecuteNonQueryAsync();
+        try
+        {
+            var dbOptions = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+                .UseNpgsql(builder.ConnectionString, npgsql => npgsql.EnableRetryOnFailure())
+                .Options;
+            var factory = new TestDbFactory(dbOptions);
+            var endpoint = new VpnEndpoint
+            {
+                Host = "9.9.9.9",
+                Port = 443,
+                Protocol = VpnProtocol.Trojan,
+                FirstSeenAt = DateTimeOffset.UtcNow,
+                LastSeenAt = DateTimeOffset.UtcNow
+            };
+            await using (var seed = await factory.CreateDbContextAsync())
+            {
+                await seed.Database.MigrateAsync();
+                seed.VpnEndpoints.Add(endpoint);
+                await seed.SaveChangesAsync();
+            }
+
+            using var clients = new TestHttpClientFactory(new DelegateHandler(_ =>
+                new HttpResponseMessage(HttpStatusCode.OK)));
+            var service = new VpnCatalogService(
+                factory,
+                clients,
+                Options.Create(new CollectorOptions()),
+                NullLogger<VpnCatalogService>.Instance);
+
+            await using var blocker = new NpgsqlConnection(builder.ConnectionString);
+            await blocker.OpenAsync();
+            await using var blockerTransaction = await blocker.BeginTransactionAsync();
+            await PostgresAdvisoryLock.AcquireTransactionAsync(
+                blocker,
+                blockerTransaction,
+                PostgresAdvisoryLock.VpnMutationKey,
+                CancellationToken.None);
+
+            var now = DateTimeOffset.UtcNow;
+            var persistence = service.PersistValidationResultsAsync(
+            [
+                new VpnValidationUpdate(
+                    endpoint.Id,
+                    VpnEndpointStatus.Reachable,
+                    15,
+                    null,
+                    now,
+                    now.AddMinutes(5))
+            ]);
+            await Task.Delay(250);
+            var waitedForGate = !persistence.IsCompleted;
+            await blockerTransaction.CommitAsync();
+
+            Assert.True(waitedForGate);
+            Assert.Equal(1, await persistence.WaitAsync(TimeSpan.FromSeconds(10)));
+        }
+        finally
+        {
+            await using var drop = new NpgsqlCommand($"DROP SCHEMA IF EXISTS {schema} CASCADE", admin);
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
+
     private static async Task<(string Endpoint, string Provenance)> ReadCatalogVersionsAsync(
         string connectionString,
         Guid endpointId,

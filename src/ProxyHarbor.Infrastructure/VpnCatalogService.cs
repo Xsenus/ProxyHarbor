@@ -62,6 +62,11 @@ public sealed class VpnCatalogService(
     {
         await using var db = await dbFactory.CreateDbContextAsync(token);
         await using var transaction = await db.Database.BeginTransactionAsync(token);
+        await PostgresAdvisoryLock.AcquireTransactionAsync(
+            (NpgsqlConnection)db.Database.GetDbConnection(),
+            (NpgsqlTransaction)transaction.GetDbTransaction(),
+            PostgresAdvisoryLock.VpnMutationKey,
+            token);
         var resultSourceIds = results.Select(result => result.Source.Id).ToArray();
         // В память попадают только источники текущего запуска. Каталог endpoint и provenance
         // может расти без ограничения, поэтому его нельзя материализовать и track'ать целиком.
@@ -343,6 +348,14 @@ public sealed class VpnCatalogService(
             var connection = (NpgsqlConnection)writeDb.Database.GetDbConnection();
             await connection.OpenAsync(token);
             await using var transaction = await connection.BeginTransactionAsync(token);
+            // Collection и validation меняют пересекающиеся VPN-строки разными
+            // set-based запросами. Короткий transaction lock сохраняет параллельный
+            // HTTP/probe этап, но исключает взаимную блокировку write-фазы.
+            await PostgresAdvisoryLock.AcquireTransactionAsync(
+                connection,
+                transaction,
+                PostgresAdvisoryLock.VpnMutationKey,
+                token);
             await using (var create = new NpgsqlCommand("""
                 CREATE TEMP TABLE vpn_check_update (
                     id uuid PRIMARY KEY,

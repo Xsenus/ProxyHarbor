@@ -13,6 +13,7 @@ internal sealed class PostgresAdvisoryLock : IAsyncDisposable
     internal const long RuntimeKey = 0x50524852554E5405;
     internal const long VpnCollectionKey = 0x50524856504E4306;
     internal const long VpnValidationKey = 0x50524856504E5607;
+    internal const long VpnMutationKey = 0x50524856504E4D08;
     internal const string CleanupFailureDataKey = "ProxyHarbor.AdvisoryLockCleanupFailure";
     private static long _cleanupFailures;
     private readonly NpgsqlConnection _connection;
@@ -104,6 +105,24 @@ internal sealed class PostgresAdvisoryLock : IAsyncDisposable
         if (cleanupFailure is not null)
             ExceptionDispatchInfo.Capture(cleanupFailure).Throw();
         return null;
+    }
+
+    /// <summary>
+    /// Сериализует короткие транзакции, изменяющие один горячий каталог. В отличие от
+    /// session lock этот lease автоматически снимается PostgreSQL при commit/rollback.
+    /// </summary>
+    internal static async Task AcquireTransactionAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        long key,
+        CancellationToken token)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        ArgumentNullException.ThrowIfNull(transaction);
+        await using var command = new NpgsqlCommand(
+            "SELECT pg_advisory_xact_lock(@key)", connection, transaction);
+        command.Parameters.AddWithValue("key", key);
+        await command.ExecuteNonQueryAsync(token);
     }
 
     /// <summary>
