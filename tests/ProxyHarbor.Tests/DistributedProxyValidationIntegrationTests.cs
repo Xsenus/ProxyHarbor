@@ -42,16 +42,20 @@ public sealed class DistributedProxyValidationIntegrationTests
             await using (var seed = await factory.CreateDbContextAsync())
             {
                 seed.CheckerNodes.AddRange(firstNode, secondNode);
-                seed.Proxies.AddRange(Enumerable.Range(1, 12).Select(index => new ProxyEndpoint
+                seed.Proxies.AddRange(Enumerable.Range(1, 20).Select(index => new ProxyEndpoint
                 {
                     Host = $"198.51.100.{index}",
                     Port = 8000 + index,
                     Protocol = ProxyProtocol.Http,
-                    Status = index <= 4 ? ProxyStatus.Alive : ProxyStatus.Pending,
-                    LastCheckedAt = index <= 4 ? DateTimeOffset.UtcNow : null,
+                    Status = index <= 4 ? ProxyStatus.Alive : index <= 12 ? ProxyStatus.Pending : ProxyStatus.Dead,
+                    LastCheckedAt = index <= 4 || index > 12 ? DateTimeOffset.UtcNow : null,
                     LatencyMs = index <= 4 ? 50 + index : null,
                     SuccessfulChecks = index <= 4 ? 1 : 0,
-                    NextCheckAt = DateTimeOffset.UtcNow.AddMinutes(-1)
+                    FailedChecks = index > 12 ? 1 : 0,
+                    ConsecutiveFailedChecks = index > 12 ? 1 : 0,
+                    // NULL входит в отдельный первый index-range и не должен
+                    // пересечься с явно просроченной частью очереди.
+                    NextCheckAt = index == 1 ? null : DateTimeOffset.UtcNow.AddMinutes(-1)
                 }));
                 await seed.SaveChangesAsync();
             }
@@ -75,7 +79,11 @@ public sealed class DistributedProxyValidationIntegrationTests
             {
                 var aliveIds = await priorityCheck.Proxies.AsNoTracking()
                     .Where(x => x.Status == ProxyStatus.Alive).Select(x => x.Id).ToArrayAsync();
-                Assert.Contains(claims, claim => aliveIds.All(id => claim!.Items.Any(item => item.Id == id)));
+                var deadIds = await priorityCheck.Proxies.AsNoTracking()
+                    .Where(x => x.Status == ProxyStatus.Dead).Select(x => x.Id).ToArrayAsync();
+                var claimedIds = claims.SelectMany(claim => claim!.Items).Select(item => item.Id).ToHashSet();
+                Assert.All(aliveIds, id => Assert.Contains(id, claimedIds));
+                Assert.DoesNotContain(deadIds, id => claimedIds.Contains(id));
             }
 
             // Второй узел штатно завершает свою партию нейтральными результатами.
