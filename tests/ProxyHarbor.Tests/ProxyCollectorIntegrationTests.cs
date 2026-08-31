@@ -54,6 +54,9 @@ public sealed class ProxyCollectorIntegrationTests
                 });
                 await seed.SaveChangesAsync();
             }
+            await using (var stored = await factory.CreateDbContextAsync())
+                oldLastSeenAt = await stored.Proxies.Where(x => x.Id == proxyId)
+                    .Select(x => x.LastSeenAt).SingleAsync();
 
             await using var blocker = new NpgsqlConnection(builder.ConnectionString);
             await blocker.OpenAsync();

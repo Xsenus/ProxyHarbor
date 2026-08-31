@@ -18,7 +18,7 @@
 
 ### Fixed
 
-- Массовое обновление `LastSeenAt` сборщиком proxy-feed'ов теперь пропускает занятые валидаторами строки через `FOR UPDATE SKIP LOCKED` и повторяет всю import-транзакцию после transient PostgreSQL-сбоя.
+- Массовое обновление `LastSeenAt` сборщиком proxy-feed'ов теперь пропускает занятые валидаторами строки через `FOR UPDATE SKIP LOCKED` и переносит их безопасное обновление на следующий collection-цикл.
 - Возврат просроченных checker-партий теперь блокирует proxy rows раньше audit rows и упорядочивает блокировки `ValidationRuns`, устраняя deadlock при одновременной выдаче заданий множеству VPS.
 - Запись VPN collection и validation теперь разделяет короткий transaction-level advisory lock: сетевые этапы остаются параллельными, а пересекающиеся set-based `UPDATE` больше не образуют deadlock под нагрузкой.
 - GeoIP-обогащение proxy/VPN теперь использует PostgreSQL binary `COPY`, один set-based `UPDATE` и `FOR UPDATE SKIP LOCKED`; занятые валидаторами строки переносятся на следующий проход без deadlock и без сотен EF `UPDATE`.
