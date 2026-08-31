@@ -330,11 +330,16 @@ jobs:
           trap cleanup EXIT
           docker compose up --detach --build
           docker compose --profile tools build restore
-          docker compose --profile tools create restore
+          # Создаём one-shot restore без повторного reconcile зависимостей:
+          # recreate PostgreSQL здесь оборвёт lifetime-lock уже запущенного API.
+          docker compose --profile tools create --no-deps restore
           api_id=$(docker compose ps --quiet api)
           web_id=$(docker compose ps --quiet web)
           postgres_id=$(docker compose ps --quiet postgres)
-          restore_id=$(docker compose --profile tools ps --all --quiet restore)
+          restore_id=$(docker ps --all --quiet \
+            --filter label=com.docker.compose.project=proxyharbor \
+            --filter label=com.docker.compose.service=restore | head -n 1)
+          test -n "$restore_id"
           api_image=$(docker inspect --format '{{.Config.Image}}' "$api_id")
           web_image=$(docker inspect --format '{{.Config.Image}}' "$web_id")
           postgres_image=$(docker inspect --format '{{.Config.Image}}' "$postgres_id")
