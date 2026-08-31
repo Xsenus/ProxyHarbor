@@ -62,6 +62,72 @@ public sealed class TelegramBotApiClientTests
     }
 
     [Fact]
+    public async Task CandidateCacheCoalescesConcurrentRefreshAndExpiresAsOneSnapshot()
+    {
+        var now = new DateTimeOffset(2026, 8, 31, 0, 0, 0, TimeSpan.Zero);
+        var cache = new TelegramProxyCandidateCache(TimeSpan.FromMinutes(1), () => now);
+        var loaderStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseLoader = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var loads = 0;
+        async Task<TelegramProxyOptions[]> Load(CancellationToken _)
+        {
+            Interlocked.Increment(ref loads);
+            loaderStarted.TrySetResult();
+            await releaseLoader.Task;
+            return [new TelegramProxyOptions { Host = "cached.example", Port = 1080 }];
+        }
+
+        var concurrent = Enumerable.Range(0, 12)
+            .Select(_ => cache.GetOrLoadAsync(Load, CancellationToken.None)).ToArray();
+        await loaderStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        releaseLoader.SetResult();
+        var snapshots = await Task.WhenAll(concurrent);
+
+        Assert.Equal(1, loads);
+        Assert.All(snapshots, snapshot => Assert.Same(snapshots[0], snapshot));
+        _ = await cache.GetOrLoadAsync(Load, CancellationToken.None);
+        Assert.Equal(1, loads);
+
+        now = now.AddMinutes(2);
+        _ = await cache.GetOrLoadAsync(Load, CancellationToken.None);
+        Assert.Equal(2, loads);
+    }
+
+    [Fact]
+    public void ProxyClientPoolReusesMatchingRouteAndRemainsBounded()
+    {
+        using var pool = new TelegramProxyHttpClientPool();
+        using var firstLease = pool.Acquire(new TelegramProxyOptions
+        {
+            Host = "PROXY.example",
+            Port = 1080,
+            Username = "user",
+            Password = "secret"
+        });
+        using var sameLease = pool.Acquire(new TelegramProxyOptions
+        {
+            Host = "proxy.example",
+            Port = 1080,
+            Username = "user",
+            Password = "secret"
+        });
+        using var changedCredentialsLease = pool.Acquire(new TelegramProxyOptions
+        {
+            Host = "proxy.example",
+            Port = 1080,
+            Username = "user",
+            Password = "changed"
+        });
+
+        Assert.Same(firstLease.Client, sameLease.Client);
+        Assert.NotSame(firstLease.Client, changedCredentialsLease.Client);
+        for (var index = 0; index < 40; index++)
+            pool.Acquire(new TelegramProxyOptions { Host = $"192.0.2.{index + 1}", Port = 1080 }).Dispose();
+        pool.Acquire(new TelegramProxyOptions { Host = "2001:db8::1", Port = 1080 }).Dispose();
+        Assert.Equal(32, pool.Count);
+    }
+
+    [Fact]
     public void ProvisioningWorkerDetectsOnlyUnappliedReadyConfiguration()
     {
         var now = DateTimeOffset.UtcNow;
