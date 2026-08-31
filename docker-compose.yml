@@ -7,7 +7,6 @@ x-logging: &bounded-logging
 
 services:
   postgres:
-    image: proxyharbor-postgres:18-alpine
     build:
       context: .
       dockerfile: src/ProxyHarbor.Postgres/Dockerfile
