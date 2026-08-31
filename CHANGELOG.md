@@ -6,6 +6,7 @@
 ## [Unreleased]
 
 ### Changed
+- Dependency baseline обновлён совместимым набором: .NET 10.0.11, SDK container 10.0.400, nginx 1.31, актуальные закреплённые GitHub Actions и проверенные frontend/test toolchain packages; несовместимые Microsoft.OpenApi 3 и TypeScript 7 намеренно исключены.
 - Pending-payment reconciliation now checks up to eight gateways concurrently with an isolated dependency/DbContext scope per order, while retaining atomic cross-replica claims.
 - Distributed checker leases preserve Alive/Pending/Dead priority with bounded per-priority and null/due index ranges, avoiding full-catalog scans when fewer due proxies exist than the requested batch.
 - Access telemetry flush теперь загружает все пятиминутные IP/user/endpoint-счётчики через PostgreSQL binary `COPY` и один упорядоченный set-based `UPSERT` вместо отдельного запроса на каждый bucket; откат атомарно возвращает всю партию в память.

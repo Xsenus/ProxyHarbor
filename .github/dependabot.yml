@@ -9,8 +9,14 @@ updates:
       dotnet-runtime:
         patterns: ["Microsoft.*", "Npgsql.*"]
         exclude-patterns: ["Microsoft.NET.Test.Sdk"]
+        update-types: ["minor", "patch"]
       dotnet-tests:
         patterns: ["xunit*", "coverlet.*", "Microsoft.NET.Test.Sdk"]
+        update-types: ["minor", "patch"]
+    ignore:
+      # Microsoft.AspNetCore.OpenApi 10.x requires Microsoft.OpenApi < 3.0.
+      - dependency-name: Microsoft.OpenApi
+        update-types: ["version-update:semver-major"]
     open-pull-requests-limit: 5
 
   - package-ecosystem: npm
@@ -19,8 +25,20 @@ updates:
     groups:
       frontend-runtime:
         dependency-type: production
+        update-types: ["minor", "patch"]
       frontend-development:
         dependency-type: development
+        update-types: ["minor", "patch"]
+    ignore:
+      # Re-enable majors one by one after their peer dependency chains support them.
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: jsdom
+        update-types: ["version-update:semver-major"]
+      - dependency-name: vite-plugin-static-copy
+        update-types: ["version-update:semver-major"]
     open-pull-requests-limit: 5
 
   - package-ecosystem: github-actions
@@ -47,6 +65,15 @@ updates:
     open-pull-requests-limit: 3
 
   - package-ecosystem: docker
+    directory: /src/ProxyHarbor.CheckerAgent
+    schedule: { interval: weekly, day: monday, time: "05:15", timezone: Asia/Novosibirsk }
+    open-pull-requests-limit: 3
+
+  - package-ecosystem: docker
     directory: /src/proxyharbor-web
     schedule: { interval: weekly, day: monday, time: "05:20", timezone: Asia/Novosibirsk }
+    ignore:
+      # The frontend currently targets the supported Node 22 LTS toolchain.
+      - dependency-name: node
+        update-types: ["version-update:semver-major"]
     open-pull-requests-limit: 3
