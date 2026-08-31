@@ -36,9 +36,9 @@ jobs:
       - name: Verify tagged repository history contains no secrets
         shell: pwsh
         run: ./tools/Invoke-Gitleaks.ps1
-      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with: { dotnet-version: '10.0.302' }
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with: { node-version: '22', cache: npm, cache-dependency-path: src/proxyharbor-web/package-lock.json }
       - name: Validate release and workflow contracts
         shell: pwsh
@@ -156,7 +156,7 @@ jobs:
         run: ./tools/Get-ReleaseMetadata.ps1 -Tag $env:GITHUB_REF_NAME -RepositoryOwner $env:GITHUB_REPOSITORY_OWNER -OutputFile $env:GITHUB_OUTPUT
       - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
         with: { platforms: arm64 }
-      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
       - name: Authenticate Buildx to the repository GHCR namespace
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
@@ -233,7 +233,7 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with: { dotnet-version: '10.0.302' }
       - name: Validate release tag and derive immutable metadata
         id: release
