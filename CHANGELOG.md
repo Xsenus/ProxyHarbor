@@ -5,6 +5,10 @@
 
 ## [Unreleased]
 
+### Added
+- Добавлен воспроизводимый fail-closed аудит публичного запуска: он проверяет TLS, SEO/JSON-LD и canonical всех публичных страниц, robots/sitemap, noindex закрытых маршрутов, security headers, readiness и наличие реально доступного платёжного провайдера; CI и release-gate выполняют его offline contracts.
+- Добавлен проверенный runbook российского размещения и публикации: выбор 152-ФЗ-инфраструктуры, разделение публичного и приватного контуров, DDoS/WAF, безопасная миграция и регистрация sitemap в кабинетах вебмастеров без преждевременного рекламного запуска.
+
 ### Changed
 - Dependency baseline обновлён совместимым набором: .NET 10.0.11, SDK container 10.0.400, nginx 1.31, актуальные закреплённые GitHub Actions и проверенные frontend/test toolchain packages; несовместимые Microsoft.OpenApi 3 и TypeScript 7 намеренно исключены.
 - Pending-payment reconciliation now checks up to eight gateways concurrently with an isolated dependency/DbContext scope per order, while retaining atomic cross-replica claims.
