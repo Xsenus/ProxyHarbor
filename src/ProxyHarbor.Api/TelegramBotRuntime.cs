@@ -437,7 +437,10 @@ public sealed class TelegramUpdateProcessor(
             await transaction.CommitAsync(token);
             return;
         }
-        if (order.Status != PaymentStatuses.Pending)
+        // После ответа pre_checkout Telegram может доставить successful_payment с задержкой.
+        // Фоновая очистка вправе уже пометить старый invoice canceled, но доверенное
+        // подтверждение состоявшегося списания обязано победить эту служебную отметку.
+        if (order.Status is not (PaymentStatuses.Pending or PaymentStatuses.Canceled))
             throw new InvalidOperationException("Заказ больше не принимает оплату.");
         var paidAt = DateTimeOffset.UtcNow;
         order.ProviderPaymentId = chargeId;

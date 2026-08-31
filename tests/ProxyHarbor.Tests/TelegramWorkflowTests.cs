@@ -194,6 +194,11 @@ public sealed class TelegramWorkflowTests
         await processor.ProcessAsync(PreCheckout(32, "invalid", "XTR", order.AmountMinor), TelegramUpdateModes.Webhook, CancellationToken.None);
         await processor.ProcessAsync(PreCheckout(33, order.Id.ToString("N"), "XTR", order.AmountMinor + 1), TelegramUpdateModes.Webhook, CancellationToken.None);
         await processor.ProcessAsync(PreCheckout(31, order.Id.ToString("N"), "XTR", order.AmountMinor), TelegramUpdateModes.Webhook, CancellationToken.None);
+        // Имитируем гонку: pre-checkout уже подтверждён Telegram, а фоновая
+        // очистка успела завершить старый invoice до доставки successful_payment.
+        order.Status = PaymentStatuses.Canceled;
+        order.UpdatedAt = DateTimeOffset.UtcNow;
+        await fixture.Db.SaveChangesAsync();
         await processor.ProcessAsync(SuccessfulPayment(40, order.Id, order.AmountMinor, "charge-1"), TelegramUpdateModes.Webhook, CancellationToken.None);
         await processor.ProcessAsync(SuccessfulPayment(41, order.Id, order.AmountMinor, "charge-1"), TelegramUpdateModes.Webhook, CancellationToken.None);
 

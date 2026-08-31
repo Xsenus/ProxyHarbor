@@ -166,6 +166,9 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
         payment.HasIndex(x => x.IdempotencyKey).IsUnique();
         payment.HasIndex(x => new { x.Provider, x.ProviderPaymentId }).IsUnique();
         payment.HasIndex(x => new { x.UserId, x.CreatedAt });
+        // Покрывает горячий путь фоновой сверки и очистки: сначала terminal status,
+        // затем конкретный шлюз и только после этого временной диапазон.
+        payment.HasIndex(x => new { x.Status, x.Provider, x.UpdatedAt });
         payment.Property(x => x.ProductCode).HasMaxLength(64);
         payment.Property(x => x.Plan).HasMaxLength(32);
         payment.Property(x => x.Provider).HasMaxLength(32);

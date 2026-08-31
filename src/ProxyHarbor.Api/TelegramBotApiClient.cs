@@ -186,6 +186,44 @@ public sealed class TelegramBotApiClient
         return result.GetProperty("message_id").GetInt64();
     }
 
+    /// <summary>
+    /// Читает страницу официального журнала Stars. В журнале сохраняется invoice payload,
+    /// поэтому пропущенный update successful_payment можно восстановить без повторного списания.
+    /// </summary>
+    internal async Task<TelegramStarTransaction[]> GetStarTransactionsAsync(
+        TelegramBotOptions options, int offset, int limit, CancellationToken token)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(offset);
+        ArgumentOutOfRangeException.ThrowIfLessThan(limit, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(limit, 100);
+        var result = await CallAsync(options, "getStarTransactions", new { offset, limit }, token);
+        if (!result.TryGetProperty("transactions", out var transactions) ||
+            transactions.ValueKind != JsonValueKind.Array)
+            throw new TelegramBotApiException(502, "Telegram вернул некорректный журнал Stars.");
+
+        var parsed = new List<TelegramStarTransaction>();
+        foreach (var transaction in transactions.EnumerateArray())
+        {
+            if (!transaction.TryGetProperty("id", out var id) || string.IsNullOrWhiteSpace(id.GetString()) ||
+                !transaction.TryGetProperty("amount", out var amount) || !amount.TryGetInt64(out var stars) ||
+                !transaction.TryGetProperty("date", out var date) || !date.TryGetInt64(out var unixTime))
+                throw new TelegramBotApiException(502, "Telegram вернул неполную операцию Stars.");
+            string? invoicePayload = null;
+            long? userId = null;
+            if (transaction.TryGetProperty("source", out var source) && source.ValueKind == JsonValueKind.Object &&
+                source.TryGetProperty("type", out var type) && type.GetString() == "user")
+            {
+                if (source.TryGetProperty("invoice_payload", out var payload)) invoicePayload = payload.GetString();
+                if (source.TryGetProperty("user", out var user) && user.ValueKind == JsonValueKind.Object &&
+                    user.TryGetProperty("id", out var rawUserId) && rawUserId.TryGetInt64(out var parsedUserId))
+                    userId = parsedUserId;
+            }
+            parsed.Add(new TelegramStarTransaction(
+                id.GetString()!, stars, DateTimeOffset.FromUnixTimeSeconds(unixTime), invoicePayload, userId));
+        }
+        return parsed.ToArray();
+    }
+
     /// <summary>Подтверждает или отклоняет обязательный pre-checkout за отведённые Telegram 10 секунд.</summary>
     public Task AnswerPreCheckoutAsync(
         TelegramBotOptions options, string queryId, bool ok, string? error, CancellationToken token) =>
@@ -382,6 +420,10 @@ public sealed record TelegramBotIdentity(long Id, string Username);
 
 /// <summary>Доверенный payload задания invoice.</summary>
 public sealed record TelegramInvoicePayload(Guid OrderId, string Title, string Description, int Stars);
+
+/// <summary>Безопасная часть одной операции из журнала Stars, достаточная для сверки заказа.</summary>
+internal sealed record TelegramStarTransaction(
+    string Id, long Stars, DateTimeOffset CreatedAt, string? InvoicePayload, long? UserId);
 
 /// <summary>Ошибка Bot API с данными для управляемого повтора.</summary>
 public sealed class TelegramBotApiException(
