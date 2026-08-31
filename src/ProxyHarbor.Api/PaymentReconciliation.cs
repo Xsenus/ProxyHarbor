@@ -127,7 +127,7 @@ public sealed class PaymentReconciliationWorker(
     private static readonly Action<ILogger, int, Exception?> TelegramRecovered = LoggerMessage.Define<int>(
         LogLevel.Information, new EventId(1803, nameof(TelegramRecovered)),
         "По журналу Telegram Stars восстановлено платежей: {Count}.");
-    private static readonly Action<ILogger, int, string, Exception?> StaleCanceled = LoggerMessage.Define<int, string>(
+    private static readonly Action<ILogger, string, int, Exception?> StaleCanceled = LoggerMessage.Define<string, int>(
         LogLevel.Information, new EventId(1804, nameof(StaleCanceled)),
         "Завершено устаревших неподтверждённых заказов через {Provider}: {Count}.");
     private static readonly Action<ILogger, Exception?> TelegramHistoryFailed = LoggerMessage.Define(
@@ -251,7 +251,7 @@ public sealed class PaymentReconciliationWorker(
                     .SetProperty(x => x.Status, PaymentStatuses.Canceled)
                     .SetProperty(x => x.UpdatedAt, now), token);
         }
-        if (canceled > 0) StaleCanceled(logger, canceled, "telegram_stars", null);
+        if (canceled > 0) StaleCanceled(logger, "telegram_stars", canceled, null);
         return recovered + canceled;
     }
 
@@ -271,7 +271,7 @@ public sealed class PaymentReconciliationWorker(
             .ExecuteUpdateAsync(update => update
                 .SetProperty(x => x.Status, PaymentStatuses.Canceled)
                 .SetProperty(x => x.UpdatedAt, now), token);
-        if (canceled > 0) StaleCanceled(logger, canceled, "yoomoney", null);
+        if (canceled > 0) StaleCanceled(logger, "yoomoney", canceled, null);
         return canceled;
     }
 
