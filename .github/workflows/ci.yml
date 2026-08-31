@@ -930,15 +930,15 @@ jobs:
              .recentBackups[0].telegramConfigured == false and
              .recentBackups[0].sentToTelegram == false'
           backup_metric_ready=false
-          # /metrics кешируется на 15 секунд. Даём предыдущему snapshot гарантированно
+          # /metrics кешируется на 30 секунд. Даём предыдущему snapshot гарантированно
           # истечь, но продолжаем опрашивать быстро, если кеш ещё не был заполнен.
-          for attempt in {1..80}; do
+          for attempt in {1..140}; do
             backup_metrics=$(curl --fail --silent http://127.0.0.1:5080/metrics)
             if grep --quiet '^proxyharbor_last_backup_success 1$' <<< "$backup_metrics"; then
               backup_metric_ready=true
               break
             fi
-            if [ "$attempt" -eq 80 ]; then echo "$backup_metrics"; fi
+            if [ "$attempt" -eq 140 ]; then echo "$backup_metrics"; fi
             sleep 0.25
           done
           test "$backup_metric_ready" = true
