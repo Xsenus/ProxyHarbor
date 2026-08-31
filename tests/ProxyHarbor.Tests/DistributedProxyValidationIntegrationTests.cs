@@ -47,6 +47,10 @@ public sealed class DistributedProxyValidationIntegrationTests
                     Host = $"198.51.100.{index}",
                     Port = 8000 + index,
                     Protocol = ProxyProtocol.Http,
+                    Status = index <= 4 ? ProxyStatus.Alive : ProxyStatus.Pending,
+                    LastCheckedAt = index <= 4 ? DateTimeOffset.UtcNow : null,
+                    LatencyMs = index <= 4 ? 50 + index : null,
+                    SuccessfulChecks = index <= 4 ? 1 : 0,
                     NextCheckAt = DateTimeOffset.UtcNow.AddMinutes(-1)
                 }));
                 await seed.SaveChangesAsync();
@@ -67,6 +71,12 @@ public sealed class DistributedProxyValidationIntegrationTests
             Assert.Equal(6, claims[0]!.Items.Count);
             Assert.Equal(6, claims[1]!.Items.Count);
             Assert.Empty(claims[0]!.Items.Select(x => x.Id).Intersect(claims[1]!.Items.Select(x => x.Id)));
+            await using (var priorityCheck = await factory.CreateDbContextAsync())
+            {
+                var aliveIds = await priorityCheck.Proxies.AsNoTracking()
+                    .Where(x => x.Status == ProxyStatus.Alive).Select(x => x.Id).ToArrayAsync();
+                Assert.Contains(claims, claim => aliveIds.All(id => claim!.Items.Any(item => item.Id == id)));
+            }
 
             // Второй узел штатно завершает свою партию нейтральными результатами.
             var secondResult = new CheckerLeaseResultRequest(claims[1]!.Items.Select(item =>

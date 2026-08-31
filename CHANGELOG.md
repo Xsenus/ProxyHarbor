@@ -6,7 +6,7 @@
 ## [Unreleased]
 
 ### Changed
-
+- Distributed checker leases preserve Alive/Pending/Dead priority with bounded per-priority index scans, avoiding full-catalog scans when fewer due proxies exist than the requested batch.
 - Access telemetry flush теперь загружает все пятиминутные IP/user/endpoint-счётчики через PostgreSQL binary `COPY` и один упорядоченный set-based `UPSERT` вместо отдельного запроса на каждый bucket; откат атомарно возвращает всю партию в память.
 - VPN-валидатор сохраняет результаты партии через PostgreSQL binary `COPY` и один set-based `UPDATE`, не track'ит тысячи EF entity и непрерывно разгребает просроченную очередь вместо полного интервала после каждой партии.
 - Pending-платежи получили страховочную фоновую сверку: ЮKassa, CloudPayments, production Robokassa, Т-Банк, Stripe и Cryptomus опрашиваются напрямую раз в минуту, а единый идемпотентный обработчик применяет webhook и polling-результаты без двойного продления подписки.
