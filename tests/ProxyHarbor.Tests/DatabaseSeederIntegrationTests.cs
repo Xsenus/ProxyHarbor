@@ -225,6 +225,73 @@ public sealed class DatabaseSeederIntegrationTests
 
     [Fact]
     [Trait("Category", "PostgresIntegration")]
+    public async Task StartupMigratesUnstableRawGithubUrlWithoutLosingSourceHistory()
+    {
+        var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
+        if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
+
+        var schema = $"proxyharbor_source_url_{Guid.NewGuid():N}";
+        var builder = new NpgsqlConnectionStringBuilder(baseConnectionString) { SearchPath = schema };
+        await using var admin = new NpgsqlConnection(baseConnectionString);
+        await admin.OpenAsync();
+        await using (var create = new NpgsqlCommand($"CREATE SCHEMA {schema}", admin))
+            await create.ExecuteNonQueryAsync();
+
+        try
+        {
+            var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+                .UseNpgsql(builder.ConnectionString)
+                .Options;
+            var canonical = BuiltInSourceCatalog.Sources.Single(source => source.Name == "TheSpeedX HTTP");
+            var sourceId = Guid.Empty;
+            var lastFetchedAt = DateTimeOffset.UtcNow;
+            var lastSucceededAt = lastFetchedAt.AddHours(-1);
+            await using (var first = new ProxyHarborDbContext(options))
+            {
+                await DatabaseSeeder.InitializeAsync(first);
+                var source = await first.Sources.SingleAsync(item => item.Url == canonical.Url);
+                sourceId = source.Id;
+                source.Url = "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/refs/heads/master/http.txt";
+                source.Enabled = false;
+                source.LastFetchedAt = lastFetchedAt;
+                source.LastSucceededAt = lastSucceededAt;
+                source.LastItemCount = 123;
+                source.HttpETag = "stale-etag";
+                source.HttpLastModifiedAt = lastSucceededAt;
+                source.ConsecutiveFailures = 2;
+                source.NextFetchAt = DateTimeOffset.UtcNow.AddHours(1);
+                source.LastError = "HTTP 400";
+                await first.SaveChangesAsync();
+            }
+
+            await using (var second = new ProxyHarborDbContext(options))
+                await DatabaseSeeder.InitializeAsync(second);
+
+            await using var verify = new ProxyHarborDbContext(options);
+            var migrated = await verify.Sources.SingleAsync(source => source.Url == canonical.Url);
+            Assert.Equal(sourceId, migrated.Id);
+            Assert.False(migrated.Enabled);
+            Assert.InRange(
+                Math.Abs((migrated.LastSucceededAt!.Value - lastSucceededAt).TotalMilliseconds),
+                0,
+                0.001);
+            Assert.Equal(123, migrated.LastItemCount);
+            Assert.Null(migrated.HttpETag);
+            Assert.Null(migrated.HttpLastModifiedAt);
+            Assert.Equal(0, migrated.ConsecutiveFailures);
+            Assert.Null(migrated.NextFetchAt);
+            Assert.Null(migrated.LastError);
+            Assert.Equal(BuiltInSourceCatalog.Sources.Count, await verify.Sources.CountAsync());
+        }
+        finally
+        {
+            await using var drop = new NpgsqlCommand($"DROP SCHEMA {schema} CASCADE", admin);
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
     public async Task ConcurrentInitializationSerializesMigrationsAndSeed()
     {
         var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");

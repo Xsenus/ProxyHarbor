@@ -11,6 +11,22 @@ public static class DatabaseSeeder
     internal const long MigrationLockKey = 0x5052484D49475203;
     internal const string StartupCleanupFailureDataKey = "ProxyHarbor.DatabaseSeeder.StartupCleanupFailure";
     private static readonly TimeSpan MigrationLockPollInterval = TimeSpan.FromMilliseconds(100);
+    private static readonly IReadOnlyDictionary<string, string> CanonicalSourceUrlReplacements =
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["https://raw.githubusercontent.com/TheSpeedX/PROXY-List/refs/heads/master/http.txt"] =
+                "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt",
+            ["https://raw.githubusercontent.com/TheSpeedX/PROXY-List/refs/heads/master/socks4.txt"] =
+                "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks4.txt",
+            ["https://raw.githubusercontent.com/TheSpeedX/PROXY-List/refs/heads/master/socks5.txt"] =
+                "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks5.txt",
+            ["https://raw.githubusercontent.com/databay-labs/free-proxy-list/refs/heads/master/http.txt"] =
+                "https://raw.githubusercontent.com/databay-labs/free-proxy-list/master/http.txt",
+            ["https://raw.githubusercontent.com/databay-labs/free-proxy-list/refs/heads/master/socks4.txt"] =
+                "https://raw.githubusercontent.com/databay-labs/free-proxy-list/master/socks4.txt",
+            ["https://raw.githubusercontent.com/databay-labs/free-proxy-list/refs/heads/master/socks5.txt"] =
+                "https://raw.githubusercontent.com/databay-labs/free-proxy-list/master/socks5.txt"
+        };
 
     /// <summary>Добавляет недостающие feed'ы и обновляет их метаданные, сохраняя выбор Enabled/Disabled.</summary>
     public static Task InitializeAsync(ProxyHarborDbContext db, CancellationToken cancellationToken = default) =>
@@ -140,9 +156,6 @@ public static class DatabaseSeeder
             "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/protocols/http/data.txt",
             "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/protocols/socks4/data.txt",
             "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/protocols/socks5/data.txt",
-            "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt",
-            "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks4.txt",
-            "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks5.txt",
             "https://raw.githubusercontent.com/iplocate/free-proxy-list/main/protocols/http.txt",
             "https://raw.githubusercontent.com/iplocate/free-proxy-list/main/protocols/socks5.txt",
             "https://raw.githubusercontent.com/cyberh4ck3r/free-proxy-list/main/http-proxies.txt",
@@ -155,10 +168,40 @@ public static class DatabaseSeeder
         };
         // Uri.AbsoluteUri уже канонизирует scheme/host, но path и query остаются
         // регистрозависимыми: /Feed и /feed могут быть разными HTTPS-ресурсами.
-        var existing = await db.Sources.ToDictionaryAsync(x => x.Url, StringComparer.Ordinal, cancellationToken);
+        var existingSources = await db.Sources.ToListAsync(cancellationToken);
+
+        // raw.githubusercontent.com принимает обе формы пути неравномерно: URL с
+        // /refs/heads/ может начать возвращать 400 только для отдельных файлов.
+        // Переносим строку на устойчивый canonical URL, сохраняя Id, Enabled и историю.
+        foreach (var (replacedUrl, canonicalUrl) in CanonicalSourceUrlReplacements)
+        {
+            var replaced = existingSources.SingleOrDefault(source => source.Url == replacedUrl);
+            if (replaced is null) continue;
+
+            var canonical = existingSources.SingleOrDefault(source => source.Url == canonicalUrl);
+            if (canonical is not null)
+            {
+                db.Sources.Remove(replaced);
+                existingSources.Remove(replaced);
+                continue;
+            }
+
+            replaced.Url = canonicalUrl;
+            // Валидаторы относятся к прежнему resource URL. Сбрасываем только состояние
+            // HTTP-повтора, чтобы новый адрес был опрошен сразу и без условных заголовков.
+            replaced.HttpETag = null;
+            replaced.HttpLastModifiedAt = null;
+            replaced.ConsecutiveFailures = 0;
+            replaced.NextFetchAt = null;
+            replaced.LastError = null;
+        }
 
         // Удаляем только URL из первоначальной встроенной версии, заменённые каноническими feed'ами.
-        db.Sources.RemoveRange(existing.Values.Where(x => legacyUrls.Contains(x.Url)));
+        var legacySources = existingSources.Where(source => legacyUrls.Contains(source.Url)).ToArray();
+        db.Sources.RemoveRange(legacySources);
+        var existing = existingSources
+            .Except(legacySources)
+            .ToDictionary(source => source.Url, StringComparer.Ordinal);
 
         foreach (var definition in BuiltInSourceCatalog.Sources)
         {

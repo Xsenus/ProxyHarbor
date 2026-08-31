@@ -43,6 +43,21 @@ public sealed class BuiltInSourceCatalogTests
     }
 
     [Fact]
+    public void TheSpeedXAndDatabayUseCanonicalRawGithubBranchUrls()
+    {
+        var feeds = BuiltInSourceCatalog.Sources
+            .Where(source => source.Provider is "TheSpeedX" or "Databay Labs")
+            .ToArray();
+
+        Assert.Equal(6, feeds.Length);
+        Assert.All(feeds, source =>
+        {
+            Assert.DoesNotContain("/refs/heads/", source.Url, StringComparison.Ordinal);
+            Assert.Contains("/master/", source.Url, StringComparison.Ordinal);
+        });
+    }
+
+    [Fact]
     public void AdminSourceResponseExposesCanonicalCatalogMetadata()
     {
         var definition = BuiltInSourceCatalog.Sources[12];
