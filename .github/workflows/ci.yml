@@ -337,6 +337,7 @@ jobs:
           restore_id=$(docker compose --profile tools ps --all --quiet restore)
           api_image=$(docker inspect --format '{{.Config.Image}}' "$api_id")
           web_image=$(docker inspect --format '{{.Config.Image}}' "$web_id")
+          postgres_image=$(docker inspect --format '{{.Config.Image}}' "$postgres_id")
           restore_image=$(docker inspect --format '{{.Config.Image}}' "$restore_id")
           assert_secret_values_absent() {
             container_id=$1
@@ -377,7 +378,7 @@ jobs:
           test "$(docker inspect --format '{{.HostConfig.Init}}' "$restore_id")" = 'true'
           docker inspect --format '{{json .HostConfig.CapDrop}}' "$restore_id" | grep --ignore-case 'ALL'
           mkdir -p "$RUNNER_TEMP/trivy-cache"
-          for image in "$api_image" "$web_image" "$restore_image"; do
+          for image in "$api_image" "$web_image" "$postgres_image" "$restore_image"; do
             docker run --rm \
               --volume /var/run/docker.sock:/var/run/docker.sock \
               --volume "$RUNNER_TEMP/trivy-cache:/root/.cache/trivy" \
