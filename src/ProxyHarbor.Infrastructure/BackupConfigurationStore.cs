@@ -120,3 +120,18 @@ public interface ITelegramBackupDeliveryResolver
     /// <summary>Проверяет основной бот и возвращает реквизиты выбранного активного диалога.</summary>
     Task<TelegramBackupDelivery> ResolveAsync(Guid recipientId, CancellationToken token = default);
 }
+
+/// <summary>
+/// Доставляет backup через runtime-транспорт Telegram. Реализация API использует те же
+/// SOCKS5-маршруты, failover и circuit breaker, что сообщения commerce-бота.
+/// </summary>
+public interface ITelegramBackupTransport
+{
+    /// <summary>Отправляет один опубликованный backup-файл выбранному Telegram-получателю.</summary>
+    Task SendAsync(
+        string path,
+        string caption,
+        string botToken,
+        string chatId,
+        CancellationToken token);
+}

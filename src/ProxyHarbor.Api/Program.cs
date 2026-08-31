@@ -122,6 +122,7 @@ builder.Services.AddOptions<TelegramBotHostOptions>()
     .ValidateOnStart();
 builder.Services.AddScoped<ITelegramBotConfigurationStore, TelegramBotConfigurationStore>();
 builder.Services.AddSingleton<ITelegramBackupDeliveryResolver, TelegramBackupDeliveryResolver>();
+builder.Services.AddSingleton<ITelegramBackupTransport, TelegramBackupTransport>();
 builder.Services.AddSingleton<TelegramProxyCandidateCache>();
 builder.Services.AddScoped<ITelegramProxyCandidateProvider, TelegramProxyCandidateProvider>();
 builder.Services.AddSingleton<TelegramTransportHealth>();
