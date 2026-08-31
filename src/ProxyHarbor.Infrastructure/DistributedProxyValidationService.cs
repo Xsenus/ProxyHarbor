@@ -48,18 +48,7 @@ public sealed class DistributedProxyValidationService(
                 return;
             }
 
-            if (node.CurrentLeaseId is { } expiredLeaseId)
-            {
-                // Истёкшая аренда не считается завершённой: сохраняем в аудите причину,
-                // а сами proxy-строки автоматически доступны следующему узлу по lease TTL.
-                await db.ValidationRuns
-                    .Where(x => x.LeaseId == expiredLeaseId && x.CheckerNodeId == node.Id && x.Status == "running")
-                    .ExecuteUpdateAsync(setters => setters
-                        .SetProperty(x => x.FinishedAt, now)
-                        .SetProperty(x => x.Status, "failed")
-                        .SetProperty(x => x.Error,
-                            "Checker-узел не завершил партию до истечения аренды; пакет возвращён в очередь."), token);
-            }
+            var expiredNodeLeaseId = node.CurrentLeaseId;
             node.CurrentLeaseId = null;
             node.CurrentLeaseUntil = null;
             var batchSize = Math.Clamp(node.BatchSize, 1, 10_000);
@@ -73,27 +62,38 @@ public sealed class DistributedProxyValidationService(
                 FOR UPDATE SKIP LOCKED
                 """).AsNoTracking().ToListAsync(token));
 
+            var expiredLeaseIds = claimed
+                .Where(x => x.CheckLeaseId.HasValue)
+                .Select(x => x.CheckLeaseId)
+                .Append(expiredNodeLeaseId)
+                .Where(x => x.HasValue)
+                .Select(x => x!.Value)
+                .Distinct()
+                .ToArray();
+            if (expiredLeaseIds.Length > 0)
+            {
+                // Все Claim-транзакции сначала блокируют proxy rows, затем старые audit rows.
+                // Стабильная сортировка Id исключает обратный порядок блокировок между узлами.
+                await db.Database.ExecuteSqlInterpolatedAsync($"""
+                    WITH locked AS MATERIALIZED (
+                        SELECT "Id"
+                        FROM "ValidationRuns"
+                        WHERE "LeaseId" = ANY ({expiredLeaseIds}) AND "Status" = 'running'
+                        ORDER BY "Id"
+                        FOR UPDATE
+                    )
+                    UPDATE "ValidationRuns" AS run
+                    SET "FinishedAt" = {now},
+                        "Status" = 'failed',
+                        "Error" = 'Checker-узел не завершил партию до истечения аренды; пакет возвращён в очередь.'
+                    FROM locked
+                    WHERE run."Id" = locked."Id"
+                    """, token);
+            }
+
             if (claimed.Count > 0)
             {
                 var ids = claimed.Select(x => x.Id).ToArray();
-                var reclaimedLeaseIds = claimed
-                    .Where(x => x.CheckLeaseId.HasValue)
-                    .Select(x => x.CheckLeaseId!.Value)
-                    .Distinct()
-                    .ToArray();
-                if (reclaimedLeaseIds.Length > 0)
-                {
-                    // Аудит закрывается именно в момент фактического повторного назначения.
-                    // Так краткий разрыв heartbeat не создаёт ложный failed, а отобранная
-                    // новым узлом просроченная партия никогда не остаётся вечным running.
-                    await db.ValidationRuns
-                        .Where(x => reclaimedLeaseIds.Contains(x.LeaseId) && x.Status == "running")
-                        .ExecuteUpdateAsync(setters => setters
-                            .SetProperty(x => x.FinishedAt, now)
-                            .SetProperty(x => x.Status, "failed")
-                            .SetProperty(x => x.Error,
-                                "Checker-узел не завершил партию до истечения аренды; пакет передан другому узлу."), token);
-                }
                 await db.Proxies.Where(x => ids.Contains(x.Id)).ExecuteUpdateAsync(setters => setters
                     .SetProperty(x => x.CheckLeaseUntil, leaseUntil)
                     .SetProperty(x => x.CheckLeaseId, leaseId), token);

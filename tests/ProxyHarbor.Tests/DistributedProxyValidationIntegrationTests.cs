@@ -105,6 +105,130 @@ public sealed class DistributedProxyValidationIntegrationTests
         }
     }
 
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
+    public async Task ExpiredLeaseLocksProxyBeforeWaitingForValidationAudit()
+    {
+        var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
+        if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
+
+        var suffix = Guid.NewGuid().ToString("N");
+        var schema = $"proxyharbor_claim_lock_order_{suffix}";
+        var applicationName = $"proxyharbor-claim-lock-order-{suffix}";
+        var serviceConnection = new NpgsqlConnectionStringBuilder(baseConnectionString)
+        {
+            SearchPath = schema,
+            ApplicationName = applicationName
+        };
+        await using var admin = new NpgsqlConnection(baseConnectionString);
+        await admin.OpenAsync();
+        await using (var create = new NpgsqlCommand($"CREATE SCHEMA {schema}", admin))
+            await create.ExecuteNonQueryAsync();
+
+        try
+        {
+            var dbOptions = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+                .UseNpgsql(serviceConnection.ConnectionString, postgres => postgres.EnableRetryOnFailure()).Options;
+            var factory = new TestDbFactory(dbOptions);
+            await using (var migrationDb = await factory.CreateDbContextAsync())
+                await migrationDb.Database.MigrateAsync();
+
+            var expiredLeaseId = Guid.NewGuid();
+            var node = Node("expired", batchSize: 1);
+            node.CurrentLeaseId = expiredLeaseId;
+            node.CurrentLeaseUntil = DateTimeOffset.UtcNow.AddMinutes(-1);
+            var proxy = new ProxyEndpoint
+            {
+                Host = "198.51.100.200",
+                Port = 8200,
+                Protocol = ProxyProtocol.Http,
+                NextCheckAt = DateTimeOffset.UtcNow.AddMinutes(-2),
+                CheckLeaseId = expiredLeaseId,
+                CheckLeaseUntil = DateTimeOffset.UtcNow.AddMinutes(-1)
+            };
+            var run = new ValidationRun
+            {
+                LeaseId = expiredLeaseId,
+                CheckerNodeId = node.Id,
+                Claimed = 1
+            };
+            await using (var seed = await factory.CreateDbContextAsync())
+            {
+                seed.AddRange(node, proxy, run);
+                await seed.SaveChangesAsync();
+            }
+
+            var settings = new CollectorOptions { ProbeTimeoutSeconds = 5 };
+            using var clients = new StubHttpClientFactory();
+            using var origin = new OriginIpProvider(clients, Options.Create(settings), new ProbeControlHealth());
+            using var validator = new ProxyValidator(factory,
+                new ProxyProbeService(Options.Create(settings), origin), Options.Create(settings),
+                NullLogger<ProxyValidator>.Instance);
+            var dispatcher = new DistributedProxyValidationService(factory, validator, Options.Create(settings));
+
+            var blockerConnectionString = new NpgsqlConnectionStringBuilder(baseConnectionString)
+            {
+                SearchPath = schema,
+                ApplicationName = $"proxyharbor-claim-blocker-{suffix}"
+            };
+            await using var blocker = new NpgsqlConnection(blockerConnectionString.ConnectionString);
+            await blocker.OpenAsync();
+            await using var blockerTransaction = await blocker.BeginTransactionAsync();
+            await using (var lockRun = new NpgsqlCommand(
+                "SELECT \"Id\" FROM \"ValidationRuns\" WHERE \"Id\" = @id FOR UPDATE", blocker, blockerTransaction))
+            {
+                lockRun.Parameters.AddWithValue("id", run.Id);
+                Assert.Equal(run.Id, await lockRun.ExecuteScalarAsync());
+            }
+
+            var claimTask = dispatcher.ClaimAsync(node.Id, CancellationToken.None);
+            var waitingForAuditLock = false;
+            for (var attempt = 0; attempt < 100 && !waitingForAuditLock; attempt++)
+            {
+                await using var activity = new NpgsqlCommand("""
+                    SELECT EXISTS (
+                        SELECT 1 FROM pg_stat_activity
+                        WHERE application_name = @application_name
+                          AND wait_event_type = 'Lock'
+                          AND query LIKE '%ValidationRuns%')
+                    """, admin);
+                activity.Parameters.AddWithValue("application_name", applicationName);
+                waitingForAuditLock = (bool)(await activity.ExecuteScalarAsync())!;
+                if (!waitingForAuditLock) await Task.Delay(50);
+            }
+
+            var probeConnectionString = new NpgsqlConnectionStringBuilder(baseConnectionString)
+            {
+                SearchPath = schema,
+                ApplicationName = $"proxyharbor-claim-probe-{suffix}"
+            };
+            await using var probe = new NpgsqlConnection(probeConnectionString.ConnectionString);
+            await probe.OpenAsync();
+            await using var probeTransaction = await probe.BeginTransactionAsync();
+            await using var probeProxy = new NpgsqlCommand(
+                "SELECT \"Id\" FROM \"Proxies\" WHERE \"Id\" = @id FOR UPDATE SKIP LOCKED", probe, probeTransaction);
+            probeProxy.Parameters.AddWithValue("id", proxy.Id);
+            var unlockedProxyId = await probeProxy.ExecuteScalarAsync();
+            await probeTransaction.RollbackAsync();
+
+            await blockerTransaction.CommitAsync();
+            var claim = await claimTask.WaitAsync(TimeSpan.FromSeconds(10));
+
+            Assert.True(waitingForAuditLock);
+            Assert.Null(unlockedProxyId);
+            Assert.NotNull(claim);
+            Assert.Single(claim!.Items);
+            await using var verify = await factory.CreateDbContextAsync();
+            Assert.Equal("failed", await verify.ValidationRuns
+                .Where(x => x.Id == run.Id).Select(x => x.Status).SingleAsync());
+        }
+        finally
+        {
+            await using var drop = new NpgsqlCommand($"DROP SCHEMA IF EXISTS {schema} CASCADE", admin);
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
+
     private static CheckerNode Node(string name, int batchSize) => new()
     {
         Name = name,
