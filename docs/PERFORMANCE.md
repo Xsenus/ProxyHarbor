@@ -34,6 +34,14 @@ SQL-план проверен на 310 429 сохранённых прокси �
 
 Streaming export дополнительно имеет общий пятиминутный lifetime от открытия `REPEATABLE READ` до финального commit. Лимит охватывает boundary query, перечисление EF и каждый async response write; клиентский backpressure поэтому не может бесконечно удерживать MVCC snapshot и один из двух process-wide export slots.
 
+## Prometheus `/metrics`
+
+Production `EXPLAIN (ANALYZE, BUFFERS)` 31 августа 2026 года на 862 999 proxy-строках показал, что прежний cache-miss `/metrics` дважды выполнял parallel sequential scan одной таблицы: status/protocol aggregate занимал 859,746 мс и 28 050 shared buffer hits, queue aggregate — 1 769,411 мс и 28 048 hits. Отдельный published count использовал partial index и занимал 12,026 мс. Сумма отдельных измерений — около 2,64 с; она служит ориентиром конкретного хоста, а не универсальным latency SLO.
+
+Все proxy-derived gauges теперь строятся одним `GROUP BY Status, Protocol` с conditional aggregates. Итоговые due/leased/stale/published счётчики складываются в приложении максимум из двенадцати компактных строк. На том же наборе кандидатный план завершился за 2 304,572 мс и коснулся 28 063 buffer pages: wall-clock улучшился примерно на 13%, а число чтений большой таблицы уменьшилось практически вдвое. PostgreSQL integration-test проверяет не текст SQL, а JSON-план и требует ровно один relation scan `Proxies`, одновременно сверяя семантику всех счётчиков.
+
+Вариант с `GROUPING SETS` измерялся отдельно и был отклонён: PostgreSQL выбрал непараллельный `MixedAggregate`, время выросло до 3 234,763 мс. Это решение намеренно не используется, хотя формально также давало один scan.
+
 ## Сбор feed'ов
 
 Внутренний parser представляет канонический IP двумя `ulong`, а port/protocol/family — value-полями; performance-contract проверяет, что ключ не содержит managed references и занимает не более 32 байт. Уникальные адреса сразу передаются в общий concurrent bounded-набор. Поэтому каждый из восьми параллельных feed'ов больше не удерживает собственный список кортежей и канонические IP-строки до 500 000 элементов, а общий набор не хранит строки до PostgreSQL COPY.
