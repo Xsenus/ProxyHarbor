@@ -428,6 +428,11 @@ jobs:
           index_html=$(curl --fail --silent http://127.0.0.1:8080/)
           asset_path=$(echo "$index_html" | grep --only-matching --extended-regexp '/assets/[^" ]+\.js' | head --lines 1)
           test -n "$asset_path"
+          private_headers=$(mktemp)
+          curl --fail --silent --dump-header "$private_headers" --output /dev/null \
+            'http://127.0.0.1:8080/account?from=ci'
+          grep --ignore-case '^X-Robots-Tag: noindex, nofollow, noarchive' "$private_headers"
+          rm "$private_headers"
           asset_headers=$(mktemp)
           curl --fail --silent --dump-header "$asset_headers" --output /dev/null "http://127.0.0.1:8080$asset_path"
           grep --ignore-case '^Content-Security-Policy:' "$asset_headers"
