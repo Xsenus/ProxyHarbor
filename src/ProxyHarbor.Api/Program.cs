@@ -130,6 +130,7 @@ builder.Services.AddSingleton<TelegramOutboundWakeSignal>();
 builder.Services.AddScoped<TelegramBotApiClient>();
 builder.Services.AddScoped<TelegramDispatchService>();
 builder.Services.AddScoped<TelegramUpdateProcessor>();
+builder.Services.AddScoped<SubscriptionReminderProcessor>();
 builder.Services.AddHostedService<TelegramProvisioningWorker>();
 builder.Services.AddHostedService<TelegramOutboundWorker>();
 builder.Services.AddHostedService<TelegramPollingWorker>();

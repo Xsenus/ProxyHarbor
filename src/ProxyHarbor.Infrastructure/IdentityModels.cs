@@ -182,6 +182,10 @@ public sealed class UserSubscription
     public DateTimeOffset StartedAt { get; set; } = DateTimeOffset.UtcNow;
     /// <summary>Конец доступа; null применяется для бесплатного и бессрочного тарифа.</summary>
     public DateTimeOffset? ExpiresAt { get; set; }
+    /// <summary>Срок, для которого уже сформировано напоминание за 12 часов.</summary>
+    public DateTimeOffset? Reminder12HoursForExpiresAt { get; set; }
+    /// <summary>Срок, для которого уже сформировано напоминание за 1 час.</summary>
+    public DateTimeOffset? Reminder1HourForExpiresAt { get; set; }
     /// <summary>Идентификатор клиента во внешней платёжной системе без платёжных данных.</summary>
     public string? ExternalCustomerId { get; set; }
     /// <summary>Идентификатор подписки во внешней платёжной системе.</summary>
