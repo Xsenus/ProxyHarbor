@@ -218,9 +218,14 @@ builder.Services.AddOutputCache(options =>
         .With(context => PublicOutputCachePolicies.IsSeekFirstPage(context.HttpContext))
         .Expire(TimeSpan.FromSeconds(10))
         .SetVaryByQuery(PublicOutputCachePolicies.SeekVaryByQuery));
-    options.AddPolicy("public-summary", policy => policy
-        .Expire(TimeSpan.FromSeconds(15))
+    options.AddPolicy(PublicOutputCachePolicies.Summary, policy => policy
+        .Expire(PublicOutputCachePolicies.SummaryExpiration)
         // Неизвестные query-параметры не должны создавать неограниченное число cache keys.
+        .SetVaryByQuery([]));
+    options.AddPolicy(PublicOutputCachePolicies.Metrics, policy => policy
+        // Два последовательных стандартных scrape используют один согласованный
+        // снимок вместо двух дорогих проходов таблицы Proxies.
+        .Expire(PublicOutputCachePolicies.MetricsExpiration)
         .SetVaryByQuery([]));
 });
 var configuredCorsOrigins = builder.Configuration.GetSection("Cors:Origins").Get<string[]>();
@@ -382,7 +387,7 @@ app.UseOutputCache();
 // Стандартный Authorization middleware проверяет endpoint-level политики для
 // cookie-сессии или сформированного выше automation API key principal.
 app.UseAuthorization();
-app.MapOpenApi().CacheOutput("public-summary").RequireRateLimiting("public");
+app.MapOpenApi().CacheOutput(PublicOutputCachePolicies.Summary).RequireRateLimiting("public");
 app.MapControllers();
 app.MapGet("/health/live", () => Results.Ok(new { status = "healthy" }));
 app.MapGet("/health/ready", async (DatabaseReadinessProbe probe, CancellationToken token) =>

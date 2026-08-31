@@ -39,4 +39,16 @@ public sealed class PublicOutputCachePolicyTests
         var method = typeof(ProxiesController).GetMethod(nameof(ProxiesController.Seek));
         Assert.Empty(method!.GetCustomAttributes<OutputCacheAttribute>());
     }
+
+    [Fact]
+    public void ExpensiveMetricsSnapshotHasDedicatedTwoScrapeCacheWindow()
+    {
+        var method = typeof(MetricsController).GetMethod(nameof(MetricsController.Get));
+        var cache = Assert.Single(method!.GetCustomAttributes<OutputCacheAttribute>());
+
+        Assert.Equal(PublicOutputCachePolicies.Metrics, cache.PolicyName);
+        Assert.Equal(TimeSpan.FromSeconds(30), PublicOutputCachePolicies.MetricsExpiration);
+        Assert.True(PublicOutputCachePolicies.MetricsExpiration >=
+            PublicOutputCachePolicies.SummaryExpiration * 2);
+    }
 }
