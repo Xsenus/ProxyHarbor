@@ -400,8 +400,25 @@ public sealed class AdminController(
                 return Problem(exception.Message, statusCode: 400);
             }
         }
-        if (request.Enabled && !request.SendToTelegram)
-            return Problem("Для плановых резервных копий доставка администратору в Telegram обязательна.", statusCode: 400);
+        var objectStorageAccessKey = request.ClearObjectStorageCredentials ? null :
+            string.IsNullOrWhiteSpace(request.ObjectStorageAccessKey) ? current.ObjectStorageAccessKey : request.ObjectStorageAccessKey.Trim();
+        var objectStorageSecretKey = request.ClearObjectStorageCredentials ? null :
+            string.IsNullOrWhiteSpace(request.ObjectStorageSecretKey) ? current.ObjectStorageSecretKey : request.ObjectStorageSecretKey;
+        var objectStorageCandidate = new BackupOptions
+        {
+            SendToObjectStorage = request.SendToObjectStorage,
+            ObjectStorageEndpoint = request.ObjectStorageEndpoint?.Trim(),
+            ObjectStorageRegion = request.ObjectStorageRegion?.Trim() ?? string.Empty,
+            ObjectStorageBucket = request.ObjectStorageBucket?.Trim(),
+            ObjectStoragePrefix = request.ObjectStoragePrefix?.Trim('/') ?? string.Empty,
+            ObjectStorageUsePathStyle = request.ObjectStorageUsePathStyle,
+            ObjectStorageAccessKey = objectStorageAccessKey,
+            ObjectStorageSecretKey = objectStorageSecretKey
+        };
+        if (request.SendToObjectStorage && !BackupOptions.IsObjectStorageConfigurationValid(objectStorageCandidate))
+            return Problem("Проверьте HTTPS endpoint, region, bucket, безопасный префикс и ключи S3-совместимого хранилища.", statusCode: 400);
+        if (request.Enabled && !request.SendToTelegram && !request.SendToObjectStorage)
+            return Problem("Для плановых резервных копий включите хотя бы Telegram или S3-совместимое хранилище.", statusCode: 400);
 
         var updated = new BackupOptions
         {
@@ -416,7 +433,15 @@ public sealed class AdminController(
             // BackupService разрешает их из основного бота перед каждой отправкой.
             TelegramBotToken = null,
             TelegramChatId = null,
-            TelegramRecipientId = request.SendToTelegram ? request.TelegramRecipientId : null
+            TelegramRecipientId = request.SendToTelegram ? request.TelegramRecipientId : null,
+            SendToObjectStorage = request.SendToObjectStorage,
+            ObjectStorageEndpoint = objectStorageCandidate.ObjectStorageEndpoint,
+            ObjectStorageRegion = objectStorageCandidate.ObjectStorageRegion,
+            ObjectStorageBucket = objectStorageCandidate.ObjectStorageBucket,
+            ObjectStoragePrefix = objectStorageCandidate.ObjectStoragePrefix,
+            ObjectStorageUsePathStyle = objectStorageCandidate.ObjectStorageUsePathStyle,
+            ObjectStorageAccessKey = objectStorageAccessKey,
+            ObjectStorageSecretKey = objectStorageSecretKey
         };
         await backupConfigurationStore.SaveAsync(updated, token);
         return Ok(await CreateBackupSettingsResponseAsync(updated, token));
@@ -539,7 +564,16 @@ public sealed record BackupSettingsRequest(
     int HistoryRetentionDays,
     int MaxTelegramFileSizeMb,
     bool SendToTelegram,
-    Guid? TelegramRecipientId);
+    Guid? TelegramRecipientId,
+    bool SendToObjectStorage = false,
+    string? ObjectStorageEndpoint = null,
+    string? ObjectStorageRegion = null,
+    string? ObjectStorageBucket = null,
+    string? ObjectStoragePrefix = null,
+    bool ObjectStorageUsePathStyle = true,
+    string? ObjectStorageAccessKey = null,
+    string? ObjectStorageSecretKey = null,
+    bool ClearObjectStorageCredentials = false);
 
 /// <summary>Безопасная проекция runtime-настроек для панели администратора.</summary>
 public sealed record BackupSettingsResponse(
@@ -553,6 +587,13 @@ public sealed record BackupSettingsResponse(
     Guid? TelegramRecipientId,
     string? TelegramRecipientDisplayName,
     string? TelegramRecipientUsername,
+    bool SendToObjectStorage,
+    string? ObjectStorageEndpoint,
+    string ObjectStorageRegion,
+    string? ObjectStorageBucket,
+    string ObjectStoragePrefix,
+    bool ObjectStorageUsePathStyle,
+    bool ObjectStorageCredentialsConfigured,
     bool EncryptionConfigured,
     string Format)
 {
@@ -572,6 +613,14 @@ public sealed record BackupSettingsResponse(
         recipient?.Id,
         recipient?.DisplayName,
         recipient?.Username,
+        options.SendToObjectStorage,
+        options.ObjectStorageEndpoint,
+        options.ObjectStorageRegion,
+        options.ObjectStorageBucket,
+        options.ObjectStoragePrefix,
+        options.ObjectStorageUsePathStyle,
+        !string.IsNullOrWhiteSpace(options.ObjectStorageAccessKey) &&
+            !string.IsNullOrWhiteSpace(options.ObjectStorageSecretKey),
         BackupOptions.IsNewEncryptionKeyValid(options.EncryptionKey),
         "PHB3 (.phbackup)");
 }
@@ -594,13 +643,17 @@ public sealed record BackupFileResponse(
     long SizeBytes,
     bool TelegramConfigured,
     bool SentToTelegram,
+    bool ObjectStorageConfigured,
+    bool SentToObjectStorage,
+    string? ObjectStorageKey,
     string? Error,
     bool Available)
 {
     /// <summary>Проецирует audit-запись без раскрытия server-side пути к файлу.</summary>
     public static BackupFileResponse From(BackupRun run, bool available) => new(
         run.Id, run.StartedAt, run.FinishedAt, run.Status, run.FileName, run.SizeBytes,
-        run.TelegramConfigured, run.SentToTelegram, run.Error, available);
+        run.TelegramConfigured, run.SentToTelegram, run.ObjectStorageConfigured,
+        run.SentToObjectStorage, run.ObjectStorageKey, run.Error, available);
 }
 
 /// <summary>Текущий backlog без уже арендованных строк и rolling validation telemetry.</summary>

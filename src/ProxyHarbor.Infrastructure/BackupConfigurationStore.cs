@@ -54,7 +54,15 @@ public sealed class BackupConfigurationStore(
                 EncryptionKey = configured.Value.EncryptionKey,
                 TelegramBotToken = secrets.TelegramBotToken,
                 TelegramChatId = secrets.TelegramChatId,
-                TelegramRecipientId = settings.TelegramRecipientId
+                TelegramRecipientId = settings.TelegramRecipientId,
+                SendToObjectStorage = settings.SendToObjectStorage,
+                ObjectStorageEndpoint = settings.ObjectStorageEndpoint,
+                ObjectStorageRegion = settings.ObjectStorageRegion ?? "ru-central1",
+                ObjectStorageBucket = settings.ObjectStorageBucket,
+                ObjectStoragePrefix = settings.ObjectStoragePrefix ?? "proxyharbor/backups",
+                ObjectStorageUsePathStyle = settings.ObjectStorageUsePathStyle,
+                ObjectStorageAccessKey = secrets.ObjectStorageAccessKey,
+                ObjectStorageSecretKey = secrets.ObjectStorageSecretKey
             };
         }
         catch (Exception exception) when (exception is JsonException or System.Security.Cryptography.CryptographicException)
@@ -78,9 +86,13 @@ public sealed class BackupConfigurationStore(
         entity.SettingsJson = JsonSerializer.Serialize(new StoredBackupSettings(
             options.Enabled, options.IntervalHours, options.RetentionDays,
             options.HistoryRetentionDays, options.MaxTelegramFileSizeMb,
-            options.TelegramRecipientId), Json);
+            options.TelegramRecipientId, options.SendToObjectStorage,
+            options.ObjectStorageEndpoint, options.ObjectStorageRegion,
+            options.ObjectStorageBucket, options.ObjectStoragePrefix,
+            options.ObjectStorageUsePathStyle), Json);
         entity.ProtectedSecrets = protector.Protect(JsonSerializer.Serialize(new StoredBackupSecrets(
-            options.TelegramBotToken, options.TelegramChatId), Json));
+            options.TelegramBotToken, options.TelegramChatId,
+            options.ObjectStorageAccessKey, options.ObjectStorageSecretKey), Json));
         entity.UpdatedAt = DateTimeOffset.UtcNow;
         await db.SaveChangesAsync(token);
     }
@@ -96,14 +108,32 @@ public sealed class BackupConfigurationStore(
         TelegramBotToken = configured.Value.TelegramBotToken,
         TelegramChatId = configured.Value.TelegramChatId,
         TelegramRecipientId = configured.Value.TelegramRecipientId,
-        MaxTelegramFileSizeMb = configured.Value.MaxTelegramFileSizeMb
+        MaxTelegramFileSizeMb = configured.Value.MaxTelegramFileSizeMb,
+        SendToObjectStorage = configured.Value.SendToObjectStorage,
+        ObjectStorageEndpoint = configured.Value.ObjectStorageEndpoint,
+        ObjectStorageRegion = configured.Value.ObjectStorageRegion,
+        ObjectStorageBucket = configured.Value.ObjectStorageBucket,
+        ObjectStoragePrefix = configured.Value.ObjectStoragePrefix,
+        ObjectStorageUsePathStyle = configured.Value.ObjectStorageUsePathStyle,
+        ObjectStorageAccessKey = configured.Value.ObjectStorageAccessKey,
+        ObjectStorageSecretKey = configured.Value.ObjectStorageSecretKey
     };
 
     private sealed record StoredBackupSettings(
         bool Enabled, int IntervalHours, int RetentionDays,
         int HistoryRetentionDays, int MaxTelegramFileSizeMb,
-        Guid? TelegramRecipientId = null);
-    private sealed record StoredBackupSecrets(string? TelegramBotToken, string? TelegramChatId);
+        Guid? TelegramRecipientId = null,
+        bool SendToObjectStorage = false,
+        string? ObjectStorageEndpoint = null,
+        string? ObjectStorageRegion = null,
+        string? ObjectStorageBucket = null,
+        string? ObjectStoragePrefix = null,
+        bool ObjectStorageUsePathStyle = true);
+    private sealed record StoredBackupSecrets(
+        string? TelegramBotToken,
+        string? TelegramChatId,
+        string? ObjectStorageAccessKey = null,
+        string? ObjectStorageSecretKey = null);
 }
 
 /// <summary>Актуальные реквизиты основного бота и выбранного CRM-диалога.</summary>
@@ -134,4 +164,11 @@ public interface ITelegramBackupTransport
         string botToken,
         string chatId,
         CancellationToken token);
+}
+
+/// <summary>Загружает уже зашифрованный PHB3-файл и подтверждает его размер/хэш в object storage.</summary>
+public interface IBackupObjectStorageTransport
+{
+    /// <summary>Возвращает безопасный object key только после успешной проверки метаданных.</summary>
+    Task<string> UploadAndVerifyAsync(string path, BackupOptions options, CancellationToken token);
 }

@@ -104,6 +104,12 @@ NOWPayments также остаётся IPN-first, потому что invoice A
 самого платежа; оба webhook-first шлюза также закрывают неподтверждённые формы через сутки.
 Telegram Stars дополнительно восстанавливаются по доверенному журналу Star Transactions.
 
+Вкладка `/admin/payments` отдельно показывает конфигурационную готовность и фактическую работу каждого
+шлюза. Для включённого ЮMoney без подтверждённых платежей отображается `Webhook требует проверки` с
+точным callback URL. В кабинете ЮMoney включите HTTP-уведомления, укажите этот URL и тот же секрет,
+затем выполните штатный тест уведомления. Пустое `test_notification=true` получает HTTP 200, но никогда
+не активирует подписку; рабочая готовность подтверждается только реальным подписанным платежом.
+
 За 12 часов и за 1 час до окончания создаются независимые одноразовые уведомления
 в веб-кабинете; при связанном Telegram и разрешённых уведомлениях те же события ставятся в надёжную
 Telegram-очередь. Истечение обрабатывается независимо от готовности Telegram. История последних
@@ -184,8 +190,14 @@ DB-IP Lite имеет пониженную относительно коммер
 | `TelegramBotToken` | пусто | legacy fallback; новые настройки используют token основного бота |
 | `TelegramChatId` | пусто | legacy fallback; новые настройки сохраняют выбранный CRM-диалог |
 | `MaxTelegramFileSizeMb` | 49 | 1..49; максимум 20 частей |
+| `SendToObjectStorage` | false | включает проверяемую доставку PHB3 в S3-совместимый bucket |
+| `ObjectStorageEndpoint` | пусто | абсолютный HTTPS endpoint без credentials/query/fragment |
+| `ObjectStorageRegion` | `ru-central1` | регион AWS Signature V4 |
+| `ObjectStorageBucket` | пусто | имя непубличного bucket |
+| `ObjectStoragePrefix` | `proxyharbor/backups` | безопасный object-key prefix без `..` и обратных слешей |
+| `ObjectStorageUsePathStyle` | true | совместимость с провайдерами, требующими path-style URL |
 
-Для включённого backup обязателен PHB3-ключ. Telegram-доставка настраивается в админке выбором активного диалога основного бота; его token не дублируется в backup-конфигурации и перечитывается перед каждой отправкой. Deploy-пара `TelegramBotToken`/`TelegramChatId` сохранена только для обратной совместимости. Полный runbook — [BACKUP_RESTORE.md](BACKUP_RESTORE.md).
+Для включённого backup обязателен PHB3-ключ и минимум один внешний канал. S3-совместимое хранилище (рекомендуется для production) и Telegram настраиваются в админке. S3 credentials защищены Data Protection и не экспортируются в backup или API. Telegram token не дублируется в backup-конфигурации и перечитывается перед каждой отправкой. Deploy-пара `TelegramBotToken`/`TelegramChatId` сохранена только для обратной совместимости. Полный runbook — [BACKUP_RESTORE.md](BACKUP_RESTORE.md).
 
 ## Распределённые checker-узлы
 

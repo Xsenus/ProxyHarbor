@@ -188,6 +188,11 @@ public sealed class PaymentsController(
     {
         providerCode = providerCode.Trim().ToLowerInvariant();
         if (!PaymentProviderConfiguration.Codes.Contains(providerCode, StringComparer.Ordinal)) return NotFound();
+        // Официальная кнопка «Протестировать» у ЮMoney может прислать пустое
+        // test_notification. Оно проверяет только достижимость URL, не содержит
+        // доверенного платежа и поэтому получает 200 без изменения заказа.
+        if (providerCode == "yoomoney" && await IsYooMoneyConnectivityTestAsync(Request, token))
+            return Ok();
         PaymentNotification notification;
         try { notification = await gateways.ReadNotificationAsync(providerCode, Request, token); }
         catch (Exception exception) when (exception is InvalidOperationException or JsonException or FormatException or KeyNotFoundException)
@@ -213,6 +218,15 @@ public sealed class PaymentsController(
         var left = Encoding.UTF8.GetBytes(expected);
         var right = Encoding.UTF8.GetBytes(actual);
         return left.Length == right.Length && CryptographicOperations.FixedTimeEquals(left, right);
+    }
+
+    private static async Task<bool> IsYooMoneyConnectivityTestAsync(
+        HttpRequest request,
+        CancellationToken token)
+    {
+        if (!request.HasFormContentType) return false;
+        var form = await request.ReadFormAsync(token);
+        return string.Equals(form["test_notification"].ToString(), "true", StringComparison.OrdinalIgnoreCase);
     }
 
 }

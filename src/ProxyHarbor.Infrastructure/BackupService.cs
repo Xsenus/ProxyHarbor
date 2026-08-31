@@ -22,7 +22,8 @@ public sealed class BackupService(
     ILogger<BackupService> logger,
     IBackupConfigurationStore? backupConfigurationStore = null,
     ITelegramBackupDeliveryResolver? telegramDeliveryResolver = null,
-    ITelegramBackupTransport? telegramTransport = null) : IDisposable
+    ITelegramBackupTransport? telegramTransport = null,
+    IBackupObjectStorageTransport? objectStorageTransport = null) : IDisposable
 {
     internal const string PipeCompletionFailureDataKey = "ProxyHarbor.BackupPipeCompletionFailure";
     private const string PublishedBackupPrefix = "proxyharbor-";
@@ -76,6 +77,9 @@ public sealed class BackupService(
             if (!BackupOptions.IsDirectoryValid(options.Directory))
                 throw new InvalidOperationException(
                     "Backup__Directory должен быть абсолютным безопасным путём длиной не более 1024 символов.");
+            if (options.SendToObjectStorage && !BackupOptions.IsObjectStorageConfigurationValid(options))
+                throw new InvalidOperationException(
+                    "S3-совместимое хранилище включено, но endpoint, bucket, region или ключи заполнены небезопасно.");
 
             TelegramBackupDelivery? resolvedDelivery = null;
             if (options.TelegramRecipientId.HasValue && telegramDeliveryResolver is not null)
@@ -84,7 +88,13 @@ public sealed class BackupService(
             var telegramConfigured = resolvedDelivery is not null ||
                 !string.IsNullOrWhiteSpace(options.TelegramBotToken) &&
                 !string.IsNullOrWhiteSpace(options.TelegramChatId);
-            var backupRun = new BackupRun { TelegramConfigured = telegramConfigured };
+            var objectStorageConfigured = options.SendToObjectStorage &&
+                BackupOptions.IsObjectStorageConfigurationValid(options);
+            var backupRun = new BackupRun
+            {
+                TelegramConfigured = telegramConfigured,
+                ObjectStorageConfigured = objectStorageConfigured
+            };
             await using (var auditDb = await dbFactory.CreateDbContextAsync(cancellationToken))
             {
                 // Advisory lock уже гарантирует отсутствие живого backup в кластере:
@@ -127,6 +137,19 @@ public sealed class BackupService(
                 // продолжительный внешний сбой оставлял бы новый архив на каждом цикле,
                 // никогда не удаляя старые файлы и в итоге мог исчерпать backup volume.
                 ApplyRetention(options.Directory, options.RetentionDays, options.IntervalHours);
+                var sentToObjectStorage = false;
+                string? objectStorageKey = null;
+                if (objectStorageConfigured)
+                {
+                    if (objectStorageTransport is null)
+                        throw new InvalidOperationException("S3-транспорт резервных копий недоступен.");
+                    objectStorageKey = await objectStorageTransport.UploadAndVerifyAsync(
+                        encryptedPath, options, cancellationToken);
+                    sentToObjectStorage = true;
+                    await RecordDeliveryAsync(backupRun.Id, sentToTelegram: null,
+                        sentToObjectStorage: true, objectStorageKey: objectStorageKey);
+                }
+
                 var sentToTelegram = false;
                 if (telegramConfigured)
                 {
@@ -139,9 +162,12 @@ public sealed class BackupService(
                     // Значение становится true только после подтверждения ok=true для файла
                     // либо для каждой части; частичная отправка остаётся failed в audit.
                     sentToTelegram = true;
+                    await RecordDeliveryAsync(backupRun.Id, sentToTelegram: true,
+                        sentToObjectStorage: null, objectStorageKey: null);
                 }
 
-                await CompleteAuditAsync(backupRun.Id, encryptedPath, sentToTelegram, options.HistoryRetentionDays);
+                await CompleteAuditAsync(backupRun.Id, encryptedPath, sentToTelegram,
+                    sentToObjectStorage, objectStorageKey, options.HistoryRetentionDays);
                 OperationalLogBoundary.Write(() => BackupCreated(logger, encryptedPath, null));
                 return encryptedPath;
             }
@@ -166,6 +192,8 @@ public sealed class BackupService(
         Guid id,
         string path,
         bool sentToTelegram,
+        bool sentToObjectStorage,
+        string? objectStorageKey,
         int historyRetentionDays)
     {
         using var timeout = new CancellationTokenSource(AuditWriteTimeout);
@@ -187,12 +215,36 @@ public sealed class BackupService(
             .SetProperty(x => x.FileName, file.Name)
             .SetProperty(x => x.SizeBytes, file.Length)
             .SetProperty(x => x.SentToTelegram, sentToTelegram)
+            .SetProperty(x => x.SentToObjectStorage, sentToObjectStorage)
+            .SetProperty(x => x.ObjectStorageKey, objectStorageKey)
             .SetProperty(x => x.Error, (string?)null), token);
 
         if (updated != 1)
             throw new InvalidOperationException(
                 "Backup-аудит потерял ownership своей running-строки.");
 
+    }
+
+    private async Task RecordDeliveryAsync(
+        Guid id,
+        bool? sentToTelegram,
+        bool? sentToObjectStorage,
+        string? objectStorageKey)
+    {
+        using var timeout = new CancellationTokenSource(AuditWriteTimeout);
+        await using var db = await dbFactory.CreateDbContextAsync(timeout.Token);
+        var query = db.BackupRuns.Where(x => x.Id == id && x.Status == "running");
+        int updated;
+        if (sentToObjectStorage == true)
+            updated = await query.ExecuteUpdateAsync(setters => setters
+                .SetProperty(x => x.SentToObjectStorage, true)
+                .SetProperty(x => x.ObjectStorageKey, objectStorageKey), timeout.Token);
+        else if (sentToTelegram == true)
+            updated = await query.ExecuteUpdateAsync(setters => setters
+                .SetProperty(x => x.SentToTelegram, true), timeout.Token);
+        else throw new ArgumentException("Не указан подтверждённый канал доставки.");
+        if (updated != 1)
+            throw new InvalidOperationException("Backup-аудит потерял ownership при фиксации доставки.");
     }
 
     private async Task FailAuditAsync(Guid id, string encryptedPath, Exception exception)
@@ -699,6 +751,12 @@ internal sealed record BackupSettingsSnapshot(
     int HistoryRetentionDays,
     int MaxTelegramFileSizeMb,
     bool TelegramConfigured,
+    bool SendToObjectStorage,
+    string? ObjectStorageEndpoint,
+    string ObjectStorageRegion,
+    string? ObjectStorageBucket,
+    string ObjectStoragePrefix,
+    bool ObjectStorageUsePathStyle,
     bool SecretsIncluded)
 {
     private static readonly HashSet<string> SecretOptionNames =
@@ -706,7 +764,9 @@ internal sealed record BackupSettingsSnapshot(
         nameof(BackupOptions.EncryptionKey),
         nameof(BackupOptions.TelegramBotToken),
         nameof(BackupOptions.TelegramChatId),
-        nameof(BackupOptions.TelegramRecipientId)
+        nameof(BackupOptions.TelegramRecipientId),
+        nameof(BackupOptions.ObjectStorageAccessKey),
+        nameof(BackupOptions.ObjectStorageSecretKey)
     ];
 
     internal static BackupSettingsSnapshot FromOptions(BackupOptions options, bool telegramConfigured)
@@ -721,6 +781,12 @@ internal sealed record BackupSettingsSnapshot(
             options.HistoryRetentionDays,
             options.MaxTelegramFileSizeMb,
             telegramConfigured,
+            options.SendToObjectStorage,
+            options.ObjectStorageEndpoint,
+            options.ObjectStorageRegion,
+            options.ObjectStorageBucket,
+            options.ObjectStoragePrefix,
+            options.ObjectStorageUsePathStyle,
             SecretsIncluded: false);
     }
 

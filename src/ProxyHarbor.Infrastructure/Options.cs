@@ -154,6 +154,57 @@ public sealed class BackupOptions
     public Guid? TelegramRecipientId { get; set; }
     /// <summary>Максимальный размер одного Telegram document перед разбиением.</summary>
     public int MaxTelegramFileSizeMb { get; set; } = 49;
+    /// <summary>Дублировать опубликованный PHB3-архив в S3-совместимое объектное хранилище.</summary>
+    public bool SendToObjectStorage { get; set; }
+    /// <summary>HTTPS endpoint российского или иного S3-совместимого провайдера.</summary>
+    public string? ObjectStorageEndpoint { get; set; }
+    /// <summary>Регион, используемый при подписи AWS Signature V4.</summary>
+    public string ObjectStorageRegion { get; set; } = "ru-central1";
+    /// <summary>Имя заранее созданного непубличного bucket.</summary>
+    public string? ObjectStorageBucket { get; set; }
+    /// <summary>Безопасный префикс ключей внутри bucket.</summary>
+    public string ObjectStoragePrefix { get; set; } = "proxyharbor/backups";
+    /// <summary>S3 access key; хранится только в защищённой server-side конфигурации.</summary>
+    public string? ObjectStorageAccessKey { get; set; }
+    /// <summary>S3 secret key; хранится только в защищённой server-side конфигурации.</summary>
+    public string? ObjectStorageSecretKey { get; set; }
+    /// <summary>Использовать path-style URL для провайдеров, не поддерживающих virtual-hosted style.</summary>
+    public bool ObjectStorageUsePathStyle { get; set; } = true;
+
+    /// <summary>Проверяет полноту и безопасные границы S3-совместимой конфигурации.</summary>
+    public static bool IsObjectStorageConfigurationValid(BackupOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        return Uri.TryCreate(options.ObjectStorageEndpoint, UriKind.Absolute, out var endpoint) &&
+            endpoint.Scheme == Uri.UriSchemeHttps && string.IsNullOrEmpty(endpoint.UserInfo) &&
+            string.IsNullOrEmpty(endpoint.Query) && string.IsNullOrEmpty(endpoint.Fragment) &&
+            endpoint.AbsolutePath is "" or "/" && !string.IsNullOrWhiteSpace(endpoint.Host) &&
+            options.ObjectStorageRegion is { Length: >= 1 and <= 100 } &&
+            options.ObjectStorageRegion.All(IsSafeObjectStorageCharacter) &&
+            IsObjectStorageBucketValid(options.ObjectStorageBucket) &&
+            options.ObjectStoragePrefix is { Length: <= 512 } &&
+            IsSafeObjectStoragePrefix(options.ObjectStoragePrefix) &&
+            options.ObjectStorageAccessKey is { Length: >= 3 and <= 256 } &&
+            options.ObjectStorageAccessKey.All(character => character is >= '!' and <= '~') &&
+            options.ObjectStorageSecretKey is { Length: >= 8 and <= 1024 } &&
+            options.ObjectStorageSecretKey.All(character => !char.IsControl(character) && !char.IsSurrogate(character));
+    }
+
+    private static bool IsSafeObjectStorageCharacter(char character) =>
+        char.IsAsciiLetterOrDigit(character) || character is '-' or '_';
+
+    private static bool IsObjectStorageBucketValid(string? bucket) =>
+        bucket is { Length: >= 3 and <= 63 } &&
+        char.IsAsciiLetterOrDigit(bucket[0]) && char.IsAsciiLetterOrDigit(bucket[^1]) &&
+        bucket.All(character => char.IsAsciiLetterLower(character) || char.IsAsciiDigit(character) || character is '-' or '.') &&
+        !bucket.Contains("..", StringComparison.Ordinal) &&
+        !System.Net.IPAddress.TryParse(bucket, out _);
+
+    private static bool IsSafeObjectStoragePrefix(string prefix) =>
+        !prefix.StartsWith('/') && !prefix.Contains('\\') &&
+        prefix.Split('/', StringSplitOptions.RemoveEmptyEntries).All(segment =>
+            segment is not "." and not ".." && segment.All(character =>
+                char.IsAsciiLetterOrDigit(character) || character is '-' or '_' or '.'));
 
     /// <summary>Проверяет bounded path-safe ASCII token без недокументированных предположений о его структуре.</summary>
     public static bool IsTelegramBotTokenValid(string? token)

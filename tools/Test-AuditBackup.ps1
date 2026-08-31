@@ -10,7 +10,7 @@ function Get-FreeTcpPort {
 
 function Start-BackupAuditMock(
     [int]$Port,
-    [ValidateSet('telegram', 'local', 'mismatch', 'http-failure')][string]$Mode,
+    [ValidateSet('telegram', 'object-storage', 'local', 'mismatch', 'http-failure')][string]$Mode,
     [int]$ExpectedRequests) {
     Start-Job -ArgumentList $Port, $Mode, $ExpectedRequests -ScriptBlock {
         param($Port, $Mode, $ExpectedRequests)
@@ -32,20 +32,26 @@ function Start-BackupAuditMock(
                 } elseif ($context.Request.HttpMethod -eq 'POST' -and
                     $context.Request.Url.AbsolutePath -eq '/api/v1/admin/backup') {
                     $handled++
-                    $sent = $Mode -ne 'local'
+                    $sent = $Mode -in @('telegram', 'mismatch')
                     $json = '{"created":"proxyharbor-20260810-120000-0001.phbackup","sentToTelegram":' +
                         $sent.ToString().ToLowerInvariant() + '}'
                 } else {
                     $handled++
-                    $configured = $Mode -ne 'local'
+                    $configured = $Mode -in @('telegram', 'mismatch')
                     $persistedSent = $Mode -eq 'telegram'
+                    $objectConfigured = $Mode -eq 'object-storage'
+                    $objectSent = $Mode -eq 'object-storage'
+                    $objectKey = if ($objectSent) { 'production/backups/proxyharbor-20260810-120000-0001.phbackup' } else { $null }
                     $startedAt = [DateTimeOffset]::UtcNow.AddSeconds(-2).ToString('O')
                     $finishedAt = [DateTimeOffset]::UtcNow.ToString('O')
                     $json = '{"recentBackups":[{"startedAt":"' + $startedAt + '",' +
                         '"finishedAt":"' + $finishedAt + '","status":"completed",' +
                         '"fileName":"proxyharbor-20260810-120000-0001.phbackup","sizeBytes":4096,' +
                         '"telegramConfigured":' + $configured.ToString().ToLowerInvariant() +
-                        ',"sentToTelegram":' + $persistedSent.ToString().ToLowerInvariant() + '}]}'
+                        ',"sentToTelegram":' + $persistedSent.ToString().ToLowerInvariant() +
+                        ',"objectStorageConfigured":' + $objectConfigured.ToString().ToLowerInvariant() +
+                        ',"sentToObjectStorage":' + $objectSent.ToString().ToLowerInvariant() +
+                        ',"objectStorageKey":' + $(if ($objectKey) { '"' + $objectKey + '"' } else { 'null' }) + '}]}'
                 }
                 $bytes = [Text.Encoding]::UTF8.GetBytes($json)
                 $context.Response.ContentType = 'application/json'
@@ -77,7 +83,7 @@ function Invoke-BackupAuditCase(
     [bool]$ShouldSucceed,
     [switch]$AllowLocalOnly) {
     $port = Get-FreeTcpPort
-    $expectedRequests = if ($Mode -eq 'http-failure' -or $Name -eq 'required') { 1 } else { 2 }
+    $expectedRequests = if ($Mode -eq 'http-failure') { 1 } else { 2 }
     $job = Start-BackupAuditMock -Port $port -Mode $Mode -ExpectedRequests $expectedRequests
     $reportPath = Join-Path $fixtureRoot "$Name.json"
     try {
@@ -114,6 +120,7 @@ function Invoke-BackupAuditCase(
 try {
     [IO.Directory]::CreateDirectory($fixtureRoot) | Out-Null
     $telegram = Invoke-BackupAuditCase -Name telegram -Mode telegram -ShouldSucceed $true
+    $objectStorage = Invoke-BackupAuditCase -Name object-storage -Mode object-storage -ShouldSucceed $true
     $local = Invoke-BackupAuditCase -Name local -Mode local -ShouldSucceed $true -AllowLocalOnly
     $required = Invoke-BackupAuditCase -Name required -Mode local -ShouldSucceed $false
     $mismatch = Invoke-BackupAuditCase -Name mismatch -Mode mismatch -ShouldSucceed $false
@@ -121,8 +128,11 @@ try {
     if (-not $telegram.sentToTelegram -or $telegram.sizeBytes -ne 4096) {
         throw 'Telegram success contract потерял delivery/size evidence.'
     }
-    if ($local.sentToTelegram -or $local.telegramRequired) {
-        throw 'Local-only contract не отразил явное ослабление требования Telegram.'
+    if (-not $objectStorage.sentToObjectStorage -or -not $objectStorage.objectStorageKey) {
+        throw 'S3 success contract потерял delivery/key evidence.'
+    }
+    if ($local.sentToTelegram -or $local.sentToObjectStorage -or $local.externalDeliveryRequired) {
+        throw 'Local-only contract не отразил явное ослабление требования внешней доставки.'
     }
     if ($required.error -notmatch 'Telegram' -or $mismatch.error -notmatch 'persisted' -or
         $failure.error -notmatch '500') {
@@ -135,7 +145,7 @@ try {
             throw "$workflowPath не запускает Test-AuditBackup.ps1."
         }
     }
-    Write-Host 'Backup-audit contracts пройдены: Telegram/local success, secret-free reports, CI/release wiring и rejection missing delivery, audit mismatch, HTTP failure.' -ForegroundColor Green
+    Write-Host 'Backup-audit contracts пройдены: Telegram/S3/local success, secret-free reports, CI/release wiring и rejection missing delivery, audit mismatch, HTTP failure.' -ForegroundColor Green
 }
 finally {
     if ([IO.Directory]::Exists($fixtureRoot)) {
