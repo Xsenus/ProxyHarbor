@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Net;
 using System.Text;
 
 namespace ProxyHarbor.Infrastructure;
@@ -52,6 +53,19 @@ public sealed class CollectorOptions
     public int ProbePort { get; set; } = 443;
     /// <summary>Канонический HTTP origin-form path/query контрольного endpoint.</summary>
     public string ProbePath { get; set; } = "/?format=json";
+    /// <summary>
+    /// Независимые HTTPS endpoint'ы, используемые по порядку при недоступности основного.
+    /// Ответ может быть JSON-объектом с полем ip, единственным IP или Cloudflare trace.
+    /// </summary>
+    public string[] ProbeFallbackUrls { get; set; } = [];
+
+    /// <summary>Изолированный массив рекомендуемых независимых fallback-сервисов.</summary>
+    public static string[] CreateDefaultProbeFallbackUrls() =>
+    [
+        "https://api64.ipify.org/?format=json",
+        "https://ifconfig.co/json",
+        "https://www.cloudflare.com/cdn-cgi/trace"
+    ];
 
     /// <summary>Control host передаётся URI, TLS SNI и сырому HTTP Host одинаковыми ASCII bytes.</summary>
     public static bool IsProbeHostValid(string? host)
@@ -82,7 +96,29 @@ public sealed class CollectorOptions
                 path,
                 StringComparison.Ordinal);
     }
+
+    /// <summary>Разбирает только публичный HTTPS endpoint без credentials/fragment.</summary>
+    public static bool TryParseProbeUrl(string? value, out ProbeControlEndpoint endpoint)
+    {
+        endpoint = default!;
+        if (string.IsNullOrWhiteSpace(value) || value.Length > 2_304 ||
+            !Uri.TryCreate(value, UriKind.Absolute, out var uri) ||
+            !string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.Ordinal) ||
+            !string.IsNullOrEmpty(uri.UserInfo) || !string.IsNullOrEmpty(uri.Fragment) ||
+            uri.Port is < 1 or > 65_535 || !IsProbeHostValid(uri.Host) ||
+            (IPAddress.TryParse(uri.Host, out var address) && !NetworkSafety.IsPublicAddress(address)))
+            return false;
+
+        var path = uri.GetComponents(UriComponents.PathAndQuery, UriFormat.UriEscaped);
+        if (string.IsNullOrEmpty(path)) path = "/";
+        if (!IsProbePathValid(path)) return false;
+        endpoint = new ProbeControlEndpoint(uri.Host, uri.Port, path);
+        return true;
+    }
 }
+
+/// <summary>Проверенный HTTPS-адрес контрольной пробы.</summary>
+public sealed record ProbeControlEndpoint(string Host, int Port, string Path);
 
 /// <summary>Параметры шифрованного резервного копирования.</summary>
 public sealed class BackupOptions

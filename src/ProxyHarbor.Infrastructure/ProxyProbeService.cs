@@ -37,7 +37,7 @@ public sealed class ProxyProbeService(IOptions<CollectorOptions> options, Origin
     public async Task<ProxyCheckResult> CheckAsync(ProxyEndpoint proxy, CancellationToken cancellationToken)
     {
         // Origin IP нужен только для признака анонимности и не расходует timeout самого proxy-туннеля.
-        var originIp = await originIpProvider.GetRequiredAsync(cancellationToken);
+        var control = await originIpProvider.GetRequiredTargetAsync(cancellationToken);
         var timer = Stopwatch.StartNew();
         try
         {
@@ -45,7 +45,7 @@ public sealed class ProxyProbeService(IOptions<CollectorOptions> options, Origin
             timeout.CancelAfter(TimeSpan.FromSeconds(options.Value.ProbeTimeoutSeconds));
 
             if (proxy.Protocol == ProxyProtocol.Socks4 &&
-                IPAddress.TryParse(options.Value.ProbeHost, out var controlAddress) &&
+                IPAddress.TryParse(control.Host, out var controlAddress) &&
                 controlAddress.AddressFamily == AddressFamily.InterNetworkV6)
                 throw new ProxyTargetUnsupportedException(
                     "SOCKS4/SOCKS4a не поддерживает IPv6 literal назначения.");
@@ -58,15 +58,15 @@ public sealed class ProxyProbeService(IOptions<CollectorOptions> options, Origin
                 case ProxyProtocol.Http:
                 case ProxyProtocol.Https:
                     await ProxyTunnelProtocol.EstablishHttpConnectAsync(
-                        stream, options.Value.ProbeHost, options.Value.ProbePort, timeout.Token);
+                        stream, control.Host, control.Port, timeout.Token);
                     break;
                 case ProxyProtocol.Socks4:
                     await ProxyTunnelProtocol.EstablishSocks4aAsync(
-                        stream, options.Value.ProbeHost, options.Value.ProbePort, timeout.Token);
+                        stream, control.Host, control.Port, timeout.Token);
                     break;
                 case ProxyProtocol.Socks5:
                     await ProxyTunnelProtocol.EstablishSocks5Async(
-                        stream, options.Value.ProbeHost, options.Value.ProbePort, timeout.Token);
+                        stream, control.Host, control.Port, timeout.Token);
                     break;
             }
 
@@ -78,13 +78,13 @@ public sealed class ProxyProbeService(IOptions<CollectorOptions> options, Origin
                 : new SslStream(stream, leaveInnerStreamOpen: false, _certificateValidationCallback);
             await tls.AuthenticateAsClientAsync(new SslClientAuthenticationOptions
             {
-                TargetHost = options.Value.ProbeHost,
+                TargetHost = control.Host,
                 EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
                 CertificateRevocationCheckMode = System.Security.Cryptography.X509Certificates.X509RevocationMode.NoCheck
             }, timeout.Token);
-            var probeHost = options.Value.ProbeHost.Contains(':') ? $"[{options.Value.ProbeHost}]" : options.Value.ProbeHost;
-            var probeAuthority = options.Value.ProbePort == 443 ? probeHost : $"{probeHost}:{options.Value.ProbePort}";
-            var request = $"GET {options.Value.ProbePath} HTTP/1.1\r\nHost: {probeAuthority}\r\nUser-Agent: ProxyHarbor/1.0\r\nConnection: close\r\n\r\n";
+            var probeHost = control.Host.Contains(':') ? $"[{control.Host}]" : control.Host;
+            var probeAuthority = control.Port == 443 ? probeHost : $"{probeHost}:{control.Port}";
+            var request = $"GET {control.Path} HTTP/1.1\r\nHost: {probeAuthority}\r\nUser-Agent: ProxyHarbor/1.0\r\nConnection: close\r\n\r\n";
             await tls.WriteAsync(Encoding.ASCII.GetBytes(request), timeout.Token);
             await tls.FlushAsync(timeout.Token);
 
@@ -95,7 +95,7 @@ public sealed class ProxyProbeService(IOptions<CollectorOptions> options, Origin
 
             timer.Stop();
             return new ProxyCheckResult(proxy.Id, true, checked((int)timer.ElapsedMilliseconds), exitIp,
-                !string.Equals(originIp, exitIp, StringComparison.OrdinalIgnoreCase), null);
+                !string.Equals(control.OriginIp, exitIp, StringComparison.OrdinalIgnoreCase), null);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (ProbeControlResponseException exception)
@@ -128,14 +128,20 @@ public sealed class OriginIpProvider(
     ProbeControlHealth health) : IDisposable
 {
     private const int MaxDirectResponseBytes = 16 * 1024;
-    private static readonly UTF8Encoding StrictUtf8 = new(false, true);
     private readonly SemaphoreSlim _gate = new(1, 1);
     // Immutable reference публикует value+expiry одним атомарным snapshot. Отдельные
     // поля оставляли бы 16-байтовый DateTimeOffset под torn read у сотен probe-задач.
     private CacheEntry _cache = CacheEntry.Empty;
 
     /// <summary>Возвращает свежий канонический origin IP или сигнализирует нейтральный Deferred.</summary>
-    public async Task<string> GetRequiredAsync(CancellationToken token)
+    public async Task<string> GetRequiredAsync(CancellationToken token) =>
+        (await GetRequiredTargetAsync(token)).OriginIp;
+
+    /// <summary>
+    /// Возвращает один согласованный снимок endpoint+origin IP. Поэтому прямая и
+    /// проксированная пробы всегда обращаются к одному и тому же доступному сервису.
+    /// </summary>
+    public async Task<ResolvedProbeControl> GetRequiredTargetAsync(CancellationToken token)
     {
         var snapshot = Volatile.Read(ref _cache);
         if (snapshot.ExpiresAt > DateTimeOffset.UtcNow)
@@ -146,54 +152,65 @@ public sealed class OriginIpProvider(
             snapshot = Volatile.Read(ref _cache);
             if (snapshot.ExpiresAt > DateTimeOffset.UtcNow)
                 return snapshot.Value ?? throw new ProbeControlUnavailableException();
-            try
+            var settings = options.Value;
+            foreach (var endpoint in ConfiguredEndpoints(settings))
             {
-                var settings = options.Value;
-                var queryIndex = settings.ProbePath.IndexOf('?');
-                var path = queryIndex < 0 ? settings.ProbePath : settings.ProbePath[..queryIndex];
-                var query = queryIndex < 0 ? string.Empty : settings.ProbePath[(queryIndex + 1)..];
-                var builder = new UriBuilder(Uri.UriSchemeHttps, settings.ProbeHost, settings.ProbePort, path)
+                try
                 {
-                    Query = query
-                };
-                var client = clients.CreateClient("origin");
-                using var response = await client.GetAsync(builder.Uri, HttpCompletionOption.ResponseHeadersRead, token);
-                response.EnsureSuccessStatusCode();
-                var jsonUtf8 = await ReadDirectResponseAsync(response.Content, token);
-                // Строки JSON декодируются лениво, поэтому валидируем весь body до DOM.
-                // Повреждённая кодировка не превращается в допустимый U+FFFD.
-                _ = StrictUtf8.GetCharCount(jsonUtf8.Span);
-                using var document = JsonDocument.Parse(jsonUtf8);
-                var value = document.RootElement.ValueKind == JsonValueKind.Object &&
-                    document.RootElement.TryGetProperty("ip", out var ipElement) &&
-                    ipElement.ValueKind == JsonValueKind.String
-                    ? ipElement.GetString()
-                    : null;
-                var publicValue = IPAddress.TryParse(value, out var address) && NetworkSafety.IsPublicAddress(address)
-                    ? address.ToString()
-                    : null;
-                snapshot = new CacheEntry(
-                    publicValue,
-                    DateTimeOffset.UtcNow.AddSeconds(publicValue is null ? 15 : 60));
-                Volatile.Write(ref _cache, snapshot);
-                health.Record(publicValue is not null);
+                    using var attempt = CancellationTokenSource.CreateLinkedTokenSource(token);
+                    attempt.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(settings.ProbeTimeoutSeconds, 2, 10)));
+                    var client = clients.CreateClient("origin");
+                    using var response = await client.GetAsync(
+                        BuildUri(endpoint), HttpCompletionOption.ResponseHeadersRead, attempt.Token);
+                    response.EnsureSuccessStatusCode();
+                    var body = await ReadDirectResponseAsync(response.Content, attempt.Token);
+                    var publicValue = ProxyOriginResponse.ParsePublicIpBody(body);
+                    var resolved = new ResolvedProbeControl(endpoint.Host, endpoint.Port, endpoint.Path, publicValue);
+                    snapshot = new CacheEntry(resolved, DateTimeOffset.UtcNow.AddSeconds(60));
+                    Volatile.Write(ref _cache, snapshot);
+                    health.Record(available: true);
+                    return resolved;
+                }
+                catch (OperationCanceledException) when (token.IsCancellationRequested)
+                {
+                    // Остановка worker/API не является отказом endpoint и не должна
+                    // отравлять отрицательный cache для следующего запуска.
+                    throw;
+                }
+                catch (Exception ex) when (ex is HttpRequestException or IOException or InvalidDataException or
+                    JsonException or DecoderFallbackException or TaskCanceledException)
+                {
+                    // Следующий независимый endpoint может оставаться доступным.
+                }
             }
-            catch (OperationCanceledException) when (token.IsCancellationRequested)
-            {
-                // Остановка worker/API не является отказом внешнего endpoint и не должна
-                // отравлять короткий отрицательный cache для следующего запуска.
-                throw;
-            }
-            catch (Exception ex) when (ex is HttpRequestException or IOException or InvalidDataException or
-                JsonException or DecoderFallbackException or TaskCanceledException)
-            {
-                snapshot = new CacheEntry(null, DateTimeOffset.UtcNow.AddSeconds(15));
-                Volatile.Write(ref _cache, snapshot);
-                health.Record(available: false);
-            }
-            return snapshot.Value ?? throw new ProbeControlUnavailableException();
+            snapshot = new CacheEntry(null, DateTimeOffset.UtcNow.AddSeconds(15));
+            Volatile.Write(ref _cache, snapshot);
+            health.Record(available: false);
+            throw new ProbeControlUnavailableException();
         }
         finally { _gate.Release(); }
+    }
+
+    private static IEnumerable<ProbeControlEndpoint> ConfiguredEndpoints(CollectorOptions settings)
+    {
+        yield return new ProbeControlEndpoint(settings.ProbeHost, settings.ProbePort, settings.ProbePath);
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            $"{settings.ProbeHost}:{settings.ProbePort}{settings.ProbePath}"
+        };
+        foreach (var value in settings.ProbeFallbackUrls ?? [])
+        {
+            if (!CollectorOptions.TryParseProbeUrl(value, out var endpoint)) continue;
+            if (seen.Add($"{endpoint.Host}:{endpoint.Port}{endpoint.Path}")) yield return endpoint;
+        }
+    }
+
+    private static Uri BuildUri(ProbeControlEndpoint endpoint)
+    {
+        var queryIndex = endpoint.Path.IndexOf('?');
+        var path = queryIndex < 0 ? endpoint.Path : endpoint.Path[..queryIndex];
+        var query = queryIndex < 0 ? string.Empty : endpoint.Path[(queryIndex + 1)..];
+        return new UriBuilder(Uri.UriSchemeHttps, endpoint.Host, endpoint.Port, path) { Query = query }.Uri;
     }
 
     private static async Task<ReadOnlyMemory<byte>> ReadDirectResponseAsync(
@@ -220,11 +237,14 @@ public sealed class OriginIpProvider(
     /// <inheritdoc />
     public void Dispose() => _gate.Dispose();
 
-    private sealed record CacheEntry(string? Value, DateTimeOffset ExpiresAt)
+    private sealed record CacheEntry(ResolvedProbeControl? Value, DateTimeOffset ExpiresAt)
     {
         internal static CacheEntry Empty { get; } = new(null, DateTimeOffset.MinValue);
     }
 }
+
+/// <summary>Доступный endpoint и IP прямого подключения, проверенные одним запросом.</summary>
+public sealed record ResolvedProbeControl(string Host, int Port, string Path, string OriginIp);
 
 /// <summary>Control endpoint недоступен напрямую, поэтому пакет нельзя объективно проверять.</summary>
 internal sealed class ProbeControlUnavailableException()

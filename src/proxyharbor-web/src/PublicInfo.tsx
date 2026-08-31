@@ -8,7 +8,6 @@ import {
   Phone,
   ShieldCheck,
 } from "lucide-react";
-import { useEffect } from "react";
 import { PublicPricingSection } from "./PublicPricingSection";
 import type { PublicInfoKind } from "./publicInfoRoutes";
 
@@ -66,9 +65,6 @@ export function PublicInfoPage({
   kind: PublicInfoKind;
   apiBaseUrl: string;
 }) {
-  useEffect(() => {
-    document.title = `${titles[kind]} — ProxyHarbor`;
-  }, [kind]);
   return (
     <div className="public-info-shell">
       <header>

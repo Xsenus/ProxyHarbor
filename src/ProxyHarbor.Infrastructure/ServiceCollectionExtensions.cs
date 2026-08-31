@@ -46,6 +46,9 @@ public static class ServiceCollectionExtensions
                 "ProbeHost не может быть локальным, private или служебным IP")
             .Validate(x => CollectorOptions.IsProbePathValid(x.ProbePath),
                 "ProbePath должен быть каноническим printable ASCII origin-form без fragment, пробелов или network-path")
+            .Validate(x => x.ProbeFallbackUrls is { Length: <= 8 } &&
+                x.ProbeFallbackUrls.All(url => CollectorOptions.TryParseProbeUrl(url, out _)),
+                "ProbeFallbackUrls: не более 8 публичных HTTPS URL без credentials/fragment")
             .ValidateOnStart();
         services.AddOptions<BackupOptions>().Bind(configuration.GetSection(BackupOptions.Section))
             .Validate(x => x.IntervalHours is >= 1 and <= 8_760, "IntervalHours: 1..8760")

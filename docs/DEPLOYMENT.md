@@ -64,6 +64,14 @@ docker compose -f docker-compose.yml -f docker-compose.production.yml logs --tai
 
 По умолчанию Caddy должен быть непосредственной публичной точкой входа. `docker-compose.production.yml` передаёт `PUBLIC_HOST` одновременно Caddy и API `AllowedHosts`, разрешает `127.0.0.1` исключительно для внутреннего healthcheck frontend-контейнера и Docker DNS-имя `api` для прямого scrape из Prometheus; API остаётся доступен только внутри backend network. Production startup отклоняет пустой allowlist и `*`, а неизвестный Host получает 400. Container healthcheck Caddy обращается к некэшируемому `/health/ready` через внутренний HTTPS-порт с тем же SNI/Host. Readiness выполняет zero-row проверку пяти operational tables и актуальных колонок, поэтому Docker видит полный работоспособный маршрут TLS → gateway → API → совместимая PostgreSQL-схема, а не только живой процесс или открытый socket. При добавлении CDN/load balancer настройте доверенные proxy ranges одновременно в Caddy и API; иначе rate limiting будет видеть адрес промежуточного узла. Никогда не доверяйте произвольному `X-Forwarded-For` из интернета.
 
+Если 80/443 уже обслуживает системный Nginx на shared-хосте, используйте
+`deploy/nginx/proxyharbor.conf`: он публикует только loopback-порты 18080/18081,
+не доверяет входящему `X-Forwarded-For`, скрывает версию gateway и добавляет
+per-IP connection/request limits с отдельными зонами только для ProxyHarbor.
+Перед заменой обязательно сохраните текущий vhost, выполните `nginx -t` и только
+после успешной проверки сделайте reload; не применяйте этот файл к другому домену
+без замены hostname и путей сертификата.
+
 ## Встроенный мониторинг
 
 Opt-in профиль запускает Prometheus с 30-дневным/10-ГБ bounded retention и Alertmanager с Telegram-маршрутом. До запуска задайте bot token и числовой chat ID (для group/channel обычно отрицательный):

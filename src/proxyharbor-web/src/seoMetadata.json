@@ -1,0 +1,79 @@
+{
+  "siteUrl": "https://proxy.blagodaty.ru",
+  "siteName": "ProxyHarbor",
+  "locale": "ru_RU",
+  "pages": {
+    "/": {
+      "title": "Проверенные прокси и VPN — ProxyHarbor",
+      "description": "ProxyHarbor — каталог публичных прокси и VPN-конфигураций с регулярной проверкой доступности, задержки и страны выхода.",
+      "changeFrequency": "hourly",
+      "priority": 1
+    },
+    "/pricing": {
+      "title": "Тарифы на доступ к прокси и VPN — ProxyHarbor",
+      "description": "Сроки, окончательные цены и состав подписки ProxyHarbor. Разовая оплата без автоматического продления.",
+      "changeFrequency": "weekly",
+      "priority": 0.9
+    },
+    "/service": {
+      "title": "Как работает сервис ProxyHarbor",
+      "description": "Описание цифровой услуги ProxyHarbor: проверка публичных узлов, оформление подписки, получение доступа и поддержка.",
+      "changeFrequency": "monthly",
+      "priority": 0.8
+    },
+    "/legal": {
+      "title": "Правовые документы — ProxyHarbor",
+      "description": "Оферта, политика обработки персональных данных, согласия, правила использования, возвраты и реквизиты ProxyHarbor.",
+      "changeFrequency": "monthly",
+      "priority": 0.7
+    },
+    "/offer": {
+      "title": "Публичная оферта — ProxyHarbor",
+      "description": "Условия приобретения и использования цифровой подписки ProxyHarbor, порядок оплаты, исполнения, отказа и возврата.",
+      "changeFrequency": "monthly",
+      "priority": 0.6
+    },
+    "/privacy": {
+      "title": "Политика обработки персональных данных — ProxyHarbor",
+      "description": "Сведения об операторе, целях, составе, сроках и защите персональных данных пользователей ProxyHarbor.",
+      "changeFrequency": "monthly",
+      "priority": 0.6
+    },
+    "/personal-data-consent": {
+      "title": "Согласие на обработку персональных данных — ProxyHarbor",
+      "description": "Текст отдельного согласия пользователя на обработку персональных данных сервисом ProxyHarbor.",
+      "changeFrequency": "monthly",
+      "priority": 0.5
+    },
+    "/marketing-consent": {
+      "title": "Согласие на информационные сообщения — ProxyHarbor",
+      "description": "Условия добровольного согласия на информационные и рекламные сообщения и порядок его отзыва.",
+      "changeFrequency": "monthly",
+      "priority": 0.4
+    },
+    "/acceptable-use": {
+      "title": "Правила допустимого использования — ProxyHarbor",
+      "description": "Обязательные правила законного использования ProxyHarbor, ограничения и порядок прекращения доступа при нарушениях.",
+      "changeFrequency": "monthly",
+      "priority": 0.6
+    },
+    "/cookies": {
+      "title": "Политика cookies — ProxyHarbor",
+      "description": "Необходимые cookies ProxyHarbor, необязательная статистика и способ изменить выбор конфиденциальности.",
+      "changeFrequency": "monthly",
+      "priority": 0.5
+    },
+    "/refunds": {
+      "title": "Отмена подписки и возврат — ProxyHarbor",
+      "description": "Порядок отказа от цифровой услуги ProxyHarbor, подачи заявления, рассмотрения требования и возврата средств.",
+      "changeFrequency": "monthly",
+      "priority": 0.6
+    },
+    "/requisites": {
+      "title": "Контакты и реквизиты — ProxyHarbor",
+      "description": "Контактные данные, сведения об исполнителе, налоговый статус и банковские реквизиты сервиса ProxyHarbor.",
+      "changeFrequency": "monthly",
+      "priority": 0.6
+    }
+  }
+}
