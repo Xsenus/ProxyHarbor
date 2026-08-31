@@ -6,12 +6,16 @@ using System.Text.Json.Serialization;
 namespace ProxyHarbor.Infrastructure;
 
 /// <summary>Надёжно отправляет один backup-документ в Telegram с обработкой 429 и временных 5xx.</summary>
-internal static class TelegramBackupSender
+public static class TelegramBackupSender
 {
     private const int MaxAttempts = 3;
     private const int MaxResponseBytes = 64 * 1024;
 
-    internal static async Task SendAsync(
+    /// <summary>
+    /// Потоково отправляет файл и ограниченно повторяет временные transport/API ошибки,
+    /// каждый раз создавая новый multipart и файловый поток.
+    /// </summary>
+    public static async Task SendAsync(
         HttpClient client,
         string path,
         string caption,

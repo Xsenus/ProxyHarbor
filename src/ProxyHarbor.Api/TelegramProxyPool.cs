@@ -116,14 +116,23 @@ public sealed class TelegramProxyHttpClientPool : IDisposable
 {
     private const int MaximumClients = 32;
     private static readonly TimeSpan IdleLifetime = TimeSpan.FromMinutes(15);
+    private static readonly TimeSpan DefaultRequestTimeout = TimeSpan.FromSeconds(45);
     private readonly Lock sync = new();
     private readonly Dictionary<ProxyClientKey, PoolEntry> entries = [];
     private bool disposed;
 
-    internal ClientLease Acquire(TelegramProxyOptions proxy)
+    internal ClientLease Acquire(TelegramProxyOptions proxy) =>
+        Acquire(proxy, DefaultRequestTimeout);
+
+    /// <summary>
+    /// Выдаёт отдельный пул соединений для операций с иным deadline. Большие backup-
+    /// документы не наследуют короткий timeout интерактивных сообщений и polling.
+    /// </summary>
+    internal ClientLease Acquire(TelegramProxyOptions proxy, TimeSpan requestTimeout)
     {
         ArgumentNullException.ThrowIfNull(proxy);
-        var key = ProxyClientKey.Create(proxy);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(requestTimeout, TimeSpan.Zero);
+        var key = ProxyClientKey.Create(proxy, requestTimeout);
         var now = DateTimeOffset.UtcNow;
         lock (sync)
         {
@@ -145,7 +154,7 @@ public sealed class TelegramProxyHttpClientPool : IDisposable
                 Retire(oldest.Value);
             }
 
-            var client = CreateClient(proxy);
+            var client = CreateClient(proxy, requestTimeout);
             var created = new PoolEntry(client, now) { ActiveLeases = 1 };
             entries.Add(key, created);
             return new ClientLease(this, created);
@@ -195,7 +204,7 @@ public sealed class TelegramProxyHttpClientPool : IDisposable
         if (entry.ActiveLeases == 0) entry.Client.Dispose();
     }
 
-    private static HttpClient CreateClient(TelegramProxyOptions proxy)
+    private static HttpClient CreateClient(TelegramProxyOptions proxy, TimeSpan requestTimeout)
     {
         // UriBuilder корректно заключает IPv6 host в скобки; строковая склейка
         // превращала валидный каталожный IPv6 SOCKS5 в неоднозначный URI.
@@ -216,7 +225,7 @@ public sealed class TelegramProxyHttpClientPool : IDisposable
         };
         // getUpdates использует long polling до 30 секунд. Клиентский timeout обязан
         // быть больше server-side timeout, иначе спокойный чат выглядит как авария сети.
-        return new HttpClient(handler, disposeHandler: true) { Timeout = TimeSpan.FromSeconds(45) };
+        return new HttpClient(handler, disposeHandler: true) { Timeout = requestTimeout };
     }
 
     internal sealed class PoolEntry(HttpClient client, DateTimeOffset lastUsedAt)
@@ -236,16 +245,16 @@ public sealed class TelegramProxyHttpClientPool : IDisposable
     }
 
     private readonly record struct ProxyClientKey(
-        string Host, int Port, string Username, string PasswordFingerprint)
+        string Host, int Port, string Username, string PasswordFingerprint, long RequestTimeoutTicks)
     {
-        internal static ProxyClientKey Create(TelegramProxyOptions proxy)
+        internal static ProxyClientKey Create(TelegramProxyOptions proxy, TimeSpan requestTimeout)
         {
             var passwordBytes = Encoding.UTF8.GetBytes(proxy.Password);
             try
             {
                 return new ProxyClientKey(
                     proxy.Host.ToLowerInvariant(), proxy.Port, proxy.Username,
-                    Convert.ToHexString(SHA256.HashData(passwordBytes)));
+                    Convert.ToHexString(SHA256.HashData(passwordBytes)), requestTimeout.Ticks);
             }
             finally
             {

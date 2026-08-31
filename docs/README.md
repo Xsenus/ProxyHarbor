@@ -23,6 +23,8 @@
 | [MONITORING.md](MONITORING.md) | Метрики, alarms и incident response |
 | [PERFORMANCE.md](PERFORMANCE.md) | Нагрузочная модель, измерения и tuning |
 | [DISTRIBUTED_CHECKERS.md](DISTRIBUTED_CHECKERS.md) | Подключение VPS, leases, failover и безопасная эксплуатация checker-агентов |
+| [RU_LEGAL_COMPLIANCE.md](RU_LEGAL_COMPLIANCE.md) | Техническая реализация и внешние обязательные действия для работы в РФ |
+| [RU_HOSTING_AND_PUBLICATION.md](RU_HOSTING_AND_PUBLICATION.md) | Российское размещение, DDoS/WAF, миграция и регистрация в поисковых системах |
 
 ## Разработчику и сопровождающему
 

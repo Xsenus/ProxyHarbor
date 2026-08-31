@@ -84,6 +84,9 @@ jobs:
       - name: Verify public API performance-audit contracts
         shell: pwsh
         run: ./tools/Test-AuditPublicApiPerformance.ps1
+      - name: Verify public launch-audit contracts
+        shell: pwsh
+        run: ./tools/Test-AuditPublicLaunch.ps1
       - name: Verify release metadata contracts
         shell: pwsh
         run: ./tools/Test-ReleaseMetadata.ps1

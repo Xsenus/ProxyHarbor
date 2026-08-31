@@ -12,7 +12,7 @@ ProxyHarbor загружает 310 HTTPS-feed от 80 независимых п�
 - Все 310 proxy-feed и 149 VPN-feed прошли URL/live-аудит 28 августа 2026 года; полный proxy end-to-end аудит выполняется CI и перед production-релизом.
 - Последний полный production-цикл: 888 116 разобранных строк, 290 217 уникальных кандидатов за 4,965 секунды.
 - Проверочная партия: 1 600/1 600 результатов, без `Deferred`; одинаковый набор Alive во всех четырёх форматах.
-- Backend: 1029 автоматических тестов; frontend: 58 component/accessibility tests.
+- Backend: 1042 автоматических теста; frontend: 58 component/accessibility tests.
 - Frontend: Vitest, ESLint, TypeScript production build и axe-core accessibility gate.
 - Release build компилируется с warnings-as-errors и обязательной XML-документацией публичного production API.
 - CI проверяет PostgreSQL migrations, backup/restore, OpenAPI, Docker Compose, security contracts, зависимости и Git-историю.

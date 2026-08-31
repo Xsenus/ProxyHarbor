@@ -21,7 +21,8 @@ public sealed class BackupService(
     IConfiguration configuration,
     ILogger<BackupService> logger,
     IBackupConfigurationStore? backupConfigurationStore = null,
-    ITelegramBackupDeliveryResolver? telegramDeliveryResolver = null) : IDisposable
+    ITelegramBackupDeliveryResolver? telegramDeliveryResolver = null,
+    ITelegramBackupTransport? telegramTransport = null) : IDisposable
 {
     internal const string PipeCompletionFailureDataKey = "ProxyHarbor.BackupPipeCompletionFailure";
     private const string PublishedBackupPrefix = "proxyharbor-";
@@ -493,6 +494,12 @@ public sealed class BackupService(
         string chatId,
         CancellationToken token)
     {
+        if (telegramTransport is not null)
+        {
+            await telegramTransport.SendAsync(path, caption, botToken, chatId, token);
+            return;
+        }
+
         var client = httpClientFactory.CreateClient("telegram");
         await TelegramBackupSender.SendAsync(
             client, path, caption, botToken, chatId, token);
