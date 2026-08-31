@@ -3,6 +3,8 @@ using System.Net;
 using System.Security.Claims;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
+using NpgsqlTypes;
 using ProxyHarbor.Infrastructure;
 
 namespace ProxyHarbor.Api;
@@ -98,7 +100,7 @@ public sealed class ProxyAccessMonitor(
         var ticks = 0;
         while (await timer.WaitForNextTickAsync(stoppingToken))
         {
-            try { await FlushAsync(stoppingToken); }
+            try { await FlushOnceAsync(stoppingToken); }
             catch (Exception exception) when (!stoppingToken.IsCancellationRequested) { MaintenanceFailed(logger, exception); }
             ticks++;
             // Каждая реплика видит изменения правил максимум через минуту, даже если
@@ -128,39 +130,30 @@ public sealed class ProxyAccessMonitor(
             .ExecuteDeleteAsync(token);
     }
 
-    private async Task FlushAsync(CancellationToken token)
+    internal async Task FlushOnceAsync(CancellationToken token)
     {
         var snapshot = counters.ToArray();
         if (snapshot.Length == 0 && siteVisits.IsEmpty) return;
         await using var db = await dbFactory.CreateDbContextAsync(token);
+        var drained = new List<(AccessKey Key, AccessCounter Value)>(snapshot.Length);
         foreach (var pair in snapshot)
         {
-            AccessCounter value;
             lock (pair.Value)
             {
                 if (!counters.TryGetValue(pair.Key, out var current) || !ReferenceEquals(current, pair.Value) ||
                     !counters.TryRemove(pair.Key, out _)) continue;
-                value = pair.Value.Copy();
-            }
-            try
-            {
-                await db.Database.ExecuteSqlInterpolatedAsync($"""
-                    INSERT INTO "ProxyAccessBuckets" ("BucketStartedAt","IpAddress","UserId","Endpoint","Requests","BlockedRequests","ProxyItems","BytesSent","LastSeenAt")
-                    VALUES ({pair.Key.Bucket},{pair.Key.Ip},{pair.Key.UserId},{pair.Key.Endpoint},{value.Requests},{value.BlockedRequests},{value.ProxyItems},{value.BytesSent},{DateTimeOffset.UtcNow})
-                    ON CONFLICT ("BucketStartedAt","IpAddress","UserId","Endpoint") DO UPDATE SET
-                    "Requests"="ProxyAccessBuckets"."Requests"+EXCLUDED."Requests",
-                    "BlockedRequests"="ProxyAccessBuckets"."BlockedRequests"+EXCLUDED."BlockedRequests",
-                    "ProxyItems"="ProxyAccessBuckets"."ProxyItems"+EXCLUDED."ProxyItems",
-                    "BytesSent"="ProxyAccessBuckets"."BytesSent"+EXCLUDED."BytesSent",
-                    "LastSeenAt"=EXCLUDED."LastSeenAt"
-                    """, token);
-            }
-            catch (Exception exception)
-            {
-                MergeCounter(pair.Key, value);
-                FlushFailed(logger, exception);
+                drained.Add((pair.Key, pair.Value.Copy()));
             }
         }
+        if (drained.Count > 0)
+            try { await BulkUpsertCountersAsync(db, drained, DateTimeOffset.UtcNow, token); }
+            catch (Exception exception)
+            {
+                // Вся import-транзакция атомарна: при её откате возвращаем каждый
+                // отсоединённый increment, включая запись, пришедшую во время flush.
+                foreach (var item in drained) MergeCounter(item.Key, item.Value);
+                FlushFailed(logger, exception);
+            }
         var visits = new List<SiteVisitLog>(Math.Min(siteVisits.Count, 5_000));
         while (visits.Count < 5_000 && siteVisits.TryDequeue(out var visit)) visits.Add(visit);
         if (visits.Count == 0) return;
@@ -174,6 +167,78 @@ public sealed class ProxyAccessMonitor(
             foreach (var visit in visits) siteVisits.Enqueue(visit);
             throw;
         }
+    }
+
+    /// <summary>
+    /// Сохраняет произвольное число access-bucket'ов за три обращения к PostgreSQL
+    /// (TEMP TABLE, binary COPY, UPSERT) вместо отдельного round-trip на каждый IP.
+    /// ORDER BY задаёт одинаковый порядок conflict-lock между несколькими API-репликами.
+    /// </summary>
+    private static async Task BulkUpsertCountersAsync(
+        ProxyHarborDbContext db,
+        IReadOnlyCollection<(AccessKey Key, AccessCounter Value)> increments,
+        DateTimeOffset flushedAt,
+        CancellationToken token)
+    {
+        var connection = (NpgsqlConnection)db.Database.GetDbConnection();
+        if (connection.State != System.Data.ConnectionState.Open) await connection.OpenAsync(token);
+        await using var transaction = await connection.BeginTransactionAsync(token);
+        await using (var create = new NpgsqlCommand("""
+            CREATE TEMP TABLE access_counter_flush (
+                bucket_started_at timestamptz NOT NULL,
+                ip_address text NOT NULL,
+                user_id uuid NULL,
+                endpoint text NOT NULL,
+                requests integer NOT NULL,
+                blocked_requests integer NOT NULL,
+                proxy_items bigint NOT NULL,
+                bytes_sent bigint NOT NULL
+            ) ON COMMIT DROP
+            """, connection, transaction))
+            await create.ExecuteNonQueryAsync(token);
+
+        await using (var writer = await connection.BeginBinaryImportAsync("""
+            COPY access_counter_flush
+                (bucket_started_at, ip_address, user_id, endpoint, requests, blocked_requests, proxy_items, bytes_sent)
+            FROM STDIN (FORMAT BINARY)
+            """, token))
+        {
+            foreach (var increment in increments)
+            {
+                await writer.StartRowAsync(token);
+                await writer.WriteAsync(increment.Key.Bucket, NpgsqlDbType.TimestampTz, token);
+                await writer.WriteAsync(increment.Key.Ip, NpgsqlDbType.Text, token);
+                if (increment.Key.UserId.HasValue)
+                    await writer.WriteAsync(increment.Key.UserId.Value, NpgsqlDbType.Uuid, token);
+                else
+                    await writer.WriteNullAsync(token);
+                await writer.WriteAsync(increment.Key.Endpoint, NpgsqlDbType.Text, token);
+                await writer.WriteAsync(increment.Value.Requests, NpgsqlDbType.Integer, token);
+                await writer.WriteAsync(increment.Value.BlockedRequests, NpgsqlDbType.Integer, token);
+                await writer.WriteAsync(increment.Value.ProxyItems, NpgsqlDbType.Bigint, token);
+                await writer.WriteAsync(increment.Value.BytesSent, NpgsqlDbType.Bigint, token);
+            }
+            await writer.CompleteAsync(token);
+        }
+
+        await using var upsert = new NpgsqlCommand("""
+            INSERT INTO "ProxyAccessBuckets"
+                ("BucketStartedAt", "IpAddress", "UserId", "Endpoint", "Requests",
+                 "BlockedRequests", "ProxyItems", "BytesSent", "LastSeenAt")
+            SELECT bucket_started_at, ip_address, user_id, endpoint, requests,
+                   blocked_requests, proxy_items, bytes_sent, @flushed_at
+            FROM access_counter_flush
+            ORDER BY bucket_started_at, ip_address, user_id NULLS FIRST, endpoint
+            ON CONFLICT ("BucketStartedAt", "IpAddress", "UserId", "Endpoint") DO UPDATE SET
+                "Requests" = "ProxyAccessBuckets"."Requests" + EXCLUDED."Requests",
+                "BlockedRequests" = "ProxyAccessBuckets"."BlockedRequests" + EXCLUDED."BlockedRequests",
+                "ProxyItems" = "ProxyAccessBuckets"."ProxyItems" + EXCLUDED."ProxyItems",
+                "BytesSent" = "ProxyAccessBuckets"."BytesSent" + EXCLUDED."BytesSent",
+                "LastSeenAt" = EXCLUDED."LastSeenAt"
+            """, connection, transaction);
+        upsert.Parameters.AddWithValue("flushed_at", NpgsqlDbType.TimestampTz, flushedAt);
+        await upsert.ExecuteNonQueryAsync(token);
+        await transaction.CommitAsync(token);
     }
 
     /// <summary>
