@@ -14,6 +14,54 @@ namespace ProxyHarbor.Tests;
 [Collection(PostgresIntegrationGroup.Name)]
 public sealed class SubscriptionReminderProcessorIntegrationTests
 {
+    [Theory]
+    [InlineData("en", "12h", "12 hours")]
+    [InlineData("en", "1h", "1 hour")]
+    [InlineData("en", "expired", "has expired")]
+    [InlineData("de", "12h", "12 Stunden")]
+    [InlineData("de", "1h", "1 Stunde")]
+    [InlineData("de", "expired", "ist abgelaufen")]
+    [InlineData("fr", "12h", "12 heures")]
+    [InlineData("fr", "1h", "1 heure")]
+    [InlineData("fr", "expired", "a expiré")]
+    [InlineData("zh", "12h", "12 小时")]
+    [InlineData("zh", "1h", "1 小时")]
+    [InlineData("zh", "expired", "已到期")]
+    [InlineData("ru", "12h", "12 часов")]
+    [InlineData("ru", "1h", "1 час")]
+    [InlineData(null, "expired", "закончилась")]
+    public void ReminderTextCoversEverySupportedLocaleAndWindow(
+        string? language,
+        string window,
+        string expected)
+    {
+        var text = SubscriptionReminderProcessor.ReminderText(
+            language,
+            window,
+            new DateTimeOffset(2026, 8, 31, 12, 0, 0, TimeSpan.Zero));
+
+        Assert.Contains(expected, text, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(0, 1, 1)]
+    [InlineData(1, 0, 1)]
+    [InlineData(1, 1, 0)]
+    public void ProcessorRejectsUnboundedConfiguration(int batchSize, int maximumBatches, int cleanupBatchSize)
+    {
+        var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+            .UseInMemoryDatabase($"subscription-reminder-options-{Guid.NewGuid():N}")
+            .Options;
+        using var db = new ProxyHarborDbContext(options);
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => new SubscriptionReminderProcessor(
+            db,
+            new TelegramDispatchService(db),
+            batchSize,
+            maximumBatches,
+            cleanupBatchSize));
+    }
+
     [Fact]
     [Trait("Category", "PostgresIntegration")]
     public async Task BatchesRemainBoundedIdempotentAndRepeatAfterExtension()
