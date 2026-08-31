@@ -12,6 +12,29 @@ namespace ProxyHarbor.Tests;
 public sealed class AdminBillingAccessTests
 {
     [Fact]
+    public async Task AccessFlushKeepsVisitQueueIndependentFromCounterPersistenceFailure()
+    {
+        await using var fixture = new Fixture();
+        var monitor = new ProxyAccessMonitor(fixture.Factory, NullLogger<ProxyAccessMonitor>.Instance);
+
+        // Пустой periodic tick не должен открывать БД или создавать служебные строки.
+        await monitor.FlushOnceAsync(CancellationToken.None);
+        var context = Context("/api/v1/telemetry/visit", "192.0.2.55");
+        monitor.RecordSiteVisit(context, "account");
+
+        // Unit fixture использует SQLite: PostgreSQL COPY ожидаемо возвращает bucket
+        // в память, но независимый visit queue всё равно обязан сохраниться.
+        await monitor.FlushOnceAsync(CancellationToken.None);
+        var visit = Assert.Single(await fixture.Db.SiteVisitLogs.AsNoTracking().ToArrayAsync());
+        Assert.Equal("192.0.2.55", visit.IpAddress);
+        Assert.Equal("account", visit.Page);
+
+        // Повторный flush повторяет только возвращённый counter и не дублирует visit.
+        await monitor.FlushOnceAsync(CancellationToken.None);
+        Assert.Single(await fixture.Db.SiteVisitLogs.AsNoTracking().ToArrayAsync());
+    }
+
+    [Fact]
     public async Task PaymentOrderRegistryFiltersAndReturnsGlobalSummary()
     {
         await using var fixture = new Fixture();
