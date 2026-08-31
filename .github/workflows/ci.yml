@@ -332,13 +332,10 @@ jobs:
           docker compose --profile tools build restore
           # Создаём one-shot restore без повторного reconcile зависимостей:
           # recreate PostgreSQL здесь оборвёт lifetime-lock уже запущенного API.
-          docker compose --profile tools create --no-deps restore
+          restore_id=$(docker compose --profile tools run --detach --no-deps restore --help)
           api_id=$(docker compose ps --quiet api)
           web_id=$(docker compose ps --quiet web)
           postgres_id=$(docker compose ps --quiet postgres)
-          restore_id=$(docker ps --all --quiet \
-            --filter label=com.docker.compose.project=proxyharbor \
-            --filter label=com.docker.compose.service=restore | head -n 1)
           test -n "$restore_id"
           api_image=$(docker inspect --format '{{.Config.Image}}' "$api_id")
           web_image=$(docker inspect --format '{{.Config.Image}}' "$web_id")
@@ -390,7 +387,7 @@ jobs:
               aquasec/trivy:0.74.0@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969 \
               image --scanners vuln,secret --severity HIGH,CRITICAL --exit-code 1 "$image"
           done
-          docker compose --profile tools rm --force --volumes restore
+          docker rm --force --volumes "$restore_id"
           docker compose --profile tools run --rm --no-deps restore --help | grep 'ProxyHarbor restore'
           for attempt in {1..90}; do
             if curl --fail --silent http://127.0.0.1:8080/health/ready; then break; fi
