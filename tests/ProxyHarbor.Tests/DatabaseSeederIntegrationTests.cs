@@ -223,9 +223,20 @@ public sealed class DatabaseSeederIntegrationTests
         }
     }
 
-    [Fact]
+    [Theory]
+    [InlineData(
+        "TheSpeedX HTTP",
+        "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/refs/heads/master/http.txt")]
+    [InlineData(
+        "XYZS996 LV",
+        "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/bt/data.txt")]
+    [InlineData(
+        "XYZS996 LU",
+        "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/lt/data.txt")]
     [Trait("Category", "PostgresIntegration")]
-    public async Task StartupMigratesUnstableRawGithubUrlWithoutLosingSourceHistory()
+    public async Task StartupMigratesReplacedBuiltInUrlWithoutLosingSourceHistory(
+        string canonicalName,
+        string replacedUrl)
     {
         var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
         if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
@@ -242,7 +253,7 @@ public sealed class DatabaseSeederIntegrationTests
             var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
                 .UseNpgsql(builder.ConnectionString)
                 .Options;
-            var canonical = BuiltInSourceCatalog.Sources.Single(source => source.Name == "TheSpeedX HTTP");
+            var canonical = BuiltInSourceCatalog.Sources.Single(source => source.Name == canonicalName);
             var sourceId = Guid.Empty;
             var lastFetchedAt = DateTimeOffset.UtcNow;
             var lastSucceededAt = lastFetchedAt.AddHours(-1);
@@ -251,7 +262,7 @@ public sealed class DatabaseSeederIntegrationTests
                 await DatabaseSeeder.InitializeAsync(first);
                 var source = await first.Sources.SingleAsync(item => item.Url == canonical.Url);
                 sourceId = source.Id;
-                source.Url = "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/refs/heads/master/http.txt";
+                source.Url = replacedUrl;
                 source.Enabled = false;
                 source.LastFetchedAt = lastFetchedAt;
                 source.LastSucceededAt = lastSucceededAt;
