@@ -38,7 +38,7 @@ public sealed class VpnMetricsSnapshotIntegrationTests
             await using var db = new ProxyHarborDbContext(options);
             await db.Database.MigrateAsync();
 
-            var now = new DateTimeOffset(2026, 9, 2, 8, 0, 0, TimeSpan.Zero);
+            var now = DateTimeOffset.UtcNow;
             var source = new VpnSource
             {
                 Name = "Metrics",
@@ -107,6 +107,7 @@ public sealed class VpnMetricsSnapshotIntegrationTests
             LatencyMs = latencyMs,
             SuccessfulChecks = successfulChecks,
             FirstSeenAt = firstSeenAt,
+            LastSeenAt = firstSeenAt,
             FirstSource = source,
             FirstSourceId = source.Id
         };
