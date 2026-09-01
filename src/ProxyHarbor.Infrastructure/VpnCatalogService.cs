@@ -259,10 +259,11 @@ public sealed class VpnCatalogService(
         var now = DateTimeOffset.UtcNow;
         // Проверяем detached snapshot: результат сохраняется одним set-based UPDATE,
         // поэтому tracking тысяч entity только раздувал память и DetectChanges CPU.
-        var endpoints = await db.VpnEndpoints.AsNoTracking()
-            .Where(x => x.NextCheckAt == null || x.NextCheckAt <= now)
-            .OrderBy(x => x.NextCheckAt).ThenBy(x => x.LastCheckedAt)
-            .Take(Math.Clamp(options.Value.ValidationBatchSize, 1, 5000)).ToArrayAsync(token);
+        var endpoints = await VpnValidationQueue.SelectAsync(
+            db,
+            Math.Clamp(options.Value.ValidationBatchSize, 1, 5000),
+            now,
+            token);
         var results = new System.Collections.Concurrent.ConcurrentBag<VpnProbeResult>();
         await Parallel.ForEachAsync(endpoints, new ParallelOptions
         {

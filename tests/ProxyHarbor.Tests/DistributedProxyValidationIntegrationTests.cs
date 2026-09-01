@@ -15,6 +15,62 @@ public sealed class DistributedProxyValidationIntegrationTests
 {
     [Fact]
     [Trait("Category", "PostgresIntegration")]
+    public async Task SharedQueueClaimPreservesPriorityAndSkipsFutureOrLeasedRows()
+    {
+        var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
+        if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
+
+        var schema = $"proxyharbor_queue_claim_{Guid.NewGuid():N}";
+        var connection = new NpgsqlConnectionStringBuilder(baseConnectionString) { SearchPath = schema };
+        await using var admin = new NpgsqlConnection(baseConnectionString);
+        await admin.OpenAsync();
+        await using (var create = new NpgsqlCommand($"CREATE SCHEMA {schema}", admin))
+            await create.ExecuteNonQueryAsync();
+
+        try
+        {
+            var dbOptions = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+                .UseNpgsql(connection.ConnectionString).Options;
+            var now = DateTimeOffset.UtcNow;
+            var aliveNeverChecked = Endpoint("198.51.100.1", ProxyStatus.Alive, null);
+            var aliveDue = Endpoint("198.51.100.2", ProxyStatus.Alive, now.AddMinutes(-2));
+            var aliveFuture = Endpoint("198.51.100.3", ProxyStatus.Alive, now.AddMinutes(2));
+            var pendingDue = Endpoint("198.51.100.4", ProxyStatus.Pending, now.AddMinutes(-5));
+            var deadDue = Endpoint("198.51.100.5", ProxyStatus.Dead, now.AddHours(-1));
+            var leasedDead = Endpoint("198.51.100.6", ProxyStatus.Dead, now.AddHours(-2));
+            leasedDead.CheckLeaseId = Guid.NewGuid();
+            leasedDead.CheckLeaseUntil = now.AddMinutes(2);
+
+            await using (var migrate = new ProxyHarborDbContext(dbOptions))
+            {
+                await migrate.Database.MigrateAsync();
+                migrate.Proxies.AddRange(
+                    aliveNeverChecked, aliveDue, aliveFuture, pendingDue, deadDue, leasedDead);
+                await migrate.SaveChangesAsync();
+            }
+
+            await using var claimDb = new ProxyHarborDbContext(dbOptions);
+            await using var transaction = await claimDb.Database.BeginTransactionAsync();
+            var claimed = await ValidationQueueClaim.ClaimAsync(
+                claimDb, 3, now, CancellationToken.None);
+
+            Assert.Equal(
+                [aliveNeverChecked.Id, aliveDue.Id, pendingDue.Id],
+                claimed.Select(proxy => proxy.Id));
+            Assert.DoesNotContain(claimed, proxy => proxy.Id == aliveFuture.Id);
+            Assert.DoesNotContain(claimed, proxy => proxy.Id == deadDue.Id);
+            Assert.DoesNotContain(claimed, proxy => proxy.Id == leasedDead.Id);
+            await transaction.RollbackAsync();
+        }
+        finally
+        {
+            await using var drop = new NpgsqlCommand($"DROP SCHEMA IF EXISTS {schema} CASCADE", admin);
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
     public async Task NodesReceiveDisjointLeasesAndExpiredBatchIsReclaimed()
     {
         var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
@@ -122,6 +178,23 @@ public sealed class DistributedProxyValidationIntegrationTests
             await drop.ExecuteNonQueryAsync();
         }
     }
+
+    private static ProxyEndpoint Endpoint(
+        string host,
+        ProxyStatus status,
+        DateTimeOffset? nextCheckAt) => new()
+        {
+            Host = host,
+            Port = 8080,
+            Protocol = ProxyProtocol.Http,
+            Status = status,
+            NextCheckAt = nextCheckAt,
+            LastCheckedAt = nextCheckAt,
+            FirstAliveAt = status == ProxyStatus.Alive ? nextCheckAt ?? DateTimeOffset.UtcNow : null,
+            SuccessfulChecks = status == ProxyStatus.Alive ? 1 : 0,
+            FailedChecks = status == ProxyStatus.Dead ? 1 : 0,
+            ConsecutiveFailedChecks = status == ProxyStatus.Dead ? 1 : 0
+        };
 
     [Fact]
     [Trait("Category", "PostgresIntegration")]

@@ -11,7 +11,7 @@ public sealed class DatabaseSeederIntegrationTests
 {
     [Fact]
     [Trait("Category", "PostgresIntegration")]
-    public async Task ValidationClaimIndexMatchesExactPriorityAndDueOrder()
+    public async Task ValidationQueueIndexesMatchExactPriorityAndDueOrders()
     {
         var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
         if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
@@ -47,6 +47,19 @@ public sealed class DatabaseSeederIntegrationTests
             Assert.Contains("WHEN 0 THEN 1", definition, StringComparison.Ordinal);
             Assert.Contains("\"NextCheckAt\" NULLS FIRST", definition, StringComparison.Ordinal);
             Assert.Contains("\"LastCheckedAt\" NULLS FIRST", definition, StringComparison.Ordinal);
+
+            await using var inspectVpn = new NpgsqlCommand(
+                """
+                SELECT indexdef
+                FROM pg_indexes
+                WHERE schemaname = @schema
+                  AND indexname = 'IX_VpnEndpoints_ValidationOrder'
+                """,
+                admin);
+            inspectVpn.Parameters.AddWithValue("schema", schema);
+            var vpnDefinition = Assert.IsType<string>(await inspectVpn.ExecuteScalarAsync());
+            Assert.Contains("\"NextCheckAt\", \"LastCheckedAt\" NULLS FIRST", vpnDefinition,
+                StringComparison.Ordinal);
         }
         finally
         {
