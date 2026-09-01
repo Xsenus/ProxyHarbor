@@ -1,7 +1,9 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using ProxyHarbor.Api;
 using ProxyHarbor.Api.Controllers;
 using ProxyHarbor.Domain;
 using ProxyHarbor.Infrastructure;
@@ -21,8 +23,17 @@ public sealed class AdminProxiesControllerTests
             Proxy("192.0.2.30", ProxyStatus.Pending, null, null, null, 0, 0));
         await fixture.Db.SaveChangesAsync();
 
-        var controller = new AdminProxiesController(fixture.Factory,
-            Options.Create(new CollectorOptions { PublicFreshnessMinutes = 15 }));
+        var collectorOptions = Options.Create(new CollectorOptions
+        {
+            PublicFreshnessMinutes = 15,
+            DeadRetentionDays = 7
+        });
+        using var snapshotCache = new ProxyMetricsSnapshotCache(
+            fixture.Factory,
+            collectorOptions,
+            NullLogger<ProxyMetricsSnapshotCache>.Instance,
+            TimeProvider.System);
+        var controller = new AdminProxiesController(fixture.Factory, collectorOptions, snapshotCache);
         var result = await controller.Get(1, 10, ProxyStatus.Alive, null, "de", "203.0.113", "active");
 
         var page = Assert.IsType<OkObjectResult>(result.Result).Value as AdminProxyPage;
@@ -40,6 +51,9 @@ public sealed class AdminProxiesControllerTests
         Assert.Equal(120, page.Summary.AverageAliveLatencyMs);
         Assert.Equal(2, page.Summary.Countries);
         Assert.Equal(2, page.Countries.Count);
+
+        Assert.IsType<OkObjectResult>((await controller.Get()).Result);
+        Assert.Equal(1, snapshotCache.DatabaseReads);
     }
 
     [Theory]
@@ -104,5 +118,7 @@ public sealed class AdminProxiesControllerTests
         : IDbContextFactory<ProxyHarborDbContext>
     {
         public ProxyHarborDbContext CreateDbContext() => new(options);
+        public Task<ProxyHarborDbContext> CreateDbContextAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(CreateDbContext());
     }
 }

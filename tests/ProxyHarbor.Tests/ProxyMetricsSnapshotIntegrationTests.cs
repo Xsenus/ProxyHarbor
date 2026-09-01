@@ -43,13 +43,15 @@ public sealed class ProxyMetricsSnapshotIntegrationTests
             var freshAfter = now.AddMinutes(-15);
             db.Proxies.AddRange(
                 Endpoint("10.0.0.1", ProxyStatus.Alive, ProxyProtocol.Http,
-                    now, now.AddMinutes(-1), now.AddMinutes(-2)),
+                    now, now.AddMinutes(-1), now.AddMinutes(-2), countryCode: "US"),
                 Endpoint("10.0.0.2", ProxyStatus.Pending, ProxyProtocol.Socks5,
-                    now.AddDays(-10), null, null),
+                    now.AddDays(-10), null, null, countryCode: "US"),
                 Endpoint("10.0.0.3", ProxyStatus.Dead, ProxyProtocol.Https,
-                    now.AddDays(-10), now.AddMinutes(-1), now.AddMinutes(-3), now.AddMinutes(5)),
+                    now.AddDays(-10), now.AddMinutes(-1), now.AddMinutes(-3), now.AddMinutes(5), countryCode: "DE"),
                 Endpoint("10.0.0.4", ProxyStatus.Alive, ProxyProtocol.Socks5,
-                    now, now.AddMinutes(1), now.AddMinutes(-30), lastCheckedAt: now.AddHours(-1)));
+                    now, now.AddMinutes(1), now.AddMinutes(-30), lastCheckedAt: now.AddHours(-1)),
+                Endpoint("10.0.0.5", ProxyStatus.Alive, ProxyProtocol.Http,
+                    now, now.AddMinutes(5), now.AddMinutes(-4), lastCheckedAt: now.AddMinutes(-5), countryCode: "DE"));
             await db.SaveChangesAsync();
 
             var snapshot = await ProxyMetricsSnapshotReader.ReadAsync(
@@ -60,9 +62,15 @@ public sealed class ProxyMetricsSnapshotIntegrationTests
             Assert.Equal(1, snapshot.Leased);
             Assert.Equal(1, snapshot.NeverAttempted);
             Assert.Equal(1, snapshot.StaleUnseen);
-            Assert.Equal(1, snapshot.Published);
+            Assert.Equal(2, snapshot.Published);
             Assert.Equal(now.AddMinutes(-2), snapshot.LastAttemptAt);
-            Assert.Equal(4, snapshot.Groups.Sum(row => row.Count));
+            Assert.Equal(now.AddHours(-2), snapshot.OldestActiveAt);
+            Assert.Equal(5, snapshot.Groups.Sum(row => row.Count));
+            Assert.Collection(snapshot.Countries,
+                country => { Assert.Equal("DE", country.Code); Assert.Equal(2, country.Count); },
+                country => { Assert.Equal("US", country.Code); Assert.Equal(2, country.Count); });
+            Assert.Equal(2, Assert.Single(snapshot.Groups,
+                row => row.Status == ProxyStatus.Alive && row.Protocol == ProxyProtocol.Http).Count);
 
             await using var explain = new NpgsqlCommand(
                 $"EXPLAIN (FORMAT JSON, COSTS OFF) {ProxyMetricsSnapshotReader.PostgresSql}",
@@ -89,7 +97,8 @@ public sealed class ProxyMetricsSnapshotIntegrationTests
         DateTimeOffset? nextCheckAt,
         DateTimeOffset? lastAttemptAt,
         DateTimeOffset? leaseUntil = null,
-        DateTimeOffset? lastCheckedAt = null) => new()
+        DateTimeOffset? lastCheckedAt = null,
+        string? countryCode = null) => new()
         {
             Host = host,
             Port = 8080,
@@ -99,6 +108,10 @@ public sealed class ProxyMetricsSnapshotIntegrationTests
             SuccessfulChecks = status == ProxyStatus.Alive ? 1 : 0,
             FailedChecks = status == ProxyStatus.Dead ? 1 : 0,
             ConsecutiveFailedChecks = status == ProxyStatus.Dead ? 1 : 0,
+            CountryCode = countryCode,
+            CurrentAliveSince = status == ProxyStatus.Alive ? lastSeenAt.AddHours(-2) : null,
+            FirstAliveAt = status == ProxyStatus.Alive ? lastSeenAt.AddHours(-3) : null,
+            LastAliveAt = status == ProxyStatus.Alive ? lastCheckedAt ?? lastAttemptAt ?? lastSeenAt : null,
             FirstSeenAt = lastSeenAt.AddDays(-1),
             LastSeenAt = lastSeenAt,
             LastCheckedAt = lastCheckedAt ?? lastAttemptAt,

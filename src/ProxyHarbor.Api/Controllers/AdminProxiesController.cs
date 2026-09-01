@@ -14,7 +14,8 @@ namespace ProxyHarbor.Api.Controllers;
 [ProducesResponseType<ProblemDetails>(StatusCodes.Status401Unauthorized)]
 public sealed class AdminProxiesController(
     IDbContextFactory<ProxyHarborDbContext> dbFactory,
-    IOptions<CollectorOptions> collectorOptions) : ControllerBase
+    IOptions<CollectorOptions> collectorOptions,
+    ProxyMetricsSnapshotCache? proxySnapshotCache = null) : ControllerBase
 {
     private static readonly string[] AllowedSorts = ["lastChecked", "active", "latency", "lastSeen"];
 
@@ -46,30 +47,18 @@ public sealed class AdminProxiesController(
 
         var now = DateTimeOffset.UtcNow;
         var freshAfter = now.AddMinutes(-collectorOptions.Value.PublicFreshnessMinutes);
+        var proxySnapshot = proxySnapshotCache is null
+            ? null
+            : await proxySnapshotCache.GetAsync(token);
         await using var db = await dbFactory.CreateDbContextAsync(token);
 
         var all = db.Proxies.AsNoTracking();
-        var rawSummary = await all.GroupBy(_ => 1).Select(group => new
-        {
-            Total = group.Count(),
-            Alive = group.Count(item => item.Status == ProxyStatus.Alive),
-            FreshAlive = group.Count(item => item.Status == ProxyStatus.Alive && item.LastCheckedAt >= freshAfter),
-            Pending = group.Count(item => item.Status == ProxyStatus.Pending),
-            Dead = group.Count(item => item.Status == ProxyStatus.Dead),
-            EverAlive = group.Count(item => item.FirstAliveAt != null),
-            Countries = group.Where(item => item.CountryCode != null).Select(item => item.CountryCode).Distinct().Count(),
-            AverageAliveLatencyMs = group.Where(item => item.Status == ProxyStatus.Alive && item.LastCheckedAt >= freshAfter && item.LatencyMs != null)
-                .Average(item => (double?)item.LatencyMs),
-            OldestActiveAt = group.Where(item => item.Status == ProxyStatus.Alive && item.CurrentAliveSince != null)
-                .Min(item => (DateTimeOffset?)item.CurrentAliveSince)
-        }).SingleOrDefaultAsync(token);
-
-        var countryCounts = await all.Where(item => item.CountryCode != null)
-            .GroupBy(item => item.CountryCode!)
-            .Select(group => new { Code = group.Key, Count = group.Count() })
-            .OrderByDescending(item => item.Count).ThenBy(item => item.Code)
-            .ToArrayAsync(token);
-        var countries = countryCounts.Select(item => new AdminProxyCountry(item.Code, item.Count)).ToArray();
+        proxySnapshot ??= await ProxyMetricsSnapshotReader.ReadAsync(
+            db,
+            now,
+            now.AddDays(-Math.Max(1, collectorOptions.Value.DeadRetentionDays)),
+            freshAfter,
+            token);
 
         var filtered = all;
         if (status.HasValue) filtered = filtered.Where(item => item.Status == status.Value);
@@ -91,17 +80,33 @@ public sealed class AdminProxiesController(
         };
         var entities = await ordered.Skip((page - 1) * pageSize).Take(pageSize).ToArrayAsync(token);
 
-        var summary = rawSummary is null
-            ? new AdminProxySummary(0, 0, 0, 0, 0, 0, 0, null, 0, null)
-            : new AdminProxySummary(rawSummary.Total, rawSummary.Alive, rawSummary.FreshAlive,
-                rawSummary.Alive - rawSummary.FreshAlive, rawSummary.Pending, rawSummary.Dead,
-                rawSummary.EverAlive, rawSummary.AverageAliveLatencyMs is null ? null : (int)Math.Round(rawSummary.AverageAliveLatencyMs.Value),
-                rawSummary.Countries, rawSummary.OldestActiveAt is null ? null : Math.Max(0, (long)(now - rawSummary.OldestActiveAt.Value).TotalSeconds));
+        var groups = proxySnapshot.Groups;
+        var latencySamples = groups.Sum(row => row.FreshLatencySamples);
+        var summary = new AdminProxySummary(
+            ToInt(groups.Sum(row => row.Count)),
+            ToInt(groups.Where(row => row.Status == ProxyStatus.Alive).Sum(row => row.Count)),
+            ToInt(proxySnapshot.Published),
+            ToInt(groups.Sum(row => row.StaleAlive)),
+            ToInt(groups.Where(row => row.Status == ProxyStatus.Pending).Sum(row => row.Count)),
+            ToInt(groups.Where(row => row.Status == ProxyStatus.Dead).Sum(row => row.Count)),
+            ToInt(groups.Sum(row => row.EverAlive)),
+            latencySamples == 0
+                ? null
+                : (int?)Math.Round(groups.Sum(row => row.FreshLatencyTotal) / (double)latencySamples),
+            proxySnapshot.Countries.Count,
+            proxySnapshot.OldestActiveAt is null
+                ? null
+                : Math.Max(0, (long)(now - proxySnapshot.OldestActiveAt.Value).TotalSeconds));
+        var countries = proxySnapshot.Countries
+            .Select(countryMetric => new AdminProxyCountry(countryMetric.Code, ToInt(countryMetric.Count)))
+            .ToArray();
 
         return Ok(new AdminProxyPage(
             entities.Select(item => AdminProxyItem.From(item, now)).ToArray(),
             page, pageSize, total, summary, countries));
     }
+
+    private static int ToInt(long value) => (int)Math.Min(int.MaxValue, Math.Max(0, value));
 }
 
 /// <summary>Серверная страница защищённого реестра.</summary>
