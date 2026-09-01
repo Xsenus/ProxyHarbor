@@ -39,6 +39,8 @@ public static class ServiceCollectionExtensions
                 "LastSeenRefreshMinutes не может превышать DeadRetentionDays")
             .Validate(x => x.DeadRetentionDays is >= 1 and <= 365, "DeadRetentionDays: 1..365")
             .Validate(x => x.RunRetentionDays is >= 1 and <= 3_650, "RunRetentionDays: 1..3650")
+            .Validate(x => x.ValidationRunRetentionHours is >= 1 and <= 720,
+                "ValidationRunRetentionHours: 1..720")
             .Validate(x => x.ProbePort is >= 1 and <= 65_535, "ProbePort: 1..65535")
             .Validate(x => CollectorOptions.IsProbeHostValid(x.ProbeHost),
                 "ProbeHost должен быть каноническим ASCII DNS-именем или IP длиной не более 253 символов")

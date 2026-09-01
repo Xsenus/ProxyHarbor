@@ -16,6 +16,7 @@ public sealed class OriginIpProviderTests
     [InlineData("Collector:DeadRetryMaxHours", "DeadRetryMaxHours")]
     [InlineData("Collector:SourceFailureBackoffMaxHours", "SourceFailureBackoffMaxHours")]
     [InlineData("Collector:DeadRetentionDays", "DeadRetentionDays")]
+    [InlineData("Collector:ValidationRunRetentionHours", "ValidationRunRetentionHours")]
     public void InfrastructureOptionsRejectExtremeDurationsWithValidationError(string key, string failureName)
     {
         using var provider = BuildOptionsProvider(key, int.MaxValue.ToString(System.Globalization.CultureInfo.InvariantCulture));

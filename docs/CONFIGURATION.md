@@ -157,7 +157,8 @@ Defaults ниже соответствуют `src/ProxyHarbor.Api/appsettings.js
 | `MaxCandidatesPerRun` | 500000 | 1..5000000 | Лимит объединённого цикла |
 | `LastSeenRefreshMinutes` | 360 | 1..10080 | Ограничение write amplification |
 | `DeadRetentionDays` | 3 | 1..365 | Хранение старых Pending/Dead, которые ни разу не были Alive; исторически рабочие строки не удаляются |
-| `RunRetentionDays` | 30 | 1..3650 | Хранение collection/validation audit |
+| `RunRetentionDays` | 30 | 1..3650 | Хранение истории циклов сбора |
+| `ValidationRunRetentionHours` | 24 | 1..720 | Хранение подробных validation-партий; очистка выполняется bounded-пакетами |
 | `ProbeHost` | `api.ipify.org` | canonical public host/IP | Контрольный TLS endpoint |
 | `ProbePort` | 443 | 1..65535 | Порт контрольного endpoint |
 | `ProbePath` | `/?format=json` | canonical origin-form | Path/query контрольного endpoint |
