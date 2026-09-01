@@ -131,6 +131,7 @@ public sealed class VpnCatalogIntegrationTests
             {
                 SourceConcurrency = 1,
                 SourceTimeoutSeconds = 5,
+                SourceRetryCount = 0,
                 SourceFailureBackoffBaseMinutes = 15,
                 SourceFailureBackoffMaxHours = 24
             }), NullLogger<VpnCatalogService>.Instance);
