@@ -1,7 +1,9 @@
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using ProxyHarbor.Api;
 using ProxyHarbor.Api.Controllers;
+using ProxyHarbor.Infrastructure;
 
 namespace ProxyHarbor.Tests;
 
@@ -80,6 +82,145 @@ public sealed class SiteSettingsControllerTests
             Identifier = "<script>alert(1)</script>"
         };
         Assert.IsType<BadRequestObjectResult>(await controller.Update(script, default));
+    }
+
+    [Fact]
+    public async Task RejectsIncompleteNullAndMalformedPublicationContracts()
+    {
+        var controller = new AdminSiteSettingsController(new Store(new SitePublicationSettings()));
+
+        await Reject(new SitePublicationSettings { Sections = null! });
+        var missingSection = new SitePublicationSettings();
+        missingSection.Sections.Remove("pricing");
+        await Reject(missingSection);
+        var nullSection = new SitePublicationSettings();
+        nullSection.Sections["pricing"] = null!;
+        await Reject(nullSection);
+
+        await Reject(new SitePublicationSettings { Requisites = null! });
+        var nullFields = new SitePublicationSettings();
+        nullFields.Requisites.Fields = null!;
+        await Reject(nullFields);
+        var missingField = new SitePublicationSettings();
+        missingField.Requisites.Fields.Remove("phone");
+        await Reject(missingField);
+        var nullField = new SitePublicationSettings();
+        nullField.Requisites.Fields["phone"] = null!;
+        await Reject(nullField);
+        var invalidTitle = new SitePublicationSettings();
+        invalidTitle.Requisites.IntroTitle = "line\nbreak";
+        await Reject(invalidTitle);
+        var invalidDescription = new SitePublicationSettings();
+        invalidDescription.Requisites.IntroDescription = "bad\0text";
+        await Reject(invalidDescription);
+        var invalidNote = new SitePublicationSettings();
+        invalidNote.Requisites.Note = new string('x', 1_001);
+        await Reject(invalidNote);
+        var invalidFieldValue = new SitePublicationSettings();
+        invalidFieldValue.Requisites.Fields["phone"].Value = new string('x', 501);
+        await Reject(invalidFieldValue);
+
+        await Reject(new SitePublicationSettings { Cookies = null! });
+        var invalidCookieTitle = new SitePublicationSettings();
+        invalidCookieTitle.Cookies.BannerTitle = string.Empty.PadLeft(121, 'x');
+        await Reject(invalidCookieTitle);
+        var invalidCookieText = new SitePublicationSettings();
+        invalidCookieText.Cookies.BannerText = "bad\0text";
+        await Reject(invalidCookieText);
+
+        await Reject(new SitePublicationSettings { Analytics = null! });
+        var nullYandex = new SitePublicationSettings();
+        nullYandex.Analytics.Yandex = null!;
+        await Reject(nullYandex);
+        var nullGoogle = new SitePublicationSettings();
+        nullGoogle.Analytics.Google = null!;
+        await Reject(nullGoogle);
+        var nullVk = new SitePublicationSettings();
+        nullVk.Analytics.Vk = null!;
+        await Reject(nullVk);
+        var enabledWithoutIdentifier = new SitePublicationSettings();
+        enabledWithoutIdentifier.Analytics.Yandex.Enabled = true;
+        await Reject(enabledWithoutIdentifier);
+        var longIdentifier = new SitePublicationSettings();
+        longIdentifier.Analytics.Vk.Identifier = new string('x', 129);
+        await Reject(longIdentifier);
+
+        async Task Reject(SitePublicationSettings request) =>
+            Assert.IsType<BadRequestObjectResult>(await controller.Update(request, default));
+    }
+
+    [Fact]
+    public async Task UnchangedConsentContractPreservesRevisionAndNormalizesValues()
+    {
+        var current = new SitePublicationSettings { CookieConsentRevision = 9 };
+        current.Analytics.Google.Identifier = "g-abcd1234";
+        current.Analytics.Vk.Identifier = "12345";
+        var store = new Store(current);
+        var request = current;
+        request.Requisites.IntroTitle = "  Исполнитель  ";
+
+        Assert.IsType<OkObjectResult>(
+            await new AdminSiteSettingsController(store).Update(request, default));
+
+        Assert.NotNull(store.Saved);
+        Assert.Equal(9, store.Saved.CookieConsentRevision);
+        Assert.Equal("Исполнитель", store.Saved.Requisites.IntroTitle);
+        Assert.Equal("G-ABCD1234", store.Saved.Analytics.Google.Identifier);
+    }
+
+    [Fact]
+    public async Task DatabaseStoreCreatesUpdatesNormalizesAndReadsSingleton()
+    {
+        var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+            .UseInMemoryDatabase($"site-settings-{Guid.NewGuid():N}").Options;
+        await using var db = new ProxyHarborDbContext(options);
+        var store = new SiteConfigurationStore(db);
+
+        var defaults = await store.GetAsync();
+        Assert.Equal(1, defaults.CookieConsentRevision);
+
+        var incomplete = new SitePublicationSettings
+        {
+            Sections = null!,
+            Requisites = new PublicRequisitesOptions { Fields = null! },
+            Cookies = null!,
+            Analytics = new SiteAnalyticsOptions
+            {
+                Yandex = null!,
+                Google = null!,
+                Vk = null!
+            },
+            CookieConsentRevision = 0
+        };
+        await store.SaveAsync(incomplete);
+        var saved = await store.GetAsync();
+        Assert.Equal(1, saved.CookieConsentRevision);
+        Assert.True(saved.Sections["privacy"].Published);
+        Assert.Equal(RequisiteFieldCodes.All.Length, saved.Requisites.Fields.Count);
+
+        saved.Cookies.BannerTitle = "Изменено";
+        await store.SaveAsync(saved);
+        Assert.Equal("Изменено", (await store.GetAsync()).Cookies.BannerTitle);
+    }
+
+    [Theory]
+    [InlineData("{")]
+    [InlineData("null")]
+    public async Task DatabaseStoreRejectsCorruptedSnapshots(string json)
+    {
+        var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+            .UseInMemoryDatabase($"site-settings-corrupt-{Guid.NewGuid():N}").Options;
+        await using var db = new ProxyHarborDbContext(options);
+        db.SiteConfigurations.Add(new SiteConfiguration
+        {
+            Id = 1,
+            SettingsJson = json,
+            UpdatedAt = DateTimeOffset.UtcNow
+        });
+        await db.SaveChangesAsync();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => new SiteConfigurationStore(db).GetAsync());
     }
 
     private sealed class Store(SitePublicationSettings current) : ISiteConfigurationStore
