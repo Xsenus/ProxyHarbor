@@ -125,6 +125,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<OriginIpProvider>();
         services.AddSingleton<ValidationWakeSignal>();
         services.AddSingleton<ProxyValidator>();
+        services.AddSingleton<ValidationClaimIdleGate>();
         services.AddSingleton<DistributedProxyValidationService>();
         services.AddSingleton<VpnCatalogService>();
         services.AddSingleton<IBackupConfigurationStore, BackupConfigurationStore>();
