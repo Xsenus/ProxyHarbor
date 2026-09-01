@@ -14,6 +14,41 @@ public sealed class OperationalMaintenanceIntegrationTests
 {
     [Fact]
     [Trait("Category", "PostgresIntegration")]
+    public async Task RunHistoryCleanupIsBoundedPerTable()
+    {
+        var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
+        if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
+
+        await WithSchemaAsync(baseConnectionString, async factory =>
+        {
+            var now = DateTimeOffset.UtcNow;
+            var old = now.AddDays(-40);
+            await using (var seed = await factory.CreateDbContextAsync())
+            {
+                seed.Runs.AddRange(Enumerable.Range(0, 3)
+                    .Select(index => CollectionRun(old.AddMinutes(index), "completed")));
+                seed.ValidationRuns.AddRange(Enumerable.Range(0, 3)
+                    .Select(index => ValidationRun(old.AddMinutes(index), "completed")));
+                await seed.SaveChangesAsync();
+            }
+
+            await using (var cleanup = await factory.CreateDbContextAsync())
+            {
+                var deleted = await OperationalRetention.PruneRunHistoryAsync(
+                    cleanup, now, collectionRetentionDays: 30, validationRetentionHours: 24,
+                    CancellationToken.None, maximumRowsPerTable: 2);
+                Assert.Equal(2, deleted.CollectionRuns);
+                Assert.Equal(2, deleted.ValidationRuns);
+            }
+
+            await using var verify = await factory.CreateDbContextAsync();
+            Assert.Equal(1, await verify.Runs.CountAsync());
+            Assert.Equal(1, await verify.ValidationRuns.CountAsync());
+        });
+    }
+
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
     public async Task PrunesEveryFinishedHistoryAndOnlyUnownedStaleProxyMembership()
     {
         var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
@@ -23,7 +58,8 @@ public sealed class OperationalMaintenanceIntegrationTests
         {
             var now = DateTimeOffset.UtcNow;
             var old = now.AddDays(-400);
-            var fresh = now.AddDays(-1);
+            var validationExpired = now.AddDays(-2);
+            var fresh = now.AddHours(-1);
             await using (var seed = await factory.CreateDbContextAsync())
             {
                 seed.Proxies.AddRange(
@@ -41,11 +77,13 @@ public sealed class OperationalMaintenanceIntegrationTests
                     CollectionRun(old, "completed"),
                     CollectionRun(old, "failed"),
                     CollectionRun(old, "running"),
+                    CollectionRun(validationExpired, "completed"),
                     CollectionRun(fresh, "completed"));
                 seed.ValidationRuns.AddRange(
                     ValidationRun(old, "completed"),
                     ValidationRun(old, "failed"),
                     ValidationRun(old, "running"),
+                    ValidationRun(validationExpired, "completed"),
                     ValidationRun(fresh, "completed"));
                 seed.BackupRuns.AddRange(
                     BackupRun(old, "completed"),
@@ -61,14 +99,14 @@ public sealed class OperationalMaintenanceIntegrationTests
             Assert.NotNull(result);
             Assert.Equal(2, result.Proxies);
             Assert.Equal(3, result.CollectionRuns);
-            Assert.Equal(3, result.ValidationRuns);
+            Assert.Equal(4, result.ValidationRuns);
             Assert.Equal(3, result.BackupRuns);
             Assert.Equal(1, result.RecoveredCollectionRuns);
             Assert.Equal(1, result.RecoveredValidationRuns);
             Assert.Equal(1, result.RecoveredBackupRuns);
-            Assert.Equal(11, result.TotalDeleted);
+            Assert.Equal(12, result.TotalDeleted);
             Assert.Equal(3, result.TotalRecovered);
-            Assert.Equal(11, maintenance.LastDeletedRows);
+            Assert.Equal(12, maintenance.LastDeletedRows);
             Assert.Equal(3, maintenance.LastRecoveredRows);
             Assert.True(maintenance.LastSuccessUnixSeconds > 0);
             Assert.Equal(0, maintenance.LastFailureUnixSeconds);
@@ -80,7 +118,7 @@ public sealed class OperationalMaintenanceIntegrationTests
             Assert.True(await verify.Proxies.AnyAsync(proxy => proxy.Host == "4.2.2.13"));
             Assert.True(await verify.Proxies.AnyAsync(proxy => proxy.Host == "4.2.2.14"));
             Assert.True(await verify.Proxies.AnyAsync(proxy => proxy.Host == "4.2.2.16"));
-            Assert.Equal(1, await verify.Runs.CountAsync());
+            Assert.Equal(2, await verify.Runs.CountAsync());
             Assert.Equal(1, await verify.ValidationRuns.CountAsync());
             Assert.Equal(1, await verify.BackupRuns.CountAsync());
             Assert.False(await verify.Runs.AnyAsync(run => run.Status == "running"));
@@ -97,7 +135,7 @@ public sealed class OperationalMaintenanceIntegrationTests
                 await metricsController.Get(CancellationToken.None));
             Assert.Contains($"proxyharbor_maintenance_last_success_timestamp_seconds {maintenance.LastSuccessUnixSeconds}",
                 metricsResult.Content, StringComparison.Ordinal);
-            Assert.Contains("proxyharbor_maintenance_last_deleted_rows 11",
+            Assert.Contains("proxyharbor_maintenance_last_deleted_rows 12",
                 metricsResult.Content, StringComparison.Ordinal);
             Assert.Contains("proxyharbor_maintenance_last_recovered_rows 3",
                 metricsResult.Content, StringComparison.Ordinal);
@@ -214,7 +252,12 @@ public sealed class OperationalMaintenanceIntegrationTests
 
     private static OperationalMaintenanceService CreateService(TestDbFactory factory) => new(
         factory,
-        Options.Create(new CollectorOptions { DeadRetentionDays = 3, RunRetentionDays = 30 }),
+        Options.Create(new CollectorOptions
+        {
+            DeadRetentionDays = 3,
+            RunRetentionDays = 30,
+            ValidationRunRetentionHours = 24
+        }),
         Options.Create(new BackupOptions { HistoryRetentionDays = 365 }));
 
     private static ProxyEndpoint Proxy(

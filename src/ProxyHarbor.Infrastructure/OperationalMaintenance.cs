@@ -9,6 +9,10 @@ namespace ProxyHarbor.Infrastructure;
 /// <summary>Единые bounded retention-запросы для pipeline и независимого maintenance worker.</summary>
 internal static class OperationalRetention
 {
+    // Validation leases создаются тысячами в час. Ограниченный DELETE не держит
+    // большую транзакцию и постепенно освобождает историю без всплеска WAL/IO.
+    internal const int RunCleanupBatchSize = 10_000;
+
     internal static Task<int> PruneProxyMembershipAsync(
         ProxyHarborDbContext db,
         DateTimeOffset now,
@@ -29,15 +33,23 @@ internal static class OperationalRetention
     internal static async Task<(int CollectionRuns, int ValidationRuns)> PruneRunHistoryAsync(
         ProxyHarborDbContext db,
         DateTimeOffset now,
-        int retentionDays,
-        CancellationToken token)
+        int collectionRetentionDays,
+        int validationRetentionHours,
+        CancellationToken token,
+        int maximumRowsPerTable = RunCleanupBatchSize)
     {
-        var cutoff = now.AddDays(-Math.Max(1, retentionDays));
+        var cleanupBatchSize = Math.Clamp(maximumRowsPerTable, 1, RunCleanupBatchSize);
+        var collectionCutoff = now.AddDays(-Math.Max(1, collectionRetentionDays));
+        var validationCutoff = now.AddHours(-Math.Max(1, validationRetentionHours));
         var collectionRuns = await db.Runs
-            .Where(run => run.StartedAt < cutoff && run.Status != "running")
+            .Where(run => run.StartedAt < collectionCutoff && run.Status != "running")
+            .OrderBy(run => run.StartedAt)
+            .Take(cleanupBatchSize)
             .ExecuteDeleteAsync(token);
         var validationRuns = await db.ValidationRuns
-            .Where(run => run.StartedAt < cutoff && run.Status != "running")
+            .Where(run => run.StartedAt < validationCutoff && run.Status != "running")
+            .OrderBy(run => run.StartedAt)
+            .Take(cleanupBatchSize)
             .ExecuteDeleteAsync(token);
         return (collectionRuns, validationRuns);
     }
@@ -99,7 +111,8 @@ public sealed class OperationalMaintenanceService(
             var proxies = await OperationalRetention.PruneProxyMembershipAsync(
                 db, now, collectorOptions.Value.DeadRetentionDays, token);
             var histories = await OperationalRetention.PruneRunHistoryAsync(
-                db, now, collectorOptions.Value.RunRetentionDays, token);
+                db, now, collectorOptions.Value.RunRetentionDays,
+                collectorOptions.Value.ValidationRunRetentionHours, token);
             var currentBackupOptions = backupConfigurationStore is null
                 ? backupOptions.Value
                 : await backupConfigurationStore.GetAsync(token);

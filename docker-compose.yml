@@ -66,6 +66,7 @@ services:
       Collector__BackgroundWorkersEnabled: ${BACKGROUND_WORKERS_ENABLED:-true}
       Collector__ValidationConcurrency: ${VALIDATION_CONCURRENCY:-800}
       Collector__ValidationBatchSize: ${VALIDATION_BATCH_SIZE:-1600}
+      Collector__ValidationRunRetentionHours: ${VALIDATION_RUN_RETENTION_HOURS:-24}
       Backup__Enabled: ${BACKUP_ENABLED:-false}
       Backup__Directory: /app/backups
       Backup__HistoryRetentionDays: ${BACKUP_HISTORY_RETENTION_DAYS:-365}

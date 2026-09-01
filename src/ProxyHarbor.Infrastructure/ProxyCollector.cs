@@ -212,7 +212,8 @@ public sealed class ProxyCollector(
                 // Долгая активная validation-партия другой реплики не должна потерять
                 // ownership своей audit row из-за retention collection-цикла.
                 await OperationalRetention.PruneRunHistoryAsync(
-                    db, now, options.Value.RunRetentionDays, cancellationToken);
+                    db, now, options.Value.RunRetentionDays,
+                    options.Value.ValidationRunRetentionHours, cancellationToken);
 
                 var updated = await db.Runs
                     .Where(item => item.Id == run.Id && item.Status == "running")

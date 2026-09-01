@@ -45,8 +45,10 @@ public sealed class CollectorOptions
     public int LastSeenRefreshMinutes { get; set; } = 360;
     /// <summary>Срок хранения давно не встречавшихся Pending/Dead proxy rows.</summary>
     public int DeadRetentionDays { get; set; } = 3;
-    /// <summary>Срок хранения завершённых collection/validation run'ов.</summary>
+    /// <summary>Срок хранения завершённых collection run'ов.</summary>
     public int RunRetentionDays { get; set; } = 30;
+    /// <summary>Срок хранения подробных validation-партий; активные аренды не удаляются.</summary>
+    public int ValidationRunRetentionHours { get; set; } = 24;
     /// <summary>Публичный контрольный host для TLS-пробы и определения exit IP.</summary>
     public string ProbeHost { get; set; } = "api.ipify.org";
     /// <summary>TCP-порт HTTPS контрольного endpoint.</summary>
