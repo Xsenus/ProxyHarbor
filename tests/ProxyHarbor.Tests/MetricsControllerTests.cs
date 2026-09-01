@@ -33,11 +33,17 @@ public sealed class MetricsControllerTests
 
         var httpTelemetry = new HttpRequestTelemetry();
         httpTelemetry.Record(HttpRouteGroup.Proxies, 503, TimeSpan.FromMilliseconds(250));
+        long idleTimestamp = 1_000;
+        var idleGate = new ValidationClaimIdleGate(
+            () => idleTimestamp, 1_000, TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(30));
+        idleGate.MarkEmpty();
+        Assert.True(idleGate.TryCoalesce(Guid.NewGuid()).Coalesced);
         var controller = new MetricsController(
             new TestDbFactory(options), Options.Create(new CollectorOptions { CollectionIntervalMinutes = 5 }),
             Options.Create(new BackupOptions()),
             new ProbeControlHealth(),
-            httpTelemetry: httpTelemetry);
+            httpTelemetry: httpTelemetry,
+            validationIdleGate: idleGate);
 
         var result = Assert.IsType<ContentResult>(await controller.Get(CancellationToken.None));
         var metrics = result.Content!;
@@ -47,6 +53,12 @@ public sealed class MetricsControllerTests
         Assert.Contains("proxyharbor_builtin_sources_healthy 0", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_builtin_sources_stale 1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_background_workers_enabled 1", metrics, StringComparison.Ordinal);
+        Assert.Contains("# TYPE proxyharbor_validation_empty_claims_coalesced_total counter", metrics,
+            StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_validation_empty_claims_coalesced_total 1", metrics,
+            StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_validation_empty_claim_cooldown_active 1", metrics,
+            StringComparison.Ordinal);
         Assert.Contains("proxyharbor_maintenance_last_success_timestamp_seconds 0", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_maintenance_last_failure_timestamp_seconds 0", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_maintenance_last_deleted_rows 0", metrics, StringComparison.Ordinal);

@@ -122,7 +122,8 @@ public sealed class DistributedProxyValidationIntegrationTests
             using var validator = new ProxyValidator(factory,
                 new ProxyProbeService(Options.Create(settings), origin), Options.Create(settings),
                 NullLogger<ProxyValidator>.Instance);
-            var dispatcher = new DistributedProxyValidationService(factory, validator, Options.Create(settings));
+            var dispatcher = new DistributedProxyValidationService(
+                factory, validator, Options.Create(settings), new ValidationClaimIdleGate());
 
             var claims = await Task.WhenAll(
                 dispatcher.ClaimAsync(firstNode.Id, CancellationToken.None),
@@ -171,6 +172,80 @@ public sealed class DistributedProxyValidationIntegrationTests
                 .Where(x => x.LeaseId == claims[1]!.LeaseId).Select(x => x.Status).SingleAsync());
             Assert.Equal(6, await verify.CheckerNodes.Where(x => x.Id == secondNode.Id)
                 .Select(x => x.CompletedChecks).SingleAsync());
+        }
+        finally
+        {
+            await using var drop = new NpgsqlCommand($"DROP SCHEMA IF EXISTS {schema} CASCADE", admin);
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
+    public async Task EmptyClaimsAreCoalescedForTwoSecondsThenNewWorkIsClaimed()
+    {
+        var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
+        if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
+
+        var schema = $"proxyharbor_idle_claim_{Guid.NewGuid():N}";
+        var connection = new NpgsqlConnectionStringBuilder(baseConnectionString) { SearchPath = schema };
+        await using var admin = new NpgsqlConnection(baseConnectionString);
+        await admin.OpenAsync();
+        await using (var create = new NpgsqlCommand($"CREATE SCHEMA {schema}", admin))
+            await create.ExecuteNonQueryAsync();
+
+        try
+        {
+            var dbOptions = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+                .UseNpgsql(connection.ConnectionString, postgres => postgres.EnableRetryOnFailure()).Options;
+            var factory = new TestDbFactory(dbOptions);
+            await using (var migrationDb = await factory.CreateDbContextAsync())
+                await migrationDb.Database.MigrateAsync();
+
+            var probingNode = Node("idle-probe", batchSize: 1);
+            probingNode.Host = "203.0.113.20";
+            var coalescedNode = Node("idle-coalesced", batchSize: 1);
+            coalescedNode.Host = "203.0.113.21";
+            await using (var seed = await factory.CreateDbContextAsync())
+            {
+                seed.CheckerNodes.AddRange(probingNode, coalescedNode);
+                await seed.SaveChangesAsync();
+            }
+
+            long timestamp = 10_000;
+            var idleGate = new ValidationClaimIdleGate(
+                () => timestamp, 1_000, TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(30));
+            var settings = new CollectorOptions { ProbeTimeoutSeconds = 5 };
+            using var clients = new StubHttpClientFactory();
+            using var origin = new OriginIpProvider(clients, Options.Create(settings), new ProbeControlHealth());
+            using var validator = new ProxyValidator(factory,
+                new ProxyProbeService(Options.Create(settings), origin), Options.Create(settings),
+                NullLogger<ProxyValidator>.Instance);
+            var dispatcher = new DistributedProxyValidationService(
+                factory, validator, Options.Create(settings), idleGate);
+
+            Assert.Null(await dispatcher.ClaimAsync(probingNode.Id, CancellationToken.None));
+            Assert.True(idleGate.CooldownActive);
+
+            var dueProxy = Endpoint("198.51.100.210", ProxyStatus.Pending, DateTimeOffset.UtcNow.AddMinutes(-1));
+            await using (var addWork = await factory.CreateDbContextAsync())
+            {
+                addWork.Proxies.Add(dueProxy);
+                await addWork.SaveChangesAsync();
+            }
+
+            Assert.Null(await dispatcher.ClaimAsync(coalescedNode.Id, CancellationToken.None));
+            Assert.Equal(1, idleGate.CoalescedClaims);
+            await using (var heartbeatCheck = await factory.CreateDbContextAsync())
+                Assert.NotNull(await heartbeatCheck.CheckerNodes.Where(x => x.Id == coalescedNode.Id)
+                    .Select(x => x.LastHeartbeatAt).SingleAsync());
+
+            timestamp += 2_000;
+            var claimed = await dispatcher.ClaimAsync(coalescedNode.Id, CancellationToken.None);
+
+            Assert.NotNull(claimed);
+            Assert.Equal(dueProxy.Id, Assert.Single(claimed!.Items).Id);
+            Assert.False(idleGate.CooldownActive);
         }
         finally
         {
@@ -265,7 +340,8 @@ public sealed class DistributedProxyValidationIntegrationTests
             using var validator = new ProxyValidator(factory,
                 new ProxyProbeService(Options.Create(settings), origin), Options.Create(settings),
                 NullLogger<ProxyValidator>.Instance);
-            var dispatcher = new DistributedProxyValidationService(factory, validator, Options.Create(settings));
+            var dispatcher = new DistributedProxyValidationService(
+                factory, validator, Options.Create(settings), new ValidationClaimIdleGate());
 
             var blockerConnectionString = new NpgsqlConnectionStringBuilder(baseConnectionString)
             {

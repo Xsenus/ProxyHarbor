@@ -19,7 +19,8 @@ public sealed class MetricsController(
     ProbeControlHealth probeControlHealth,
     OperationalMaintenanceService? maintenance = null,
     HttpRequestTelemetry? httpTelemetry = null,
-    ProxyMetricsSnapshotCache? proxySnapshotCache = null) : ControllerBase
+    ProxyMetricsSnapshotCache? proxySnapshotCache = null,
+    ValidationClaimIdleGate? validationIdleGate = null) : ControllerBase
 {
     /// <summary>Возвращает согласованный Prometheus text exposition operational-метрик.</summary>
     [HttpGet]
@@ -112,6 +113,12 @@ public sealed class MetricsController(
             validationTelemetry.FailedRuns);
         Gauge(output, "proxyharbor_validation_runs_active", "Validation batches currently marked as active.",
             validationTelemetry.ActiveRuns);
+        Counter(output, "proxyharbor_validation_empty_claims_coalesced_total",
+            "Empty checker lease polls served without a full validation queue claim on this API replica.",
+            validationIdleGate?.CoalescedClaims ?? 0);
+        Gauge(output, "proxyharbor_validation_empty_claim_cooldown_active",
+            "Whether the short process-local empty validation queue cooldown is currently active.",
+            validationIdleGate?.CooldownActive == true ? 1 : 0);
         Gauge(output, "proxyharbor_background_workers_enabled", "Whether built-in collection and validation workers are enabled.",
             collectorOptions.Value.BackgroundWorkersEnabled ? 1 : 0);
         Counter(output, "proxyharbor_advisory_lock_cleanup_failures_total",

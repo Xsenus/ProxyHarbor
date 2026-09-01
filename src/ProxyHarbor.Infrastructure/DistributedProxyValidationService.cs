@@ -11,11 +11,20 @@ namespace ProxyHarbor.Infrastructure;
 public sealed class DistributedProxyValidationService(
     IDbContextFactory<ProxyHarborDbContext> dbFactory,
     ProxyValidator validator,
-    IOptions<CollectorOptions> options)
+    IOptions<CollectorOptions> options,
+    ValidationClaimIdleGate idleGate)
 {
     /// <summary>Атомарно арендует очередной непересекающийся пакет для включённого узла.</summary>
     public async Task<CheckerLeaseResponse?> ClaimAsync(Guid nodeId, CancellationToken token)
     {
+        var idleDecision = idleGate.TryCoalesce(nodeId);
+        if (idleDecision.Coalesced)
+        {
+            if (idleDecision.PersistHeartbeat)
+                await PersistIdleHeartbeatAsync(nodeId, token);
+            return null;
+        }
+
         var settings = options.Value;
         var now = DateTimeOffset.UtcNow;
         var leaseDuration = ValidationLeasePolicy.Duration(settings.ProbeTimeoutSeconds);
@@ -23,6 +32,7 @@ public sealed class DistributedProxyValidationService(
         var leaseId = Guid.NewGuid();
         var claimed = new List<ProxyEndpoint>();
         CheckerNode? nodeSnapshot = null;
+        var queueWasProbed = false;
 
         await using var strategyDb = await dbFactory.CreateDbContextAsync(token);
         await strategyDb.Database.CreateExecutionStrategy().ExecuteAsync(async () =>
@@ -52,6 +62,7 @@ public sealed class DistributedProxyValidationService(
             node.CurrentLeaseId = null;
             node.CurrentLeaseUntil = null;
             var batchSize = Math.Clamp(node.BatchSize, 1, 10_000);
+            queueWasProbed = true;
             claimed.AddRange(await ValidationQueueClaim.ClaimAsync(db, batchSize, now, token));
 
             var expiredLeaseIds = claimed
@@ -108,6 +119,12 @@ public sealed class DistributedProxyValidationService(
             await transaction.CommitAsync(token);
         });
 
+        if (nodeSnapshot is not null)
+            idleGate.MarkHeartbeat(nodeId);
+        if (claimed.Count > 0)
+            idleGate.MarkWorkAvailable();
+        else if (queueWasProbed)
+            idleGate.MarkEmpty();
         if (nodeSnapshot is null || claimed.Count == 0) return null;
         return new CheckerLeaseResponse(
             leaseId, leaseUntil, Math.Clamp(nodeSnapshot.Concurrency, 1, 1_000),
@@ -227,6 +244,16 @@ public sealed class DistributedProxyValidationService(
             .SetProperty(x => x.RemoteAddress, Bounded(remoteAddress, 64))
             .SetProperty(x => x.DeploymentStatus, "online")
             .SetProperty(x => x.LastError, Bounded(heartbeat.Error, 1000)), token);
+        idleGate.MarkHeartbeat(nodeId);
+    }
+
+    private async Task PersistIdleHeartbeatAsync(Guid nodeId, CancellationToken token)
+    {
+        var now = DateTimeOffset.UtcNow;
+        await using var db = await dbFactory.CreateDbContextAsync(token);
+        await db.CheckerNodes.Where(x => x.Id == nodeId && x.Enabled).ExecuteUpdateAsync(setters => setters
+            .SetProperty(x => x.LastHeartbeatAt, now)
+            .SetProperty(x => x.LastError, (string?)null), token);
     }
 
     private static string? Bounded(string? value, int maximum) =>
