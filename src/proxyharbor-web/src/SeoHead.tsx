@@ -1,5 +1,8 @@
 import { useEffect } from "react";
 import metadata from "./seoMetadata.json";
+import { publicInfoPaths } from "./publicInfoRoutes";
+import { useSiteSettings } from "./siteSettingsContext";
+import type { SiteSettings } from "./siteSettingsModel";
 
 type SeoPage = {
   title: string;
@@ -45,17 +48,20 @@ function setCanonical(url: string) {
   element.href = url;
 }
 
-function structuredData(path: string, page: SeoPage) {
+function structuredData(path: string, page: SeoPage, settings: SiteSettings) {
   const url = `${metadata.siteUrl}${path === "/" ? "/" : path}`;
+  const email = settings.requisites.fields.email;
+  const phone = settings.requisites.fields.phone;
+  const organization: Record<string, unknown> = {
+    "@type": "Organization",
+    "@id": `${metadata.siteUrl}/#organization`,
+    name: metadata.siteName,
+    url: `${metadata.siteUrl}/`,
+  };
+  if (email.visible && email.value.trim()) organization.email = email.value.trim();
+  if (phone.visible && phone.value.trim()) organization.telephone = phone.value.trim();
   const graph: Record<string, unknown>[] = [
-    {
-      "@type": "Organization",
-      "@id": `${metadata.siteUrl}/#organization`,
-      name: metadata.siteName,
-      url: `${metadata.siteUrl}/`,
-      email: "ilel@list.ru",
-      telephone: "+7-913-014-93-49",
-    },
+    organization,
     {
       "@type": "WebSite",
       "@id": `${metadata.siteUrl}/#website`,
@@ -85,7 +91,9 @@ function structuredData(path: string, page: SeoPage) {
       serviceType: "Информационный онлайн-сервис",
       areaServed: "RU",
       provider: { "@id": `${metadata.siteUrl}/#organization` },
-      offers: { "@type": "Offer", url: `${metadata.siteUrl}/pricing`, priceCurrency: "RUB" },
+      ...(settings.sections.pricing.published
+        ? { offers: { "@type": "Offer", url: `${metadata.siteUrl}/pricing`, priceCurrency: "RUB" } }
+        : {}),
     });
   }
 
@@ -94,11 +102,14 @@ function structuredData(path: string, page: SeoPage) {
 
 export function SeoHead() {
   const path = normalizedPath();
+  const { settings, loading } = useSiteSettings();
 
   useEffect(() => {
     const page = pages[path];
     const isPrivate = privatePath.test(path);
-    const isIndexable = Boolean(page) && !isPrivate;
+    const section = publicInfoPaths[path];
+    const published = !section || settings.sections[section].published;
+    const isIndexable = Boolean(page) && !isPrivate && published && !loading;
     const title = page?.title ?? (isPrivate ? "Личный кабинет — ProxyHarbor" : "Страница не найдена — ProxyHarbor");
     const description = page?.description ?? (isPrivate
       ? "Защищённый раздел ProxyHarbor."
@@ -133,8 +144,8 @@ export function SeoHead() {
       script.type = "application/ld+json";
       document.head.append(script);
     }
-    script.textContent = JSON.stringify(structuredData(path, page));
-  }, [path]);
+    script.textContent = JSON.stringify(structuredData(path, page, settings));
+  }, [path, settings, loading]);
 
   return null;
 }

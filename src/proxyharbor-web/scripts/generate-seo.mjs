@@ -19,8 +19,6 @@ function structuredData(path, page) {
       "@id": `${metadata.siteUrl}/#organization`,
       name: metadata.siteName,
       url: `${metadata.siteUrl}/`,
-      email: "ilel@list.ru",
-      telephone: "+7-913-014-93-49",
     },
     {
       "@type": "WebSite",

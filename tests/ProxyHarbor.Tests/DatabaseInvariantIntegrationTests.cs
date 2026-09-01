@@ -52,6 +52,7 @@ public sealed class DatabaseInvariantIntegrationTests
         "CK_ReferralRelationships_Slot",
         "CK_ReferralRewards_Days",
         "CK_ReferralRewards_Kind",
+        "CK_SiteConfigurations_Singleton",
         "CK_Subscriptions_Plan",
         "CK_Subscriptions_Status",
         "CK_Subscriptions_Timeline",

@@ -3,16 +3,21 @@ import { useEffect, useState } from "react";
 import {
   openPrivacyPreferences,
   privacyPreferenceChanged,
+  privacySignalEnabled,
   readAnalyticsChoice,
   writeAnalyticsChoice,
 } from "../privacyPreferences";
+import { useSiteSettings } from "../siteSettingsContext";
 
 export function PrivacyControls() {
-  const [choice, setChoice] = useState(readAnalyticsChoice);
+  const { settings, loading } = useSiteSettings();
+  const revision = settings.cookieConsentRevision;
+  const [choice, setChoice] = useState(() => readAnalyticsChoice(revision));
   const [open, setOpen] = useState(choice === null);
+  const privacySignal = privacySignalEnabled();
 
   useEffect(() => {
-    const refresh = () => setChoice(readAnalyticsChoice());
+    const refresh = () => setChoice(readAnalyticsChoice(revision));
     const show = () => setOpen(true);
     window.addEventListener(privacyPreferenceChanged, refresh);
     window.addEventListener(openPrivacyPreferences, show);
@@ -20,48 +25,73 @@ export function PrivacyControls() {
       window.removeEventListener(privacyPreferenceChanged, refresh);
       window.removeEventListener(openPrivacyPreferences, show);
     };
-  }, []);
+  }, [revision]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const next = readAnalyticsChoice(revision);
+      setChoice(next);
+      if (next === null) setOpen(true);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [revision]);
 
   const choose = (value: "accepted" | "rejected") => {
-    writeAnalyticsChoice(value);
-    setChoice(value);
+    const effective = privacySignal ? "rejected" : value;
+    writeAnalyticsChoice(effective, revision);
+    setChoice(effective);
     setOpen(false);
   };
 
+  if (loading) return null;
+
+  const enabledAnalytics = [
+    settings.analytics.firstPartyEnabled && "собственная статистика ProxyHarbor",
+    settings.analytics.yandex.enabled && "Яндекс Метрика",
+    settings.analytics.google.enabled && "Google Analytics",
+    settings.analytics.vk.enabled && "VK Pixel",
+  ].filter(Boolean) as string[];
+
   return (
     <>
-      <button
+      {settings.cookies.showSettingsButton && choice !== null && <button
         className="privacy-settings-button"
         type="button"
         onClick={() => setOpen(true)}
         aria-label="Настройки cookies"
       >
         <Settings2 /> Cookies
-      </button>
+      </button>}
       {open && (
-        <section
-          className="privacy-consent-banner"
-          role="dialog"
-          aria-modal="false"
-          aria-labelledby="privacy-consent-title"
-        >
-          <button
+        <div className={`privacy-consent-layer ${choice === null ? "required" : ""}`}>
+          <section
+            className="privacy-consent-banner"
+            role="dialog"
+            aria-modal={choice === null}
+            aria-labelledby="privacy-consent-title"
+          >
+          {choice !== null && <button
             className="privacy-consent-close"
             type="button"
             aria-label="Закрыть"
             onClick={() => setOpen(false)}
           >
             <X />
-          </button>
+          </button>}
           <Cookie />
           <div>
-            <h2 id="privacy-consent-title">Настройки конфиденциальности</h2>
-            <p>
-              Необходимые cookies обеспечивают вход и язык сайта. Необязательная
-              статистика посещений включается только с вашего разрешения.
-              Рекламных cookies нет.
-            </p>
+            <h2 id="privacy-consent-title">{settings.cookies.bannerTitle}</h2>
+            <p>{settings.cookies.bannerText}</p>
+            {enabledAnalytics.length > 0 && (
+              <p className="privacy-consent-providers">
+                По разрешению: {enabledAnalytics.join(", ")}.
+              </p>
+            )}
             <a href="/cookies">Подробнее о cookies</a>
+            {choice === null && <small>Для продолжения выберите один из вариантов.</small>}
+            {privacySignal && (
+              <small>Браузер передал GPC/DNT — необязательная статистика будет отключена.</small>
+            )}
             {choice === "rejected" && (
               <small>Необязательная статистика отключена.</small>
             )}
@@ -74,11 +104,13 @@ export function PrivacyControls() {
               className="primary"
               type="button"
               onClick={() => choose("accepted")}
+              disabled={privacySignal || enabledAnalytics.length === 0}
             >
               Разрешить статистику
             </button>
           </div>
-        </section>
+          </section>
+        </div>
       )}
     </>
   );

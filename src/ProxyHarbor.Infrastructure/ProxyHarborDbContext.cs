@@ -43,6 +43,8 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
     public DbSet<UserNotification> UserNotifications => Set<UserNotification>();
     /// <summary>Singleton runtime-настройка платежей с защищёнными секретами.</summary>
     public DbSet<PaymentConfiguration> PaymentConfigurations => Set<PaymentConfiguration>();
+    /// <summary>Singleton runtime-настройка публичного сайта и документов.</summary>
+    public DbSet<SiteConfiguration> SiteConfigurations => Set<SiteConfiguration>();
     /// <summary>Аудит ручных изменений подписок.</summary>
     public DbSet<SubscriptionAdminAction> SubscriptionAdminActions => Set<SubscriptionAdminAction>();
     /// <summary>Агрегированная статистика выдачи адресов и посещений сайта.</summary>
@@ -211,6 +213,11 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
         paymentConfiguration.Property(x => x.ProtectedSecrets).HasMaxLength(65_536);
         paymentConfiguration.ToTable(table =>
             table.HasCheckConstraint("CK_PaymentConfigurations_Singleton", "\"Id\" = 1"));
+
+        var siteConfiguration = builder.Entity<SiteConfiguration>();
+        siteConfiguration.Property(x => x.SettingsJson).HasColumnType("jsonb");
+        siteConfiguration.ToTable(table => table.HasCheckConstraint(
+            "CK_SiteConfigurations_Singleton", "\"Id\" = 1"));
 
         var subscriptionAction = builder.Entity<SubscriptionAdminAction>();
         subscriptionAction.HasIndex(x => new { x.SubscriptionId, x.CreatedAt });
