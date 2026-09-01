@@ -36,7 +36,7 @@ public sealed class DatabaseSeederIntegrationTests
                 SELECT indexdef
                 FROM pg_indexes
                 WHERE schemaname = @schema
-                  AND indexname = 'IX_Proxies_ValidationClaimOrder'
+                  AND indexname = 'IX_Proxies_ValidationClaimUnleased'
                 """,
                 admin);
             inspect.Parameters.AddWithValue("schema", schema);
@@ -47,6 +47,32 @@ public sealed class DatabaseSeederIntegrationTests
             Assert.Contains("WHEN 0 THEN 1", definition, StringComparison.Ordinal);
             Assert.Contains("\"NextCheckAt\" NULLS FIRST", definition, StringComparison.Ordinal);
             Assert.Contains("\"LastCheckedAt\" NULLS FIRST", definition, StringComparison.Ordinal);
+            Assert.Contains("WHERE (\"CheckLeaseUntil\" IS NULL)", definition, StringComparison.Ordinal);
+
+            await using var inspectExpiredLease = new NpgsqlCommand(
+                """
+                SELECT indexdef
+                FROM pg_indexes
+                WHERE schemaname = @schema
+                  AND indexname = 'IX_Proxies_ExpiredLeaseClaim'
+                """,
+                admin);
+            inspectExpiredLease.Parameters.AddWithValue("schema", schema);
+            var expiredLeaseDefinition = Assert.IsType<string>(await inspectExpiredLease.ExecuteScalarAsync());
+            Assert.Contains("(\"CheckLeaseUntil\")", expiredLeaseDefinition, StringComparison.Ordinal);
+            Assert.Contains("WHERE (\"CheckLeaseUntil\" IS NOT NULL)", expiredLeaseDefinition,
+                StringComparison.Ordinal);
+
+            await using var inspectRetired = new NpgsqlCommand(
+                """
+                SELECT EXISTS (
+                    SELECT 1 FROM pg_indexes
+                    WHERE schemaname = @schema
+                      AND indexname = 'IX_Proxies_ValidationClaimOrder')
+                """,
+                admin);
+            inspectRetired.Parameters.AddWithValue("schema", schema);
+            Assert.False(Assert.IsType<bool>(await inspectRetired.ExecuteScalarAsync()));
 
             await using var inspectVpn = new NpgsqlCommand(
                 """

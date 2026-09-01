@@ -11,7 +11,11 @@ namespace ProxyHarbor.Api;
 public sealed class HttpRequestTelemetry
 {
     private static readonly double[] DurationBuckets = [0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10];
-    private static readonly string[] RouteLabels = ["proxies", "export", "stats", "sources", "admin", "health", "openapi", "vpn", "other"];
+    private static readonly string[] RouteLabels =
+    [
+        "proxies", "export", "stats", "sources", "admin", "health", "openapi", "vpn",
+        "checker-lease", "checker-results", "checker-heartbeat", "other"
+    ];
     private static readonly string[] StatusLabels = ["1xx", "2xx", "3xx", "4xx", "5xx", "other"];
 
     private readonly long[,] _requests = new long[RouteLabels.Length, StatusLabels.Length];
@@ -102,6 +106,9 @@ internal enum HttpRouteGroup
     Health,
     OpenApi,
     Vpn,
+    CheckerLease,
+    CheckerResults,
+    CheckerHeartbeat,
     Other
 }
 
@@ -142,13 +149,18 @@ public sealed class HttpRequestTelemetryMiddleware(RequestDelegate next)
         }
     }
 
-    /// <summary>Сводит любые пользовательские path к девяти заранее известным значениям.</summary>
+    /// <summary>Сводит любые пользовательские path к заранее известным значениям.</summary>
     internal static HttpRouteGroup? Classify(PathString path)
     {
         if (path.StartsWithSegments("/metrics")) return null;
         if (path.StartsWithSegments("/api/v1/export")) return HttpRouteGroup.Export;
         if (path.StartsWithSegments("/api/v1/proxies")) return HttpRouteGroup.Proxies;
         if (path.StartsWithSegments("/api/v1/vpn")) return HttpRouteGroup.Vpn;
+        if (path.Equals("/api/v1/checker-agent/lease")) return HttpRouteGroup.CheckerLease;
+        if (path.StartsWithSegments("/api/v1/checker-agent/leases") &&
+            path.Value?.EndsWith("/results", StringComparison.OrdinalIgnoreCase) == true)
+            return HttpRouteGroup.CheckerResults;
+        if (path.StartsWithSegments("/api/v1/checker-agent")) return HttpRouteGroup.CheckerHeartbeat;
         if (path.StartsWithSegments("/api/v1/stats")) return HttpRouteGroup.Stats;
         if (path.StartsWithSegments("/api/v1/sources")) return HttpRouteGroup.Sources;
         if (path.StartsWithSegments("/api/v1/admin")) return HttpRouteGroup.Admin;
