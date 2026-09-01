@@ -1,4 +1,5 @@
 using System.Data;
+using System.Threading.Channels;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Options;
@@ -208,42 +209,88 @@ internal static class ProxyMetricsSnapshotReader
 public sealed class ProxyMetricsSnapshotCache(
     IDbContextFactory<ProxyHarborDbContext> dbFactory,
     IOptions<CollectorOptions> collectorOptions,
-    ILogger<ProxyMetricsSnapshotCache> logger) : IDisposable
+    ILogger<ProxyMetricsSnapshotCache> logger,
+    TimeProvider timeProvider) : IDisposable
 {
     private static readonly Action<ILogger, DateTimeOffset, Exception?> RefreshFailed =
         LoggerMessage.Define<DateTimeOffset>(
             LogLevel.Warning,
             new EventId(1501, "ProxyMetricsSnapshotRefreshFailed"),
             "Не удалось обновить proxy metrics snapshot; используется снимок {CapturedAt}.");
-    internal static readonly TimeSpan MaximumAge = TimeSpan.FromSeconds(20);
-    internal static readonly TimeSpan RefreshInterval = TimeSpan.FromSeconds(15);
+    // Exact aggregation currently reads the entire large proxy table. A one-minute
+    // soft TTL keeps dashboards current without spending database CPU when nobody
+    // consumes the snapshot. Five minutes is the fail-safe maximum: a missing
+    // background consumer then makes the request refresh synchronously.
+    internal static readonly TimeSpan MaximumAge = TimeSpan.FromMinutes(1);
+    internal static readonly TimeSpan MaximumStaleAge = TimeSpan.FromMinutes(5);
     private readonly SemaphoreSlim _refreshGate = new(1, 1);
+    private readonly Channel<byte> _refreshRequests = Channel.CreateBounded<byte>(new BoundedChannelOptions(1)
+    {
+        SingleReader = true,
+        SingleWriter = false,
+        FullMode = BoundedChannelFullMode.Wait,
+        AllowSynchronousContinuations = false
+    });
     private CacheEntry? _current;
+    private long _databaseReads;
+    private long _refreshRequestsQueued;
+    private long _refreshRequestsCoalesced;
 
-    internal Task<ProxyMetricsSnapshot> GetAsync(CancellationToken token) =>
-        GetOrRefreshAsync(force: false, token);
+    internal Task<ProxyMetricsSnapshot> GetAsync(CancellationToken token)
+    {
+        var observed = Volatile.Read(ref _current);
+        var now = timeProvider.GetUtcNow();
+        if (observed is null || now - observed.StoredAt >= MaximumStaleAge)
+            return GetOrRefreshAsync(force: false, token);
+        if (IsFresh(observed, now)) return Task.FromResult(observed.Snapshot);
+
+        // Serve the last internally consistent snapshot immediately. The bounded
+        // signal means any number of simultaneous /stats and /metrics consumers
+        // causes at most one background full-table aggregate.
+        if (_refreshRequests.Writer.TryWrite(0))
+            Interlocked.Increment(ref _refreshRequestsQueued);
+        else
+            Interlocked.Increment(ref _refreshRequestsCoalesced);
+        return Task.FromResult(observed.Snapshot);
+    }
 
     internal Task<ProxyMetricsSnapshot> RefreshAsync(CancellationToken token) =>
         GetOrRefreshAsync(force: true, token);
 
+    internal Task<ProxyMetricsSnapshot> WarmAsync(CancellationToken token) =>
+        GetOrRefreshAsync(force: false, token);
+
+    internal ValueTask<bool> WaitForRefreshRequestAsync(CancellationToken token) =>
+        _refreshRequests.Reader.WaitToReadAsync(token);
+
+    internal void DrainRefreshRequests()
+    {
+        while (_refreshRequests.Reader.TryRead(out _)) { }
+    }
+
+    internal long DatabaseReads => Interlocked.Read(ref _databaseReads);
+    internal long RefreshRequestsQueued => Interlocked.Read(ref _refreshRequestsQueued);
+    internal long RefreshRequestsCoalesced => Interlocked.Read(ref _refreshRequestsCoalesced);
+
     private async Task<ProxyMetricsSnapshot> GetOrRefreshAsync(bool force, CancellationToken token)
     {
         var observed = Volatile.Read(ref _current);
-        if (!force && IsFresh(observed, DateTimeOffset.UtcNow)) return observed!.Snapshot;
+        if (!force && IsFresh(observed, timeProvider.GetUtcNow())) return observed!.Snapshot;
 
         await _refreshGate.WaitAsync(token);
         try
         {
             var latest = Volatile.Read(ref _current);
-            if (IsFresh(latest, DateTimeOffset.UtcNow) &&
+            if (IsFresh(latest, timeProvider.GetUtcNow()) &&
                 (!force || !ReferenceEquals(latest, observed)))
                 return latest!.Snapshot;
 
             try
             {
                 await using var db = await dbFactory.CreateDbContextAsync(token);
-                var now = DateTimeOffset.UtcNow;
+                var now = timeProvider.GetUtcNow();
                 var options = collectorOptions.Value;
+                Interlocked.Increment(ref _databaseReads);
                 var snapshot = await BufferedReadSnapshot.ExecuteAsync(db,
                     innerToken => ProxyMetricsSnapshotReader.ReadAsync(
                         db,
@@ -252,7 +299,7 @@ public sealed class ProxyMetricsSnapshotCache(
                         now.AddMinutes(-options.PublicFreshnessMinutes),
                         innerToken),
                     token);
-                Volatile.Write(ref _current, new CacheEntry(snapshot, DateTimeOffset.UtcNow));
+                Volatile.Write(ref _current, new CacheEntry(snapshot, timeProvider.GetUtcNow()));
                 return snapshot;
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested)
@@ -274,29 +321,58 @@ public sealed class ProxyMetricsSnapshotCache(
     private static bool IsFresh(CacheEntry? entry, DateTimeOffset now) =>
         entry is not null && now - entry.StoredAt < MaximumAge;
 
-    /// <summary>Освобождает gate singleton-кэша при остановке host.</summary>
-    public void Dispose() => _refreshGate.Dispose();
+    /// <summary>Завершает ожидающий demand-worker и освобождает gate singleton-кэша.</summary>
+    public void Dispose()
+    {
+        _refreshRequests.Writer.TryComplete();
+        _refreshGate.Dispose();
+    }
 
     private sealed record CacheEntry(ProxyMetricsSnapshot Snapshot, DateTimeOffset StoredAt);
 }
 
-/// <summary>Поддерживает общий aggregate тёплым до прихода HTTP/scrape запроса.</summary>
+/// <summary>
+/// Один раз прогревает aggregate, затем обновляет его только по объединённому
+/// demand-сигналу. В простое большая таблица больше не сканируется по таймеру.
+/// </summary>
 internal sealed class ProxyMetricsSnapshotRefreshWorker(
     ProxyMetricsSnapshotCache cache,
     ILogger<ProxyMetricsSnapshotRefreshWorker> logger) : BackgroundService
 {
-    private static readonly Action<ILogger, Exception?> WarmupFailed = LoggerMessage.Define(
+    private static readonly Action<ILogger, Exception?> BackgroundRefreshFailed = LoggerMessage.Define(
         LogLevel.Warning,
-        new EventId(1502, "ProxyMetricsSnapshotWarmupFailed"),
-        "Не удалось прогреть proxy metrics snapshot.");
+        new EventId(1502, "ProxyMetricsSnapshotBackgroundRefreshFailed"),
+        "Фоновое обновление proxy metrics snapshot не удалось.");
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        try
+        {
+            cache.DrainRefreshRequests();
+            await cache.WarmAsync(stoppingToken);
+            cache.DrainRefreshRequests();
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            return;
+        }
+        catch (Exception exception)
+        {
+            // Startup failure must not terminate the demand consumer. A later
+            // successful cold request can populate the cache and wake this worker.
+            BackgroundRefreshFailed(logger, exception);
+        }
+
         while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
+                if (!await cache.WaitForRefreshRequestAsync(stoppingToken)) break;
+                // Сигналы, накопленные до и во время текущего refresh, относятся
+                // к одному устаревшему snapshot и не должны запускать второй scan.
+                cache.DrainRefreshRequests();
                 await cache.RefreshAsync(stoppingToken);
+                cache.DrainRefreshRequests();
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -304,10 +380,9 @@ internal sealed class ProxyMetricsSnapshotRefreshWorker(
             }
             catch (Exception exception)
             {
-                WarmupFailed(logger, exception);
+                BackgroundRefreshFailed(logger, exception);
+                cache.DrainRefreshRequests();
             }
-
-            await Task.Delay(ProxyMetricsSnapshotCache.RefreshInterval, stoppingToken);
         }
     }
 }
