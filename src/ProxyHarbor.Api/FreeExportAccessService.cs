@@ -81,6 +81,9 @@ public sealed class FreeExportAccessService(IDbContextFactory<ProxyHarborDbConte
         CancellationToken cancellationToken)
     {
         var userId = TryGetUserId(principal);
+        if (principal.IsInRole(UserRoles.Administrator))
+            return new(true, true, int.MaxValue, null, "paid");
+
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
         if (await HasPaidAccessAsync(db, principal, userId, cancellationToken))
             return new(true, true, int.MaxValue, null, "paid");
@@ -129,8 +132,12 @@ public sealed class FreeExportAccessService(IDbContextFactory<ProxyHarborDbConte
     /// <inheritdoc />
     public async Task<bool> HasPaidAccessAsync(ClaimsPrincipal principal, CancellationToken cancellationToken)
     {
+        if (principal.IsInRole(UserRoles.Administrator)) return true;
+        var userId = TryGetUserId(principal);
+        if (!userId.HasValue) return false;
+
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
-        return await HasPaidAccessAsync(db, principal, TryGetUserId(principal), cancellationToken);
+        return await HasPaidAccessAsync(db, principal, userId, cancellationToken);
     }
 
     private async Task<FreeExportAccess> AcquireInMemoryProviderAsync(

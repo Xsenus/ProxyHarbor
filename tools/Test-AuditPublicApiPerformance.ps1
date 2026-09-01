@@ -53,7 +53,10 @@ function Wait-PerformanceMock([int]$Port) {
     }
 }
 
-function Invoke-PerformanceCase([string]$Mode, [bool]$ShouldSucceed) {
+function Invoke-PerformanceCase(
+    [string]$Mode,
+    [bool]$ShouldSucceed,
+    [ValidateSet('Paid', 'Anonymous')][string]$AccessMode = 'Paid') {
     $port = Get-FreeTcpPort
     $job = Start-PerformanceMock -Port $port -Mode $Mode
     $reportPath = Join-Path $fixtureRoot "$Mode.json"
@@ -63,7 +66,8 @@ function Invoke-PerformanceCase([string]$Mode, [bool]$ShouldSucceed) {
         try {
             $hotLimit = if ($Mode -eq 'slow') { 5 } else { 1000 }
             & $auditScript -ApiBaseUrl "http://127.0.0.1:$port" -SamplesPerRoute 5 `
-                -MaxHotP95Ms $hotLimit -MaxColdP95Ms $hotLimit -ReportPath $reportPath *> $null
+                -AccessMode $AccessMode -MaxHotP95Ms $hotLimit -MaxColdP95Ms $hotLimit `
+                -ReportPath $reportPath *> $null
         }
         catch { $rejected = $true }
         $completed = Wait-Job $job -Timeout 10
@@ -75,6 +79,9 @@ function Invoke-PerformanceCase([string]$Mode, [bool]$ShouldSucceed) {
             $report.totalRequests -ne 17 -or $report.routes.Count -ne 3 -or
             $report.coldPageBase -lt 1 -or $report.coldPageBase -gt 49970 -or $report.error)) {
             throw 'Положительный performance contract нарушен.'
+        }
+        if ($ShouldSucceed -and $report.accessMode -ne $AccessMode) {
+            throw "Performance report потерял режим доступа $AccessMode."
         }
         if (-not $ShouldSucceed -and (-not $rejected -or $report.success -or -not $report.error)) {
             throw "Отрицательный performance contract $Mode был принят."
@@ -90,12 +97,19 @@ function Invoke-PerformanceCase([string]$Mode, [bool]$ShouldSucceed) {
 try {
     [IO.Directory]::CreateDirectory($fixtureRoot) | Out-Null
     $success = Invoke-PerformanceCase success $true
+    $anonymous = Invoke-PerformanceCase success $true Anonymous
     $slow = Invoke-PerformanceCase slow $false
     $failure = Invoke-PerformanceCase failure $false
     $rateLimit = Invoke-PerformanceCase rate-limit $false
     if ($slow.error -notmatch 'SLO' -or $failure.error -notmatch '503' -or
         $rateLimit.error -notmatch '429') {
         throw 'Performance negative contracts не сохранили точную причину отказа.'
+    }
+    $anonymousNames = @($anonymous.routes | ForEach-Object name)
+    if ($anonymousNames -notcontains 'proxy-catalog-anonymous-hot' -or
+        $anonymousNames -notcontains 'vpn-catalog-anonymous-hot' -or
+        $anonymousNames -notcontains 'stats-hot') {
+        throw 'Anonymous performance contract не проверяет фактические публичные каталоги.'
     }
     $repositoryRoot = Split-Path -Parent $PSScriptRoot
     foreach ($workflowPath in @('.github/workflows/ci.yml', '.github/workflows/release.yml')) {

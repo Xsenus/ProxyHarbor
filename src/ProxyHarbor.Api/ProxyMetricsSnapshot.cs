@@ -1,6 +1,7 @@
 using System.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
+using Microsoft.Extensions.Options;
 using Npgsql;
 using NpgsqlTypes;
 using ProxyHarbor.Domain;
@@ -19,7 +20,8 @@ internal sealed record ProxyMetricsSnapshot(
     long NeverAttempted,
     long StaleUnseen,
     long Published,
-    DateTimeOffset? LastAttemptAt);
+    DateTimeOffset? LastAttemptAt,
+    DateTimeOffset CapturedAt);
 
 /// <summary>Одна компактная status/protocol-строка PostgreSQL partial aggregate.</summary>
 internal sealed record ProxyMetricsRow(
@@ -31,6 +33,10 @@ internal sealed record ProxyMetricsRow(
     long NeverAttempted,
     long StaleUnseen,
     long Published,
+    long StaleAlive,
+    long Scheduled,
+    long FreshLatencyTotal,
+    long FreshLatencySamples,
     DateTimeOffset? LastAttemptAt);
 
 /// <summary>
@@ -55,6 +61,16 @@ internal static class ProxyMetricsSnapshotReader
                    ("CheckLeaseUntil" IS NULL OR "CheckLeaseUntil" < @now))::bigint AS "StaleUnseen",
                count(*) FILTER (WHERE
                    "Status" = @alive_status AND "LastCheckedAt" >= @fresh_after)::bigint AS "Published",
+               count(*) FILTER (WHERE
+                   "Status" = @alive_status AND
+                   ("LastCheckedAt" IS NULL OR "LastCheckedAt" < @fresh_after))::bigint AS "StaleAlive",
+               count(*) FILTER (WHERE "NextCheckAt" > @now)::bigint AS "Scheduled",
+               coalesce(sum("LatencyMs"::bigint) FILTER (WHERE
+                   "Status" = @alive_status AND "LastCheckedAt" >= @fresh_after AND
+                   "LatencyMs" IS NOT NULL), 0)::bigint AS "FreshLatencyTotal",
+               count(*) FILTER (WHERE
+                   "Status" = @alive_status AND "LastCheckedAt" >= @fresh_after AND
+                   "LatencyMs" IS NOT NULL)::bigint AS "FreshLatencySamples",
                max("LastValidationAttemptAt") AS "LastAttemptAt"
         FROM "Proxies"
         GROUP BY "Status", "Protocol"
@@ -108,10 +124,14 @@ internal static class ProxyMetricsSnapshotReader
                 reader.GetInt64(5),
                 reader.GetInt64(6),
                 reader.GetInt64(7),
-                reader.IsDBNull(8) ? null : reader.GetFieldValue<DateTimeOffset>(8)));
+                reader.GetInt64(8),
+                reader.GetInt64(9),
+                reader.GetInt64(10),
+                reader.GetInt64(11),
+                reader.IsDBNull(12) ? null : reader.GetFieldValue<DateTimeOffset>(12)));
         }
 
-        return Aggregate(rows);
+        return Aggregate(rows, now);
     }
 
     /// <summary>
@@ -142,12 +162,20 @@ internal static class ProxyMetricsSnapshotReader
                     (proxy.CheckLeaseUntil == null || proxy.CheckLeaseUntil < now)),
                 group.LongCount(proxy =>
                     proxy.Status == ProxyStatus.Alive && proxy.LastCheckedAt >= freshAfter),
+                group.LongCount(proxy => proxy.Status == ProxyStatus.Alive &&
+                    (proxy.LastCheckedAt == null || proxy.LastCheckedAt < freshAfter)),
+                group.LongCount(proxy => proxy.NextCheckAt > now),
+                group.Where(proxy => proxy.Status == ProxyStatus.Alive &&
+                    proxy.LastCheckedAt >= freshAfter && proxy.LatencyMs != null)
+                    .Sum(proxy => (long?)proxy.LatencyMs) ?? 0,
+                group.LongCount(proxy => proxy.Status == ProxyStatus.Alive &&
+                    proxy.LastCheckedAt >= freshAfter && proxy.LatencyMs != null),
                 group.Max(proxy => proxy.LastValidationAttemptAt)))
             .ToArrayAsync(token);
-        return Aggregate(rows);
+        return Aggregate(rows, now);
     }
 
-    private static ProxyMetricsSnapshot Aggregate(IReadOnlyList<ProxyMetricsRow> rows)
+    private static ProxyMetricsSnapshot Aggregate(IReadOnlyList<ProxyMetricsRow> rows, DateTimeOffset capturedAt)
     {
         long due = 0;
         long leased = 0;
@@ -168,6 +196,118 @@ internal static class ProxyMetricsSnapshotReader
         }
 
         return new ProxyMetricsSnapshot(
-            rows, due, leased, neverAttempted, staleUnseen, published, lastAttemptAt);
+            rows, due, leased, neverAttempted, staleUnseen, published, lastAttemptAt, capturedAt);
+    }
+}
+
+/// <summary>
+/// Разделяет один дорогой proxy aggregate между публичной сводкой и Prometheus.
+/// Одновременные cache misses объединяются, а при кратком сбое БД возвращается
+/// последний согласованный снимок вместо задержки/ошибки пользовательского запроса.
+/// </summary>
+public sealed class ProxyMetricsSnapshotCache(
+    IDbContextFactory<ProxyHarborDbContext> dbFactory,
+    IOptions<CollectorOptions> collectorOptions,
+    ILogger<ProxyMetricsSnapshotCache> logger) : IDisposable
+{
+    private static readonly Action<ILogger, DateTimeOffset, Exception?> RefreshFailed =
+        LoggerMessage.Define<DateTimeOffset>(
+            LogLevel.Warning,
+            new EventId(1501, "ProxyMetricsSnapshotRefreshFailed"),
+            "Не удалось обновить proxy metrics snapshot; используется снимок {CapturedAt}.");
+    internal static readonly TimeSpan MaximumAge = TimeSpan.FromSeconds(20);
+    internal static readonly TimeSpan RefreshInterval = TimeSpan.FromSeconds(15);
+    private readonly SemaphoreSlim _refreshGate = new(1, 1);
+    private CacheEntry? _current;
+
+    internal Task<ProxyMetricsSnapshot> GetAsync(CancellationToken token) =>
+        GetOrRefreshAsync(force: false, token);
+
+    internal Task<ProxyMetricsSnapshot> RefreshAsync(CancellationToken token) =>
+        GetOrRefreshAsync(force: true, token);
+
+    private async Task<ProxyMetricsSnapshot> GetOrRefreshAsync(bool force, CancellationToken token)
+    {
+        var observed = Volatile.Read(ref _current);
+        if (!force && IsFresh(observed, DateTimeOffset.UtcNow)) return observed!.Snapshot;
+
+        await _refreshGate.WaitAsync(token);
+        try
+        {
+            var latest = Volatile.Read(ref _current);
+            if (IsFresh(latest, DateTimeOffset.UtcNow) &&
+                (!force || !ReferenceEquals(latest, observed)))
+                return latest!.Snapshot;
+
+            try
+            {
+                await using var db = await dbFactory.CreateDbContextAsync(token);
+                var now = DateTimeOffset.UtcNow;
+                var options = collectorOptions.Value;
+                var snapshot = await BufferedReadSnapshot.ExecuteAsync(db,
+                    innerToken => ProxyMetricsSnapshotReader.ReadAsync(
+                        db,
+                        now,
+                        now.AddDays(-Math.Max(1, options.DeadRetentionDays)),
+                        now.AddMinutes(-options.PublicFreshnessMinutes),
+                        innerToken),
+                    token);
+                Volatile.Write(ref _current, new CacheEntry(snapshot, DateTimeOffset.UtcNow));
+                return snapshot;
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception) when (latest is not null)
+            {
+                RefreshFailed(logger, latest.Snapshot.CapturedAt, exception);
+                return latest.Snapshot;
+            }
+        }
+        finally
+        {
+            _refreshGate.Release();
+        }
+    }
+
+    private static bool IsFresh(CacheEntry? entry, DateTimeOffset now) =>
+        entry is not null && now - entry.StoredAt < MaximumAge;
+
+    /// <summary>Освобождает gate singleton-кэша при остановке host.</summary>
+    public void Dispose() => _refreshGate.Dispose();
+
+    private sealed record CacheEntry(ProxyMetricsSnapshot Snapshot, DateTimeOffset StoredAt);
+}
+
+/// <summary>Поддерживает общий aggregate тёплым до прихода HTTP/scrape запроса.</summary>
+internal sealed class ProxyMetricsSnapshotRefreshWorker(
+    ProxyMetricsSnapshotCache cache,
+    ILogger<ProxyMetricsSnapshotRefreshWorker> logger) : BackgroundService
+{
+    private static readonly Action<ILogger, Exception?> WarmupFailed = LoggerMessage.Define(
+        LogLevel.Warning,
+        new EventId(1502, "ProxyMetricsSnapshotWarmupFailed"),
+        "Не удалось прогреть proxy metrics snapshot.");
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            try
+            {
+                await cache.RefreshAsync(stoppingToken);
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (Exception exception)
+            {
+                WarmupFailed(logger, exception);
+            }
+
+            await Task.Delay(ProxyMetricsSnapshotCache.RefreshInterval, stoppingToken);
+        }
     }
 }

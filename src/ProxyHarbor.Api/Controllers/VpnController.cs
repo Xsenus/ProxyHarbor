@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.OutputCaching;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using ProxyHarbor.Domain;
@@ -32,6 +33,7 @@ public sealed class VpnController(
 
     /// <summary>Возвращает страницу VPN endpoint; бесплатный тариф получает смешанные 10 записей.</summary>
     [HttpGet]
+    [OutputCache(PolicyName = PublicOutputCachePolicies.VpnCatalog)]
     public async Task<ActionResult<PagedResult<VpnEndpointResponse>>> Get(
         [FromQuery] int page = 1, [FromQuery] int pageSize = 10,
         [FromQuery] VpnProtocol? protocol = null, [FromQuery] VpnEndpointStatus? status = null,
@@ -88,6 +90,7 @@ public sealed class VpnController(
 
     /// <summary>Возвращает страны доступных VPN endpoint для фирменного фильтра.</summary>
     [HttpGet("countries")]
+    [OutputCache(PolicyName = PublicOutputCachePolicies.Countries)]
     public async Task<ActionResult<IReadOnlyList<ProxyCountryDto>>> Countries(CancellationToken token)
     {
         await using var db = await dbFactory.CreateDbContextAsync(token);
