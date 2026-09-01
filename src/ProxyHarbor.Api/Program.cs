@@ -215,12 +215,12 @@ builder.Services.AddOutputCache(options =>
     options.SizeLimit = 32 * 1024 * 1024;
     options.MaximumBodySize = 2 * 1024 * 1024;
     options.AddPolicy(PublicOutputCachePolicies.ProxyCatalog, policy => policy
-        .With(context => PublicOutputCachePolicies.IsAnonymous(context.HttpContext))
+        .With(context => PublicOutputCachePolicies.IsAnonymousFirstPage(context.HttpContext))
         .Expire(PublicOutputCachePolicies.CatalogExpiration)
         .SetVaryByQuery(PublicOutputCachePolicies.ListVaryByQuery)
         .VaryByValue(PublicOutputCachePolicies.CultureKey));
     options.AddPolicy(PublicOutputCachePolicies.VpnCatalog, policy => policy
-        .With(context => PublicOutputCachePolicies.IsAnonymous(context.HttpContext))
+        .With(context => PublicOutputCachePolicies.IsAnonymousFirstPage(context.HttpContext))
         .Expire(PublicOutputCachePolicies.CatalogExpiration)
         .SetVaryByQuery(PublicOutputCachePolicies.VpnListVaryByQuery)
         .VaryByValue(PublicOutputCachePolicies.CultureKey));
