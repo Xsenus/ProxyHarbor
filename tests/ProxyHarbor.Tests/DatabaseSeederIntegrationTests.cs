@@ -58,7 +58,22 @@ public sealed class DatabaseSeederIntegrationTests
                 admin);
             inspectVpn.Parameters.AddWithValue("schema", schema);
             var vpnDefinition = Assert.IsType<string>(await inspectVpn.ExecuteScalarAsync());
-            Assert.Contains("\"NextCheckAt\", \"LastCheckedAt\" NULLS FIRST", vpnDefinition,
+            Assert.Contains("\"NextCheckAt\", \"LastCheckedAt\" NULLS FIRST, \"Id\"", vpnDefinition,
+                StringComparison.Ordinal);
+
+            await using var inspectVpnNull = new NpgsqlCommand(
+                """
+                SELECT indexdef
+                FROM pg_indexes
+                WHERE schemaname = @schema
+                  AND indexname = 'IX_VpnEndpoints_ValidationNullOrder'
+                """,
+                admin);
+            inspectVpnNull.Parameters.AddWithValue("schema", schema);
+            var vpnNullDefinition = Assert.IsType<string>(await inspectVpnNull.ExecuteScalarAsync());
+            Assert.Contains("\"LastCheckedAt\" NULLS FIRST, \"Id\"", vpnNullDefinition,
+                StringComparison.Ordinal);
+            Assert.Contains("WHERE (\"NextCheckAt\" IS NULL)", vpnNullDefinition,
                 StringComparison.Ordinal);
         }
         finally

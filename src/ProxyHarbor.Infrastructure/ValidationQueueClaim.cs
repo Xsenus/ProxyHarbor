@@ -65,7 +65,7 @@ internal static class VpnValidationQueue
         selected.AddRange(await db.VpnEndpoints.FromSqlInterpolated($"""
             SELECT * FROM "VpnEndpoints"
             WHERE "NextCheckAt" <= {now}
-            ORDER BY "NextCheckAt", "LastCheckedAt" NULLS FIRST
+            ORDER BY "NextCheckAt", "LastCheckedAt" NULLS FIRST, "Id"
             LIMIT {batchSize}
             """).AsNoTracking().ToListAsync(token));
 
@@ -75,7 +75,7 @@ internal static class VpnValidationQueue
             selected.AddRange(await db.VpnEndpoints.FromSqlInterpolated($"""
                 SELECT * FROM "VpnEndpoints"
                 WHERE "NextCheckAt" IS NULL
-                ORDER BY "LastCheckedAt" NULLS FIRST
+                ORDER BY "LastCheckedAt" NULLS FIRST, "Id"
                 LIMIT {remaining}
                 """).AsNoTracking().ToListAsync(token));
         }
