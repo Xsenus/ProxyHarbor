@@ -9,7 +9,7 @@ namespace ProxyHarbor.Infrastructure;
 public static class BuiltInVpnSourceCatalog
 {
     /// <summary>Дата последней ручной проверки происхождения и лицензий.</summary>
-    public static DateOnly LastAuditedOn { get; } = new(2026, 8, 28);
+    public static DateOnly LastAuditedOn { get; } = new(2026, 9, 1);
 
     /// <summary>Начальный набор разрешённых VPN feed'ов.</summary>
     public static IReadOnlyList<VpnSourceDefinition> Sources { get; } =
@@ -170,6 +170,34 @@ public static class BuiltInVpnSourceCatalog
         new("Black Crow Shadowsocks", "nukcrow/black-crow", "https://raw.githubusercontent.com/nukcrow/black-crow/main/sub/protocols/ss.txt", VpnProtocol.Shadowsocks, "MIT"),
         new("Black Crow Trojan", "nukcrow/black-crow", "https://raw.githubusercontent.com/nukcrow/black-crow/main/sub/protocols/trojan.txt", VpnProtocol.Trojan, "MIT"),
         new("Black Crow Hysteria2", "nukcrow/black-crow", "https://raw.githubusercontent.com/nukcrow/black-crow/main/sub/protocols/hysteria2.txt", VpnProtocol.Hysteria2, "MIT"),
+
+        // Российские и зарубежные каталоги, live-проверенные 01.09.2026. Включены
+        // только поддерживаемые URI/base64-feed с явной лицензией репозитория.
+        new("VPN for Russia VLESS", "igareck/vpn-configs-for-russia", "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/main/BLACK_VLESS_RUS.txt", VpnProtocol.Vless, "GPL-3.0"),
+        new("VPN for Russia mixed", "igareck/vpn-configs-for-russia", "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/main/BLACK_SS%2BAll_RUS.txt", VpnProtocol.Shadowsocks, "GPL-3.0"),
+        new("Russia mirror VLESS", "kort0881/vpn-vless-configs-russia", "https://raw.githubusercontent.com/kort0881/vpn-vless-configs-russia/main/data/githubmirror/clean/vless.txt", VpnProtocol.Vless, "GPL-3.0"),
+        new("Russia mirror VMess", "kort0881/vpn-vless-configs-russia", "https://raw.githubusercontent.com/kort0881/vpn-vless-configs-russia/main/data/githubmirror/clean/vmess.txt", VpnProtocol.Vmess, "GPL-3.0"),
+        new("Russia mirror Trojan", "kort0881/vpn-vless-configs-russia", "https://raw.githubusercontent.com/kort0881/vpn-vless-configs-russia/main/data/githubmirror/clean/trojan.txt", VpnProtocol.Trojan, "GPL-3.0"),
+        new("Russia mirror Shadowsocks", "kort0881/vpn-vless-configs-russia", "https://raw.githubusercontent.com/kort0881/vpn-vless-configs-russia/main/data/githubmirror/clean/ss.txt", VpnProtocol.Shadowsocks, "GPL-3.0"),
+        new("Russia mirror Hysteria2", "kort0881/vpn-vless-configs-russia", "https://raw.githubusercontent.com/kort0881/vpn-vless-configs-russia/main/data/githubmirror/clean/hysteria2.txt", VpnProtocol.Hysteria2, "GPL-3.0"),
+        new("ALIILA mixed", "ALIILAPRO/v2rayNG-Config", "https://raw.githubusercontent.com/ALIILAPRO/v2rayNG-Config/main/sub.txt", VpnProtocol.Vless, "GPL-3.0"),
+        new("Epodonios mixed", "Epodonios/v2ray-configs", "https://raw.githubusercontent.com/Epodonios/v2ray-configs/main/All_Configs_Sub.txt", VpnProtocol.Vless, "GPL-3.0"),
+        new("Firmfox VLESS", "Firmfox/Proxify", "https://raw.githubusercontent.com/Firmfox/Proxify/main/v2ray_configs/separated_by_protocol/vless.txt", VpnProtocol.Vless, "GPL-3.0"),
+        new("Firmfox VMess", "Firmfox/Proxify", "https://raw.githubusercontent.com/Firmfox/Proxify/main/v2ray_configs/separated_by_protocol/vmess.txt", VpnProtocol.Vmess, "GPL-3.0"),
+        new("Firmfox Trojan", "Firmfox/Proxify", "https://raw.githubusercontent.com/Firmfox/Proxify/main/v2ray_configs/separated_by_protocol/trojan.txt", VpnProtocol.Trojan, "GPL-3.0"),
+        new("Firmfox Shadowsocks", "Firmfox/Proxify", "https://raw.githubusercontent.com/Firmfox/Proxify/main/v2ray_configs/separated_by_protocol/shadowsocks.txt", VpnProtocol.Shadowsocks, "GPL-3.0"),
+        new("Surfboard converted", "Surfboardv2ray/Proxy-sorter", "https://raw.githubusercontent.com/Surfboardv2ray/Proxy-sorter/main/output/converted.txt", VpnProtocol.Vless, "MIT"),
+        new("V2ray Tester Pro verified", "Shayanthn/V2ray-Tester-Pro", "https://raw.githubusercontent.com/Shayanthn/V2ray-Tester-Pro/main/subscriptions/subscription.txt", VpnProtocol.Vless, "MPL-2.0"),
+        new("FreeProxies mixed", "mfuu/FreeProxies", "https://raw.githubusercontent.com/mfuu/FreeProxies/master/sub", VpnProtocol.Vless, "CC-BY-SA-4.0"),
+        new("Au1rxx verified 1", "Au1rxx/free-vpn-subscriptions", "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/all-verified/v2ray-base64-0001.txt", VpnProtocol.Vless, "MIT"),
+        new("Au1rxx verified 2", "Au1rxx/free-vpn-subscriptions", "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/all-verified/v2ray-base64-0002.txt", VpnProtocol.Vless, "MIT"),
+        new("Au1rxx verified 3", "Au1rxx/free-vpn-subscriptions", "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/all-verified/v2ray-base64-0003.txt", VpnProtocol.Vless, "MIT"),
+        new("Au1rxx verified 4", "Au1rxx/free-vpn-subscriptions", "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/all-verified/v2ray-base64-0004.txt", VpnProtocol.Vless, "MIT"),
+        new("Au1rxx verified 5", "Au1rxx/free-vpn-subscriptions", "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/all-verified/v2ray-base64-0005.txt", VpnProtocol.Vless, "MIT"),
+        new("Au1rxx verified 6", "Au1rxx/free-vpn-subscriptions", "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/all-verified/v2ray-base64-0006.txt", VpnProtocol.Vless, "MIT"),
+        new("Au1rxx verified 7", "Au1rxx/free-vpn-subscriptions", "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/all-verified/v2ray-base64-0007.txt", VpnProtocol.Vless, "MIT"),
+        new("Au1rxx verified 8", "Au1rxx/free-vpn-subscriptions", "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/all-verified/v2ray-base64-0008.txt", VpnProtocol.Vless, "MIT"),
+        new("Au1rxx verified 9", "Au1rxx/free-vpn-subscriptions", "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/all-verified/v2ray-base64-0009.txt", VpnProtocol.Vless, "MIT"),
     ];
 }
 

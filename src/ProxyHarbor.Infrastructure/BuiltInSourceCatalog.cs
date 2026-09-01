@@ -2,11 +2,11 @@ using ProxyHarbor.Domain;
 
 namespace ProxyHarbor.Infrastructure;
 
-/// <summary>Версионируемый каталог публичных proxy-feed endpoint'ов от 80 независимых провайдеров.</summary>
+/// <summary>Версионируемый каталог публичных proxy-feed endpoint'ов от 85 независимых провайдеров.</summary>
 public static class BuiltInSourceCatalog
 {
-    /// <summary>Дата последнего полного production-аудита всех канонических feed'ов.</summary>
-    public static DateOnly LastAuditedOn => new(2026, 8, 28);
+    /// <summary>Дата последнего полного URL/live-аудита всех канонических feed'ов.</summary>
+    public static DateOnly LastAuditedOn => new(2026, 9, 1);
 
     /// <summary>Источники ранжированы по свежести, объёму, стабильности ответа и разнообразию провайдеров.</summary>
     public static IReadOnlyList<BuiltInSource> Sources { get; } =
@@ -281,8 +281,8 @@ public static class BuiltInSourceCatalog
         Feed(253, "Syscallh00k Mixed", "Syscallh00k", "https://raw.githubusercontent.com/Syscallh00k/proxy-list/main/all.txt", ProxyProtocol.Http),
         Feed(254, "XYZS996 CL", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/cl/data.txt", ProxyProtocol.Http),
         Feed(255, "XYZS996 CM", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/cm/data.txt", ProxyProtocol.Http),
-        Feed(256, "XYZS996 CR", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/cr/data.txt", ProxyProtocol.Http),
-        Feed(257, "XYZS996 CU", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/cu/data.txt", ProxyProtocol.Http),
+        Feed(256, "Gifted Proxies HTTP", "Gifted Proxies", "https://raw.githubusercontent.com/mauricegift/free-proxies/master/files/http.json", ProxyProtocol.Http),
+        Feed(257, "Gifted Proxies SOCKS4", "Gifted Proxies", "https://raw.githubusercontent.com/mauricegift/free-proxies/master/files/socks4.json", ProxyProtocol.Socks4),
         Feed(258, "XYZS996 CY", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/cy/data.txt", ProxyProtocol.Http),
         Feed(259, "XYZS996 DO", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/do/data.txt", ProxyProtocol.Http),
         Feed(260, "XYZS996 EG", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/eg/data.txt", ProxyProtocol.Http),
@@ -339,6 +339,19 @@ public static class BuiltInSourceCatalog
         Feed(308, "Free Proxy API HTTP", "Free Proxy API List", "https://raw.githubusercontent.com/gnxD3RfTT2WE/free-proxy-api-list/main/http.txt", ProxyProtocol.Http),
         Feed(309, "Free Proxy API SOCKS4", "Free Proxy API List", "https://raw.githubusercontent.com/gnxD3RfTT2WE/free-proxy-api-list/main/socks4.txt", ProxyProtocol.Socks4),
         Feed(310, "Free Proxy API SOCKS5", "Free Proxy API List", "https://raw.githubusercontent.com/gnxD3RfTT2WE/free-proxy-api-list/main/socks5.txt", ProxyProtocol.Socks5),
+
+        // Независимые владельцы, повторно проверенные 01.09.2026. Каталог включает
+        // только файлы с явной открытой лицензией и фактическим IP:port содержимым.
+        Feed(311, "Gifted Proxies SOCKS5", "Gifted Proxies", "https://raw.githubusercontent.com/mauricegift/free-proxies/master/files/socks5.json", ProxyProtocol.Socks5),
+        Feed(312, "Worldpool HTTP", "Worldpool", "https://raw.githubusercontent.com/CelestialBrain/worldpool/main/proxies/http.txt", ProxyProtocol.Http),
+        Feed(313, "Worldpool SOCKS4", "Worldpool", "https://raw.githubusercontent.com/CelestialBrain/worldpool/main/proxies/socks4.txt", ProxyProtocol.Socks4),
+        Feed(314, "Worldpool SOCKS5", "Worldpool", "https://raw.githubusercontent.com/CelestialBrain/worldpool/main/proxies/socks5.txt", ProxyProtocol.Socks5),
+        Feed(315, "Firmfox HTTP", "Firmfox", "https://raw.githubusercontent.com/Firmfox/Proxify/main/proxy/http.txt", ProxyProtocol.Http),
+        Feed(316, "Firmfox HTTPS", "Firmfox", "https://raw.githubusercontent.com/Firmfox/Proxify/main/proxy/https.txt", ProxyProtocol.Https),
+        Feed(317, "Firmfox SOCKS4", "Firmfox", "https://raw.githubusercontent.com/Firmfox/Proxify/main/proxy/socks4.txt", ProxyProtocol.Socks4),
+        Feed(318, "Firmfox SOCKS5", "Firmfox", "https://raw.githubusercontent.com/Firmfox/Proxify/main/proxy/socks5.txt", ProxyProtocol.Socks5),
+        Feed(319, "Berkay Digital Mixed", "Berkay Digital", "https://raw.githubusercontent.com/berkay-digital/Proxy-Scraper/main/proxies.txt", ProxyProtocol.Http),
+        Feed(320, "Volkan Auto Proxy Mixed", "Volkan Auto Proxy", "https://raw.githubusercontent.com/VolkanSah/Auto-Proxy-Fetcher/main/proxies.txt", ProxyProtocol.Http),
     ];
 
     private static readonly Dictionary<string, BuiltInSource> SourcesByUrl =
