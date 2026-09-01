@@ -42,8 +42,8 @@ public sealed class VpnCatalogService(
                 (forceAllSources || x.NextFetchAt == null || x.NextFetchAt <= collectionStartedAt))
             .OrderBy(x => x.Priority).ToArrayAsync(token);
         if (sources.Length == 0)
-            return new VpnCollectionResult(0, 0, 0, 0);
-        var results = await ParallelFetchAsync(sources, token);
+            return new VpnCollectionResult(0, 0, 0, 0, 0, 0);
+        var results = await ParallelFetchAsync(sources, forceAllSources, collectionStartedAt, token);
         // Production использует NpgsqlRetryingExecutionStrategy. Вся транзакция должна
         // находиться внутри execution scope, а каждая retry-попытка — получать свежий
         // DbContext: после rollback уже сохранённый tracker иначе считал бы source health
@@ -74,6 +74,7 @@ public sealed class VpnCatalogService(
             .ToDictionaryAsync(x => x.Id, token);
         var now = DateTimeOffset.UtcNow;
         var acceptedResults = new List<FetchResult>(results.Length);
+        var succeededResults = new List<FetchResult>(results.Length);
         foreach (var result in results)
         {
             if (!trackedSources.TryGetValue(result.Source.Id, out var source)) continue;
@@ -97,13 +98,17 @@ public sealed class VpnCatalogService(
                 continue;
             }
             source.LastSucceededAt = now;
-            source.LastItemCount = result.Candidates.Count;
+            source.LastItemCount = result.ConfirmedCandidateCount;
+            source.HttpETag = result.HttpETag;
+            source.HttpLastModifiedAt = result.HttpLastModifiedAt;
+            if (result.ContentFetched) source.LastContentFetchedAt = now;
             source.ConsecutiveFailures = 0;
             source.LastError = null;
             source.NextFetchAt = null;
+            succeededResults.Add(result);
             // Для выбора preferred URI используем актуальный priority из БД, а не снимок,
             // с которым HTTP-запрос стартовал.
-            acceptedResults.Add(result with { Source = source });
+            if (result.ContentFetched) acceptedResults.Add(result with { Source = source });
         }
 
         // Source health и импорт составляют одну транзакцию: успешный источник не должен
@@ -116,7 +121,15 @@ public sealed class VpnCatalogService(
             options.Value.LastSeenRefreshMinutes,
             token);
         await transaction.CommitAsync(token);
-        return new(sourceCount, acceptedResults.Count, acceptedResults.Sum(x => x.Candidates.Count), added);
+        var succeeded = succeededResults.Count;
+        var contentFetched = succeededResults.Count(result => result.ContentFetched);
+        return new(
+            sourceCount,
+            succeeded,
+            succeededResults.Sum(result => result.ConfirmedCandidateCount),
+            added,
+            contentFetched,
+            succeeded - contentFetched);
     }
 
     /// <summary>
@@ -415,7 +428,11 @@ public sealed class VpnCatalogService(
         });
     }
 
-    private async Task<FetchResult[]> ParallelFetchAsync(VpnSource[] sources, CancellationToken token)
+    private async Task<FetchResult[]> ParallelFetchAsync(
+        VpnSource[] sources,
+        bool forceAllSources,
+        DateTimeOffset collectionStartedAt,
+        CancellationToken token)
     {
         var results = new System.Collections.Concurrent.ConcurrentBag<FetchResult>();
         await Parallel.ForEachAsync(sources, new ParallelOptions { MaxDegreeOfParallelism = options.Value.SourceConcurrency, CancellationToken = token },
@@ -423,41 +440,58 @@ public sealed class VpnCatalogService(
             {
                 try
                 {
-                    if (!await NetworkSafety.IsSafePublicHttpsUrlAsync(source.Url, cancellationToken))
-                        throw new HttpRequestException("URL источника не прошёл public HTTPS проверку");
-                    using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                    timeout.CancelAfter(TimeSpan.FromSeconds(options.Value.SourceTimeoutSeconds));
-                    using var response = await httpClientFactory.CreateClient("sources").GetAsync(source.Url, HttpCompletionOption.ResponseHeadersRead, timeout.Token);
-                    response.EnsureSuccessStatusCode();
-                    if (response.Content.Headers.ContentLength > MaximumFeedBytes) throw new HttpRequestException("VPN feed превышает 32 MiB");
-                    await using var stream = await response.Content.ReadAsStreamAsync(timeout.Token);
-                    using var memory = new MemoryStream();
-                    await CopyBoundedAsync(stream, memory, timeout.Token);
-                    var content = System.Text.Encoding.UTF8.GetString(memory.GetBuffer(), 0, checked((int)memory.Length));
+                    var useValidators = !forceAllSources && SourceConditionalFetchPolicy.ShouldUseValidators(
+                        source.LastContentFetchedAt,
+                        source.LastSucceededAt,
+                        source.LastItemCount,
+                        collectionStartedAt,
+                        options.Value.DeadRetentionDays);
+                    var fetched = await SourceHttpFetcher.FetchAsync(
+                        httpClientFactory.CreateClient("sources"),
+                        source.Url,
+                        useValidators ? source.HttpETag : null,
+                        useValidators ? source.HttpLastModifiedAt : null,
+                        MaximumFeedBytes,
+                        options.Value.SourceTimeoutSeconds,
+                        options.Value.SourceRetryCount,
+                        cancellationToken,
+                        SourceFeedParser.EnsureSupportedMediaType);
+                    if (fetched.NotModified)
+                    {
+                        if (source.LastSucceededAt is null || source.LastContentFetchedAt is null || source.LastItemCount <= 0)
+                            throw new InvalidDataException("VPN feed вернул 304 без подтверждённого полного снимка.");
+                        results.Add(new(
+                            source,
+                            [],
+                            source.LastItemCount,
+                            ContentFetched: false,
+                            fetched.HttpETag,
+                            fetched.HttpLastModifiedAt,
+                            Error: null));
+                        return;
+                    }
+
                     var maximumCandidates = Math.Min(options.Value.MaxProxiesPerSource, MaximumCandidatesPerVpnSource);
-                    results.Add(new(source, VpnFeedParser.Parse(content, source.DefaultProtocol, maximumCandidates), null));
+                    var candidates = VpnFeedParser.Parse(
+                        fetched.Content ?? throw new InvalidDataException("VPN feed не вернул тело."),
+                        source.DefaultProtocol,
+                        maximumCandidates);
+                    results.Add(new(
+                        source,
+                        candidates,
+                        candidates.Count,
+                        ContentFetched: true,
+                        fetched.HttpETag,
+                        fetched.HttpLastModifiedAt,
+                        Error: null));
                 }
                 catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
                 {
                     OperationalLogBoundary.Write(() => SourceFailed(logger, source.Id, exception));
-                    results.Add(new(source, [], exception.Message));
+                    results.Add(new(source, [], 0, false, null, null, exception.Message));
                 }
             });
         return results.ToArray();
-    }
-
-    private static async Task CopyBoundedAsync(Stream input, Stream output, CancellationToken token)
-    {
-        var buffer = new byte[81920];
-        var total = 0;
-        while (true)
-        {
-            var read = await input.ReadAsync(buffer, token);
-            if (read == 0) return;
-            total += read;
-            if (total > MaximumFeedBytes) throw new HttpRequestException("VPN feed превышает 32 MiB");
-            await output.WriteAsync(buffer.AsMemory(0, read), token);
-        }
     }
 
     private static async Task ConnectPublicAsync(string host, int port, int timeoutSeconds, CancellationToken token)
@@ -477,15 +511,29 @@ public sealed class VpnCatalogService(
         throw new IOException("VPN endpoint недоступен", last);
     }
 
-    private sealed record FetchResult(VpnSource Source, IReadOnlyList<VpnCandidate> Candidates, string? Error);
+    private sealed record FetchResult(
+        VpnSource Source,
+        IReadOnlyList<VpnCandidate> Candidates,
+        int ConfirmedCandidateCount,
+        bool ContentFetched,
+        string? HttpETag,
+        DateTimeOffset? HttpLastModifiedAt,
+        string? Error);
 }
 
 /// <summary>Сводка завершённого VPN-сбора.</summary>
 public sealed record VpnCollectionResult
 {
     /// <summary>Создаёт сводку сбора.</summary>
-    public VpnCollectionResult(int sources, int succeeded, int candidates, int added) =>
-        (Sources, Succeeded, Candidates, Added) = (sources, succeeded, candidates, added);
+    public VpnCollectionResult(
+        int sources,
+        int succeeded,
+        int candidates,
+        int added,
+        int contentFetched,
+        int notModified) =>
+        (Sources, Succeeded, Candidates, Added, ContentFetched, NotModified) =
+        (sources, succeeded, candidates, added, contentFetched, notModified);
     /// <summary>Обработано источников.</summary>
     public int Sources { get; }
     /// <summary>Успешных источников.</summary>
@@ -494,6 +542,10 @@ public sealed record VpnCollectionResult
     public int Candidates { get; }
     /// <summary>Добавлено новых endpoint.</summary>
     public int Added { get; }
+    /// <summary>Источников, вернувших и заново разобравших полное тело.</summary>
+    public int ContentFetched { get; }
+    /// <summary>Источников, подтверждённых HTTP 304 без импорта каталога.</summary>
+    public int NotModified { get; }
 }
 
 /// <summary>Сводка проверки VPN endpoint.</summary>
@@ -528,12 +580,13 @@ public sealed class VpnCollectorWorker(VpnCatalogService service, IOptions<Colle
     internal enum CycleOutcome { Succeeded, PeerOwned, Failed }
     private static readonly TimeSpan FailureRetryDelay = TimeSpan.FromMinutes(1);
     private static readonly TimeSpan OverrunCooldown = TimeSpan.FromSeconds(30);
-    private static readonly Action<ILogger, int, int, int, int, double, Exception?> CycleCompleted =
-        LoggerMessage.Define<int, int, int, int, double>(
+    private static readonly Action<ILogger, int, int, string, int, int, double, Exception?> CycleCompleted =
+        LoggerMessage.Define<int, int, string, int, int, double>(
             LogLevel.Information,
             new EventId(1160, "VpnCycleCompleted"),
             "VPN catalog cycle завершён: источников {SourceCount}, успешно {SucceededCount}, " +
-            "кандидатов {CandidateCount}, добавлено {AddedCount}, время {ElapsedMilliseconds:F0} мс");
+            "HTTP {HttpOutcome}, кандидатов {CandidateCount}, " +
+            "добавлено {AddedCount}, время {ElapsedMilliseconds:F0} мс");
     private static readonly Action<ILogger, Exception?> CycleFailed =
         LoggerMessage.Define(LogLevel.Error, new EventId(1162, "VpnCycleFailed"), "VPN catalog cycle failed");
     /// <inheritdoc />
@@ -553,6 +606,7 @@ public sealed class VpnCollectorWorker(VpnCatalogService service, IOptions<Colle
                     logger,
                     result.Sources,
                     result.Succeeded,
+                    $"body={result.ContentFetched}, not-modified={result.NotModified}",
                     result.Candidates,
                     result.Added,
                     elapsed.TotalMilliseconds,

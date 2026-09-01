@@ -248,8 +248,22 @@ public sealed class AdminVpnController(IDbContextFactory<ProxyHarborDbContext> d
         else
         {
             var problem = await ValidateRequestAsync(request, token); if (problem is not null) return problem;
+            var representationChanged = !string.Equals(source.Url, request.Url, StringComparison.Ordinal) ||
+                source.DefaultProtocol != request.Protocol;
             source.Name = request.Name.Trim(); source.Provider = request.Provider.Trim(); source.Url = request.Url;
             source.DefaultProtocol = request.Protocol; source.Enabled = request.Enabled; source.Priority = request.Priority; source.License = request.License.Trim();
+            if (representationChanged)
+            {
+                source.LastFetchedAt = null;
+                source.LastSucceededAt = null;
+                source.LastContentFetchedAt = null;
+                source.NextFetchAt = null;
+                source.HttpETag = null;
+                source.HttpLastModifiedAt = null;
+                source.LastItemCount = 0;
+                source.ConsecutiveFailures = 0;
+                source.LastError = null;
+            }
         }
         await db.SaveChangesAsync(token); return Ok(Map(source, builtIn));
     }

@@ -300,7 +300,12 @@ internal static class RestoreApplication
                 await db.VpnEndpointSources.ExecuteDeleteAsync(token);
                 await db.VpnEndpoints.ExecuteDeleteAsync(token);
                 await db.VpnSources.ExecuteDeleteAsync(token);
-                _ = await ImportIdentityAsync<VpnSource>(archive, "database/vpn-sources.json", db, token);
+                _ = await ImportIdentityAsync<VpnSource>(
+                    archive,
+                    "database/vpn-sources.json",
+                    db,
+                    token,
+                    RestoreEntityValidator.ValidateVpnSource);
                 if (archive.GetEntry("database/vpn-endpoints.json") is not null)
                     _ = await ImportIdentityAsync<VpnEndpoint>(archive, "database/vpn-endpoints.json", db, token);
                 if (archive.GetEntry("database/vpn-endpoint-sources.json") is not null)
@@ -418,13 +423,15 @@ internal static class RestoreApplication
         ZipArchive archive,
         string entryName,
         ProxyHarborDbContext db,
-        CancellationToken token) where TEntity : class
+        CancellationToken token,
+        Action<TEntity>? validateEntity = null) where TEntity : class
     {
         var count = 0;
         await using var stream = BackupArchiveValidator.RequiredEntry(archive, entryName).Open();
         await foreach (var entity in JsonSerializer.DeserializeAsyncEnumerable<TEntity>(stream, JsonOptions, token))
         {
             if (entity is null) throw new InvalidDataException($"Файл {entryName} содержит пустой объект.");
+            validateEntity?.Invoke(entity);
             db.Set<TEntity>().Add(entity);
             count++;
             if (count % 500 != 0) continue;
@@ -680,6 +687,36 @@ internal static class RestoreEntityValidator
                 entity.LastContentFetchedAt > entity.LastFetchedAt ||
                 entity.LastContentFetchedAt > entity.LastSucceededAt))
             Invalid("source.lastContentFetchedAt должен принадлежать успешной fetch timeline.");
+    }
+
+    internal static void ValidateVpnSource(VpnSource entity)
+    {
+        RequireId(entity.Id, "vpnSource.id");
+        RequireText(entity.Name, 120, "vpnSource.name", minimumLength: 2);
+        RequireText(entity.Provider, 120, "vpnSource.provider", minimumLength: 2);
+        RequireText(entity.Url, 2048, "vpnSource.url");
+        if (!Uri.TryCreate(entity.Url, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps ||
+            (!uri.IsDefaultPort && uri.Port != 443) || !string.IsNullOrEmpty(uri.UserInfo) ||
+            !string.IsNullOrEmpty(uri.Fragment))
+            Invalid("vpnSource.url должен иметь допустимую HTTPS-форму без credentials/fragment.");
+        RequireEnum(entity.DefaultProtocol, "vpnSource.defaultProtocol");
+        if (entity.Priority is < -10_000 or > 10_000)
+            Invalid("vpnSource.priority выходит за диапазон -10000..10000.");
+        RequireText(entity.License, 80, "vpnSource.license", minimumLength: 2);
+        RequireNonNegative(entity.LastItemCount, "vpnSource.lastItemCount");
+        RequireNonNegative(entity.ConsecutiveFailures, "vpnSource.consecutiveFailures");
+        RequireOptionalText(entity.HttpETag, 512, "vpnSource.httpETag");
+        if (entity.HttpETag is not null && !EntityTagHeaderValue.TryParse(entity.HttpETag, out _))
+            Invalid("vpnSource.httpETag имеет некорректный HTTP-формат.");
+        RequireOptionalText(entity.LastError, 500, "vpnSource.lastError", allowControlCharacters: true);
+        if (entity.LastSucceededAt is not null &&
+            (entity.LastFetchedAt is null || entity.LastSucceededAt > entity.LastFetchedAt))
+            Invalid("vpnSource.lastSucceededAt не может быть новее lastFetchedAt.");
+        if (entity.LastContentFetchedAt is not null &&
+            (entity.LastFetchedAt is null || entity.LastSucceededAt is null ||
+                entity.LastContentFetchedAt > entity.LastFetchedAt ||
+                entity.LastContentFetchedAt > entity.LastSucceededAt))
+            Invalid("vpnSource.lastContentFetchedAt должен принадлежать успешной fetch timeline.");
     }
 
     internal static void ValidateCollectionRun(CollectionRun entity)

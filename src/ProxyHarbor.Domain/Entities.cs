@@ -127,8 +127,14 @@ public sealed class VpnSource
     public DateTimeOffset? LastFetchedAt { get; set; }
     /// <summary>Последняя успешная загрузка.</summary>
     public DateTimeOffset? LastSucceededAt { get; set; }
+    /// <summary>Последняя успешная загрузка полного тела feed, а не HTTP 304.</summary>
+    public DateTimeOffset? LastContentFetchedAt { get; set; }
     /// <summary>Не раньше какого момента повторять загрузку после ошибки.</summary>
     public DateTimeOffset? NextFetchAt { get; set; }
+    /// <summary>Последний валидный HTTP ETag исходного URL.</summary>
+    public string? HttpETag { get; set; }
+    /// <summary>Последний валидный HTTP Last-Modified исходного URL.</summary>
+    public DateTimeOffset? HttpLastModifiedAt { get; set; }
     /// <summary>Число безопасно разобранных endpoint.</summary>
     public int LastItemCount { get; set; }
     /// <summary>Число последовательных ошибок.</summary>

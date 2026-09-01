@@ -10,6 +10,7 @@ public sealed class RestoreEntityValidatorTests
     {
         RestoreEntityValidator.ValidateProxy(ValidProxy());
         RestoreEntityValidator.ValidateSource(ValidSource());
+        RestoreEntityValidator.ValidateVpnSource(ValidVpnSource());
         RestoreEntityValidator.ValidateCollectionRun(new CollectionRun
         {
             FinishedAt = DateTimeOffset.UtcNow,
@@ -85,6 +86,19 @@ public sealed class RestoreEntityValidatorTests
         source.LastContentFetchedAt = source.LastFetchedAt.Value.AddMinutes(1);
 
         Assert.Throws<InvalidDataException>(() => RestoreEntityValidator.ValidateSource(source));
+    }
+
+    [Fact]
+    public void RejectsInvalidVpnConditionalFetchState()
+    {
+        var source = ValidVpnSource();
+        source.HttpETag = "not an etag";
+
+        Assert.Throws<InvalidDataException>(() => RestoreEntityValidator.ValidateVpnSource(source));
+
+        source = ValidVpnSource();
+        source.LastContentFetchedAt = source.LastFetchedAt!.Value.AddMinutes(1);
+        Assert.Throws<InvalidDataException>(() => RestoreEntityValidator.ValidateVpnSource(source));
     }
 
     [Fact]
@@ -213,4 +227,24 @@ public sealed class RestoreEntityValidatorTests
         HttpLastModifiedAt = DateTimeOffset.UtcNow.AddHours(-1),
         LastError = "System.Exception: failure\n   at collector"
     };
+
+    private static VpnSource ValidVpnSource()
+    {
+        var now = DateTimeOffset.UtcNow;
+        return new VpnSource
+        {
+            Name = "Valid VPN source",
+            Provider = "Integration provider",
+            Url = "https://8.8.4.4/vpn.txt",
+            DefaultProtocol = VpnProtocol.Vless,
+            Priority = 100,
+            License = "MIT",
+            LastFetchedAt = now,
+            LastSucceededAt = now.AddMinutes(-1),
+            LastContentFetchedAt = now.AddMinutes(-2),
+            HttpETag = "W/\"vpn-valid-v1\"",
+            HttpLastModifiedAt = now.AddHours(-1),
+            LastItemCount = 4
+        };
+    }
 }

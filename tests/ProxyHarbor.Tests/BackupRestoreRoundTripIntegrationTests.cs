@@ -458,6 +458,9 @@ public sealed class BackupRestoreRoundTripIntegrationTests
         License = "Public test feed",
         LastFetchedAt = SnapshotTime,
         LastSucceededAt = SnapshotTime.AddMinutes(-1),
+        LastContentFetchedAt = SnapshotTime.AddMinutes(-2),
+        HttpETag = "W/\"vpn-v1\"",
+        HttpLastModifiedAt = SnapshotTime.AddHours(-1),
         LastItemCount = 7,
         ConsecutiveFailures = 1,
         LastError = "representative VPN source error"

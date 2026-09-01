@@ -71,6 +71,7 @@ public sealed class DatabaseInvariantIntegrationTests
         "CK_VpnEndpoints_Identity",
         "CK_VpnEndpoints_Timeline",
         "CK_VpnSources_Counters",
+        "CK_VpnSources_ContentTimeline",
         "CK_VpnSources_FetchTimeline",
         "CK_VpnSources_ProtocolPriority"
     ];
@@ -113,6 +114,19 @@ public sealed class DatabaseInvariantIntegrationTests
         Assert.Single(operations, operation => operation.Sql.Contains("SET \"FirstAliveAt\""));
         Assert.Contains("IF NOT EXISTS", Assert.Single(operations, operation =>
             operation.Sql.Contains("CK_Proxies_StatusEvidence") && operation.Sql.Contains("NOT VALID")).Sql);
+    }
+
+    [Fact]
+    public void VpnConditionalFetchMigrationIsRestartableAndValidatesWithoutBlockingWrites()
+    {
+        var operations = new OptimizeVpnConditionalFetch().UpOperations.OfType<SqlOperation>().ToArray();
+
+        Assert.Equal(3, operations.Length);
+        Assert.All(operations, operation => Assert.True(operation.SuppressTransaction));
+        Assert.Contains("ADD COLUMN IF NOT EXISTS", operations[0].Sql, StringComparison.Ordinal);
+        Assert.Contains("IF NOT EXISTS", operations[1].Sql, StringComparison.Ordinal);
+        Assert.Contains("NOT VALID", operations[1].Sql, StringComparison.Ordinal);
+        Assert.Contains("VALIDATE CONSTRAINT", operations[2].Sql, StringComparison.Ordinal);
     }
 
     [Fact]
