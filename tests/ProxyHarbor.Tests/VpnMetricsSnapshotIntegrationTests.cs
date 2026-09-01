@@ -39,6 +39,7 @@ public sealed class VpnMetricsSnapshotIntegrationTests
             await db.Database.MigrateAsync();
 
             var now = DateTimeOffset.UtcNow;
+            now = now.AddTicks(-(now.Ticks % 10)); // PostgreSQL timestamp precision is one microsecond.
             var source = new VpnSource
             {
                 Name = "Metrics",
