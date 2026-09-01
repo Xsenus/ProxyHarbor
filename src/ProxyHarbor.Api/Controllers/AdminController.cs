@@ -24,7 +24,8 @@ public sealed class AdminController(
     IOptions<CollectorOptions> collectorOptions,
     IBackupConfigurationStore? backupConfigurationStore = null,
     ITelegramBackupDeliveryResolver? telegramBackupDeliveryResolver = null,
-    ProxyMetricsSnapshotCache? proxySnapshotCache = null) : ControllerBase
+    ProxyMetricsSnapshotCache? proxySnapshotCache = null,
+    VpnMetricsSnapshotCache? vpnSnapshotCache = null) : ControllerBase
 {
     /// <summary>Возвращает стабильную bounded-страницу источников и их runtime-состояние.</summary>
     [HttpGet("sources")]
@@ -196,14 +197,24 @@ public sealed class AdminController(
     [ProducesResponseType<DiagnosticsResponse>(StatusCodes.Status200OK)]
     public async Task<ActionResult<DiagnosticsResponse>> Diagnostics(CancellationToken requestToken)
     {
+        // Дорогие process-wide aggregates обновляются до короткого database snapshot:
+        // холодный scan не удерживает лишнюю транзакцию diagnostics и её MVCC horizon.
+        var proxySnapshot = proxySnapshotCache is null
+            ? null
+            : await proxySnapshotCache.GetAsync(requestToken);
+        var vpnSnapshot = vpnSnapshotCache is null
+            ? null
+            : await vpnSnapshotCache.GetAsync(requestToken);
         await using var db = await dbFactory.CreateDbContextAsync(requestToken);
         return await BufferedReadSnapshot.ExecuteAsync(
-            db, token => GetDiagnosticsSnapshotAsync(db, token), requestToken);
+            db, token => GetDiagnosticsSnapshotAsync(db, proxySnapshot, vpnSnapshot, token), requestToken);
     }
 
     /// <summary>Строит весь database-derived операторский ответ внутри одного read snapshot.</summary>
     private async Task<ActionResult<DiagnosticsResponse>> GetDiagnosticsSnapshotAsync(
         ProxyHarborDbContext db,
+        ProxyMetricsSnapshot? proxySnapshot,
+        VpnMetricsSnapshot? vpnSnapshot,
         CancellationToken token)
     {
         var now = DateTimeOffset.UtcNow;
@@ -211,16 +222,17 @@ public sealed class AdminController(
         var unseenRetentionCutoff = now.AddDays(-Math.Max(1, collectorOptions.Value.DeadRetentionDays));
         var databaseBytes = await db.Database.SqlQueryRaw<long>("SELECT pg_database_size(current_database()) AS \"Value\"")
             .SingleAsync(token);
-        // VPN-узлы считаются в том же согласованном snapshot, что и прокси,
-        // чтобы боковая панель не показывала число из отдельного, более старого запроса.
-        var vpnEndpoints = await db.VpnEndpoints.AsNoTracking().CountAsync(token);
+        // Production использует общий минутный snapshot административной VPN-страницы.
+        // Null сохраняет provider-neutral и транзакционную семантику изолированных тестов.
+        var vpnEndpoints = vpnSnapshot is null
+            ? await db.VpnEndpoints.AsNoTracking().CountAsync(token)
+            : SaturatingInt(vpnSnapshot.Total);
         // Production использует тот же минутный aggregate, что /metrics и /stats.
         // Поэтому refresh любой открытой admin-страницы не запускает отдельный полный
         // scan Proxies. Null остаётся provider-neutral тестам для snapshot-проверки.
-        var cachedQueue = proxySnapshotCache is null ? null : await proxySnapshotCache.GetAsync(token);
-        var queue = cachedQueue is null
+        var queue = proxySnapshot is null
             ? await ReadValidationQueueAsync(db, now, unseenRetentionCutoff, token)
-            : ValidationQueueAggregate.From(cachedQueue);
+            : ValidationQueueAggregate.From(proxySnapshot);
         var validationRuns = await db.ValidationRuns.AsNoTracking()
             .Where(run => run.FinishedAt >= validationWindowStart || run.Status == "running")
             .ToListAsync(token);
@@ -320,6 +332,8 @@ public sealed class AdminController(
 
         private static int ToInt(long value) => (int)Math.Min(int.MaxValue, Math.Max(0, value));
     }
+
+    private static int SaturatingInt(long value) => (int)Math.Min(int.MaxValue, Math.Max(0, value));
 
     /// <summary>Принудительно загружает и разбирает каждый включённый источник.</summary>
     [HttpPost("collect")]

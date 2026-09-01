@@ -194,7 +194,10 @@ public sealed record VpnEndpointResponse(Guid Id, string Host, int Port, string?
 /// <summary>Административное управление VPN-каталогом и его источниками.</summary>
 [ApiController, Route("api/v1/admin/vpn"), EnableRateLimiting("admin")]
 [Authorize(Roles = UserRoles.Administrator)]
-public sealed class AdminVpnController(IDbContextFactory<ProxyHarborDbContext> dbFactory, VpnCatalogService catalog) : ControllerBase
+public sealed class AdminVpnController(
+    IDbContextFactory<ProxyHarborDbContext> dbFactory,
+    VpnCatalogService catalog,
+    VpnMetricsSnapshotCache? vpnSnapshotCache = null) : ControllerBase
 {
     private static readonly string[] AllowedEndpointSorts =
         ["address", "protocol", "status", "latency", "quality", "firstSeen", "lastSeen", "lastChecked"];
@@ -309,25 +312,9 @@ public sealed class AdminVpnController(IDbContextFactory<ProxyHarborDbContext> d
         var now = DateTimeOffset.UtcNow;
         await using var db = await dbFactory.CreateDbContextAsync(token);
         var all = db.VpnEndpoints.AsNoTracking();
-        var rawSummary = await all.GroupBy(_ => 1).Select(group => new
-        {
-            Total = group.Count(),
-            Reachable = group.Count(item => item.Status == VpnEndpointStatus.Reachable),
-            Pending = group.Count(item => item.Status == VpnEndpointStatus.Pending),
-            Unreachable = group.Count(item => item.Status == VpnEndpointStatus.Unreachable),
-            Unsupported = group.Count(item => item.Status == VpnEndpointStatus.UnsupportedTransport),
-            EverReachable = group.Count(item => item.SuccessfulChecks > 0),
-            Countries = group.Where(item => item.CountryCode != null).Select(item => item.CountryCode).Distinct().Count(),
-            AverageReachableLatencyMs = group.Where(item => item.Status == VpnEndpointStatus.Reachable && item.LatencyMs != null)
-                .Average(item => (double?)item.LatencyMs),
-            OldestReachableAt = group.Where(item => item.Status == VpnEndpointStatus.Reachable)
-                .Min(item => (DateTimeOffset?)item.FirstSeenAt)
-        }).SingleOrDefaultAsync(token);
-        var countries = await all.Where(item => item.CountryCode != null)
-            .GroupBy(item => item.CountryCode!)
-            .Select(group => new { Code = group.Key, Count = group.Count() })
-            .OrderByDescending(item => item.Count).ThenBy(item => item.Code)
-            .ToArrayAsync(token);
+        var metrics = vpnSnapshotCache is null
+            ? await VpnMetricsSnapshotReader.ReadAsync(db, now, token)
+            : await vpnSnapshotCache.GetAsync(token);
 
         var filtered = all;
         if (protocol.HasValue) filtered = filtered.Where(item => item.Protocol == protocol.Value);
@@ -366,15 +353,25 @@ public sealed class AdminVpnController(IDbContextFactory<ProxyHarborDbContext> d
             _ => filtered.OrderBy(item => item.LastCheckedAt == null).ThenByDescending(item => item.LastCheckedAt).ThenBy(item => item.Id)
         };
         var entities = await ordered.Skip((page - 1) * pageSize).Take(pageSize).ToArrayAsync(token);
-        var summary = rawSummary is null
-            ? new AdminVpnSummary(0, 0, 0, 0, 0, 0, null, 0, null)
-            : new AdminVpnSummary(rawSummary.Total, rawSummary.Reachable, rawSummary.Pending,
-                rawSummary.Unreachable, rawSummary.Unsupported, rawSummary.EverReachable,
-                rawSummary.AverageReachableLatencyMs is null ? null : (int)Math.Round(rawSummary.AverageReachableLatencyMs.Value),
-                rawSummary.Countries, rawSummary.OldestReachableAt is null ? null : Math.Max(0, (long)(now - rawSummary.OldestReachableAt.Value).TotalSeconds));
+        var averageLatency = metrics.ReachableLatencySamples == 0
+            ? null
+            : (int?)Math.Round(metrics.ReachableLatencyTotal / (double)metrics.ReachableLatencySamples);
+        var summary = new AdminVpnSummary(
+            ToInt(metrics.Total),
+            ToInt(metrics.Reachable),
+            ToInt(metrics.Pending),
+            ToInt(metrics.Unreachable),
+            ToInt(metrics.Unsupported),
+            ToInt(metrics.EverReachable),
+            averageLatency,
+            metrics.Countries.Count,
+            metrics.OldestReachableAt is null
+                ? null
+                : Math.Max(0, (long)(now - metrics.OldestReachableAt.Value).TotalSeconds));
 
         return Ok(new AdminVpnEndpointPage(entities.Select(item => AdminVpnEndpointItem.From(item, now)).ToArray(),
-            page, pageSize, total, summary, countries.Select(item => new AdminVpnCountry(item.Code, item.Count)).ToArray()));
+            page, pageSize, total, summary,
+            metrics.Countries.Select(item => new AdminVpnCountry(item.Code, ToInt(item.Count))).ToArray()));
     }
 
     [HttpPost("collect")]
@@ -393,6 +390,8 @@ public sealed class AdminVpnController(IDbContextFactory<ProxyHarborDbContext> d
     private static AdminVpnSourceResponse Map(VpnSource x, bool builtIn) => new(x.Id, x.Name, x.Provider, x.Url,
         x.DefaultProtocol, x.Enabled, x.Priority, x.License, x.LastFetchedAt, x.LastSucceededAt, x.LastItemCount,
         x.ConsecutiveFailures, x.LastError, builtIn);
+
+    private static int ToInt(long value) => value >= int.MaxValue ? int.MaxValue : (int)Math.Max(0, value);
 
     private async Task<ActionResult?> ValidateRequestAsync(SaveVpnSourceRequest request, CancellationToken token)
     {

@@ -16,6 +16,7 @@
 - Добавлен проверенный runbook российского размещения и публикации: выбор 152-ФЗ-инфраструктуры, разделение публичного и приватного контуров, DDoS/WAF, безопасная миграция и регистрация sitemap в кабинетах вебмастеров без преждевременного рекламного запуска.
 
 ### Changed
+- Admin diagnostics и VPN-каталог теперь разделяют один demand-driven минутный VPN metrics snapshot: total/status/страны/latency/возраст строятся одним PostgreSQL aggregate вместо независимых полных проходов, а холодное обновление выполняется до короткой diagnostics-транзакции.
 - Admin diagnostics теперь переиспользует единый минутный proxy metrics snapshot: 15-секундное обновление каждой открытой страницы админки больше не запускает полный проход таблицы `Proxies`, а дополнительные операторские счётчики вычисляются в том же общем aggregate.
 - Dependency baseline обновлён совместимым набором: .NET 10.0.11, SDK container 10.0.400, nginx 1.31, актуальные закреплённые GitHub Actions и проверенные frontend/test toolchain packages; несовместимые Microsoft.OpenApi 3 и TypeScript 7 намеренно исключены.
 - Pending-payment reconciliation now checks up to eight gateways concurrently with an isolated dependency/DbContext scope per order, while retaining atomic cross-replica claims.
