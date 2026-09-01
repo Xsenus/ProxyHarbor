@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace ProxyHarbor.Api;
 
 /// <summary>Общие имена и предикаты политик кэширования публичной выдачи.</summary>
@@ -15,9 +17,9 @@ internal static class PublicOutputCachePolicies
     // равный TTL превращал почти каждый scrape в полный scan большого каталога.
     internal static readonly TimeSpan MetricsExpiration = TimeSpan.FromSeconds(30);
     internal static readonly string[] ListVaryByQuery =
-        ["protocol", "maxLatencyMs", "minSuccessRate", "country", "page", "pageSize"];
+        ["protocol", "maxLatencyMs", "minSuccessRate", "country"];
     internal static readonly string[] VpnListVaryByQuery =
-        ["page", "pageSize", "protocol", "status", "country"];
+        ["protocol", "status", "country"];
     internal static readonly string[] SeekVaryByQuery =
         ["protocol", "maxLatencyMs", "minSuccessRate", "country", "pageSize"];
 
@@ -35,6 +37,20 @@ internal static class PublicOutputCachePolicies
     /// </summary>
     internal static bool IsAnonymous(HttpContext context) =>
         context.User.Identity?.IsAuthenticated != true;
+
+    /// <summary>
+    /// Общий cache хранит только фактически выдаваемую анониму первую страницу.
+    /// page/pageSize не входят в ключ: контроллер всё равно применяет фиксированный
+    /// бесплатный лимит, а произвольные значения не должны вытеснять горячий ответ.
+    /// Непервая либо неоднозначная page проходит в контроллер без общего cache.
+    /// </summary>
+    internal static bool IsAnonymousFirstPage(HttpContext context)
+    {
+        if (!IsAnonymous(context)) return false;
+        if (!context.Request.Query.TryGetValue("page", out var values)) return true;
+        return values.Count == 1 && int.TryParse(values[0], NumberStyles.None,
+            CultureInfo.InvariantCulture, out var page) && page == 1;
+    }
 
     /// <summary>Локализованные сообщения и Content-Language не смешиваются в одном ключе.</summary>
     internal static KeyValuePair<string, string> CultureKey(HttpContext _) =>

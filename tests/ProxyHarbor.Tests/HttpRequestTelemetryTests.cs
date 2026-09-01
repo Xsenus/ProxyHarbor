@@ -10,6 +10,8 @@ public sealed class HttpRequestTelemetryTests
     [Theory]
     [InlineData("/api/v1/proxies", 0)]
     [InlineData("/api/v1/proxies/seek", 0)]
+    [InlineData("/api/v1/vpn", 7)]
+    [InlineData("/api/v1/vpn/export/json", 7)]
     [InlineData("/api/v1/export/json", 1)]
     [InlineData("/api/v1/stats", 2)]
     [InlineData("/api/v1/sources", 3)]
@@ -17,7 +19,7 @@ public sealed class HttpRequestTelemetryTests
     [InlineData("/health/ready", 5)]
     [InlineData("/healthz", 5)]
     [InlineData("/openapi/v1.json", 6)]
-    [InlineData("/untrusted/arbitrary/value", 7)]
+    [InlineData("/untrusted/arbitrary/value", 8)]
     public void ClassifierMapsArbitraryPathsToBoundedRouteGroups(string path, int expected)
     {
         Assert.Equal((HttpRouteGroup)expected, HttpRequestTelemetryMiddleware.Classify(path));
@@ -37,6 +39,7 @@ public sealed class HttpRequestTelemetryTests
         var telemetry = new HttpRequestTelemetry();
         telemetry.Record(HttpRouteGroup.Proxies, 200, TimeSpan.FromMilliseconds(40));
         telemetry.Record(HttpRouteGroup.Proxies, 503, TimeSpan.FromSeconds(3));
+        telemetry.Record(HttpRouteGroup.Vpn, 200, TimeSpan.FromMilliseconds(20));
 
         var output = new StringBuilder();
         telemetry.AppendPrometheus(output);
@@ -50,6 +53,8 @@ public sealed class HttpRequestTelemetryTests
         Assert.Contains("proxyharbor_http_request_duration_seconds_bucket{route=\"proxies\",le=\"+Inf\"} 2", metrics);
         Assert.Contains("proxyharbor_http_request_duration_seconds_sum{route=\"proxies\"} 3.04", metrics);
         Assert.Contains("proxyharbor_http_request_duration_seconds_count{route=\"proxies\"} 2", metrics);
+        Assert.Contains("proxyharbor_http_requests_total{route=\"vpn\",status=\"2xx\"} 1", metrics);
+        Assert.Contains("proxyharbor_http_request_duration_seconds_count{route=\"vpn\"} 1", metrics);
         Assert.DoesNotContain("untrusted", metrics, StringComparison.OrdinalIgnoreCase);
     }
 

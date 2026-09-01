@@ -14,6 +14,8 @@ public sealed class PublicOutputCachePolicyTests
     {
         Assert.Contains("country", PublicOutputCachePolicies.ListVaryByQuery);
         Assert.Contains("country", PublicOutputCachePolicies.SeekVaryByQuery);
+        Assert.DoesNotContain("page", PublicOutputCachePolicies.ListVaryByQuery);
+        Assert.DoesNotContain("pageSize", PublicOutputCachePolicies.ListVaryByQuery);
         Assert.Equal(PublicOutputCachePolicies.ListVaryByQuery.Length,
             PublicOutputCachePolicies.ListVaryByQuery.Distinct(StringComparer.Ordinal).Count());
         Assert.Equal(PublicOutputCachePolicies.SeekVaryByQuery.Length,
@@ -24,10 +26,26 @@ public sealed class PublicOutputCachePolicyTests
     public void VpnCatalogCacheKeyIncludesEveryPublicFilter()
     {
         Assert.Equal(
-            ["page", "pageSize", "protocol", "status", "country"],
+            ["protocol", "status", "country"],
             PublicOutputCachePolicies.VpnListVaryByQuery);
         Assert.Equal(PublicOutputCachePolicies.VpnListVaryByQuery.Length,
             PublicOutputCachePolicies.VpnListVaryByQuery.Distinct(StringComparer.Ordinal).Count());
+    }
+
+    [Theory]
+    [InlineData("", true)]
+    [InlineData("?page=1", true)]
+    [InlineData("?page=1&pageSize=10", true)]
+    [InlineData("?page=2", false)]
+    [InlineData("?page=0", false)]
+    [InlineData("?page=1&page=2", false)]
+    [InlineData("?page=invalid", false)]
+    public void SharedCatalogCacheAcceptsOnlyCanonicalAnonymousFirstPage(string query, bool expected)
+    {
+        var context = new DefaultHttpContext();
+        context.Request.QueryString = new QueryString(query);
+
+        Assert.Equal(expected, PublicOutputCachePolicies.IsAnonymousFirstPage(context));
     }
 
     [Fact]
