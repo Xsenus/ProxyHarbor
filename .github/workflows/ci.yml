@@ -952,7 +952,7 @@ jobs:
           echo "$backup_diagnostics" | jq --exit-status \
             '.sourceCatalog.isComplete == true and
              .sourceCatalog.expectedSources == 320 and
-             .sourceCatalog.expectedProviders == 80 and
+             .sourceCatalog.expectedProviders == 85 and
              .recentBackups[0].status == "completed" and
              .recentBackups[0].sizeBytes > 0 and
              .recentBackups[0].telegramConfigured == false and
