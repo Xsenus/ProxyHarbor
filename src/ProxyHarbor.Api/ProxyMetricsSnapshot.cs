@@ -29,9 +29,13 @@ internal sealed record ProxyMetricsRow(
     ProxyStatus Status,
     ProxyProtocol Protocol,
     long Count,
+    long EverAlive,
+    long HistoricalDead,
     long Due,
     long Leased,
+    long NeverChecked,
     long NeverAttempted,
+    long RepeatedlyFailing,
     long StaleUnseen,
     long Published,
     long StaleAlive,
@@ -52,10 +56,17 @@ internal static class ProxyMetricsSnapshotReader
                "Protocol",
                count(*)::bigint AS "Count",
                count(*) FILTER (WHERE
+                   "FirstAliveAt" IS NOT NULL OR "SuccessfulChecks" > 0)::bigint AS "EverAlive",
+               count(*) FILTER (WHERE
+                   "Status" = @dead_status AND
+                   ("FirstAliveAt" IS NOT NULL OR "SuccessfulChecks" > 0))::bigint AS "HistoricalDead",
+               count(*) FILTER (WHERE
                    ("NextCheckAt" IS NULL OR "NextCheckAt" <= @now) AND
                    ("CheckLeaseUntil" IS NULL OR "CheckLeaseUntil" < @now))::bigint AS "Due",
                count(*) FILTER (WHERE "CheckLeaseUntil" >= @now)::bigint AS "Leased",
+               count(*) FILTER (WHERE "LastCheckedAt" IS NULL)::bigint AS "NeverChecked",
                count(*) FILTER (WHERE "LastValidationAttemptAt" IS NULL)::bigint AS "NeverAttempted",
+               count(*) FILTER (WHERE "ConsecutiveFailedChecks" >= 3)::bigint AS "RepeatedlyFailing",
                count(*) FILTER (WHERE
                    "Status" IN (@pending_status, @dead_status) AND
                    "LastSeenAt" < @retention_cutoff AND
@@ -129,7 +140,11 @@ internal static class ProxyMetricsSnapshotReader
                 reader.GetInt64(9),
                 reader.GetInt64(10),
                 reader.GetInt64(11),
-                reader.IsDBNull(12) ? null : reader.GetFieldValue<DateTimeOffset>(12)));
+                reader.GetInt64(12),
+                reader.GetInt64(13),
+                reader.GetInt64(14),
+                reader.GetInt64(15),
+                reader.IsDBNull(16) ? null : reader.GetFieldValue<DateTimeOffset>(16)));
         }
 
         return Aggregate(rows, now);
@@ -152,11 +167,16 @@ internal static class ProxyMetricsSnapshotReader
                 group.Key.Status,
                 group.Key.Protocol,
                 group.LongCount(),
+                group.LongCount(proxy => proxy.FirstAliveAt != null || proxy.SuccessfulChecks > 0),
+                group.LongCount(proxy => proxy.Status == ProxyStatus.Dead &&
+                    (proxy.FirstAliveAt != null || proxy.SuccessfulChecks > 0)),
                 group.LongCount(proxy =>
                     (proxy.NextCheckAt == null || proxy.NextCheckAt <= now) &&
                     (proxy.CheckLeaseUntil == null || proxy.CheckLeaseUntil < now)),
                 group.LongCount(proxy => proxy.CheckLeaseUntil >= now),
+                group.LongCount(proxy => proxy.LastCheckedAt == null),
                 group.LongCount(proxy => proxy.LastValidationAttemptAt == null),
+                group.LongCount(proxy => proxy.ConsecutiveFailedChecks >= 3),
                 group.LongCount(proxy =>
                     (proxy.Status == ProxyStatus.Pending || proxy.Status == ProxyStatus.Dead) &&
                     proxy.LastSeenAt < retentionCutoff &&

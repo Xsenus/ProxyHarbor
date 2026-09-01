@@ -3,8 +3,10 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Npgsql;
+using ProxyHarbor.Api;
 using ProxyHarbor.Api.Controllers;
 using ProxyHarbor.Domain;
 using ProxyHarbor.Infrastructure;
@@ -102,6 +104,16 @@ public sealed class AdminDiagnosticsIntegrationTests
                 await update.SaveChangesAsync(token);
             });
             var diagnosticsFactory = RetryFactory(builder.ConnectionString, mutation);
+            var collectorOptions = Options.Create(new CollectorOptions
+            {
+                ValidationConcurrency = 10,
+                ValidationBatchSize = 20
+            });
+            using var proxySnapshotCache = new ProxyMetricsSnapshotCache(
+                diagnosticsFactory,
+                collectorOptions,
+                NullLogger<ProxyMetricsSnapshotCache>.Instance,
+                TimeProvider.System);
             var controller = new AdminController(
                 diagnosticsFactory,
                 null!,
@@ -109,11 +121,10 @@ public sealed class AdminDiagnosticsIntegrationTests
                 null!,
                 null!,
                 Options.Create(new BackupOptions()),
-                Options.Create(new CollectorOptions
-                {
-                    ValidationConcurrency = 10,
-                    ValidationBatchSize = 20
-                }));
+                collectorOptions,
+                null,
+                null,
+                proxySnapshotCache);
 
             var action = await controller.Diagnostics(CancellationToken.None);
             Assert.True(mutation.MutationInvoked);
@@ -135,6 +146,10 @@ public sealed class AdminDiagnosticsIntegrationTests
             Assert.Single(root.GetProperty("recentRuns").EnumerateArray());
             Assert.Single(root.GetProperty("recentValidationRuns").EnumerateArray());
             Assert.Single(root.GetProperty("recentBackups").EnumerateArray());
+
+            var secondAction = await controller.Diagnostics(CancellationToken.None);
+            Assert.IsType<OkObjectResult>(secondAction.Result);
+            Assert.Equal(1, proxySnapshotCache.DatabaseReads);
 
             // Concurrent mutation действительно закоммичена, но уже открытый diagnostics
             // snapshot обязан показать целиком предшествующую эпоху всех таблиц.
