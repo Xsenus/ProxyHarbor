@@ -148,6 +148,18 @@ public sealed class MetricsController(
             validationTelemetry.EstimatedDrainSeconds ?? 0);
         Gauge(output, "proxyharbor_validation_last_attempt_timestamp_seconds", "Unix timestamp of the latest completed validation attempt.",
             proxySnapshot.LastAttemptAt?.ToUnixTimeSeconds() ?? 0);
+        GaugeDouble(output, "proxyharbor_proxy_snapshot_age_seconds",
+            "Age of the shared exact proxy aggregate currently served by /stats and /metrics.",
+            Math.Max(0, (now - proxySnapshot.CapturedAt).TotalSeconds));
+        Counter(output, "proxyharbor_proxy_snapshot_database_reads_total",
+            "Exact full-table proxy aggregates executed by this API replica.",
+            proxySnapshotCache?.DatabaseReads ?? 0);
+        Counter(output, "proxyharbor_proxy_snapshot_refresh_requests_total",
+            "Stale snapshot demand signals queued for background refresh.",
+            proxySnapshotCache?.RefreshRequestsQueued ?? 0);
+        Counter(output, "proxyharbor_proxy_snapshot_refresh_requests_coalesced_total",
+            "Stale snapshot demand signals coalesced behind an already queued refresh.",
+            proxySnapshotCache?.RefreshRequestsCoalesced ?? 0);
         Gauge(output, "proxyharbor_probe_control_available", "Control endpoint health: 1 available, 0 unavailable, -1 not checked.",
             probeControlHealth.Availability);
         Gauge(output, "proxyharbor_probe_control_last_check_timestamp_seconds", "Unix timestamp of the latest control endpoint health check.",
