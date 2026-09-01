@@ -29,7 +29,9 @@ public static class DatabaseSeeder
             ["https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/bt/data.txt"] =
                 "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/lv/data.txt",
             ["https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/lt/data.txt"] =
-                "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/lu/data.txt"
+                "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/lu/data.txt",
+            ["https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/gq/data.txt"] =
+                "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/th/data.txt"
         };
 
     /// <summary>Добавляет недостающие feed'ы и обновляет их метаданные, сохраняя выбор Enabled/Disabled.</summary>

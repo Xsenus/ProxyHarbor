@@ -289,7 +289,7 @@ public static class BuiltInSourceCatalog
         Feed(261, "XYZS996 GE", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/ge/data.txt", ProxyProtocol.Http),
         Feed(262, "XYZS996 GH", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/gh/data.txt", ProxyProtocol.Http),
         Feed(263, "Pxys Daily CSV", "Pxys", "https://raw.githubusercontent.com/Pxys-io/DailyProxyList/master/working_proxies.csv", ProxyProtocol.Http),
-        Feed(264, "XYZS996 GQ", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/gq/data.txt", ProxyProtocol.Http),
+        Feed(264, "XYZS996 TH", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/th/data.txt", ProxyProtocol.Http),
         Feed(265, "XYZS996 US", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/us/data.txt", ProxyProtocol.Http),
         Feed(266, "XYZS996 GT", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/gt/data.txt", ProxyProtocol.Http),
         Feed(267, "XYZS996 HN", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/hn/data.txt", ProxyProtocol.Http),
