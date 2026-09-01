@@ -23,7 +23,8 @@ public sealed class AdminController(
     IOptions<BackupOptions> backupOptions,
     IOptions<CollectorOptions> collectorOptions,
     IBackupConfigurationStore? backupConfigurationStore = null,
-    ITelegramBackupDeliveryResolver? telegramBackupDeliveryResolver = null) : ControllerBase
+    ITelegramBackupDeliveryResolver? telegramBackupDeliveryResolver = null,
+    ProxyMetricsSnapshotCache? proxySnapshotCache = null) : ControllerBase
 {
     /// <summary>Возвращает стабильную bounded-страницу источников и их runtime-состояние.</summary>
     [HttpGet("sources")]
@@ -213,41 +214,29 @@ public sealed class AdminController(
         // VPN-узлы считаются в том же согласованном snapshot, что и прокси,
         // чтобы боковая панель не показывала число из отдельного, более старого запроса.
         var vpnEndpoints = await db.VpnEndpoints.AsNoTracking().CountAsync(token);
-        var queue = await db.Proxies.AsNoTracking().GroupBy(_ => 1).Select(x => new
-        {
-            total = x.Count(),
-            everAlive = x.Count(proxy => proxy.FirstAliveAt != null || proxy.SuccessfulChecks > 0),
-            historicalDead = x.Count(proxy => proxy.Status == ProxyStatus.Dead &&
-                (proxy.FirstAliveAt != null || proxy.SuccessfulChecks > 0)),
-            leased = x.Count(proxy => proxy.CheckLeaseUntil >= now),
-            neverChecked = x.Count(proxy => proxy.LastCheckedAt == null),
-            neverAttempted = x.Count(proxy => proxy.LastValidationAttemptAt == null),
-            due = x.Count(proxy => (proxy.NextCheckAt == null || proxy.NextCheckAt <= now) &&
-                (proxy.CheckLeaseUntil == null || proxy.CheckLeaseUntil < now)),
-            scheduled = x.Count(proxy => proxy.NextCheckAt > now),
-            repeatedlyFailing = x.Count(proxy => proxy.ConsecutiveFailedChecks >= 3),
-            staleUnseen = x.Count(proxy =>
-                (proxy.Status == ProxyStatus.Pending || proxy.Status == ProxyStatus.Dead) &&
-                proxy.LastSeenAt < unseenRetentionCutoff &&
-                (proxy.CheckLeaseUntil == null || proxy.CheckLeaseUntil < now)),
-            lastAttemptAt = x.Max(proxy => proxy.LastValidationAttemptAt)
-        }).SingleOrDefaultAsync(token);
+        // Production использует тот же минутный aggregate, что /metrics и /stats.
+        // Поэтому refresh любой открытой admin-страницы не запускает отдельный полный
+        // scan Proxies. Null остаётся provider-neutral тестам для snapshot-проверки.
+        var cachedQueue = proxySnapshotCache is null ? null : await proxySnapshotCache.GetAsync(token);
+        var queue = cachedQueue is null
+            ? await ReadValidationQueueAsync(db, now, unseenRetentionCutoff, token)
+            : ValidationQueueAggregate.From(cachedQueue);
         var validationRuns = await db.ValidationRuns.AsNoTracking()
             .Where(run => run.FinishedAt >= validationWindowStart || run.Status == "running")
             .ToListAsync(token);
         var validationTelemetry = ValidationTelemetry.Calculate(
-            validationRuns, validationWindowStart, queue?.due ?? 0);
+            validationRuns, validationWindowStart, queue?.Due ?? 0);
         var validationQueue = queue is null ? null : new ValidationQueueResponse(
-            queue.total,
-            queue.everAlive,
-            queue.historicalDead,
-            queue.leased,
-            queue.neverChecked,
-            queue.neverAttempted,
-            queue.due,
-            queue.scheduled,
-            queue.repeatedlyFailing,
-            queue.staleUnseen,
+            queue.Total,
+            queue.EverAlive,
+            queue.HistoricalDead,
+            queue.Leased,
+            queue.NeverChecked,
+            queue.NeverAttempted,
+            queue.Due,
+            queue.Scheduled,
+            queue.RepeatedlyFailing,
+            queue.StaleUnseen,
             validationTelemetry.Attempts,
             validationTelemetry.Checked,
             validationTelemetry.Alive,
@@ -258,7 +247,7 @@ public sealed class AdminController(
             collectorOptions.Value.ValidationBatchSize,
             validationTelemetry.ChecksPerSecond,
             validationTelemetry.EstimatedDrainSeconds,
-            queue.lastAttemptAt);
+            queue.LastAttemptAt);
         var builtInUrls = BuiltInSourceCatalog.Sources.Select(source => source.Url).ToArray();
         var sourceCatalog = SourceCatalogHealth.Calculate(
             await db.Sources.AsNoTracking().Where(source => builtInUrls.Contains(source.Url)).ToListAsync(token),
@@ -277,6 +266,59 @@ public sealed class AdminController(
             recentRuns,
             recentValidationRuns,
             recentBackups));
+    }
+
+    private static async Task<ValidationQueueAggregate?> ReadValidationQueueAsync(
+        ProxyHarborDbContext db,
+        DateTimeOffset now,
+        DateTimeOffset unseenRetentionCutoff,
+        CancellationToken token) =>
+        await db.Proxies.AsNoTracking().GroupBy(_ => 1).Select(group => new ValidationQueueAggregate(
+            group.Count(),
+            group.Count(proxy => proxy.FirstAliveAt != null || proxy.SuccessfulChecks > 0),
+            group.Count(proxy => proxy.Status == ProxyStatus.Dead &&
+                (proxy.FirstAliveAt != null || proxy.SuccessfulChecks > 0)),
+            group.Count(proxy => proxy.CheckLeaseUntil >= now),
+            group.Count(proxy => proxy.LastCheckedAt == null),
+            group.Count(proxy => proxy.LastValidationAttemptAt == null),
+            group.Count(proxy => (proxy.NextCheckAt == null || proxy.NextCheckAt <= now) &&
+                (proxy.CheckLeaseUntil == null || proxy.CheckLeaseUntil < now)),
+            group.Count(proxy => proxy.NextCheckAt > now),
+            group.Count(proxy => proxy.ConsecutiveFailedChecks >= 3),
+            group.Count(proxy =>
+                (proxy.Status == ProxyStatus.Pending || proxy.Status == ProxyStatus.Dead) &&
+                proxy.LastSeenAt < unseenRetentionCutoff &&
+                (proxy.CheckLeaseUntil == null || proxy.CheckLeaseUntil < now)),
+            group.Max(proxy => proxy.LastValidationAttemptAt)))
+        .SingleOrDefaultAsync(token);
+
+    private sealed record ValidationQueueAggregate(
+        int Total,
+        int EverAlive,
+        int HistoricalDead,
+        int Leased,
+        int NeverChecked,
+        int NeverAttempted,
+        int Due,
+        int Scheduled,
+        int RepeatedlyFailing,
+        int StaleUnseen,
+        DateTimeOffset? LastAttemptAt)
+    {
+        internal static ValidationQueueAggregate From(ProxyMetricsSnapshot snapshot) => new(
+            ToInt(snapshot.Groups.Sum(row => row.Count)),
+            ToInt(snapshot.Groups.Sum(row => row.EverAlive)),
+            ToInt(snapshot.Groups.Sum(row => row.HistoricalDead)),
+            ToInt(snapshot.Leased),
+            ToInt(snapshot.Groups.Sum(row => row.NeverChecked)),
+            ToInt(snapshot.NeverAttempted),
+            ToInt(snapshot.Due),
+            ToInt(snapshot.Groups.Sum(row => row.Scheduled)),
+            ToInt(snapshot.Groups.Sum(row => row.RepeatedlyFailing)),
+            ToInt(snapshot.StaleUnseen),
+            snapshot.LastAttemptAt);
+
+        private static int ToInt(long value) => (int)Math.Min(int.MaxValue, Math.Max(0, value));
     }
 
     /// <summary>Принудительно загружает и разбирает каждый включённый источник.</summary>
