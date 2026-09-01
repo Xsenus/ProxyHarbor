@@ -1,10 +1,10 @@
-# Каталог 80 провайдеров бесплатных прокси
+# Каталог 85 провайдеров бесплатных прокси
 
-Все 80 независимых провайдеров уже входят в `BuiltInSourceCatalog`, а их 310 HTTPS endpoint обрабатываются production collector. Документ предназначен оператору; публичная главная страница источники не раскрывает.
+Все 85 независимых провайдеров уже входят в `BuiltInSourceCatalog`, а их 320 HTTPS endpoint обрабатываются production collector. Документ предназначен оператору; публичная главная страница источники не раскрывает.
 
 Совместимый read-only endpoint `GET /api/v1/sources` пока сохраняется для API-клиентов, но обычный React-интерфейс его не запрашивает и не показывает. Runtime errors, backoff и внутреннее состояние доступны только администратору.
 
-Базовые 81 endpoint прошли полный end-to-end аудит 10 августа 2026 года. 24 августа дополнительно проверены 17 URL шести провайдеров, 26 августа — ещё 100 URL от 19 origin-владельцев. 28 августа проверены ещё 100 protocol- и country-feed, затем заменены четыре удалённых country-feed `XYZS996` и добавлены 12 URL пяти новых origin-владельцев. Полный 310-feed прогон является обязательным release-gate и не подменяется URL-проверкой.
+Базовые 81 endpoint прошли полный end-to-end аудит 10 августа 2026 года. 24 августа дополнительно проверены 17 URL шести провайдеров, 26 августа — ещё 100 URL от 19 origin-владельцев. 28 августа проверены ещё 100 protocol- и country-feed. 1 сентября два удалённых country-feed `XYZS996` заменены, добавлены 12 URL пяти новых origin-владельцев и повторно проверен весь каталог. Полный 320-feed прогон является обязательным release-gate и не подменяется URL-проверкой.
 
 | № | Провайдер | Feed'ов | Протоколы | Представительный источник |
 |---:|---|---:|---|---|
@@ -42,7 +42,7 @@
 | 32 | RoosterKid | 1 | HTTPS | [GitHub](https://github.com/roosterkid/openproxylist) |
 | 33 | Proxy-Free | 1 | HTTP | [GitHub](https://github.com/proxy-free/free-proxy-list) |
 | 34 | Ch4120N | 1 | HTTP | [GitHub](https://github.com/Ch4120N/Ch4120N-Proxy-List) |
-| 35 | XYZS996 | 70 | Mixed, HTTP, HTTPS, country feeds | [GitHub](https://github.com/xyzs996/free-proxy-health-list) |
+| 35 | XYZS996 | 68 | Mixed, HTTP, HTTPS, country feeds | [GitHub](https://github.com/xyzs996/free-proxy-health-list) |
 | 36 | Tianndev | 5 | Mixed, HTTP, HTTPS, SOCKS4, SOCKS5 | [GitHub](https://github.com/Tianndev/free-proxy) |
 | 37 | KangProxy | 1 | HTTP | [GitHub](https://github.com/officialputuid/KangProxy) |
 | 38 | Thordata | 1 | HTTP | [GitHub](https://github.com/Thordata/awesome-free-proxy-list) |
@@ -88,11 +88,16 @@
 | 78 | Pxys | 2 | Mixed, CSV | [GitHub](https://github.com/Pxys-io/DailyProxyList) |
 | 79 | Syscallh00k | 5 | Mixed, HTTP, HTTPS, SOCKS4, SOCKS5 | [GitHub](https://github.com/Syscallh00k/proxy-list) |
 | 80 | Free Proxy API List | 3 | HTTP, SOCKS4, SOCKS5 | [GitHub](https://github.com/gnxD3RfTT2WE/free-proxy-api-list) |
+| 81 | Gifted Proxies | 3 | HTTP, SOCKS4, SOCKS5 | [GitHub](https://github.com/mauricegift/free-proxies) |
+| 82 | Worldpool | 3 | HTTP, SOCKS4, SOCKS5 | [GitHub](https://github.com/CelestialBrain/worldpool) |
+| 83 | Firmfox | 4 | HTTP, HTTPS, SOCKS4, SOCKS5 | [GitHub](https://github.com/Firmfox/Proxify) |
+| 84 | Berkay Digital | 1 | Mixed | [GitHub](https://github.com/berkay-digital/Proxy-Scraper) |
+| 85 | Volkan Auto Proxy | 1 | Mixed | [GitHub](https://github.com/VolkanSah/Auto-Proxy-Fetcher) |
 
 ## Что именно гарантирует ProxyHarbor
 
 Доступность feed и работоспособность прокси — разные проверки. Source audit требует, чтобы каждый встроенный endpoint присутствовал, был включён, успешно и полностью обработан текущим production-циклом и вернул хотя бы одного кандидата. После межисточниковой дедупликации validator независимо открывает соединение через каждый кандидат, проверяет заявленный протокол, TLS/HTTP-маршрут, внешний адрес и задержку. В публичные JSON, XML, TXT и CSV попадают только недавно подтверждённые живые адреса.
 
-Бесплатные прокси меняются каждую минуту, поэтому нельзя честно обещать, что все строки внешнего feed будут рабочими. Гарантия сервиса другая и проверяемая: все 80 провайдеров входят в сбор; неработающие адреса не публикуются; отказавший, пустой или усечённый feed сразу становится нездоровым в diagnostics, Prometheus и еженедельном CI-аудите.
+Бесплатные прокси меняются каждую минуту, поэтому нельзя честно обещать, что все строки внешнего feed будут рабочими. Гарантия сервиса другая и проверяемая: все 85 провайдеров входят в сбор; неработающие адреса не публикуются; отказавший, пустой или усечённый feed сразу становится нездоровым в diagnostics, Prometheus и еженедельном CI-аудите.
 
-Полные 310 URL, их протоколы и эксплуатационный порядок находятся в [`BuiltInSourceCatalog.cs`](../src/ProxyHarbor.Infrastructure/BuiltInSourceCatalog.cs). Команда воспроизводимого production-аудита описана в [`SOURCES.md`](SOURCES.md).
+Полные 320 URL, их протоколы и эксплуатационный порядок находятся в [`BuiltInSourceCatalog.cs`](../src/ProxyHarbor.Infrastructure/BuiltInSourceCatalog.cs). Команда воспроизводимого production-аудита описана в [`SOURCES.md`](SOURCES.md).

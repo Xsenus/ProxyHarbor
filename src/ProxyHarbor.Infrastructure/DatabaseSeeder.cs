@@ -168,7 +168,9 @@ public static class DatabaseSeeder
             "https://raw.githubusercontent.com/zloi-user/hideip.me/main/https.txt",
             "https://raw.githubusercontent.com/zloi-user/hideip.me/main/socks4.txt",
             "https://raw.githubusercontent.com/zloi-user/hideip.me/main/socks5.txt",
-            "https://raw.githubusercontent.com/CB-X2-Jun/proxy-lists/main/proxy.txt"
+            "https://raw.githubusercontent.com/CB-X2-Jun/proxy-lists/main/proxy.txt",
+            "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/cr/data.txt",
+            "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/cu/data.txt"
         };
         // Uri.AbsoluteUri уже канонизирует scheme/host, но path и query остаются
         // регистрозависимыми: /Feed и /feed могут быть разными HTTPS-ресурсами.
@@ -200,7 +202,8 @@ public static class DatabaseSeeder
             replaced.LastError = null;
         }
 
-        // Удаляем только URL из первоначальной встроенной версии, заменённые каноническими feed'ами.
+        // Удаляем только явно перечисленные бывшие встроенные URL: заменённые каноническими
+        // feed'ами либо подтверждённо недоступные. Пользовательские источники не затрагиваются.
         var legacySources = existingSources.Where(source => legacyUrls.Contains(source.Url)).ToArray();
         db.Sources.RemoveRange(legacySources);
         var existing = existingSources

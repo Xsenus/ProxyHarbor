@@ -3,9 +3,10 @@ param(
     [ValidateRange(1, 300)][int]$TimeoutSeconds = 25,
     [ValidateRange(1024, 33554432)][int]$MaxBodyBytes = 33554432,
     [ValidateRange(1, 64)][int]$ThrottleLimit = 12,
-    [ValidateRange(1, 10000)][int]$ExpectedFeeds = 149,
-    [ValidateRange(1, 10000)][int]$ExpectedProviders = 23,
-    [switch]$CatalogOnly
+    [ValidateRange(1, 10000)][int]$ExpectedFeeds = 174,
+    [ValidateRange(1, 10000)][int]$ExpectedProviders = 32,
+    [switch]$CatalogOnly,
+    [string]$ReportPath
 )
 
 Set-StrictMode -Version Latest
@@ -33,14 +34,27 @@ if (@($feeds | Where-Object { [string]::IsNullOrWhiteSpace($_.License) }).Count 
     throw 'VPN-каталог содержит источник без лицензии или условий публикации.'
 }
 
+function Write-AuditReport([object]$Report) {
+    $json = $Report | ConvertTo-Json -Depth 5
+    Write-Output $json
+    if (-not [string]::IsNullOrWhiteSpace($ReportPath)) {
+        $absoluteReportPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($ReportPath)
+        $parent = Split-Path -Parent $absoluteReportPath
+        if (-not [string]::IsNullOrWhiteSpace($parent)) {
+            New-Item -ItemType Directory -Force -Path $parent | Out-Null
+        }
+        Set-Content -LiteralPath $absoluteReportPath -Value $json -Encoding utf8NoBOM
+    }
+}
+
 if ($CatalogOnly) {
-    [ordered]@{
+    Write-AuditReport ([ordered]@{
         auditedAt = [DateTimeOffset]::UtcNow.ToString('O')
         feeds = $feeds.Count
         providers = @($feeds.Provider | Sort-Object -Unique).Count
         networkSkipped = $true
         failures = @()
-    } | ConvertTo-Json -Depth 3
+    })
     return
 }
 
@@ -77,11 +91,11 @@ $results = @($feeds | ForEach-Object -Parallel {
 } -ThrottleLimit $ThrottleLimit)
 
 $failures = @($results | Where-Object { -not $_.Success })
-[ordered]@{
+Write-AuditReport ([ordered]@{
     auditedAt = [DateTimeOffset]::UtcNow.ToString('O')
     feeds = $feeds.Count
     providers = @($feeds.Provider | Sort-Object -Unique).Count
     succeeded = $results.Count - $failures.Count
     failures = $failures
-} | ConvertTo-Json -Depth 4
+})
 if ($failures.Count -gt 0) { throw "VPN live-аудит завершился с $($failures.Count) ошибками." }

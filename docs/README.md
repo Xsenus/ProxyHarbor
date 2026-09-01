@@ -9,7 +9,7 @@
 | [README проекта](../README.md) | Возможности, быстрый старт и основные команды |
 | [PROJECT_STATUS.md](PROJECT_STATUS.md) | Полная карта того, что уже реализовано и проверено |
 | [API.md](API.md) | Маршруты, фильтры, pagination, форматы и ошибки |
-| [SOURCE_CATALOG.md](SOURCE_CATALOG.md) | Операторский каталог 80 провайдеров и 310 proxy-feed |
+| [SOURCE_CATALOG.md](SOURCE_CATALOG.md) | Операторский каталог 85 провайдеров и 320 proxy-feed |
 | [SOURCES.md](SOURCES.md) | Как собираются и аудируются внешние feed’ы |
 
 ## Оператору

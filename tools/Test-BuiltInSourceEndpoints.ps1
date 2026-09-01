@@ -3,8 +3,8 @@ param(
     [ValidateRange(1, 300)][int]$TimeoutSeconds = 25,
     [ValidateRange(1024, 1048576)][int]$MaxBodyBytes = 262144,
     [ValidateRange(1, 64)][int]$ThrottleLimit = 12,
-    [ValidateRange(1, 10000)][int]$ExpectedFeeds = 310,
-    [ValidateRange(1, 10000)][int]$ExpectedProviders = 80,
+    [ValidateRange(1, 10000)][int]$ExpectedFeeds = 320,
+    [ValidateRange(1, 10000)][int]$ExpectedProviders = 85,
     [switch]$CatalogOnly,
     [string]$ReportPath
 )
