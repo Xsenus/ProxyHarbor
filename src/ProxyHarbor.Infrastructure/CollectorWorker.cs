@@ -63,6 +63,7 @@ public sealed class CollectorWorker(ProxyCollector collector, IOptions<Collector
 /// <summary>Непрерывно проверяет очередной пакет прокси с паузой между пустыми проходами.</summary>
 public sealed class ValidatorWorker(
     ProxyValidator validator,
+    LocalValidationStandbyGate standbyGate,
     ValidationWakeSignal validationWakeSignal,
     IOptions<CollectorOptions> options,
     ILogger<ValidatorWorker> logger) : BackgroundService
@@ -78,6 +79,14 @@ public sealed class ValidatorWorker(
         {
             try
             {
+                if (await standbyGate.ShouldStandByAsync(stoppingToken))
+                {
+                    await validationWakeSignal.WaitAsync(
+                        LocalValidationStandbyGate.StandbyPollInterval,
+                        stoppingToken);
+                    continue;
+                }
+
                 var result = await validator.ValidateBatchAsync(stoppingToken);
                 await validationWakeSignal.WaitAsync(
                     NextDelay(result.Checked, result.Deferred),

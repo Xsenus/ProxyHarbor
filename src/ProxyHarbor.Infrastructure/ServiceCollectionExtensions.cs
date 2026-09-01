@@ -124,6 +124,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ProbeControlHealth>();
         services.AddSingleton<OriginIpProvider>();
         services.AddSingleton<ValidationWakeSignal>();
+        services.AddSingleton<LocalValidationStandbyGate>();
         services.AddSingleton<ProxyValidator>();
         services.AddSingleton<ValidationClaimIdleGate>();
         services.AddSingleton<DistributedProxyValidationService>();
