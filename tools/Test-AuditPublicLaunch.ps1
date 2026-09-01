@@ -20,7 +20,7 @@ function Start-LaunchMock([int]$Port, [ValidateSet('success', 'failure')][string
         $listener.Start()
         $handled = 0
         try {
-            while ($handled -lt 24) {
+            while ($handled -lt 35) {
                 $context = $listener.GetContext()
                 if ($context.Request.Url.AbsolutePath -eq '/mock-ready') {
                     $body = '{}'
@@ -33,7 +33,16 @@ function Start-LaunchMock([int]$Port, [ValidateSet('success', 'failure')][string
                     $context.Response.Headers['X-Frame-Options'] = 'DENY'
                     $context.Response.Headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
                     $context.Response.Headers['Permissions-Policy'] = 'camera=()'
-                    if ($path -in $public) {
+                    if ($context.Request.HttpMethod -eq 'TRACE') {
+                        $context.Response.StatusCode = if ($Mode -eq 'success') { 405 } else { 200 }
+                        $body = 'trace disabled'
+                    } elseif ($context.Request.HttpMethod -eq 'OPTIONS' -and $path -eq '/api/v1/payments/catalog') {
+                        $context.Response.StatusCode = 204
+                        if ($Mode -eq 'failure') {
+                            $context.Response.Headers['Access-Control-Allow-Origin'] = 'https://public-launch-audit.invalid'
+                        }
+                        $body = ''
+                    } elseif ($path -in $public) {
                         $canonical = if ($path -eq '/') { "$base/" } else { "$base$path" }
                         $body = "<html><head><title>Page</title><meta name=`"description`" content=`"Description`"><meta name=`"robots`" content=`"index, follow`"><link rel=`"canonical`" href=`"$canonical`"><script type=`"application/ld+json`">{}</script></head></html>"
                         $context.Response.ContentType = 'text/html'
@@ -46,6 +55,15 @@ function Start-LaunchMock([int]$Port, [ValidateSet('success', 'failure')][string
                         $context.Response.ContentType = 'application/xml'
                     } elseif ($path -eq '/indexnow-key.txt') {
                         $body = 'proxyharbor-public-indexnow-key-2026'
+                        $context.Response.ContentType = 'text/plain'
+                    } elseif ($path -eq '/.well-known/security.txt') {
+                        $expiry = if ($Mode -eq 'success') { [DateTimeOffset]::UtcNow.AddDays(365) } else { [DateTimeOffset]::UtcNow.AddDays(-1) }
+                        $body = "Contact: mailto:security@example.test`nExpires: $($expiry.ToString('O'))`nPreferred-Languages: ru, en`nCanonical: $base/.well-known/security.txt`n"
+                        $context.Response.ContentType = 'text/plain'
+                    } elseif ($path -in @('/.env', '/.git/config', '/docker-compose.yml', '/docker-compose.server.yml',
+                        '/appsettings.json', '/swagger/index.html', '/metrics', '/server-status')) {
+                        $context.Response.StatusCode = if ($Mode -eq 'failure' -and $path -eq '/.env') { 200 } else { 404 }
+                        $body = if ($context.Response.StatusCode -eq 200) { 'SECRET=leaked' } else { 'not found' }
                         $context.Response.ContentType = 'text/plain'
                     } elseif ($path -in $private) {
                         $body = '<html>private</html>'
@@ -98,8 +116,9 @@ function Invoke-LaunchCase([string]$Mode, [bool]$ShouldSucceed) {
         if (-not $completed) { throw "Launch mock $Mode не завершил ожидаемые запросы." }
         Receive-Job $job -ErrorAction Stop | Out-Null
         $report = Get-Content $reportPath -Raw | ConvertFrom-Json
-        if ($ShouldSucceed -and ($rejected -or -not $report.success -or $report.summary.failed -ne 0 -or $report.summary.total -lt 31)) {
-            throw 'Положительный launch-аудит contract нарушен.'
+        if ($ShouldSucceed -and ($rejected -or -not $report.success -or $report.summary.failed -ne 0 -or $report.summary.total -lt 42)) {
+            $failedNames = @($report.checks | Where-Object { -not $_.success } | ForEach-Object name)
+            throw "Положительный launch-аудит contract нарушен: rejected=$rejected; total=$($report.summary.total); failed=$($report.summary.failed); checks=$($failedNames -join ', ')."
         }
         if (-not $ShouldSucceed -and (-not $rejected -or $report.success -or $report.summary.failed -lt 2)) {
             throw 'Отрицательный launch-аудит contract был принят.'
@@ -122,7 +141,7 @@ try {
             throw "$workflowPath не запускает public launch audit contracts."
         }
     }
-    Write-Host 'Public launch audit contracts пройдены: SEO, private noindex, security headers, sitemap, IndexNow, readiness и payment availability.' -ForegroundColor Green
+    Write-Host 'Public launch audit contracts пройдены: SEO, private noindex, security headers, security.txt, sensitive paths, CORS, TRACE, sitemap, IndexNow, readiness и payment availability.' -ForegroundColor Green
 }
 finally {
     if ([IO.Directory]::Exists($fixtureRoot)) {

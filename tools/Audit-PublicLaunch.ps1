@@ -36,13 +36,19 @@ function Add-Check([string]$Name, [bool]$Success, [string]$Details) {
     $checks.Add([ordered]@{ name = $Name; success = $Success; details = $Details })
 }
 
-function Invoke-AuditRequest([string]$Path) {
+function Invoke-AuditRequest(
+    [string]$Path,
+    [string]$Method = 'GET',
+    [hashtable]$Headers = @{}
+) {
     try {
+        $requestHeaders = @{ 'User-Agent' = 'ProxyHarbor-Public-Launch-Audit/1.0' }
+        foreach ($entry in $Headers.GetEnumerator()) { $requestHeaders[$entry.Key] = $entry.Value }
         return Invoke-WebRequest -Uri "$base$Path" -TimeoutSec $TimeoutSec -NoProxy `
-            -SkipHttpErrorCheck -Headers @{ 'User-Agent' = 'ProxyHarbor-Public-Launch-Audit/1.0' }
+            -SkipHttpErrorCheck -Method $Method -Headers $requestHeaders
     }
     catch {
-        Add-Check "HTTP $Path" $false $_.Exception.Message
+        Add-Check "HTTP $Method $Path" $false $_.Exception.Message
         return $null
     }
 }
@@ -157,6 +163,57 @@ try {
         }
     }
     else { Add-Check 'IndexNow ownership key' $false "Repository key file is missing: $indexNowKeyPath" }
+
+    $securityText = Invoke-AuditRequest '/.well-known/security.txt'
+    if ($securityText) {
+        $securityBody = [string]$securityText.Content
+        $contact = [regex]::Match($securityBody, '(?im)^Contact:\s*(?<value>\S+)\s*$')
+        $expires = [regex]::Match($securityBody, '(?im)^Expires:\s*(?<value>\S+)\s*$')
+        $canonical = [regex]::Match($securityBody, '(?im)^Canonical:\s*(?<value>\S+)\s*$')
+        $expiresAt = [DateTimeOffset]::MinValue
+        $expiresValid = $expires.Success -and [DateTimeOffset]::TryParse(
+            $expires.Groups['value'].Value,
+            [Globalization.CultureInfo]::InvariantCulture,
+            [Globalization.DateTimeStyles]::AssumeUniversal,
+            [ref]$expiresAt) -and $expiresAt -gt [DateTimeOffset]::UtcNow.AddDays(30)
+        $contactValid = $contact.Success -and
+            ($contact.Groups['value'].Value -match '^(?i:mailto:|https://)')
+        $expectedCanonical = "$base/.well-known/security.txt"
+        $securityOk = $securityText.StatusCode -eq 200 -and
+            (Get-Header $securityText 'Content-Type') -like 'text/plain*' -and
+            $contactValid -and $expiresValid -and
+            $canonical.Success -and $canonical.Groups['value'].Value -ceq $expectedCanonical
+        Add-Check 'RFC 9116 security.txt' $securityOk `
+            "HTTP $($securityText.StatusCode); contact=$contactValid; expires=$($expires.Groups['value'].Value); canonical=$($canonical.Groups['value'].Value)."
+    }
+
+    $sensitivePaths = @(
+        '/.env', '/.git/config', '/docker-compose.yml', '/docker-compose.server.yml',
+        '/appsettings.json', '/swagger/index.html', '/metrics', '/server-status'
+    )
+    foreach ($path in $sensitivePaths) {
+        $response = Invoke-AuditRequest $path
+        if ($response) {
+            Add-Check "Sensitive path blocked $path" ($response.StatusCode -eq 404) `
+                "HTTP $($response.StatusCode); expected 404 without fallback document."
+        }
+    }
+
+    $cors = Invoke-AuditRequest '/api/v1/payments/catalog' 'OPTIONS' @{
+        Origin = 'https://public-launch-audit.invalid'
+        'Access-Control-Request-Method' = 'GET'
+    }
+    if ($cors) {
+        $allowedOrigin = Get-Header $cors 'Access-Control-Allow-Origin'
+        Add-Check 'Untrusted CORS origin denied' `
+            ($cors.StatusCode -ge 200 -and $cors.StatusCode -lt 300 -and [string]::IsNullOrEmpty($allowedOrigin)) `
+            "HTTP $($cors.StatusCode); Access-Control-Allow-Origin=$allowedOrigin."
+    }
+
+    $trace = Invoke-AuditRequest '/' 'TRACE'
+    if ($trace) {
+        Add-Check 'TRACE method disabled' ($trace.StatusCode -in 405, 501) "HTTP $($trace.StatusCode)."
+    }
 
     foreach ($path in $privateRoutes) {
         $response = Invoke-AuditRequest "$path`?launch-audit=1"
