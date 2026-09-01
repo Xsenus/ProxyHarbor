@@ -6,7 +6,7 @@ namespace ProxyHarbor.Infrastructure;
 public static class BuiltInSourceCatalog
 {
     /// <summary>Дата последнего полного URL/live-аудита всех канонических feed'ов.</summary>
-    public static DateOnly LastAuditedOn => new(2026, 9, 1);
+    public static DateOnly LastAuditedOn => new(2026, 9, 2);
 
     /// <summary>Источники ранжированы по свежести, объёму, стабильности ответа и разнообразию провайдеров.</summary>
     public static IReadOnlyList<BuiltInSource> Sources { get; } =
@@ -290,7 +290,7 @@ public static class BuiltInSourceCatalog
         Feed(262, "XYZS996 GH", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/gh/data.txt", ProxyProtocol.Http),
         Feed(263, "Pxys Daily CSV", "Pxys", "https://raw.githubusercontent.com/Pxys-io/DailyProxyList/master/working_proxies.csv", ProxyProtocol.Http),
         Feed(264, "XYZS996 GQ", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/gq/data.txt", ProxyProtocol.Http),
-        Feed(265, "XYZS996 GR", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/gr/data.txt", ProxyProtocol.Http),
+        Feed(265, "XYZS996 US", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/us/data.txt", ProxyProtocol.Http),
         Feed(266, "XYZS996 GT", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/gt/data.txt", ProxyProtocol.Http),
         Feed(267, "XYZS996 HN", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/hn/data.txt", ProxyProtocol.Http),
         Feed(268, "XYZS996 LU", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/lu/data.txt", ProxyProtocol.Http),

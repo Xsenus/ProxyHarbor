@@ -390,10 +390,30 @@ public sealed class SourceReliabilityTests
         bool expected)
     {
         var now = new DateTimeOffset(2026, 8, 10, 0, 0, 0, TimeSpan.Zero);
+        var lastSucceededAt = now.AddMinutes(-5);
 
         Assert.Equal(expected, SourceConditionalFetchPolicy.ShouldUseValidators(
-            now.AddHours(contentAgeHours), now, retentionDays));
-        Assert.False(SourceConditionalFetchPolicy.ShouldUseValidators(null, now, retentionDays));
+            now.AddHours(contentAgeHours), lastSucceededAt, 1, now, retentionDays));
+        Assert.False(SourceConditionalFetchPolicy.ShouldUseValidators(
+            null, lastSucceededAt, 1, now, retentionDays));
+    }
+
+    [Theory]
+    [InlineData(false, 1)]
+    [InlineData(true, 0)]
+    [InlineData(true, -1)]
+    public void ConditionalValidatorsRequireReusableSuccessfulResult(
+        bool hasSuccessfulFetch,
+        int lastItemCount)
+    {
+        var now = new DateTimeOffset(2026, 8, 10, 0, 0, 0, TimeSpan.Zero);
+
+        Assert.False(SourceConditionalFetchPolicy.ShouldUseValidators(
+            now.AddMinutes(-5),
+            hasSuccessfulFetch ? now.AddMinutes(-5) : null,
+            lastItemCount,
+            now,
+            deadRetentionDays: 3));
     }
 
     private sealed class SequencedHandler(params HttpResponseMessage[] responses) : HttpMessageHandler

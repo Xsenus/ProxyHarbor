@@ -9,7 +9,7 @@ ProxyHarbor загружает 320 HTTPS-feed от 85 независимых п�
 ## Состояние проекта
 
 - 320 встроенных proxy-feed от 85 провайдеров и 174 VPN-feed от 32 провайдеров; операторский каталог: [docs/SOURCE_CATALOG.md](docs/SOURCE_CATALOG.md).
-- Все 320 proxy-feed и 174 VPN-feed прошли URL/live-аудит 1 сентября 2026 года; полный proxy end-to-end аудит выполняется CI и перед production-релизом.
+- Все 320 proxy-feed прошли URL/live-аудит 2 сентября 2026 года, а 174 VPN-feed — 1 сентября; полный proxy end-to-end аудит выполняется CI и перед production-релизом.
 - Последний полный production-цикл: 888 116 разобранных строк, 290 217 уникальных кандидатов за 4,965 секунды.
 - Проверочная партия: 1 600/1 600 результатов, без `Deferred`; одинаковый набор Alive во всех четырёх форматах.
 - Backend: 1063 автоматических теста; frontend: 66 component/accessibility tests.
