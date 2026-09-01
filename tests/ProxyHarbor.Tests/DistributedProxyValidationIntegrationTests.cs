@@ -182,19 +182,29 @@ public sealed class DistributedProxyValidationIntegrationTests
     private static ProxyEndpoint Endpoint(
         string host,
         ProxyStatus status,
-        DateTimeOffset? nextCheckAt) => new()
+        DateTimeOffset? nextCheckAt)
+    {
+        var observedAt = nextCheckAt ?? DateTimeOffset.UtcNow.AddMinutes(-10);
+        var aliveAt = status == ProxyStatus.Alive ? observedAt : (DateTimeOffset?)null;
+        return new ProxyEndpoint
         {
             Host = host,
             Port = 8080,
             Protocol = ProxyProtocol.Http,
             Status = status,
             NextCheckAt = nextCheckAt,
-            LastCheckedAt = nextCheckAt,
-            FirstAliveAt = status == ProxyStatus.Alive ? nextCheckAt ?? DateTimeOffset.UtcNow : null,
+            LastCheckedAt = status == ProxyStatus.Pending ? null : observedAt,
+            FirstSeenAt = observedAt.AddDays(-1),
+            LastSeenAt = observedAt,
+            FirstAliveAt = aliveAt,
+            LastAliveAt = aliveAt,
+            CurrentAliveSince = aliveAt,
+            LatencyMs = status == ProxyStatus.Alive ? 20 : null,
             SuccessfulChecks = status == ProxyStatus.Alive ? 1 : 0,
             FailedChecks = status == ProxyStatus.Dead ? 1 : 0,
             ConsecutiveFailedChecks = status == ProxyStatus.Dead ? 1 : 0
         };
+    }
 
     [Fact]
     [Trait("Category", "PostgresIntegration")]
