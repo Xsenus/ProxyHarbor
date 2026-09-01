@@ -2,10 +2,13 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { Activity, ArrowDownToLine, ArrowRight, Ban, Bell, Bot, CalendarClock, Check, ChevronDown, Clock3, Copy, CreditCard, Database, Eye, EyeOff, Gauge, Globe2, HardDriveDownload, HelpCircle, LayoutDashboard, LockKeyhole, LogOut, Mail, MessageCircle, MousePointerClick, Network, Pencil, Play, Plus, Radio, Receipt, RefreshCw, Search, Send, Server, Settings2, ShieldCheck, ShieldOff, Star, Trash2, User, Users, Wifi, Workflow, X } from 'lucide-react'
 import { currentLocale, LanguageSwitcher, type Language, useI18n } from './i18n'
 import { StyledSelect } from './components/StyledSelect'
+import { Toggle } from './components/Toggle'
 import { ToastSignal } from './components/Toasts'
 import { PublicPricingSection } from './PublicPricingSection'
 import { publicInfoPaths } from './publicInfoRoutes'
 import { analyticsAllowed, privacyPreferenceChanged } from './privacyPreferences'
+import { useSiteSettings } from './siteSettingsContext'
+import { sectionHref, siteSectionCodes, siteSectionLabels, type SiteSettings } from './siteSettingsModel'
 
 type Protocol = 'Http' | 'Https' | 'Socks4' | 'Socks5'
 type Proxy = { host: string; port: number; protocol: Protocol; url: string; latencyMs: number; successRate: number; exitIp?: string; countryCode?: string; lastCheckedAt: string; firstAliveAt?: string; lastAliveAt?: string; activeSince?: string; activeForSeconds?: number }
@@ -35,8 +38,9 @@ type Diagnostics = {
 const API = import.meta.env.VITE_API_URL ?? ''
 const APP_VERSION = import.meta.env.VITE_APP_VERSION ?? '0.0.0-local'
 const PublicInfoPage = lazy(() => import('./PublicInfo').then(module => ({default: module.PublicInfoPage})))
+const AdminSiteSettingsPage = lazy(() => import('./AdminSiteSettingsPage'))
 const protocols: Protocol[] = ['Http', 'Https', 'Socks4', 'Socks5']
-type AdminSection = 'overview' | 'operations' | 'checkers' | 'proxies' | 'vpn' | 'sources' | 'backups' | 'users' | 'payments' | 'telegram' | 'subscriptions' | 'access'
+type AdminSection = 'overview' | 'operations' | 'checkers' | 'proxies' | 'vpn' | 'sources' | 'backups' | 'users' | 'payments' | 'telegram' | 'subscriptions' | 'access' | 'site'
 type CheckerNode = {id:string;name:string;host:string;sshPort:number;sshUsername:string;enabled:boolean;concurrency:number;batchSize:number;createdAt:string;updatedAt:string;lastHeartbeatAt?:string;lastLeaseAt?:string;lastCompletedAt?:string;currentLeaseId?:string;currentLeaseUntil?:string;agentVersion?:string;remoteAddress?:string;deploymentStatus:string;lastError?:string;completedChecks:number;aliveChecks:number;hostKeyFingerprint?:string;online:boolean;busy:boolean}
 type CheckerNodeList = {image:string;nativeAssetBaseUrl:string;items:CheckerNode[]}
 type AdminProxyStatus = 'Pending' | 'Alive' | 'Dead'
@@ -120,6 +124,7 @@ async function copyText(value: string) {
 /** Основная панель: публичный каталог и компактное администрирование в одном интерфейсе. */
 export default function App() {
   const { t } = useI18n()
+  const { settings: siteSettings, loading: siteSettingsLoading } = useSiteSettings()
   const [stats, setStats] = useState<Stats | null>(null)
   const [proxies, setProxies] = useState<Proxy[]>([])
   const [protocol, setProtocol] = useState<Protocol | 'All'>('All')
@@ -151,7 +156,8 @@ export default function App() {
           : currentPath === '/admin/payments' ? 'payments'
             : currentPath === '/admin/telegram' ? 'telegram'
               : currentPath === '/admin/subscriptions' ? 'subscriptions'
-              : currentPath === '/admin/access' ? 'access' : 'overview'
+              : currentPath === '/admin/access' ? 'access'
+                : currentPath === '/admin/site' ? 'site' : 'overview'
   const [adminAuthenticated, setAdminAuthenticated] = useState(false)
   const [adminError, setAdminError] = useState('')
   const [sources, setSources] = useState<Source[]>([])
@@ -198,11 +204,14 @@ export default function App() {
   // Beacon не задерживает переход со страницы. Сервер принимает только pathname,
   // сводит его к фиксированному коду и не сохраняет query/fragment или tracking cookies.
   useEffect(() => {
-    if (!analyticsAllowed() || recordedVisitRef.current === currentPath || typeof navigator.sendBeacon !== 'function') return
+    if (!siteSettings.analytics.firstPartyEnabled ||
+      !analyticsAllowed(siteSettings.cookieConsentRevision) ||
+      recordedVisitRef.current === currentPath ||
+      typeof navigator.sendBeacon !== 'function') return
     recordedVisitRef.current = currentPath
     const payload = new Blob([JSON.stringify({ path: currentPath })], { type: 'application/json' })
     navigator.sendBeacon(`${API}/api/v1/telemetry/visit`, payload)
-  }, [currentPath, analyticsConsentRevision])
+  }, [currentPath, analyticsConsentRevision, siteSettings.analytics.firstPartyEnabled, siteSettings.cookieConsentRevision])
 
   const cancelPublicRequests = useCallback(() => {
     publicRequestIdRef.current++
@@ -650,13 +659,15 @@ export default function App() {
   if (forgotPasswordPage) return <ForgotPasswordPage/>
   if (resetPasswordPage) return <ResetPasswordPage/>
   if (accountOpen) return <AccountPage/>
+  if (publicInfoPage && siteSettingsLoading) return <main className="route-loading" aria-live="polite"><RefreshCw className="spin"/> Загружаем страницу…</main>
+  if (publicInfoPage && !siteSettings.sections[publicInfoPage].published) return <NotFoundPage/>
   if (publicInfoPage) return <Suspense fallback={<main className="route-loading" aria-live="polite"><RefreshCw className="spin"/> Загружаем страницу…</main>}><PublicInfoPage kind={publicInfoPage} apiBaseUrl={API}/></Suspense>
   if (currentPath !== '/' && !adminOpen) return <NotFoundPage/>
 
   return <div className="app-shell">
     {!adminOpen && <><header>
       <a className="brand" href="#top" aria-label="ProxyHarbor"><span className="brand-mark"><Network size={20}/></span><span>Proxy<span>Harbor</span></span></a>
-      <nav><a href="#catalog">{t('proxies')}</a><a href="#vpn-catalog">{t('vpn')}</a><a href="/pricing">Тарифы</a><a href="#api">API</a><LanguageSwitcher compact/><a className="admin-link" href="/login"><LockKeyhole size={15}/> {t('signIn')}</a></nav>
+      <nav><a href="#catalog">{t('proxies')}</a><a href="#vpn-catalog">{t('vpn')}</a>{siteSettings.sections.pricing.published&&siteSettings.sections.pricing.showInNavigation&&<a href="/pricing">Тарифы</a>}<a href="#api">API</a><LanguageSwitcher compact/><a className="admin-link" href="/login"><LockKeyhole size={15}/> {t('signIn')}</a></nav>
       <a className="mobile-admin" aria-label={t('signIn')} href="/login"><LockKeyhole size={17}/></a>
       <div className={`live-pill ${apiError ? 'offline' : ''}`} aria-live="polite"><span/> {loading ? t('systemChecking') : apiError ? t('systemOffline') : t('systemActive')}</div>
     </header>
@@ -708,7 +719,7 @@ export default function App() {
       <section id="api" className="api-panel"><div><span className="kicker">ONE-CLICK EXPORT</span><h2>{t('exportTitle')}</h2><p>{t('exportText')}</p><small className="geo-attribution">IP geolocation: <a href="https://db-ip.com" target="_blank" rel="noreferrer">DB-IP</a></small></div><div className="export-grid">{['json','xml','txt','csv'].map(format => <a key={format} href={`${API}/api/v1/export/${format}?${exportQuery}`}><span>Proxy .{format}</span><ArrowDownToLine size={18}/></a>)}{['json','txt'].map(format=><a key={`vpn-${format}`} href={`${API}/api/v1/vpn/export/${format}`}><span>VPN .{format}</span><ArrowDownToLine size={18}/></a>)}</div><div className="endpoint"><span>GET</span><code>/api/v1/vpn?protocol=Vless&amp;country=DE</code></div></section>
     </main>
 
-    <footer><div className="brand"><span className="brand-mark"><Network size={18}/></span><span>Proxy<span>Harbor</span></span></div><nav aria-label="Информация о сервисе"><a href="/pricing">Тарифы</a><a href="/service">Получение доступа</a><a href="/legal">Документы</a><a href="/offer">Оферта</a><a href="/acceptable-use">Использование</a><a href="/privacy">Персональные данные</a><a href="/refunds">Возврат</a><a href="/requisites">Реквизиты</a></nav><span>v{APP_VERSION} · © {new Date().getFullYear()}</span></footer></>}
+    <footer><div className="brand"><span className="brand-mark"><Network size={18}/></span><span>Proxy<span>Harbor</span></span></div><PublicSiteNavigation settings={siteSettings.sections}/><span>v{APP_VERSION} · © {new Date().getFullYear()}</span></footer></>}
 
     {adminOpen && <main className="admin-workspace">
       <aside className="admin-sidebar" aria-label="Навигация по панели управления">
@@ -726,6 +737,7 @@ export default function App() {
           <a className={adminSection === 'telegram' ? 'active' : ''} aria-current={adminSection === 'telegram' ? 'page' : undefined} href="/admin/telegram"><Bot/>{t('telegramBot')}</a>
           <a className={adminSection === 'subscriptions' ? 'active' : ''} aria-current={adminSection === 'subscriptions' ? 'page' : undefined} href="/admin/subscriptions"><CalendarClock/>{t('subscriptions')}</a>
           <a className={adminSection === 'access' ? 'active' : ''} aria-current={adminSection === 'access' ? 'page' : undefined} href="/admin/access"><ShieldOff/>{t('accessIp')}</a>
+          <a className={adminSection === 'site' ? 'active' : ''} aria-current={adminSection === 'site' ? 'page' : undefined} href="/admin/site"><Globe2/>Сайт и документы</a>
         </nav>
         <div className="admin-sidebar-foot"><LanguageSwitcher/><a href="/account"><User/>{t('profile')}</a><a href="/"><ArrowRight/>{t('home')}</a><button onClick={logoutAdmin}><LogOut/>{t('logout')}</button></div>
       </aside>
@@ -785,6 +797,7 @@ export default function App() {
           {adminSection === 'telegram' && <AdminTelegramPage/>}
           {adminSection === 'subscriptions' && <AdminSubscriptionsPage/>}
           {adminSection === 'access' && <AdminAccessPage/>}
+          {adminSection === 'site' && <Suspense fallback={<div className="admin-initial-loading"><RefreshCw className="spin"/><span>Загружаем настройки…</span></div>}><AdminSiteSettingsPage/></Suspense>}
         </>}
       </section>
     </main>}
@@ -805,6 +818,11 @@ export default function App() {
     </div>}
     {backupDeleteTarget && <div className="source-editor-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget && !backupBusy) setBackupDeleteTarget(null) }}><section className="source-editor-modal backup-delete-modal" role="dialog" aria-modal="true" aria-labelledby="backup-delete-title"><div className="source-editor-heading"><div><span className="kicker">ОПАСНОЕ ДЕЙСТВИЕ</span><h2 id="backup-delete-title">Удалить резервную копию?</h2><p>Файл <b>{backupDeleteTarget.fileName ?? 'без имени'}</b> и его запись в истории будут удалены без возможности восстановления.</p></div><button className="icon-button" aria-label="Отмена" onClick={() => setBackupDeleteTarget(null)} disabled={!!backupBusy}><X/></button></div><div className="source-editor-actions"><span/><button className="secondary-admin-button" onClick={() => setBackupDeleteTarget(null)} disabled={!!backupBusy}>Отмена</button><button className="danger-link" onClick={() => void deleteBackup()} disabled={!!backupBusy}><Trash2/>{backupBusy ? 'Удаляем…' : 'Удалить навсегда'}</button></div></section></div>}
   </div>
+}
+
+function PublicSiteNavigation({settings}:{settings:SiteSettings['sections']}) {
+  const visible = siteSectionCodes.filter(code => settings[code].published && settings[code].showInNavigation)
+  return <nav aria-label="Информация о сервисе">{visible.map(code=><a key={code} href={sectionHref(code)}>{siteSectionLabels[code]}</a>)}</nav>
 }
 
 function NotFoundPage() {
@@ -1512,8 +1530,6 @@ function secondarySecretLabel(code:string){return code==='robokassa'?'Парол
 function needsSecondarySecret(code:string){return code==='robokassa'||code==='stripe'||code==='nowpayments'}
 
 /** Доступный переключатель вместо платформенно-зависимого checkbox. */
-function Toggle({checked,onChange,label,danger=false}:{checked:boolean;onChange:(value:boolean)=>void;label:string;danger?:boolean}){return <button type="button" role="switch" aria-checked={checked} className={`ui-switch ${checked?'on':''} ${danger?'danger':''}`} onClick={()=>onChange(!checked)}><i><span/></i><b>{label}</b></button>}
-
 /** Настройки backup живут в PostgreSQL и применяются worker без рестарта контейнера. */
 function AdminBackupSettings({onError}:{onError:(message:string)=>void}){
   const [draft,setDraft]=useState<BackupSettings|null>(null)
@@ -1612,6 +1628,67 @@ function AdminPageHeader({id,title,children}:{id:string;title:string;children?:R
   </header>
 }
 
+/* AdminSiteSettingsPage was moved to a lazy route chunk.
+function AdminSiteSettingsPage(){
+  const {refresh}=useSiteSettings()
+  const [draft,setDraft]=useState<SiteSettings|null>(null)
+  const [tab,setTab]=useState<'sections'|'requisites'|'cookies'|'analytics'>('sections')
+  const [busy,setBusy]=useState(false)
+  const [error,setError]=useState('')
+  const [saved,setSaved]=useState('')
+
+  useEffect(()=>{
+    const controller=new AbortController()
+    const load=async()=>{
+      try{
+        const response=await fetch(`${API}/api/v1/admin/site-settings`,{credentials:'include',cache:'no-store',signal:controller.signal})
+        if(!response.ok)throw new Error(await responseMessage(response,'Не удалось загрузить настройки сайта'))
+        setDraft(await response.json() as SiteSettings)
+      }catch(reason){if(!isAbortError(reason))setError(reason instanceof Error?reason.message:'Не удалось загрузить настройки сайта')}
+    }
+    void load()
+    return()=>controller.abort()
+  },[])
+
+  const updateSection=(code:SiteSectionCode,patch:Partial<SiteSettings['sections'][SiteSectionCode]>)=>setDraft(current=>current?{...current,sections:{...current.sections,[code]:{...current.sections[code],...patch}}}:current)
+  const updateField=(code:(typeof requisiteFieldCodes)[number],patch:Partial<SiteSettings['requisites']['fields'][typeof code]>)=>setDraft(current=>current?{...current,requisites:{...current.requisites,fields:{...current.requisites.fields,[code]:{...current.requisites.fields[code],...patch}}}}:current)
+  const save=async()=>{
+    if(!draft||busy)return
+    setBusy(true);setError('');setSaved('')
+    try{
+      const response=await fetch(`${API}/api/v1/admin/site-settings`,{method:'PUT',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify(draft)})
+      if(!response.ok)throw new Error(await responseMessage(response,'Настройки сайта не сохранены'))
+      const next=await response.json() as SiteSettings
+      setDraft(next)
+      await refresh()
+      setSaved('Настройки опубликованы. Новая конфигурация применяется без перезапуска.')
+    }catch(reason){setError(reason instanceof Error?reason.message:'Настройки сайта не сохранены')}
+    finally{setBusy(false)}
+  }
+
+  if(!draft)return <section className="admin-section"><AdminPageHeader id="admin-site-title" title="Сайт и документы"/><div className="admin-initial-loading"><RefreshCw className="spin"/><span>Загружаем настройки…</span></div><ToastSignal kind="error" message={error}/></section>
+
+  const tracker=(code:'yandex'|'google'|'vk',title:string,description:string,placeholder:string,help:string)=>{
+    const value=draft.analytics[code]
+    return <article className="admin-card site-tracker-card" key={code}><div className="site-tracker-heading"><div><span className="summary-icon"><Gauge/></span><span><b>{title}</b><small>{description}</small></span></div><Toggle checked={value.enabled} onChange={enabled=>setDraft({...draft,analytics:{...draft.analytics,[code]:{...value,enabled}}})} label={value.enabled?'Включена':'Выключена'}/></div><label>Идентификатор<input autoComplete="off" maxLength={128} placeholder={placeholder} value={value.identifier} onChange={event=>setDraft({...draft,analytics:{...draft.analytics,[code]:{...value,identifier:event.target.value}}})}/></label><a href={help} target="_blank" rel="noreferrer"><HelpCircle/>Где получить идентификатор</a><p><ShieldCheck/>Код загружается только после явного разрешения статистики.</p></article>
+  }
+
+  return <section className="admin-section site-settings-section" aria-labelledby="admin-site-title">
+    <AdminPageHeader id="admin-site-title" title="Сайт и документы"><button className="primary-admin-button" disabled={busy} onClick={()=>void save()}><ShieldCheck/>{busy?'Сохраняем…':'Сохранить и опубликовать'}</button></AdminPageHeader>
+    <ToastSignal kind="error" message={error}/><ToastSignal kind="success" message={saved}/>
+    <AdminTabs value={tab} onChange={value=>setTab(value as typeof tab)} idPrefix="site-settings" items={[["sections","Разделы"],["requisites","Реквизиты"],["cookies","Cookies"],["analytics","Метрики"]]}/>
+
+    {tab==='sections'&&<div id="site-settings-panel-sections" role="tabpanel" aria-labelledby="site-settings-tab-sections" className="admin-card site-section-settings"><div className="card-heading"><div><span className="kicker">PUBLICATION</span><h2>Публичные разделы</h2><p>Страницу можно снять с публикации либо оставить доступной только по прямой ссылке. Обязательные документы нельзя отключить, но можно убрать из меню.</p></div></div><div className="site-section-list">{siteSectionCodes.map(code=>{const value=draft.sections[code];const required=requiredSiteSections.has(code);return <article key={code}><div><b>{siteSectionLabels[code]}</b><small>{sectionHref(code)}{required?' · обязательный документ':''}</small></div><Toggle disabled={required} checked={value.published} onChange={published=>updateSection(code,{published,showInNavigation:published?value.showInNavigation:false})} label={value.published?'Опубликован':'Скрыт'}/><Toggle disabled={!value.published} checked={value.showInNavigation} onChange={showInNavigation=>updateSection(code,{showInNavigation})} label="В навигации"/></article>})}</div></div>}
+
+    {tab==='requisites'&&<div id="site-settings-panel-requisites" role="tabpanel" aria-labelledby="site-settings-tab-requisites" className="site-requisites-settings"><section className="admin-card"><div className="card-heading"><div><span className="kicker">OWNER DATA</span><h2>Карточка исполнителя</h2><p>Значения используются на странице реквизитов и в юридических документах. Переключатель управляет строкой именно на странице реквизитов.</p></div></div><div className="site-copy-grid"><label>Заголовок<input maxLength={120} value={draft.requisites.introTitle} onChange={event=>setDraft({...draft,requisites:{...draft.requisites,introTitle:event.target.value}})}/></label><label className="wide">Описание<textarea maxLength={500} value={draft.requisites.introDescription} onChange={event=>setDraft({...draft,requisites:{...draft.requisites,introDescription:event.target.value}})}/></label></div><div className="site-requisite-fields">{requisiteFieldCodes.filter(code=>!bankRequisiteFields.has(code)).map(code=>{const value=draft.requisites.fields[code];return <article key={code}><label><span>{requisiteFieldLabels[code]}</span><input autoComplete="off" maxLength={500} value={value.value} onChange={event=>updateField(code,{value:event.target.value})}/></label><Toggle checked={value.visible} onChange={visible=>updateField(code,{visible})} label={value.visible?'Показывать':'Скрыто'}/></article>})}</div></section><section className="admin-card"><div className="card-heading"><div><span className="kicker">BANK DETAILS</span><h2>Банковские реквизиты</h2><p>Блок по умолчанию скрыт. Даже при включённом блоке можно скрыть отдельные строки.</p></div><Toggle checked={draft.requisites.bankSectionVisible} onChange={bankSectionVisible=>setDraft({...draft,requisites:{...draft.requisites,bankSectionVisible}})} label={draft.requisites.bankSectionVisible?'Блок опубликован':'Блок скрыт'}/></div><div className="site-requisite-fields">{requisiteFieldCodes.filter(code=>bankRequisiteFields.has(code)).map(code=>{const value=draft.requisites.fields[code];return <article key={code}><label><span>{requisiteFieldLabels[code]}</span><input autoComplete="off" maxLength={500} value={value.value} onChange={event=>updateField(code,{value:event.target.value})}/></label><Toggle disabled={!draft.requisites.bankSectionVisible} checked={value.visible} onChange={visible=>updateField(code,{visible})} label={value.visible?'Показывать':'Скрыто'}/></article>})}</div><label className="site-note-field">Пояснение<textarea maxLength={1000} value={draft.requisites.note} onChange={event=>setDraft({...draft,requisites:{...draft.requisites,note:event.target.value}})}/></label></section></div>}
+
+    {tab==='cookies'&&<div id="site-settings-panel-cookies" role="tabpanel" aria-labelledby="site-settings-tab-cookies" className="admin-card site-cookie-settings"><div className="card-heading"><div><span className="kicker">CONSENT</span><h2>Обязательный первый выбор</h2><p>Новый посетитель не может закрыть диалог, пока не выберет только необходимые cookies либо разрешит статистику. Оферта или согласие на рекламу с этим выбором не объединяются.</p></div><span className="state-pill active">Всегда включён</span></div><div className="site-cookie-required"><LockKeyhole/><div><b>Необходимые cookies</b><p>Авторизация и выбранный язык работают независимо от разрешения статистики.</p></div></div><div className="site-copy-grid"><label>Заголовок<input maxLength={120} value={draft.cookies.bannerTitle} onChange={event=>setDraft({...draft,cookies:{...draft.cookies,bannerTitle:event.target.value}})}/></label><label className="wide">Текст диалога<textarea maxLength={1000} value={draft.cookies.bannerText} onChange={event=>setDraft({...draft,cookies:{...draft.cookies,bannerText:event.target.value}})}/></label></div><Toggle checked={draft.cookies.showSettingsButton} onChange={showSettingsButton=>setDraft({...draft,cookies:{...draft.cookies,showSettingsButton}})} label="Показывать кнопку повторной настройки"/><p className="privacy-note"><ShieldCheck/>При изменении текста или набора метрик редакция согласия повысится автоматически, и посетители сделают выбор заново.</p></div>}
+
+    {tab==='analytics'&&<div id="site-settings-panel-analytics" role="tabpanel" aria-labelledby="site-settings-tab-analytics" className="site-analytics-settings"><section className="admin-card first-party-analytics"><div><span className="summary-icon"><MousePointerClick/></span><span><b>Статистика ProxyHarbor</b><small>Минимальные page codes и IP с ограниченным сроком хранения; без query и рекламных cookies.</small></span></div><Toggle checked={draft.analytics.firstPartyEnabled} onChange={firstPartyEnabled=>setDraft({...draft,analytics:{...draft.analytics,firstPartyEnabled}})} label={draft.analytics.firstPartyEnabled?'Включена':'Выключена'}/></section><div className="site-tracker-grid">{tracker('yandex','Яндекс Метрика','Номер счётчика; Вебвизор принудительно выключен.','12345678','https://yandex.ru/support/metrica/ru/quick-start')}{tracker('google','Google Analytics 4','Measurement ID веб-потока.','G-XXXXXXXXXX','https://support.google.com/analytics/answer/9539598?hl=ru')}{tracker('vk','VK Pixel','Идентификатор пикселя ретаргетинга.','VK-RTRG-…','https://ads.vk.com/')}</div><aside className="site-analytics-warning"><ShieldOff/><p>Внешние метрики могут означать трансграничную передачу и использование сторонних обработчиков. Включайте их после проверки политики, уведомлений Роскомнадзора и договорных оснований.</p></aside></div>}
+  </section>
+}
+
+*/
 function AdminTabs({value,onChange,items,ariaLabel='Разделы страницы',idPrefix}:{value:string;onChange:(value:string)=>void;items:[string,string][];ariaLabel?:string;idPrefix?:string}){
   const activate=(index:number,event:React.KeyboardEvent<HTMLButtonElement>)=>{const buttons=event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]');const button=buttons?.[index];if(!button)return;button.focus();onChange(items[index][0])}
   return <nav className="admin-tabs" role="tablist" aria-label={ariaLabel}>{items.map(([key,label],index)=><button key={key} type="button" id={idPrefix?`${idPrefix}-tab-${key}`:undefined} role="tab" aria-selected={value===key} aria-controls={idPrefix?`${idPrefix}-panel-${key}`:undefined} tabIndex={value===key?0:-1} className={value===key?'active':''} onClick={()=>onChange(key)} onKeyDown={event=>{if(!['ArrowRight','ArrowLeft','Home','End'].includes(event.key))return;event.preventDefault();if(event.key==='ArrowRight')activate((index+1)%items.length,event);else if(event.key==='ArrowLeft')activate((index-1+items.length)%items.length,event);else if(event.key==='Home')activate(0,event);else activate(items.length-1,event)}}>{label}</button>)}</nav>

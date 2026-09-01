@@ -111,6 +111,7 @@ builder.Services.AddOptions<PaymentOptions>().Bind(builder.Configuration.GetSect
     .ValidateOnStart();
 builder.Services.AddHttpClient();
 builder.Services.AddScoped<IPaymentConfigurationStore, PaymentConfigurationStore>();
+builder.Services.AddScoped<ISiteConfigurationStore, SiteConfigurationStore>();
 builder.Services.AddScoped<PaymentGatewayClient>();
 builder.Services.AddScoped<PaymentSettlementService>();
 builder.Services.AddHostedService<PaymentReconciliationWorker>();

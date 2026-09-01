@@ -11,6 +11,7 @@ Manifest v7 содержит согласованный repeatable-read snapshot
 - безопасные runtime-настройки CORS, trusted networks, hosts и logging;
 - счета со способом оплаты, подписки, одноразовые уведомления, аудит ручных продлений, агрегаты выдачи по IP и правила блокировки;
 - конфигурацию commerce-бота, Telegram CRM, очередь доставки и обработанные update;
+- управляемые публичные реквизиты, публикацию разделов, cookie-тексты и идентификаторы аналитики;
 - внешние checker-узлы, их несекретные SSH-реквизиты, fingerprint, состояние lease и счётчики;
 - UTC-время, версии manifest/settings schema и `secretsIncluded=false`.
 

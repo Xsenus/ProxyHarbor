@@ -10,6 +10,15 @@ import {
 } from "lucide-react";
 import { PublicPricingSection } from "./PublicPricingSection";
 import type { PublicInfoKind } from "./publicInfoRoutes";
+import {
+  bankRequisiteFields,
+  requisiteFieldCodes,
+  requisiteFieldLabels,
+  sectionHref,
+  siteSectionCodes,
+  siteSectionLabels,
+} from "./siteSettingsModel";
+import { useSiteSettings } from "./siteSettingsContext";
 
 const effectiveDate = "28 августа 2026 года";
 const titles: Record<PublicInfoKind, string> = {
@@ -26,6 +35,24 @@ const titles: Record<PublicInfoKind, string> = {
   requisites: "Контакты и реквизиты",
 };
 
+function useOperatorDetails() {
+  const { settings } = useSiteSettings();
+  const value = (code: keyof typeof settings.requisites.fields) =>
+    settings.requisites.fields[code].value;
+  const email = value("email");
+  const phone = value("phone");
+  return {
+    fullName: value("fullName"),
+    inn: value("inn"),
+    taxStatus: value("taxStatus"),
+    address: value("address"),
+    email,
+    phone,
+    emailHref: `mailto:${email.trim()}`,
+    phoneHref: `tel:${phone.replace(/[^+0-9]/g, "")}`,
+  };
+}
+
 function PublicBrand() {
   return (
     <a className="brand" href="/">
@@ -40,18 +67,21 @@ function PublicBrand() {
 }
 
 function PublicInfoFooter() {
+  const { settings } = useSiteSettings();
+  const visible = siteSectionCodes.filter(
+    (code) =>
+      settings.sections[code].published &&
+      settings.sections[code].showInNavigation,
+  );
   return (
     <footer className="legal-footer">
       <PublicBrand />
       <nav aria-label="Правовая информация">
-        <a href="/legal">Документы</a>
-        <a href="/offer">Оферта</a>
-        <a href="/privacy">Персональные данные</a>
-        <a href="/acceptable-use">Использование</a>
-        <a href="/marketing-consent">Рассылки</a>
-        <a href="/cookies">Cookies</a>
-        <a href="/refunds">Возврат</a>
-        <a href="/requisites">Реквизиты</a>
+        {visible.map((code) => (
+          <a href={sectionHref(code)} key={code}>
+            {siteSectionLabels[code]}
+          </a>
+        ))}
       </nav>
       <span>© {new Date().getFullYear()}</span>
     </footer>
@@ -65,15 +95,18 @@ export function PublicInfoPage({
   kind: PublicInfoKind;
   apiBaseUrl: string;
 }) {
+  const { settings } = useSiteSettings();
+  const headerSections = (["pricing", "service", "legal", "requisites"] as const).filter(
+    (code) => settings.sections[code].published && settings.sections[code].showInNavigation,
+  );
   return (
     <div className="public-info-shell">
       <header>
         <PublicBrand />
         <nav>
-          <a href="/pricing">Тарифы</a>
-          <a href="/service">Получение доступа</a>
-          <a href="/legal">Документы</a>
-          <a href="/requisites">Реквизиты</a>
+          {headerSections.map((code) => (
+            <a href={sectionHref(code)} key={code}>{siteSectionLabels[code]}</a>
+          ))}
         </nav>
         <a className="public-info-account" href="/login">
           Личный кабинет
@@ -108,45 +141,46 @@ export function PublicInfoPage({
 }
 
 function LegalIndex() {
+  const { settings } = useSiteSettings();
   const documents = [
-    ["/offer", "Публичная оферта", "Условия покупки и использования сервиса."],
+    ["offer", "Публичная оферта", "Условия покупки и использования сервиса."],
     [
-      "/privacy",
+      "privacy",
       "Политика обработки персональных данных",
       "Цели, состав, сроки обработки и права пользователя.",
     ],
     [
-      "/personal-data-consent",
+      "personal-data-consent",
       "Согласие на обработку персональных данных",
       "Отдельное согласие, выдаваемое при регистрации.",
     ],
     [
-      "/acceptable-use",
+      "acceptable-use",
       "Правила допустимого использования",
       "Законные цели, запреты, контроль нарушений и прекращение доступа.",
     ],
     [
-      "/marketing-consent",
+      "marketing-consent",
       "Согласие на рекламные сообщения",
       "Добровольное согласие на акции и специальные предложения.",
     ],
     [
-      "/cookies",
+      "cookies",
       "Политика cookies",
       "Необходимые технологии и необязательная статистика.",
     ],
     [
-      "/refunds",
+      "refunds",
       "Отмена и возврат",
       "Как отказаться от услуги и направить требование.",
     ],
     [
-      "/service",
+      "service",
       "Получение услуги",
       "Состав и порядок предоставления цифрового доступа.",
     ],
     [
-      "/requisites",
+      "requisites",
       "Контакты и реквизиты",
       "Сведения об исполнителе и способы связи.",
     ],
@@ -164,8 +198,8 @@ function LegalIndex() {
           временем принятия.
         </p>
         <div className="legal-index-grid">
-          {documents.map(([href, title, description]) => (
-            <a href={href} key={href}>
+          {documents.filter(([code]) => settings.sections[code].published).map(([code, title, description]) => (
+            <a href={sectionHref(code)} key={code}>
               <FileText />
               <span>
                 <b>{title}</b>
@@ -215,6 +249,7 @@ function ServiceSummary() {
 }
 
 function ServicePage() {
+  const operator = useOperatorDetails();
   return (
     <article className="public-document">
       <section>
@@ -265,8 +300,8 @@ function ServicePage() {
       <section>
         <h2>Если доступ не появился</h2>
         <p>
-          Напишите на <a href="mailto:ilel@list.ru">ilel@list.ru</a> или
-          позвоните по номеру <a href="tel:+79130149349">+7 913 014-93-49</a>.
+          Напишите на <a href={operator.emailHref}>{operator.email}</a> или
+          позвоните по номеру <a href={operator.phoneHref}>{operator.phone}</a>.
           Укажите e-mail аккаунта, дату, сумму и способ оплаты; не присылайте
           полные данные банковской карты.
         </p>
@@ -276,6 +311,7 @@ function ServicePage() {
 }
 
 function OfferPage() {
+  const operator = useOperatorDetails();
   return (
     <article className="public-document">
       <p className="document-meta">
@@ -284,8 +320,8 @@ function OfferPage() {
       <section>
         <h2>1. Общие положения</h2>
         <p>
-          Настоящий документ является предложением плательщика НПД Телятникова
-          Ильи Александровича, ИНН 890415962910 (далее — Исполнитель), заключить
+          Настоящий документ является предложением плательщика НПД {operator.fullName},
+          ИНН {operator.inn} (далее — Исполнитель), заключить
           договор возмездного оказания информационных услуг на изложенных ниже
           условиях. Пользователь принимает оферту при регистрации и подтверждает
           её при оплате тарифа.
@@ -351,7 +387,7 @@ function OfferPage() {
         <p>
           Заказчик вправе отказаться от договора в порядке, предусмотренном
           законодательством РФ. Для возврата направьте заявление на{" "}
-          <a href="mailto:ilel@list.ru">ilel@list.ru</a> с e-mail аккаунта и
+          <a href={operator.emailHref}>{operator.email}</a> с e-mail аккаунта и
           укажите номер заказа. До начала предоставления доступа возвращается
           уплаченная сумма. После активации Исполнитель вправе удержать только
           фактически понесённые и подтверждаемые расходы, непосредственно
@@ -399,6 +435,13 @@ function OfferPage() {
 }
 
 function PrivacyPage() {
+  const operator = useOperatorDetails();
+  const { settings } = useSiteSettings();
+  const externalAnalytics = [
+    settings.analytics.yandex.enabled && "Яндекс Метрика",
+    settings.analytics.google.enabled && "Google Analytics 4",
+    settings.analytics.vk.enabled && "VK Pixel",
+  ].filter(Boolean) as string[];
   return (
     <article className="public-document">
       <p className="document-meta">
@@ -407,9 +450,9 @@ function PrivacyPage() {
       <section>
         <h2>1. Оператор данных</h2>
         <p>
-          Оператор: Телятников Илья Александрович, ИНН 890415962910, плательщик
+          Оператор: {operator.fullName}, ИНН {operator.inn}, плательщик
           налога на профессиональный доход. Контакт по вопросам персональных
-          данных: <a href="mailto:ilel@list.ru">ilel@list.ru</a>.
+          данных: <a href={operator.emailHref}>{operator.email}</a>.
         </p>
       </section>
       <section>
@@ -458,7 +501,7 @@ function PrivacyPage() {
           Пользователь может запросить сведения об обработке, исправление,
           ограничение или удаление данных, отозвать согласие и обратиться с
           возражением. Запрос направляется на{" "}
-          <a href="mailto:ilel@list.ru">ilel@list.ru</a>; для защиты аккаунта
+          <a href={operator.emailHref}>{operator.email}</a>; для защиты аккаунта
           может потребоваться подтверждение личности.
         </p>
       </section>
@@ -466,8 +509,11 @@ function PrivacyPage() {
         <h2>7. Cookies</h2>
         <p>
           Сайт использует технические cookies защищённой сессии и настройки
-          языка. Рекламные cookies не используются. Сигнал Global Privacy
-          Control учитывается для необязательной статистики посещений.
+          языка. Необязательная статистика
+          {externalAnalytics.length > 0
+            ? ` через ${externalAnalytics.join(", ")}`
+            : " ProxyHarbor"} включается только после отдельного выбора.
+          Сигналы Global Privacy Control и Do Not Track имеют приоритет.
         </p>
       </section>
       <section>
@@ -490,6 +536,7 @@ function PrivacyPage() {
           Telegram данные могут передаваться иностранной платформе; такая
           передача проводится только после выполнения применимых требований к
           трансграничной передаче.
+          {externalAnalytics.length > 0 && ` При разрешении статистики технические идентификаторы, IP и сведения о посещённой странице могут передаваться поставщикам: ${externalAnalytics.join(", ")}. До включения таких поставщиков оператор обязан выполнить применимые требования к локализации, уведомлению и трансграничной передаче.`}
         </p>
       </section>
       <section>
@@ -513,6 +560,7 @@ function PrivacyPage() {
 }
 
 function PersonalDataConsentPage() {
+  const operator = useOperatorDetails();
   return (
     <article className="public-document">
       <p className="document-meta">
@@ -523,9 +571,8 @@ function PersonalDataConsentPage() {
         <p>
           Создавая аккаунт на сайте либо начиная использовать Telegram-бота и
           нажимая отдельную кнопку подтверждения, я свободно, своей волей и в
-          своём интересе даю Телятникову Илье Александровичу, ИНН
-          890415962910, адрес: 633209, Новосибирская область, г. Искитим, ул.
-          Терешковой, д. 35, согласие на обработку моих персональных данных.
+          своём интересе даю оператору {operator.fullName}, ИНН {operator.inn},
+          адрес: {operator.address}, согласие на обработку моих персональных данных.
         </p>
       </section>
       <section>
@@ -563,7 +610,7 @@ function PersonalDataConsentPage() {
         <h2>5. Отзыв</h2>
         <p>
           Согласие можно отозвать письмом на{" "}
-          <a href="mailto:ilel@list.ru">ilel@list.ru</a> или по адресу
+          <a href={operator.emailHref}>{operator.email}</a> или по адресу
           оператора. Укажите e-mail аккаунта и суть требования. Отзыв может
           сделать невозможным дальнейшее использование аккаунта, но не
           прекращает обработку, допускаемую законом без согласия. Подробнее — в{" "}
@@ -575,6 +622,7 @@ function PersonalDataConsentPage() {
 }
 
 function MarketingConsentPage() {
+  const operator = useOperatorDetails();
   return (
     <article className="public-document">
       <p className="document-meta">
@@ -591,10 +639,9 @@ function MarketingConsentPage() {
           подготовки, доставки и учёта таких сообщений.
         </p>
         <p>
-          Оператор и рекламораспространитель: Телятников Илья Александрович,
-          ИНН 890415962910, адрес: 633209, Новосибирская область, г. Искитим,
-          ул. Терешковой, д. 35; e-mail: {" "}
-          <a href="mailto:ilel@list.ru">ilel@list.ru</a>.
+          Оператор и рекламораспространитель: {operator.fullName},
+          ИНН {operator.inn}, адрес: {operator.address}; e-mail: {" "}
+          <a href={operator.emailHref}>{operator.email}</a>.
         </p>
         <p>
           Согласие не является условием регистрации, покупки или использования
@@ -623,7 +670,7 @@ function MarketingConsentPage() {
         <p>
           Согласие можно в любой момент отозвать в Telegram-боте командой
           <b> /notifications</b> и кнопкой «Отозвать согласие на рекламу» либо
-          письмом на <a href="mailto:ilel@list.ru">ilel@list.ru</a>. После
+          письмом на <a href={operator.emailHref}>{operator.email}</a>. После
           отзыва новые рекламные сообщения не ставятся в очередь. Отзыв не
           отключает необходимые сообщения об оплате, безопасности, поддержке и
           состоянии уже приобретённой подписки.
@@ -643,6 +690,7 @@ function MarketingConsentPage() {
 }
 
 function AcceptableUsePage() {
+  const operator = useOperatorDetails();
   return (
     <article className="public-document">
       <p className="document-meta">
@@ -700,7 +748,7 @@ function AcceptableUsePage() {
         <h2>4. Сообщение о нарушении</h2>
         <p>
           Сообщения о злоупотреблении принимаются на {" "}
-          <a href="mailto:ilel@list.ru">ilel@list.ru</a>. Укажите адрес или
+          <a href={operator.emailHref}>{operator.email}</a>. Укажите адрес или
           идентификатор события, дату, описание и подтверждающие материалы без
           паролей, полных платёжных реквизитов и иных лишних персональных данных.
         </p>
@@ -721,8 +769,15 @@ function AcceptableUsePage() {
 }
 
 function CookiesPage() {
+  const { settings } = useSiteSettings();
   const openSettings = () =>
     window.dispatchEvent(new Event("proxyharbor:open-privacy-preferences"));
+  const analyticsProviders = [
+    settings.analytics.firstPartyEnabled && "внутренняя статистика ProxyHarbor",
+    settings.analytics.yandex.enabled && "Яндекс Метрика",
+    settings.analytics.google.enabled && "Google Analytics 4",
+    settings.analytics.vk.enabled && "VK Pixel",
+  ].filter(Boolean) as string[];
   return (
     <article className="public-document">
       <p className="document-meta">
@@ -731,9 +786,9 @@ function CookiesPage() {
       <section>
         <h2>1. Что используется</h2>
         <p>
-          Cookies и localStorage помогают сохранить защищённую сессию и
-          выбранный язык. Рекламные и межсайтовые отслеживающие cookies
-          ProxyHarbor не устанавливает.
+          Cookies и localStorage помогают сохранить защищённую сессию,
+          выбранный язык и сделанный выбор конфиденциальности. До отдельного
+          разрешения загружаются только необходимые технологии ProxyHarbor.
         </p>
       </section>
       <section>
@@ -755,7 +810,7 @@ function CookiesPage() {
             <span>Локальное хранилище языка, до удаления пользователем.</span>
           </p>
           <p>
-            <b>proxyharbor.analytics-consent.v1</b>
+            <b>proxyharbor.analytics-consent.v{settings.cookieConsentRevision}</b>
             <span>Локально хранит ваш выбор по необязательной статистике.</span>
           </p>
         </div>
@@ -763,10 +818,16 @@ function CookiesPage() {
       <section>
         <h2>3. Необязательная статистика</h2>
         <p>
-          Только после разрешения сайт отправляет код посещённой страницы и
-          технический IP-адрес. Query-параметры, содержимое форм и рекламные
-          идентификаторы не передаются. История удаляется через 90 дней. Global
-          Privacy Control и Do Not Track отключают такую отправку.
+          При первом входе посетитель обязан выбрать только необходимые
+          технологии либо разрешить статистику. Сейчас администратором
+          {analyticsProviders.length > 0
+            ? ` подготовлены: ${analyticsProviders.join(", ")}.`
+            : " не включено ни одной системы статистики."} Внешние скрипты не
+          загружаются до разрешения. Global Privacy Control и Do Not Track имеют
+          приоритет и отключают необязательную отправку. При разрешении внешней
+          статистики поставщик может получить технический идентификатор, IP,
+          user-agent, время и адрес открытой страницы в соответствии со своей
+          политикой обработки данных.
         </p>
         <button
           className="document-action"
@@ -789,6 +850,7 @@ function CookiesPage() {
 }
 
 function RefundsPage() {
+  const operator = useOperatorDetails();
   return (
     <article className="public-document">
       <p className="document-meta">
@@ -807,7 +869,7 @@ function RefundsPage() {
         <h2>Как направить требование</h2>
         <ol>
           <li>
-            Отправьте письмо на <a href="mailto:ilel@list.ru">ilel@list.ru</a> с
+            Отправьте письмо на <a href={operator.emailHref}>{operator.email}</a> с
             e-mail вашего аккаунта.
           </li>
           <li>
@@ -842,97 +904,44 @@ function RefundsPage() {
 }
 
 function RequisitesPage() {
+  const { settings } = useSiteSettings();
+  const fields = settings.requisites.fields;
+  const general = requisiteFieldCodes.filter(
+    (code) => !bankRequisiteFields.has(code) && fields[code].visible && fields[code].value.trim(),
+  );
+  const bank = requisiteFieldCodes.filter(
+    (code) => bankRequisiteFields.has(code) && fields[code].visible && fields[code].value.trim(),
+  );
+  const renderValue = (code: (typeof requisiteFieldCodes)[number]) => {
+    const value = fields[code].value;
+    if (code === "email")
+      return <a href={`mailto:${value.trim()}`}><Mail />{value}</a>;
+    if (code === "phone")
+      return <a href={`tel:${value.replace(/[^+0-9]/g, "")}`}><Phone />{value}</a>;
+    return value;
+  };
   return (
     <article className="public-document">
       <section className="requisites-intro">
         <ShieldCheck />
         <div>
-          <h2>Исполнитель</h2>
-          <p>
-            Самозанятый гражданин Российской Федерации, плательщик налога на
-            профессиональный доход.
-          </p>
+          <h2>{settings.requisites.introTitle}</h2>
+          <p>{settings.requisites.introDescription}</p>
         </div>
       </section>
       <dl className="requisites-grid">
-        <div>
-          <dt>ФИО</dt>
-          <dd>Телятников Илья Александрович</dd>
-        </div>
-        <div>
-          <dt>ИНН</dt>
-          <dd>890415962910</dd>
-        </div>
-        <div>
-          <dt>Статус</dt>
-          <dd>Плательщик НПД (самозанятый)</dd>
-        </div>
-        <div>
-          <dt>Адрес для корреспонденции</dt>
-          <dd>
-            633209, Новосибирская область, г. Искитим, ул. Терешковой, д. 35
-          </dd>
-        </div>
-        <div>
-          <dt>E-mail</dt>
-          <dd>
-            <a href="mailto:ilel@list.ru">
-              <Mail />
-              ilel@list.ru
-            </a>
-          </dd>
-        </div>
-        <div>
-          <dt>Телефон</dt>
-          <dd>
-            <a href="tel:+79130149349">
-              <Phone />
-              +7 913 014-93-49
-            </a>
-          </dd>
-        </div>
+        {general.map((code) => <div key={code}><dt>{requisiteFieldLabels[code]}</dt><dd>{renderValue(code)}</dd></div>)}
       </dl>
-      <section>
+      {settings.requisites.bankSectionVisible && bank.length > 0 && <section>
         <h2>Банковские реквизиты</h2>
         <dl className="bank-details">
-          <div>
-            <dt>Получатель</dt>
-            <dd>Телятников Илья Александрович</dd>
-          </div>
-          <div>
-            <dt>Счёт</dt>
-            <dd>40817810507220051060</dd>
-          </div>
-          <div>
-            <dt>Банк</dt>
-            <dd>АО «Альфа-Банк», г. Москва</dd>
-          </div>
-          <div>
-            <dt>БИК</dt>
-            <dd>044525593</dd>
-          </div>
-          <div>
-            <dt>Корреспондентский счёт</dt>
-            <dd>30101810200000000593</dd>
-          </div>
-          <div>
-            <dt>ИНН банка</dt>
-            <dd>7728168971</dd>
-          </div>
-          <div>
-            <dt>КПП банка</dt>
-            <dd>770801001</dd>
-          </div>
+          {bank.map((code) => <div key={code}><dt>{requisiteFieldLabels[code]}</dt><dd>{renderValue(code)}</dd></div>)}
         </dl>
-      </section>
-      <aside className="requisites-note">
+      </section>}
+      {settings.requisites.note && <aside className="requisites-note">
         <MapPin />
-        <p>
-          Для обращений по заказу используйте e-mail или телефон. Паспортные
-          данные и реквизиты банковской карты клиента на сайте не публикуются и
-          службой поддержки не запрашиваются.
-        </p>
-      </aside>
+        <p>{settings.requisites.note}</p>
+      </aside>}
     </article>
   );
 }

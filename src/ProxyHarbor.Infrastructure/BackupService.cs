@@ -384,6 +384,10 @@ public sealed class BackupService(
                 // .phbackup дополнительно шифрует весь архив как единое целое.
                 await WriteJsonAsync(archive, "database/payment-configuration.json",
                     db.PaymentConfigurations.AsNoTracking().AsAsyncEnumerable(), token);
+                // Публичные реквизиты, cookie-тексты и идентификаторы счётчиков
+                // являются runtime-конфигурацией и должны переживать восстановление.
+                await WriteJsonAsync(archive, "database/site-configuration.json",
+                    db.SiteConfigurations.AsNoTracking().AsAsyncEnumerable(), token);
                 // Telegram token и webhook secret уже защищены Data Protection. Сохраняем
                 // также CRM, дедупликацию update и очередь, чтобы восстановление не вызвало
                 // повторных оплат, рассылок или потери истории переписки.

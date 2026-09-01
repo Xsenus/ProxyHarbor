@@ -253,6 +253,7 @@ internal static class RestoreApplication
             await db.Sources.ExecuteDeleteAsync(token);
             var hasIdentitySnapshot = archive.GetEntry("database/users.json") is not null;
             var hasPaymentConfiguration = archive.GetEntry("database/payment-configuration.json") is not null;
+            var hasSiteConfiguration = archive.GetEntry("database/site-configuration.json") is not null;
             var hasBackupConfiguration = archive.GetEntry("database/backup-configuration.json") is not null;
             var hasTelegramSnapshot = archive.GetEntry("database/telegram-chats.json") is not null;
             if (hasIdentitySnapshot)
@@ -268,6 +269,8 @@ internal static class RestoreApplication
             }
             if (hasPaymentConfiguration)
                 await db.PaymentConfigurations.ExecuteDeleteAsync(token);
+            if (hasSiteConfiguration)
+                await db.SiteConfigurations.ExecuteDeleteAsync(token);
             if (hasIdentitySnapshot)
             {
                 // Старые encrypted backups v2-v5 не содержат accounts и поэтому сохраняют
@@ -389,6 +392,9 @@ internal static class RestoreApplication
             if (hasPaymentConfiguration)
                 _ = await ImportIdentityAsync<PaymentConfiguration>(
                     archive, "database/payment-configuration.json", db, token);
+            if (hasSiteConfiguration)
+                _ = await ImportIdentityAsync<SiteConfiguration>(
+                    archive, "database/site-configuration.json", db, token);
             if (hasBackupConfiguration)
             {
                 await db.BackupConfigurations.ExecuteDeleteAsync(token);

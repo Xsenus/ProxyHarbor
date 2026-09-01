@@ -431,6 +431,20 @@ public sealed class PaymentConfiguration
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 
+/// <summary>
+/// Единственная runtime-конфигурация публичного сайта. Содержит только
+/// несекретные реквизиты, видимость разделов и идентификаторы счётчиков.
+/// </summary>
+public sealed class SiteConfiguration
+{
+    /// <summary>Фиксированный ключ singleton-записи.</summary>
+    public int Id { get; set; } = 1;
+    /// <summary>Версионируемый JSON со всеми публичными настройками.</summary>
+    public string SettingsJson { get; set; } = string.Empty;
+    /// <summary>Момент последнего административного изменения.</summary>
+    public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
 /// <summary>Singleton-конфигурация торгового Telegram-бота с зашифрованным token.</summary>
 public sealed class TelegramBotConfiguration
 {
