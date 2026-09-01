@@ -198,21 +198,27 @@ public sealed class VpnCatalogIntegrationTests
             var now = DateTimeOffset.UtcNow;
             var oldestDue = Endpoint("198.51.100.10", now.AddMinutes(-10));
             var newestDue = Endpoint("198.51.100.11", now.AddMinutes(-2));
-            var neverScheduled = Endpoint("198.51.100.12", null);
+            var firstNeverScheduled = Endpoint("198.51.100.12", null);
+            firstNeverScheduled.Id = Guid.Parse("00000000-0000-0000-0000-000000000001");
+            var secondNeverScheduled = Endpoint("198.51.100.14", null);
+            secondNeverScheduled.Id = Guid.Parse("00000000-0000-0000-0000-000000000002");
             var future = Endpoint("198.51.100.13", now.AddMinutes(2));
             await using (var seed = new ProxyHarborDbContext(dbOptions))
             {
                 await seed.Database.MigrateAsync();
-                seed.VpnEndpoints.AddRange(newestDue, future, neverScheduled, oldestDue);
+                // Обратный insert-order доказывает, что NULL fallback использует
+                // явный Id tie-break, а не случайный heap-order PostgreSQL.
+                seed.VpnEndpoints.AddRange(
+                    newestDue, future, secondNeverScheduled, firstNeverScheduled, oldestDue);
                 await seed.SaveChangesAsync();
             }
 
             await using var queueDb = new ProxyHarborDbContext(dbOptions);
             var selected = await VpnValidationQueue.SelectAsync(
-                queueDb, 3, now, CancellationToken.None);
+                queueDb, 4, now, CancellationToken.None);
 
             Assert.Equal(
-                [oldestDue.Id, newestDue.Id, neverScheduled.Id],
+                [oldestDue.Id, newestDue.Id, firstNeverScheduled.Id, secondNeverScheduled.Id],
                 selected.Select(endpoint => endpoint.Id));
             Assert.DoesNotContain(selected, endpoint => endpoint.Id == future.Id);
         }
