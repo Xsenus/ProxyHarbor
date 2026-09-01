@@ -79,6 +79,8 @@ public sealed class ProxyCollector(
                         // результат текущего ручного запуска.
                         var useValidators = !forceAllSources && SourceConditionalFetchPolicy.ShouldUseValidators(
                             source.LastContentFetchedAt,
+                            source.LastSucceededAt,
+                            source.LastItemCount,
                             collectionStartedAt,
                             options.Value.DeadRetentionDays);
                         var fetched = await FetchSourceStateAsync(
@@ -156,11 +158,14 @@ public sealed class ProxyCollector(
                         continue;
                     var fetchedAt = DateTimeOffset.UtcNow;
                     source.LastFetchedAt = fetchedAt;
-                    source.LastItemCount = result.Count;
-                    source.LastResultTruncated = result.Truncated;
                     source.LastError = result.Error?[..Math.Min(500, result.Error.Length)];
                     if (result.Error is null)
                     {
+                        // Это поля последнего успешного результата, а не последней попытки.
+                        // Временная HTTP-ошибка не должна стирать доказательство, которое
+                        // позволяет безопасно принять следующий conditional 304.
+                        source.LastItemCount = result.Count;
+                        source.LastResultTruncated = result.Truncated;
                         source.LastSucceededAt = fetchedAt;
                         source.ConsecutiveFailures = 0;
                         source.NextFetchAt = null;
@@ -636,10 +641,14 @@ internal static class SourceConditionalFetchPolicy
 {
     internal static bool ShouldUseValidators(
         DateTimeOffset? lastContentFetchedAt,
+        DateTimeOffset? lastSucceededAt,
+        int lastItemCount,
         DateTimeOffset now,
         int deadRetentionDays)
     {
-        if (lastContentFetchedAt is null || lastContentFetchedAt > now) return false;
+        if (lastSucceededAt is null || lastItemCount <= 0 ||
+            lastContentFetchedAt is null || lastContentFetchedAt > now)
+            return false;
         var retention = TimeSpan.FromDays(Math.Clamp(deadRetentionDays, 1, 365));
         var maximumBodyAge = TimeSpan.FromTicks(Math.Min(TimeSpan.FromDays(1).Ticks, retention.Ticks / 2));
         return now - lastContentFetchedAt.Value < maximumBodyAge;
