@@ -60,6 +60,14 @@ export function ToastSignal({ kind, message, action }: { kind: ToastKind; messag
 
 type ServerNotification = { id: string; message: string; actionUrl?: string }
 
+function canReceiveAccountNotifications(pathname: string) {
+  const path = pathname.replace(/\/+$/, '') || '/'
+  return path === '/account'
+    || path.startsWith('/account/')
+    || path === '/admin'
+    || path.startsWith('/admin/') && path !== '/admin/login'
+}
+
 /** Доставляет сохранённые сервером уведомления один раз, даже после повторного входа или перезагрузки. */
 export function NotificationBridge({ apiBase = '' }: { apiBase?: string }) {
   const push = useContext(ToastContext)
@@ -67,6 +75,9 @@ export function NotificationBridge({ apiBase = '' }: { apiBase?: string }) {
     if (!push) return
     let stopped = false
     const poll = async () => {
+      // Публичные и auth-страницы не имеют пользовательской сессии. Не создаём
+      // на них лишний защищённый запрос и ожидаемый 401 в консоли браузера.
+      if (!canReceiveAccountNotifications(window.location.pathname)) return
       try {
         const response = await fetch(`${apiBase}/api/v1/account/notifications`, { credentials: 'include' })
         if (!response.ok || stopped) return

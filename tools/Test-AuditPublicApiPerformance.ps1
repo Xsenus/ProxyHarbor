@@ -8,8 +8,12 @@ function Get-FreeTcpPort {
     finally { $listener.Stop() }
 }
 
-function Start-PerformanceMock([int]$Port, [ValidateSet('success', 'slow', 'failure', 'rate-limit')][string]$Mode) {
-    $expected = if ($Mode -in 'failure', 'rate-limit') { 1 } else { 17 } # 2 warm-up + 3 * 5 samples
+function Start-PerformanceMock(
+    [int]$Port,
+    [ValidateSet('success', 'slow', 'failure', 'rate-limit')][string]$Mode,
+    [ValidateSet('Paid', 'Anonymous')][string]$AccessMode) {
+    # Paid: stats+seek warm-up; Anonymous: stats+proxy+VPN warm-up.
+    $expected = if ($Mode -in 'failure', 'rate-limit') { 1 } elseif ($AccessMode -eq 'Anonymous') { 18 } else { 17 }
     Start-Job -ArgumentList $Port, $Mode, $expected -ScriptBlock {
         param($Port, $Mode, $Expected)
         $listener = [Net.HttpListener]::new()
@@ -58,7 +62,7 @@ function Invoke-PerformanceCase(
     [bool]$ShouldSucceed,
     [ValidateSet('Paid', 'Anonymous')][string]$AccessMode = 'Paid') {
     $port = Get-FreeTcpPort
-    $job = Start-PerformanceMock -Port $port -Mode $Mode
+    $job = Start-PerformanceMock -Port $port -Mode $Mode -AccessMode $AccessMode
     $reportPath = Join-Path $fixtureRoot "$Mode.json"
     try {
         Wait-PerformanceMock $port
@@ -75,8 +79,9 @@ function Invoke-PerformanceCase(
         Receive-Job $job -ErrorAction Stop | Out-Null
         if (-not [IO.File]::Exists($reportPath)) { throw "Performance case $Mode не сохранил отчёт." }
         $report = Get-Content $reportPath -Raw | ConvertFrom-Json
+        $expectedRequests = if ($AccessMode -eq 'Anonymous') { 18 } else { 17 }
         if ($ShouldSucceed -and ($rejected -or -not $report.success -or
-            $report.totalRequests -ne 17 -or $report.routes.Count -ne 3 -or
+            $report.totalRequests -ne $expectedRequests -or $report.routes.Count -ne 3 -or
             $report.coldPageBase -lt 1 -or $report.coldPageBase -gt 49970 -or $report.error)) {
             throw 'Положительный performance contract нарушен.'
         }
