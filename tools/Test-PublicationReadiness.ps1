@@ -18,7 +18,8 @@ $requiredFiles = @(
     '.github/ISSUE_TEMPLATE/documentation.yml', '.github/ISSUE_TEMPLATE/config.yml',
     '.github/workflows/ci.yml', '.github/workflows/codeql.yml',
     '.github/workflows/release.yml', '.github/workflows/source-audit.yml',
-    'docs/DEPLOYMENT.md', 'docs/GITHUB_SETUP.md', 'docs/RELEASING.md'
+    'docs/DEPLOYMENT.md', 'docs/GITHUB_SETUP.md', 'docs/RELEASING.md',
+    'src/proxyharbor-web/public/.well-known/security.txt'
 )
 
 $missing = @($requiredFiles | Where-Object { -not [IO.File]::Exists((Join-Path $root $_)) })
@@ -65,6 +66,25 @@ if ($license -notmatch '^MIT License' -or $license -notmatch 'ProxyHarbor contri
     throw 'LICENSE не содержит ожидаемую MIT-лицензию ProxyHarbor.'
 }
 
+$securityTextPath = Join-Path $root 'src/proxyharbor-web/public/.well-known/security.txt'
+$securityText = Get-Content -LiteralPath $securityTextPath -Raw
+if ($securityText -notmatch '(?m)^Contact:\s*mailto:[^\s@]+@[^\s@]+\s*$' -or
+    $securityText -notmatch '(?m)^Canonical:\s*https://proxy\.blagodaty\.ru/\.well-known/security\.txt\s*$' -or
+    $securityText -notmatch '(?m)^Preferred-Languages:\s*ru,\s*en\s*$') {
+    throw 'security.txt не содержит обязательные Contact, Canonical и Preferred-Languages.'
+}
+$expiresMatch = [regex]::Match($securityText, '(?m)^Expires:\s*(\S+)\s*$')
+$expiresAt = [DateTimeOffset]::MinValue
+if (-not $expiresMatch.Success -or
+    -not [DateTimeOffset]::TryParse(
+        $expiresMatch.Groups[1].Value,
+        [Globalization.CultureInfo]::InvariantCulture,
+        [Globalization.DateTimeStyles]::AssumeUniversal,
+        [ref]$expiresAt) -or
+    $expiresAt -le [DateTimeOffset]::UtcNow.AddDays(30)) {
+    throw 'security.txt отсутствует, содержит некорректный Expires либо истекает менее чем через 30 дней.'
+}
+
 if ($RequireCleanWorktree) {
     $status = @(& git -C $root status --porcelain=v1 --untracked-files=all)
     if ($LASTEXITCODE -ne 0) { throw 'Не удалось проверить чистоту worktree.' }
@@ -73,4 +93,4 @@ if ($RequireCleanWorktree) {
     }
 }
 
-Write-Host "Publication readiness пройдена: $($tracked.Count) tracked файлов, governance/workflows, case, size и artifact policy." -ForegroundColor Green
+Write-Host "Publication readiness пройдена: $($tracked.Count) tracked файлов, governance/workflows, security.txt, case, size и artifact policy." -ForegroundColor Green

@@ -6,7 +6,7 @@ $release = Get-Content -LiteralPath './.github/workflows/release.yml' -Raw
 $guide = Get-Content -LiteralPath './docs/GITHUB_SETUP.md' -Raw
 $fixtureRoot = Join-Path ([IO.Path]::GetTempPath()) "proxyharbor-publication-$([Guid]::NewGuid().ToString('N'))"
 
-foreach ($signal in 'docs/GITHUB_SETUP.md', 'caseCollisions', '10MB', 'forbiddenPath', 'RequireCleanWorktree') {
+foreach ($signal in 'docs/GITHUB_SETUP.md', 'caseCollisions', '10MB', 'forbiddenPath', 'RequireCleanWorktree', 'security.txt', 'Expires') {
     if (-not $gate.Contains($signal, [StringComparison]::Ordinal)) {
         throw "Publication gate потерял обязательный contract: $signal"
     }
@@ -55,13 +55,17 @@ try {
         '.github/ISSUE_TEMPLATE/documentation.yml', '.github/ISSUE_TEMPLATE/config.yml',
         '.github/workflows/ci.yml', '.github/workflows/codeql.yml',
         '.github/workflows/release.yml', '.github/workflows/source-audit.yml',
-        'docs/DEPLOYMENT.md', 'docs/GITHUB_SETUP.md', 'docs/RELEASING.md'
+        'docs/DEPLOYMENT.md', 'docs/GITHUB_SETUP.md', 'docs/RELEASING.md',
+        'src/proxyharbor-web/public/.well-known/security.txt'
     )
     foreach ($relativePath in $fixtureFiles) {
         $path = Join-Path $fixtureRoot $relativePath
         [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($path)) | Out-Null
         $content = if ($relativePath -eq 'LICENSE') {
             "MIT License`n`nCopyright (c) ProxyHarbor contributors`n"
+        } elseif ($relativePath -eq 'src/proxyharbor-web/public/.well-known/security.txt') {
+            $expires = [DateTimeOffset]::UtcNow.AddDays(180).ToString('yyyy-MM-ddTHH:mm:ssZ')
+            "Contact: mailto:security@example.com`nExpires: $expires`nPreferred-Languages: ru, en`nCanonical: https://proxy.blagodaty.ru/.well-known/security.txt`n"
         } else { "fixture`n" }
         [IO.File]::WriteAllText($path, $content)
     }
@@ -104,6 +108,11 @@ try {
 
     [IO.File]::AppendAllText((Join-Path $fixtureRoot 'README.md'), "dirty`n")
     Assert-PublicationRejected 'чистый worktree' -RequireClean
+
+    Invoke-Git checkout -- README.md
+    $securityTextPath = Join-Path $fixtureRoot 'src/proxyharbor-web/public/.well-known/security.txt'
+    [IO.File]::WriteAllText($securityTextPath, "Contact: mailto:security@example.com`nExpires: 2000-01-01T00:00:00Z`nPreferred-Languages: ru, en`nCanonical: https://proxy.blagodaty.ru/.well-known/security.txt`n")
+    Assert-PublicationRejected 'security.txt'
 }
 finally {
     if ([IO.Directory]::Exists($fixtureRoot)) {
@@ -114,4 +123,4 @@ finally {
     }
 }
 
-Write-Host 'Publication contracts пройдены: wiring/checks и negative fixtures для secret/artifact, size, case collision, dirty worktree.' -ForegroundColor Green
+Write-Host 'Publication contracts пройдены: wiring/checks и negative fixtures для secret/artifact, size, case collision, dirty worktree и security.txt expiry.' -ForegroundColor Green

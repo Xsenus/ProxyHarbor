@@ -1,0 +1,5 @@
+Contact: mailto:ilel@list.ru
+Expires: 2027-09-01T00:00:00Z
+Preferred-Languages: ru, en
+Canonical: https://proxy.blagodaty.ru/.well-known/security.txt
+
