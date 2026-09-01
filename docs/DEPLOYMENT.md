@@ -18,7 +18,7 @@ curl --fail https://proxy.example.com/health/ready
 curl --fail https://proxy.example.com/api/v1/stats
 ```
 
-После переключения трафика выполните единый fail-closed аудит публичного запуска. Он проверяет TLS, security headers, canonical/robots/JSON-LD всех индексируемых страниц, sitemap, `X-Robots-Tag` закрытых маршрутов, настоящий 404, readiness и наличие хотя бы одного доступного платёжного провайдера. JSON-отчёт сохраняйте вместе с журналом выпуска:
+После переключения трафика выполните единый fail-closed аудит публичного запуска. Он проверяет TLS, security headers, canonical/robots/JSON-LD всех индексируемых страниц, sitemap, RFC 9116 `security.txt`, `X-Robots-Tag` закрытых маршрутов, настоящий 404, отсутствие выдачи `.env`/Git/Compose/config/Swagger/metrics, отказ недоверенному CORS origin, отключённый TRACE, readiness и наличие хотя бы одного доступного платёжного провайдера. JSON-отчёт сохраняйте вместе с журналом выпуска:
 
 ```powershell
 ./tools/Audit-PublicLaunch.ps1 `
