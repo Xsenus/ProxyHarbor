@@ -203,6 +203,8 @@ builder.Services.AddSingleton<HttpRequestTelemetry>();
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<ProxyMetricsSnapshotCache>();
 builder.Services.AddHostedService<ProxyMetricsSnapshotRefreshWorker>();
+builder.Services.AddSingleton<VpnMetricsSnapshotCache>();
+builder.Services.AddHostedService<VpnMetricsSnapshotRefreshWorker>();
 builder.Services.AddResponseCompression(x =>
 {
     x.EnableForHttps = true;

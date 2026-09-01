@@ -114,6 +114,10 @@ public sealed class AdminDiagnosticsIntegrationTests
                 collectorOptions,
                 NullLogger<ProxyMetricsSnapshotCache>.Instance,
                 TimeProvider.System);
+            using var vpnSnapshotCache = new VpnMetricsSnapshotCache(
+                diagnosticsFactory,
+                NullLogger<VpnMetricsSnapshotCache>.Instance,
+                TimeProvider.System);
             var controller = new AdminController(
                 diagnosticsFactory,
                 null!,
@@ -124,7 +128,8 @@ public sealed class AdminDiagnosticsIntegrationTests
                 collectorOptions,
                 null,
                 null,
-                proxySnapshotCache);
+                proxySnapshotCache,
+                vpnSnapshotCache);
 
             var action = await controller.Diagnostics(CancellationToken.None);
             Assert.True(mutation.MutationInvoked);
@@ -150,6 +155,7 @@ public sealed class AdminDiagnosticsIntegrationTests
             var secondAction = await controller.Diagnostics(CancellationToken.None);
             Assert.IsType<OkObjectResult>(secondAction.Result);
             Assert.Equal(1, proxySnapshotCache.DatabaseReads);
+            Assert.Equal(1, vpnSnapshotCache.DatabaseReads);
 
             // Concurrent mutation действительно закоммичена, но уже открытый diagnostics
             // snapshot обязан показать целиком предшествующую эпоху всех таблиц.
