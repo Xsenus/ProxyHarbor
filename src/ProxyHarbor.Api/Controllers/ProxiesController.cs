@@ -70,6 +70,7 @@ public sealed class ProxiesController(
 
     /// <summary>Возвращает страницу только живых прокси, отсортированную по задержке.</summary>
     [HttpGet("proxies")]
+    [OutputCache(PolicyName = PublicOutputCachePolicies.ProxyCatalog)]
     public async Task<ActionResult<PagedResult<ProxyDto>>> Get(
         [FromQuery, EnumDataType(typeof(ProxyProtocol))] ProxyProtocol? protocol,
         [FromQuery, Range(1, int.MaxValue)] int? maxLatencyMs,
@@ -216,7 +217,7 @@ public sealed class ProxiesController(
 
     /// <summary>Возвращает страны, доступные среди свежих живых прокси.</summary>
     [HttpGet("proxies/countries")]
-    [OutputCache(PolicyName = "public-list")]
+    [OutputCache(PolicyName = PublicOutputCachePolicies.Countries)]
     public async Task<ActionResult<IReadOnlyList<ProxyCountryDto>>> Countries(CancellationToken cancellationToken)
     {
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);

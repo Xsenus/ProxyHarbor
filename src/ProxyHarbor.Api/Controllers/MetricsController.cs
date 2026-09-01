@@ -18,7 +18,8 @@ public sealed class MetricsController(
     IOptions<BackupOptions> backupOptions,
     ProbeControlHealth probeControlHealth,
     OperationalMaintenanceService? maintenance = null,
-    HttpRequestTelemetry? httpTelemetry = null) : ControllerBase
+    HttpRequestTelemetry? httpTelemetry = null,
+    ProxyMetricsSnapshotCache? proxySnapshotCache = null) : ControllerBase
 {
     /// <summary>Возвращает согласованный Prometheus text exposition operational-метрик.</summary>
     [HttpGet]
@@ -40,8 +41,10 @@ public sealed class MetricsController(
         var validationWindowStart = now.AddMinutes(-5);
         var sourceFreshAfter = now.Subtract(
             SourceCatalogHealth.FreshnessWindow(collectorOptions.Value.CollectionIntervalMinutes));
-        var proxySnapshot = await ProxyMetricsSnapshotReader.ReadAsync(
-            db, now, unseenRetentionCutoff, freshAfter, token);
+        var proxySnapshot = proxySnapshotCache is null
+            ? await ProxyMetricsSnapshotReader.ReadAsync(
+                db, now, unseenRetentionCutoff, freshAfter, token)
+            : await proxySnapshotCache.GetAsync(token);
         var validationRuns = await db.ValidationRuns.AsNoTracking()
             .Where(run => run.FinishedAt >= validationWindowStart || run.Status == "running")
             .ToListAsync(token);

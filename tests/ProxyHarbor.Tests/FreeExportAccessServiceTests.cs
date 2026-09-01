@@ -60,10 +60,50 @@ public sealed class FreeExportAccessServiceTests
         Assert.Empty(await verify.FreeProxyExportGrants.ToListAsync());
     }
 
+    [Fact]
+    public async Task AnonymousPaidCheckDoesNotCreateDatabaseContext()
+    {
+        var factory = new CountingFactory();
+        var service = new FreeExportAccessService(factory);
+
+        var paid = await service.HasPaidAccessAsync(new ClaimsPrincipal(), CancellationToken.None);
+
+        Assert.False(paid);
+        Assert.Equal(0, factory.Created);
+    }
+
+    [Fact]
+    public async Task AdministratorPaidCheckDoesNotCreateDatabaseContext()
+    {
+        var factory = new CountingFactory();
+        var identity = new ClaimsIdentity(
+            [new Claim(ClaimTypes.Role, UserRoles.Administrator)], "test");
+        var service = new FreeExportAccessService(factory);
+
+        var paid = await service.HasPaidAccessAsync(new ClaimsPrincipal(identity), CancellationToken.None);
+
+        Assert.True(paid);
+        Assert.Equal(0, factory.Created);
+    }
+
     private sealed class TestFactory(DbContextOptions<ProxyHarborDbContext> options)
         : IDbContextFactory<ProxyHarborDbContext>
     {
         public ProxyHarborDbContext CreateDbContext() => new(options);
+        public Task<ProxyHarborDbContext> CreateDbContextAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(CreateDbContext());
+    }
+
+    private sealed class CountingFactory : IDbContextFactory<ProxyHarborDbContext>
+    {
+        public int Created { get; private set; }
+
+        public ProxyHarborDbContext CreateDbContext()
+        {
+            Created++;
+            throw new InvalidOperationException("Fast path must not create a DbContext.");
+        }
+
         public Task<ProxyHarborDbContext> CreateDbContextAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult(CreateDbContext());
     }

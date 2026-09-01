@@ -12,7 +12,8 @@ namespace ProxyHarbor.Api.Controllers;
 [ApiController, Route("api/v1/stats"), EnableRateLimiting("public")]
 public sealed class StatsController(
     IDbContextFactory<ProxyHarborDbContext> dbFactory,
-    IOptions<CollectorOptions> collectorOptions) : ControllerBase
+    IOptions<CollectorOptions> collectorOptions,
+    ProxyMetricsSnapshotCache? proxySnapshotCache = null) : ControllerBase
 {
     /// <summary>Возвращает согласованный snapshot proxy/source/run агрегатов.</summary>
     [HttpGet]
@@ -20,31 +21,22 @@ public sealed class StatsController(
     [ProducesResponseType<StatsResponse>(StatusCodes.Status200OK)]
     public async Task<ActionResult<StatsResponse>> Get(CancellationToken cancellationToken)
     {
+        var cachedProxySnapshot = proxySnapshotCache is null
+            ? null
+            : await proxySnapshotCache.GetAsync(cancellationToken);
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
-        var freshAfter = DateTimeOffset.UtcNow.AddMinutes(-collectorOptions.Value.PublicFreshnessMinutes);
         var now = DateTimeOffset.UtcNow;
         var response = await BufferedReadSnapshot.ExecuteAsync(db, async token =>
         {
-            // Один агрегирующий проход заменяет семь отдельных сканирований большой таблицы Proxies.
-            var proxyRows = await db.Proxies.AsNoTracking()
-                .GroupBy(x => new { x.Status, x.Protocol }).Select(group => new
-                {
-                    group.Key.Status,
-                    group.Key.Protocol,
-                    Total = group.Count(),
-                    FreshAlive = group.Count(proxy => proxy.Status == ProxyStatus.Alive && proxy.LastCheckedAt >= freshAfter),
-                    StaleAlive = group.Count(proxy => proxy.Status == ProxyStatus.Alive &&
-                        (proxy.LastCheckedAt == null || proxy.LastCheckedAt < freshAfter)),
-                    Due = group.Count(proxy => (proxy.NextCheckAt == null || proxy.NextCheckAt <= now) &&
-                        (proxy.CheckLeaseUntil == null || proxy.CheckLeaseUntil < now)),
-                    Leased = group.Count(proxy => proxy.CheckLeaseUntil >= now),
-                    Scheduled = group.Count(proxy => proxy.NextCheckAt > now),
-                    FreshLatencyTotal = group.Where(proxy => proxy.Status == ProxyStatus.Alive &&
-                        proxy.LastCheckedAt >= freshAfter && proxy.LatencyMs != null)
-                        .Sum(proxy => (long?)proxy.LatencyMs) ?? 0,
-                    FreshLatencySamples = group.Count(proxy => proxy.Status == ProxyStatus.Alive &&
-                        proxy.LastCheckedAt >= freshAfter && proxy.LatencyMs != null)
-                }).ToListAsync(token);
+            // Production использует общий прогретый aggregate вместе с /metrics.
+            // Прямые controller-тесты сохраняют provider-neutral fallback на том же reader.
+            var proxySnapshot = cachedProxySnapshot ?? await ProxyMetricsSnapshotReader.ReadAsync(
+                db,
+                now,
+                now.AddDays(-Math.Max(1, collectorOptions.Value.DeadRetentionDays)),
+                now.AddMinutes(-collectorOptions.Value.PublicFreshnessMinutes),
+                token);
+            var proxyRows = proxySnapshot.Groups;
             var sourceHealth = await db.Sources.AsNoTracking().Where(x => x.Enabled).GroupBy(_ => 1).Select(x => new
             {
                 Enabled = x.Count(),
@@ -55,21 +47,21 @@ public sealed class StatsController(
             var lastRun = await db.Runs.AsNoTracking().OrderByDescending(x => x.StartedAt)
                 .FirstOrDefaultAsync(token);
 
-            var alive = proxyRows.Sum(row => row.FreshAlive);
+            var alive = proxySnapshot.Published;
             var latencySamples = proxyRows.Sum(row => row.FreshLatencySamples);
             var latencyTotal = proxyRows.Sum(row => row.FreshLatencyTotal);
             var byProtocol = proxyRows.GroupBy(row => row.Protocol)
-                .Select(group => new ProtocolCountResponse(group.Key, group.Sum(row => row.FreshAlive)))
+                .Select(group => new ProtocolCountResponse(group.Key, checked((int)group.Sum(row => row.Published))))
                 .Where(row => row.Count > 0)
                 .ToArray();
             return new StatsResponse(
-                alive,
-                proxyRows.Sum(row => row.StaleAlive),
-                proxyRows.Where(row => row.Status == ProxyStatus.Pending).Sum(row => row.Total),
-                proxyRows.Where(row => row.Status == ProxyStatus.Dead).Sum(row => row.Total),
-                proxyRows.Sum(row => row.Due),
-                proxyRows.Sum(row => row.Leased),
-                proxyRows.Sum(row => row.Scheduled),
+                checked((int)alive),
+                checked((int)proxyRows.Sum(row => row.StaleAlive)),
+                checked((int)proxyRows.Where(row => row.Status == ProxyStatus.Pending).Sum(row => row.Count)),
+                checked((int)proxyRows.Where(row => row.Status == ProxyStatus.Dead).Sum(row => row.Count)),
+                checked((int)proxySnapshot.Due),
+                checked((int)proxySnapshot.Leased),
+                checked((int)proxyRows.Sum(row => row.Scheduled)),
                 latencySamples == 0 ? null : (double)latencyTotal / latencySamples,
                 sourceHealth?.Enabled ?? 0,
                 sourceHealth?.Failing ?? 0,

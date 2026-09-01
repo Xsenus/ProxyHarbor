@@ -1,6 +1,8 @@
 [CmdletBinding()]
 param(
     [string]$ApiBaseUrl = 'http://localhost:8080',
+    [ValidateSet('Paid', 'Anonymous')][string]$AccessMode = 'Paid',
+    [string]$BearerTokenFile,
     [ValidateRange(5, 30)][int]$SamplesPerRoute = 10,
     [ValidateRange(1, 10000)][int]$MaxHotP95Ms = 250,
     [ValidateRange(1, 30000)][int]$MaxColdP95Ms = 1500,
@@ -13,6 +15,7 @@ $resolvedColdPageBase = if ($ColdPageBase -eq 0) { [Random]::Shared.Next(1, 4997
 $report = [ordered]@{
     auditedAt = [DateTimeOffset]::UtcNow.ToString('O')
     apiBaseUrl = $ApiBaseUrl
+    accessMode = $AccessMode
     samplesPerRoute = $SamplesPerRoute
     maxHotP95Ms = $MaxHotP95Ms
     maxColdP95Ms = $MaxColdP95Ms
@@ -22,11 +25,12 @@ $report = [ordered]@{
     routes = @()
     error = $null
 }
+$requestHeaders = @{ 'User-Agent' = 'ProxyHarbor-Performance-Audit/1.1' }
 function Invoke-TimedJsonRequest([string]$Path) {
     $timer = [Diagnostics.Stopwatch]::StartNew()
     try {
         $response = Invoke-WebRequest -Uri "$ApiBaseUrl$Path" -TimeoutSec 30 -NoProxy `
-            -Headers @{ 'User-Agent' = 'ProxyHarbor-Performance-Audit/1.0' }
+            -Headers $requestHeaders
         $timer.Stop()
         if ($response.StatusCode -ne 200) {
             throw "GET $Path вернул HTTP $($response.StatusCode)."
@@ -72,32 +76,64 @@ function New-RouteMetric([string]$Name, [object[]]$Samples, [int]$ThresholdMs) {
 }
 
 try {
+    if ($BearerTokenFile) {
+        $absoluteTokenPath = [IO.Path]::GetFullPath($BearerTokenFile)
+        if (-not [IO.File]::Exists($absoluteTokenPath)) {
+            throw "Файл Bearer-токена не найден: $absoluteTokenPath"
+        }
+        $bearerToken = [IO.File]::ReadAllText($absoluteTokenPath).Trim()
+        if ([string]::IsNullOrWhiteSpace($bearerToken) -or $bearerToken.Length -gt 4096 -or
+            $bearerToken.IndexOfAny([char[]]@(0, 10, 13)) -ge 0) {
+            throw 'Файл Bearer-токена пуст, слишком длинен или содержит управляющие символы.'
+        }
+        $requestHeaders.Authorization = "Bearer $bearerToken"
+    }
+
     # Два warm-up запроса прогревают JIT, connection pool и bounded output cache.
     # Они учитываются в totalRequests, но не искажают измеряемые выборки.
     Invoke-TimedJsonRequest '/api/v1/stats' | Out-Null
-    Invoke-TimedJsonRequest '/api/v1/proxies/seek?pageSize=100' | Out-Null
+    if ($AccessMode -eq 'Paid') {
+        Invoke-TimedJsonRequest '/api/v1/proxies/seek?pageSize=100' | Out-Null
+    } else {
+        Invoke-TimedJsonRequest '/api/v1/proxies?page=1&pageSize=10' | Out-Null
+    }
     $report.totalRequests += 2
 
-    $coldList = @()
-    foreach ($offset in 0..($SamplesPerRoute - 1)) {
-        # Случайная безопасная база почти исключает повторное использование cache keys
-        # прошлого аудита и измеряет bounded deep legacy OFFSET + точный COUNT.
-        $page = $resolvedColdPageBase + $offset
-        $coldList += Invoke-TimedJsonRequest "/api/v1/proxies?page=$page&pageSize=100"
-    }
-    $hotSeek = @(1..$SamplesPerRoute | ForEach-Object {
-        Invoke-TimedJsonRequest '/api/v1/proxies/seek?pageSize=100'
-    })
     $hotStats = @(1..$SamplesPerRoute | ForEach-Object {
         Invoke-TimedJsonRequest '/api/v1/stats'
     })
+    if ($AccessMode -eq 'Paid') {
+        $coldList = @()
+        foreach ($offset in 0..($SamplesPerRoute - 1)) {
+            # Случайная безопасная база почти исключает повторное использование cache keys
+            # прошлого аудита и измеряет bounded deep legacy OFFSET + точный COUNT.
+            $page = $resolvedColdPageBase + $offset
+            $coldList += Invoke-TimedJsonRequest "/api/v1/proxies?page=$page&pageSize=100"
+        }
+        $hotSeek = @(1..$SamplesPerRoute | ForEach-Object {
+            Invoke-TimedJsonRequest '/api/v1/proxies/seek?pageSize=100'
+        })
+        $report.routes = @(
+            New-RouteMetric 'legacy-list-cold' $coldList $MaxColdP95Ms
+            New-RouteMetric 'seek-first-page-hot' $hotSeek $MaxHotP95Ms
+            New-RouteMetric 'stats-hot' $hotStats $MaxHotP95Ms
+        )
+    } else {
+        # Анонимный production-аудит измеряет только реально доступные маршруты.
+        # Он не подменяет paid-проверку глубокого OFFSET/keyset, а дополняет её.
+        $hotProxyCatalog = @(1..$SamplesPerRoute | ForEach-Object {
+            Invoke-TimedJsonRequest '/api/v1/proxies?page=1&pageSize=10'
+        })
+        $hotVpnCatalog = @(1..$SamplesPerRoute | ForEach-Object {
+            Invoke-TimedJsonRequest '/api/v1/vpn?page=1&pageSize=10'
+        })
+        $report.routes = @(
+            New-RouteMetric 'proxy-catalog-anonymous-hot' $hotProxyCatalog $MaxHotP95Ms
+            New-RouteMetric 'vpn-catalog-anonymous-hot' $hotVpnCatalog $MaxHotP95Ms
+            New-RouteMetric 'stats-hot' $hotStats $MaxHotP95Ms
+        )
+    }
     $report.totalRequests += 3 * $SamplesPerRoute
-
-    $report.routes = @(
-        New-RouteMetric 'legacy-list-cold' $coldList $MaxColdP95Ms
-        New-RouteMetric 'seek-first-page-hot' $hotSeek $MaxHotP95Ms
-        New-RouteMetric 'stats-hot' $hotStats $MaxHotP95Ms
-    )
     $violations = @($report.routes | Where-Object { $_.p95Ms -gt $_.thresholdMs })
     if ($violations.Count -gt 0) {
         $details = $violations | ForEach-Object { "$($_.name) p95=$($_.p95Ms)ms > $($_.thresholdMs)ms" }

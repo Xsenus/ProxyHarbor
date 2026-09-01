@@ -200,6 +200,8 @@ builder.Services.AddOpenApi(options =>
 });
 builder.Services.AddProblemDetails();
 builder.Services.AddSingleton<HttpRequestTelemetry>();
+builder.Services.AddSingleton<ProxyMetricsSnapshotCache>();
+builder.Services.AddHostedService<ProxyMetricsSnapshotRefreshWorker>();
 builder.Services.AddResponseCompression(x =>
 {
     x.EnableForHttps = true;
@@ -212,9 +214,20 @@ builder.Services.AddOutputCache(options =>
 {
     options.SizeLimit = 32 * 1024 * 1024;
     options.MaximumBodySize = 2 * 1024 * 1024;
-    options.AddPolicy("public-list", policy => policy
-        .Expire(TimeSpan.FromSeconds(10))
-        .SetVaryByQuery(PublicOutputCachePolicies.ListVaryByQuery));
+    options.AddPolicy(PublicOutputCachePolicies.ProxyCatalog, policy => policy
+        .With(context => PublicOutputCachePolicies.IsAnonymous(context.HttpContext))
+        .Expire(PublicOutputCachePolicies.CatalogExpiration)
+        .SetVaryByQuery(PublicOutputCachePolicies.ListVaryByQuery)
+        .VaryByValue(PublicOutputCachePolicies.CultureKey));
+    options.AddPolicy(PublicOutputCachePolicies.VpnCatalog, policy => policy
+        .With(context => PublicOutputCachePolicies.IsAnonymous(context.HttpContext))
+        .Expire(PublicOutputCachePolicies.CatalogExpiration)
+        .SetVaryByQuery(PublicOutputCachePolicies.VpnListVaryByQuery)
+        .VaryByValue(PublicOutputCachePolicies.CultureKey));
+    options.AddPolicy(PublicOutputCachePolicies.Countries, policy => policy
+        .Expire(PublicOutputCachePolicies.CatalogExpiration)
+        .SetVaryByQuery([])
+        .VaryByValue(PublicOutputCachePolicies.CultureKey));
     options.AddPolicy(PublicOutputCachePolicies.SeekFirstPage, policy => policy
         // Произвольные cursor продолжения не должны создавать одноразовые cache entries.
         .With(context => PublicOutputCachePolicies.IsSeekFirstPage(context.HttpContext))
@@ -385,10 +398,12 @@ app.UseMiddleware<UserApiTokenMiddleware>();
 app.UseMiddleware<AdminApiKeyMiddleware>();
 app.UseMiddleware<ProxyAccessMiddleware>();
 app.UseRateLimiter();
-app.UseOutputCache();
 // Стандартный Authorization middleware проверяет endpoint-level политики для
 // cookie-сессии или сформированного выше automation API key principal.
 app.UseAuthorization();
+// Output cache работает после authentication/authorization: публичные cache policies
+// видят итоговый principal и никогда не разделяют entitlement-aware ответы пользователей.
+app.UseOutputCache();
 app.MapOpenApi().CacheOutput(PublicOutputCachePolicies.Summary).RequireRateLimiting("public");
 app.MapControllers();
 app.MapGet("/health/live", () => Results.Ok(new { status = "healthy" }));

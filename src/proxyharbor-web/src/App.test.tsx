@@ -225,7 +225,7 @@ describe('ProxyHarbor UI', () => {
   it('renders a dedicated login page and probes an existing cookie session', async () => {
     window.history.replaceState({}, '', '/admin/login')
     render(<App />)
-    expect(screen.getByRole('heading', { name: 'Вход в ProxyHarbor' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'Вход в ProxyHarbor' })).toBeInTheDocument()
     expect(screen.getByLabelText('Логин или email')).toHaveAttribute('autocomplete', 'username')
     expect(screen.getByLabelText('Пароль')).toHaveAttribute('autocomplete', 'current-password')
     expect(screen.queryByPlaceholderText('X-Admin-Key')).not.toBeInTheDocument()
@@ -237,7 +237,7 @@ describe('ProxyHarbor UI', () => {
     window.history.replaceState({}, '', '/admin/login')
     vi.mocked(fetch).mockResolvedValue(jsonResponseValue({ title: 'Неверный логин или пароль' }, 401))
     render(<App />)
-    fireEvent.change(screen.getByLabelText('Логин или email'), { target: { value: 'admin' } })
+    fireEvent.change(await screen.findByLabelText('Логин или email'), { target: { value: 'admin' } })
     fireEvent.change(screen.getByLabelText('Пароль'), { target: { value: 'wrong-password' } })
     fireEvent.click(screen.getByRole('button', { name: 'Войти' }))
 
@@ -254,17 +254,17 @@ describe('ProxyHarbor UI', () => {
     ['/register', 'Создать аккаунт'],
     ['/forgot-password', 'Восстановить пароль'],
     ['/reset-password?email=user%40example.com&token=token', 'Новый пароль'],
-  ])('renders the %s account flow without public content', (path, heading) => {
+  ])('renders the %s account flow without public content', async (path, heading) => {
     window.history.replaceState({}, '', path)
     render(<App />)
-    expect(screen.getByRole('heading', { name: heading })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: heading })).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Лучшие прямо сейчас' })).not.toBeInTheDocument()
   })
 
-  it('groups registration fields and independently reveals both passwords', () => {
+  it('groups registration fields and independently reveals both passwords', async () => {
     window.history.replaceState({}, '', '/register')
     const { container } = render(<App />)
-    const form = screen.getByRole('form', { name: 'Создать аккаунт' })
+    const form = await screen.findByRole('form', { name: 'Создать аккаунт' })
     const password = within(form).getByLabelText('Пароль')
     const confirmation = within(form).getByLabelText('Повторите пароль')
     const toggles = within(form).getAllByRole('button', { name: 'Показать пароль' })
@@ -283,10 +283,10 @@ describe('ProxyHarbor UI', () => {
     expect(confirmation).toHaveAttribute('type', 'text')
   })
 
-  it('requires separate offer acceptance and personal data consent before account creation', () => {
+  it('requires separate offer acceptance and personal data consent before account creation', async () => {
     window.history.replaceState({}, '', '/register')
     render(<App />)
-    const offer=screen.getByRole('checkbox',{name:/Я принимаю/})
+    const offer=await screen.findByRole('checkbox',{name:/Я принимаю/})
     const personalData=screen.getByRole('checkbox',{name:/Я отдельно даю/})
     const submit=screen.getByRole('button',{name:'Создать аккаунт'})
     expect(submit).toBeDisabled()
