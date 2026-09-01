@@ -205,17 +205,8 @@ public sealed class ProxyValidator(
             proxies.Clear();
             await using var claimDb = await dbFactory.CreateDbContextAsync(token);
             await using var transaction = await claimDb.Database.BeginTransactionAsync(token);
-            proxies.AddRange(await claimDb.Proxies.FromSqlInterpolated($"""
-                SELECT * FROM "Proxies"
-                WHERE ("NextCheckAt" IS NULL OR "NextCheckAt" <= {now})
-                  AND ("CheckLeaseUntil" IS NULL OR "CheckLeaseUntil" < {now})
-                ORDER BY
-                    CASE "Status" WHEN 1 THEN 0 WHEN 0 THEN 1 ELSE 2 END,
-                    "NextCheckAt" NULLS FIRST,
-                    "LastCheckedAt" NULLS FIRST
-                LIMIT {batchSize}
-                FOR UPDATE SKIP LOCKED
-                """).AsNoTracking().ToListAsync(token));
+            proxies.AddRange(await ValidationQueueClaim.ClaimAsync(
+                claimDb, batchSize, now, token));
             var ids = proxies.Select(x => x.Id).ToArray();
             if (ids.Length > 0)
                 await claimDb.Proxies.Where(x => ids.Contains(x.Id)).ExecuteUpdateAsync(setters => setters

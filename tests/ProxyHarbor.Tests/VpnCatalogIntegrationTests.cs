@@ -180,6 +180,51 @@ public sealed class VpnCatalogIntegrationTests
 
     [Fact]
     [Trait("Category", "PostgresIntegration")]
+    public async Task ValidationQueueSelectsOnlyDueRowsInStableOrder()
+    {
+        var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
+        if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
+
+        var schema = $"proxyharbor_vpn_queue_{Guid.NewGuid():N}";
+        var builder = new NpgsqlConnectionStringBuilder(baseConnectionString) { SearchPath = schema };
+        await using var admin = new NpgsqlConnection(baseConnectionString);
+        await admin.OpenAsync();
+        await using (var create = new NpgsqlCommand($"CREATE SCHEMA {schema}", admin))
+            await create.ExecuteNonQueryAsync();
+        try
+        {
+            var dbOptions = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+                .UseNpgsql(builder.ConnectionString).Options;
+            var now = DateTimeOffset.UtcNow;
+            var oldestDue = Endpoint("198.51.100.10", now.AddMinutes(-10));
+            var newestDue = Endpoint("198.51.100.11", now.AddMinutes(-2));
+            var neverScheduled = Endpoint("198.51.100.12", null);
+            var future = Endpoint("198.51.100.13", now.AddMinutes(2));
+            await using (var seed = new ProxyHarborDbContext(dbOptions))
+            {
+                await seed.Database.MigrateAsync();
+                seed.VpnEndpoints.AddRange(newestDue, future, neverScheduled, oldestDue);
+                await seed.SaveChangesAsync();
+            }
+
+            await using var queueDb = new ProxyHarborDbContext(dbOptions);
+            var selected = await VpnValidationQueue.SelectAsync(
+                queueDb, 3, now, CancellationToken.None);
+
+            Assert.Equal(
+                [oldestDue.Id, newestDue.Id, neverScheduled.Id],
+                selected.Select(endpoint => endpoint.Id));
+            Assert.DoesNotContain(selected, endpoint => endpoint.Id == future.Id);
+        }
+        finally
+        {
+            await using var drop = new NpgsqlCommand($"DROP SCHEMA IF EXISTS {schema} CASCADE", admin);
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
     public async Task ValidationBulkUpdatePreservesCatalogFieldsAndAppliesCountersOnce()
     {
         var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
@@ -382,6 +427,17 @@ public sealed class VpnCatalogIntegrationTests
         Assert.True(await reader.ReadAsync());
         return (reader.GetString(0), reader.GetString(1));
     }
+
+    private static VpnEndpoint Endpoint(string host, DateTimeOffset? nextCheckAt) => new()
+    {
+        Host = host,
+        Port = 443,
+        Protocol = VpnProtocol.Trojan,
+        NextCheckAt = nextCheckAt,
+        LastCheckedAt = nextCheckAt,
+        FirstSeenAt = DateTimeOffset.UtcNow.AddDays(-1),
+        LastSeenAt = DateTimeOffset.UtcNow
+    };
 
     private sealed class TestDbFactory(DbContextOptions<ProxyHarborDbContext> options)
         : IDbContextFactory<ProxyHarborDbContext>

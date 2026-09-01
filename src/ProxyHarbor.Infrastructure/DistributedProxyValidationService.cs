@@ -52,36 +52,7 @@ public sealed class DistributedProxyValidationService(
             node.CurrentLeaseId = null;
             node.CurrentLeaseUntil = null;
             var batchSize = Math.Clamp(node.BatchSize, 1, 10_000);
-            // Не сканируем единый expression-index до конца, когда due-строк меньше
-            // размера партии. На большой БД такой scan искал отсутствующую 400-ю
-            // строку среди всего каталога. Приоритет и NULL/non-NULL части разделены:
-            // прямые IS NULL и <= predicates становятся Index Cond, тогда как единый
-            // OR PostgreSQL оставлял post-filter и снова обходил весь status-range.
-            for (var priority = 0; priority <= 2 && claimed.Count < batchSize; priority++)
-            {
-                var remaining = batchSize - claimed.Count;
-                claimed.AddRange(await db.Proxies.FromSqlInterpolated($"""
-                    SELECT * FROM "Proxies"
-                    WHERE CASE "Status" WHEN 1 THEN 0 WHEN 0 THEN 1 ELSE 2 END = {priority}
-                      AND "NextCheckAt" IS NULL
-                      AND ("CheckLeaseUntil" IS NULL OR "CheckLeaseUntil" < {now})
-                    ORDER BY "LastCheckedAt" NULLS FIRST
-                    LIMIT {remaining}
-                    FOR UPDATE SKIP LOCKED
-                    """).AsNoTracking().ToListAsync(token));
-
-                if (claimed.Count >= batchSize) continue;
-                remaining = batchSize - claimed.Count;
-                claimed.AddRange(await db.Proxies.FromSqlInterpolated($"""
-                    SELECT * FROM "Proxies"
-                    WHERE CASE "Status" WHEN 1 THEN 0 WHEN 0 THEN 1 ELSE 2 END = {priority}
-                      AND "NextCheckAt" <= {now}
-                      AND ("CheckLeaseUntil" IS NULL OR "CheckLeaseUntil" < {now})
-                    ORDER BY "NextCheckAt", "LastCheckedAt" NULLS FIRST
-                    LIMIT {remaining}
-                    FOR UPDATE SKIP LOCKED
-                    """).AsNoTracking().ToListAsync(token));
-            }
+            claimed.AddRange(await ValidationQueueClaim.ClaimAsync(db, batchSize, now, token));
 
             var expiredLeaseIds = claimed
                 .Where(x => x.CheckLeaseId.HasValue)
