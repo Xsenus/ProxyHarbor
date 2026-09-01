@@ -199,6 +199,42 @@ public sealed class VpnControllerTests
         Assert.False((await verify.VpnSources.SingleAsync()).Enabled);
     }
 
+    [Fact]
+    public async Task ChangingCustomFeedRepresentationClearsConditionalFetchState()
+    {
+        var options = Options();
+        var now = DateTimeOffset.UtcNow;
+        var source = Source("Conditional feed", "https://8.8.8.8/old.txt");
+        source.LastFetchedAt = now;
+        source.LastSucceededAt = now;
+        source.LastContentFetchedAt = now;
+        source.HttpETag = "\"old-v1\"";
+        source.HttpLastModifiedAt = now.AddHours(-1);
+        source.LastItemCount = 42;
+        source.ConsecutiveFailures = 3;
+        source.NextFetchAt = now.AddHours(2);
+        source.LastError = "old failure";
+        await SeedAsync(options, source);
+
+        var result = await Admin(options).Update(
+            source.Id,
+            Request("Conditional feed", "https://8.8.4.4/new.txt"),
+            CancellationToken.None);
+
+        Assert.IsType<OkObjectResult>(result.Result);
+        await using var verify = new ProxyHarborDbContext(options);
+        var saved = await verify.VpnSources.AsNoTracking().SingleAsync();
+        Assert.Null(saved.LastFetchedAt);
+        Assert.Null(saved.LastSucceededAt);
+        Assert.Null(saved.LastContentFetchedAt);
+        Assert.Null(saved.HttpETag);
+        Assert.Null(saved.HttpLastModifiedAt);
+        Assert.Null(saved.NextFetchAt);
+        Assert.Null(saved.LastError);
+        Assert.Equal(0, saved.LastItemCount);
+        Assert.Equal(0, saved.ConsecutiveFailures);
+    }
+
     private static SaveVpnSourceRequest Request(string name, string url, bool enabled = true, string license = "MIT") => new()
     {
         Name = name,

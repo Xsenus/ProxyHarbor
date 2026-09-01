@@ -180,6 +180,101 @@ public sealed class VpnCatalogIntegrationTests
 
     [Fact]
     [Trait("Category", "PostgresIntegration")]
+    public async Task AutomaticRunUsesConditionalGetAndForcedRunRequiresFreshBody()
+    {
+        var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
+        if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
+
+        var schema = $"proxyharbor_vpn_conditional_{Guid.NewGuid():N}";
+        var builder = new NpgsqlConnectionStringBuilder(baseConnectionString) { SearchPath = schema };
+        await using var admin = new NpgsqlConnection(baseConnectionString);
+        await admin.OpenAsync();
+        await using (var create = new NpgsqlCommand($"CREATE SCHEMA {schema}", admin))
+            await create.ExecuteNonQueryAsync();
+        try
+        {
+            var dbOptions = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+                .UseNpgsql(builder.ConnectionString, npgsql => npgsql.EnableRetryOnFailure())
+                .Options;
+            var factory = new TestDbFactory(dbOptions);
+            Guid sourceId;
+            await using (var seed = await factory.CreateDbContextAsync())
+            {
+                await seed.Database.MigrateAsync();
+                var source = new VpnSource
+                {
+                    Name = "Conditional VPN feed",
+                    Provider = "Integration test",
+                    Url = "https://8.8.8.8/conditional-vpn.txt",
+                    DefaultProtocol = VpnProtocol.Vless,
+                    License = "MIT"
+                };
+                seed.VpnSources.Add(source);
+                await seed.SaveChangesAsync();
+                sourceId = source.Id;
+            }
+
+            var handler = new ConditionalVpnHandler();
+            using var clients = new TestHttpClientFactory(handler);
+            var service = new VpnCatalogService(factory, clients, Options.Create(new CollectorOptions
+            {
+                SourceConcurrency = 1,
+                SourceTimeoutSeconds = 5,
+                LastSeenRefreshMinutes = 360
+            }), NullLogger<VpnCatalogService>.Instance);
+
+            var first = await service.CollectAsync();
+            DateTimeOffset firstContentFetchedAt;
+            Guid endpointId;
+            await using (var verify = await factory.CreateDbContextAsync())
+            {
+                var source = await verify.VpnSources.AsNoTracking().SingleAsync();
+                endpointId = (await verify.VpnEndpoints.AsNoTracking().SingleAsync()).Id;
+                firstContentFetchedAt = Assert.IsType<DateTimeOffset>(source.LastContentFetchedAt);
+                Assert.Equal("\"vpn-v1\"", source.HttpETag);
+                Assert.Equal(1, source.LastItemCount);
+            }
+            var versionsBefore304 = await ReadCatalogVersionsAsync(
+                builder.ConnectionString, endpointId, sourceId);
+
+            var notModified = await service.CollectAsync();
+            var versionsAfter304 = await ReadCatalogVersionsAsync(
+                builder.ConnectionString, endpointId, sourceId);
+
+            Assert.Equal(1, first.ContentFetched);
+            Assert.Equal(0, first.NotModified);
+            Assert.Equal(0, notModified.ContentFetched);
+            Assert.Equal(1, notModified.NotModified);
+            Assert.Equal(1, notModified.Candidates);
+            Assert.Equal(versionsBefore304, versionsAfter304);
+            Assert.True(handler.Requests[1].IfNoneMatch);
+            Assert.True(handler.Requests[1].IfModifiedSince);
+            await using (var verify = await factory.CreateDbContextAsync())
+            {
+                var source = await verify.VpnSources.AsNoTracking().SingleAsync();
+                Assert.Equal(firstContentFetchedAt, source.LastContentFetchedAt);
+                Assert.True(source.LastFetchedAt > firstContentFetchedAt);
+                Assert.Equal(1, source.LastItemCount);
+            }
+
+            var forced = await service.CollectAsync(forceAllSources: true);
+
+            Assert.Equal(1, forced.ContentFetched);
+            Assert.Equal(0, forced.NotModified);
+            Assert.False(handler.Requests[2].IfNoneMatch);
+            Assert.False(handler.Requests[2].IfModifiedSince);
+            await using (var verify = await factory.CreateDbContextAsync())
+                Assert.True((await verify.VpnSources.AsNoTracking().SingleAsync()).LastContentFetchedAt > firstContentFetchedAt);
+        }
+        finally
+        {
+            await using var drop = new NpgsqlCommand($"DROP SCHEMA IF EXISTS {schema} CASCADE", admin);
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
     public async Task ValidationQueueSelectsOnlyDueRowsInStableOrder()
     {
         var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
@@ -476,6 +571,31 @@ public sealed class VpnCatalogIntegrationTests
                 {
                     Content = new StringContent("vless://test-id@8.8.4.4:443?type=tcp#integration")
                 });
+        }
+    }
+
+    private sealed class ConditionalVpnHandler : HttpMessageHandler
+    {
+        private static readonly DateTimeOffset LastModified =
+            new(2026, 8, 30, 12, 0, 0, TimeSpan.Zero);
+        internal List<(bool IfNoneMatch, bool IfModifiedSince)> Requests { get; } = [];
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            var conditional = request.Headers.IfNoneMatch.Count > 0 || request.Headers.IfModifiedSince is not null;
+            Requests.Add((request.Headers.IfNoneMatch.Count > 0, request.Headers.IfModifiedSince is not null));
+            if (conditional)
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotModified));
+
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("vless://conditional@8.8.4.4:443?type=tcp#conditional")
+            };
+            response.Headers.ETag = new System.Net.Http.Headers.EntityTagHeaderValue("\"vpn-v1\"");
+            response.Content.Headers.LastModified = LastModified;
+            return Task.FromResult(response);
         }
     }
 
