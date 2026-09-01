@@ -89,15 +89,20 @@ try {
         $requestHeaders.Authorization = "Bearer $bearerToken"
     }
 
-    # Два warm-up запроса прогревают JIT, connection pool и bounded output cache.
-    # Они учитываются в totalRequests, но не искажают измеряемые выборки.
+    # Каждый измеряемый hot-маршрут прогревается отдельно: общий JIT/connection pool
+    # не заменяет собственный output-cache key VPN/Proxy/Stats. Warm-up учитывается
+    # в totalRequests, но не искажает измеряемые выборки.
     Invoke-TimedJsonRequest '/api/v1/stats' | Out-Null
+    $warmupRequests = 1
     if ($AccessMode -eq 'Paid') {
         Invoke-TimedJsonRequest '/api/v1/proxies/seek?pageSize=100' | Out-Null
+        $warmupRequests++
     } else {
         Invoke-TimedJsonRequest '/api/v1/proxies?page=1&pageSize=10' | Out-Null
+        Invoke-TimedJsonRequest '/api/v1/vpn?page=1&pageSize=10' | Out-Null
+        $warmupRequests += 2
     }
-    $report.totalRequests += 2
+    $report.totalRequests += $warmupRequests
 
     $hotStats = @(1..$SamplesPerRoute | ForEach-Object {
         Invoke-TimedJsonRequest '/api/v1/stats'
