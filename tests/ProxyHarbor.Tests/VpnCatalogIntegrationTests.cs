@@ -276,7 +276,7 @@ public sealed class VpnCatalogIntegrationTests
 
     [Fact]
     [Trait("Category", "PostgresIntegration")]
-    public async Task ValidationQueueSelectsOnlyDueRowsInStableOrder()
+    public async Task ValidationQueueReservesHalfBatchForNeverCheckedRowsInStableOrder()
     {
         var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
         if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
@@ -293,7 +293,9 @@ public sealed class VpnCatalogIntegrationTests
                 .UseNpgsql(builder.ConnectionString).Options;
             var now = DateTimeOffset.UtcNow;
             var oldestDue = Endpoint("198.51.100.10", now.AddMinutes(-10));
-            var newestDue = Endpoint("198.51.100.11", now.AddMinutes(-2));
+            var secondDue = Endpoint("198.51.100.11", now.AddMinutes(-7));
+            var thirdDue = Endpoint("198.51.100.15", now.AddMinutes(-4));
+            var newestDue = Endpoint("198.51.100.16", now.AddMinutes(-2));
             var firstNeverScheduled = Endpoint("198.51.100.12", null);
             firstNeverScheduled.Id = Guid.Parse("00000000-0000-0000-0000-000000000001");
             var secondNeverScheduled = Endpoint("198.51.100.14", null);
@@ -305,7 +307,8 @@ public sealed class VpnCatalogIntegrationTests
                 // Обратный insert-order доказывает, что NULL fallback использует
                 // явный Id tie-break, а не случайный heap-order PostgreSQL.
                 seed.VpnEndpoints.AddRange(
-                    newestDue, future, secondNeverScheduled, firstNeverScheduled, oldestDue);
+                    newestDue, thirdDue, future, secondNeverScheduled,
+                    firstNeverScheduled, secondDue, oldestDue);
                 await seed.SaveChangesAsync();
             }
 
@@ -314,8 +317,10 @@ public sealed class VpnCatalogIntegrationTests
                 queueDb, 4, now, CancellationToken.None);
 
             Assert.Equal(
-                [oldestDue.Id, newestDue.Id, firstNeverScheduled.Id, secondNeverScheduled.Id],
+                [oldestDue.Id, secondDue.Id, firstNeverScheduled.Id, secondNeverScheduled.Id],
                 selected.Select(endpoint => endpoint.Id));
+            Assert.DoesNotContain(selected, endpoint => endpoint.Id == thirdDue.Id);
+            Assert.DoesNotContain(selected, endpoint => endpoint.Id == newestDue.Id);
             Assert.DoesNotContain(selected, endpoint => endpoint.Id == future.Id);
         }
         finally
@@ -324,6 +329,19 @@ public sealed class VpnCatalogIntegrationTests
             await drop.ExecuteNonQueryAsync();
         }
     }
+
+    [Theory]
+    [InlineData(1, 1)]
+    [InlineData(2, 1)]
+    [InlineData(3, 1)]
+    [InlineData(4, 2)]
+    [InlineData(1600, 800)]
+    public void ValidationQueueNeverCheckedQuotaIsBoundedAndFair(int batchSize, int expected) =>
+        Assert.Equal(expected, VpnValidationQueue.NeverCheckedQuota(batchSize));
+
+    [Fact]
+    public void ValidationQueueRejectsEmptyBatch() =>
+        Assert.Throws<ArgumentOutOfRangeException>(() => VpnValidationQueue.NeverCheckedQuota(0));
 
     [Fact]
     [Trait("Category", "PostgresIntegration")]

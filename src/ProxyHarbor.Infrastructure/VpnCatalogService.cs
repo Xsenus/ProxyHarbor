@@ -277,35 +277,36 @@ public sealed class VpnCatalogService(
             Math.Clamp(options.Value.ValidationBatchSize, 1, 5000),
             now,
             token);
-        var results = new System.Collections.Concurrent.ConcurrentBag<VpnProbeResult>();
-        await Parallel.ForEachAsync(endpoints, new ParallelOptions
+        var results = new VpnProbeResult[endpoints.Length];
+        await Parallel.ForAsync(0, endpoints.Length, new ParallelOptions
         {
             MaxDegreeOfParallelism = Math.Clamp(options.Value.ValidationConcurrency, 1, 250),
             CancellationToken = token
-        }, async (endpoint, cancellationToken) =>
+        }, async (index, cancellationToken) =>
         {
+            var endpoint = endpoints[index];
             if (endpoint.Transport == "udp")
             {
-                results.Add(new(
+                results[index] = new(
                     endpoint.Id,
                     null,
                     null,
-                    "UDP требует протокольной проверки; credentials не используются"));
+                    "UDP требует протокольной проверки; credentials не используются");
                 return;
             }
             var stopwatch = Stopwatch.StartNew();
             try
             {
                 await ConnectPublicAsync(endpoint.Host, endpoint.Port, options.Value.ProbeTimeoutSeconds, cancellationToken);
-                results.Add(new(endpoint.Id, true, (int)Math.Min(stopwatch.ElapsedMilliseconds, int.MaxValue), null));
+                results[index] = new(endpoint.Id, true, (int)Math.Min(stopwatch.ElapsedMilliseconds, int.MaxValue), null);
             }
             catch (Exception exception) when (exception is SocketException or IOException or OperationCanceledException)
             {
-                results.Add(new(
+                results[index] = new(
                     endpoint.Id,
                     false,
                     null,
-                    exception is OperationCanceledException ? "timeout" : exception.GetType().Name));
+                    exception is OperationCanceledException ? "timeout" : exception.GetType().Name);
             }
         });
 
@@ -572,7 +573,7 @@ internal sealed record VpnValidationUpdate(
     DateTimeOffset NextCheckAt);
 
 /// <summary>Результат сетевого probe до нормализации статуса и расписания.</summary>
-internal sealed record VpnProbeResult(Guid Id, bool? Reachable, int? Latency, string? Error);
+internal readonly record struct VpnProbeResult(Guid Id, bool? Reachable, int? Latency, string? Error);
 
 /// <summary>Запускает сбор VPN feed независимо от более частой проверки endpoint.</summary>
 public sealed class VpnCollectorWorker(VpnCatalogService service, IOptions<CollectorOptions> options, ILogger<VpnCollectorWorker> logger) : BackgroundService
