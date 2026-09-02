@@ -1,10 +1,10 @@
 # Каталог 85 провайдеров бесплатных прокси
 
-Все 85 независимых провайдеров уже входят в `BuiltInSourceCatalog`, а их 320 HTTPS endpoint обрабатываются production collector. Документ предназначен оператору; публичная главная страница источники не раскрывает.
+Все 85 независимых провайдеров уже входят в `BuiltInSourceCatalog`, а их 255 стабильных HTTPS endpoint обрабатываются production collector. Документ предназначен оператору; публичная главная страница источники не раскрывает.
 
 Совместимый read-only endpoint `GET /api/v1/sources` пока сохраняется для API-клиентов, но обычный React-интерфейс его не запрашивает и не показывает. Runtime errors, backoff и внутреннее состояние доступны только администратору.
 
-Базовые 81 endpoint прошли полный end-to-end аудит 10 августа 2026 года. 24 августа дополнительно проверены 17 URL шести провайдеров, 26 августа — ещё 100 URL от 19 origin-владельцев. 28 августа проверены ещё 100 protocol- и country-feed. 1 сентября два удалённых country-feed `XYZS996` заменены, добавлены 12 URL пяти новых origin-владельцев и повторно проверен весь каталог. 2 сентября исчезнувшие `XYZS996 GR`, `XYZS996 GQ` и `XYZS996 DK` заменены на непустые `XYZS996 US`, `XYZS996 TH` и `XYZS996 TR`, опустевший `ProxyGenerator MostStable SOCKS4` — на рабочий `ProxyGenerator Cloudflare SOCKS4`, а Fyvri переведён на однозначный `refs/heads/archive` URL ветки; все 320 URL после последней замены снова ответили успешно. Полный 320-feed прогон является обязательным release-gate и не подменяется URL-проверкой.
+Базовые 81 endpoint прошли полный end-to-end аудит 10 августа 2026 года. 24 августа дополнительно проверены 17 URL шести провайдеров, 26 августа — ещё 100 URL от 19 origin-владельцев. 28 августа проверены дополнительные protocol- и country-feed, а 1 сентября добавлены 12 URL пяти новых origin-владельцев. Production-наблюдение 2 сентября показало, что 65 country-файлов `XYZS996` исчезают при временно пустой стране и полностью дублируют агрегированные feed этого же origin. Они исключены без потери независимых провайдеров и данных; `XYZS996` представлен стабильными `all.txt`, `http.txt` и `https.txt`. Опустевший `ProxyGenerator MostStable SOCKS4` заменён на рабочий `ProxyGenerator Cloudflare SOCKS4`, а Fyvri переведён на однозначный `refs/heads/archive` URL ветки. Все оставшиеся 255 URL повторно ответили успешно. Полный 255-feed прогон является обязательным release-gate и не подменяется URL-проверкой.
 
 | № | Провайдер | Feed'ов | Протоколы | Представительный источник |
 |---:|---|---:|---|---|
@@ -42,7 +42,7 @@
 | 32 | RoosterKid | 1 | HTTPS | [GitHub](https://github.com/roosterkid/openproxylist) |
 | 33 | Proxy-Free | 1 | HTTP | [GitHub](https://github.com/proxy-free/free-proxy-list) |
 | 34 | Ch4120N | 1 | HTTP | [GitHub](https://github.com/Ch4120N/Ch4120N-Proxy-List) |
-| 35 | XYZS996 | 68 | Mixed, HTTP, HTTPS, country feeds | [GitHub](https://github.com/xyzs996/free-proxy-health-list) |
+| 35 | XYZS996 | 3 | Mixed, HTTP, HTTPS | [GitHub](https://github.com/xyzs996/free-proxy-health-list) |
 | 36 | Tianndev | 5 | Mixed, HTTP, HTTPS, SOCKS4, SOCKS5 | [GitHub](https://github.com/Tianndev/free-proxy) |
 | 37 | KangProxy | 1 | HTTP | [GitHub](https://github.com/officialputuid/KangProxy) |
 | 38 | Thordata | 1 | HTTP | [GitHub](https://github.com/Thordata/awesome-free-proxy-list) |
@@ -100,4 +100,4 @@
 
 Бесплатные прокси меняются каждую минуту, поэтому нельзя честно обещать, что все строки внешнего feed будут рабочими. Гарантия сервиса другая и проверяемая: все 85 провайдеров входят в сбор; неработающие адреса не публикуются; отказавший, пустой или усечённый feed сразу становится нездоровым в diagnostics, Prometheus и еженедельном CI-аудите.
 
-Полные 320 URL, их протоколы и эксплуатационный порядок находятся в [`BuiltInSourceCatalog.cs`](../src/ProxyHarbor.Infrastructure/BuiltInSourceCatalog.cs). Команда воспроизводимого production-аудита описана в [`SOURCES.md`](SOURCES.md).
+Полные 255 URL, их протоколы и эксплуатационный порядок находятся в [`BuiltInSourceCatalog.cs`](../src/ProxyHarbor.Infrastructure/BuiltInSourceCatalog.cs). Команда воспроизводимого production-аудита описана в [`SOURCES.md`](SOURCES.md).

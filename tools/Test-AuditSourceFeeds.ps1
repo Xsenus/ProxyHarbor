@@ -14,9 +14,10 @@ function Get-FreeTcpPort {
 }
 
 function Start-SourceAuditMock([int]$Port, [ValidateSet('success', 'saved-state', 'stale', 'future', 'missing-content', 'identity-missing', 'zero-candidates', 'skipped', 'http-failure')][string]$Mode) {
-    # Start-Job используется намеренно: вызываемый audit остаётся отдельным обычным
-    # PowerShell script и проходит тот же HTTP/JSON путь, что в GitHub Actions.
-    return Start-Job -ArgumentList $Port, $Mode -ScriptBlock {
+    # ThreadJob avoids repeatedly starting a separate pwsh process for every
+    # negative contract. The audit itself still runs as a normal PowerShell script
+    # and exercises the same HTTP/JSON path used by GitHub Actions.
+    return Start-ThreadJob -ArgumentList $Port, $Mode -ScriptBlock {
         param($Port, $Mode)
 
         $listener = [Net.HttpListener]::new()
@@ -73,13 +74,17 @@ function Start-SourceAuditMock([int]$Port, [ValidateSet('success', 'saved-state'
     }
 }
 
-function Wait-SourceAuditMock([int]$Port) {
-    foreach ($attempt in 1..50) {
+function Wait-SourceAuditMock([int]$Port, [Management.Automation.Job]$Job) {
+    foreach ($attempt in 1..150) {
         try {
             Invoke-WebRequest -Uri "http://127.0.0.1:$Port/ready" -TimeoutSec 1 | Out-Null
             return
         } catch {
-            if ($attempt -eq 50) { throw "Source-audit mock на порту $Port не запустился." }
+            if ($Job.State -in @('Completed', 'Failed', 'Stopped')) {
+                Receive-Job $Job -ErrorAction Stop | Out-Null
+                throw "Source-audit mock на порту $Port завершился до readiness-check."
+            }
+            if ($attempt -eq 150) { throw "Source-audit mock на порту $Port не запустился." }
             Start-Sleep -Milliseconds 100
         }
     }
@@ -95,7 +100,7 @@ function Invoke-SourceAuditCase(
     $job = Start-SourceAuditMock -Port $port -Mode $Mode
     $reportPath = Join-Path $testRoot "$Name.json"
     try {
-        Wait-SourceAuditMock -Port $port
+        Wait-SourceAuditMock -Port $port -Job $job
         $rejected = $false
         try {
             $auditParameters = @{

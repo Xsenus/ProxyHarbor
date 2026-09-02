@@ -363,7 +363,7 @@ public sealed class DatabaseSeederIntegrationTests
 
     [Fact]
     [Trait("Category", "PostgresIntegration")]
-    public async Task StartupRemovesRetiredBuiltInFeedAndSeedsItsReplacement()
+    public async Task StartupRemovesRetiredDynamicCountryFeedAndKeepsStableAggregate()
     {
         var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
         if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
@@ -377,8 +377,9 @@ public sealed class DatabaseSeederIntegrationTests
 
         const string retiredUrl =
             "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/gr/data.txt";
-        const string replacementUrl =
-            "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/us/data.txt";
+        const string aggregateUrl =
+            "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/all.txt";
+        const string customUrl = "https://example.com/operator-proxies.txt";
 
         try
         {
@@ -388,12 +389,19 @@ public sealed class DatabaseSeederIntegrationTests
             await using (var first = new ProxyHarborDbContext(options))
             {
                 await DatabaseSeeder.InitializeAsync(first);
-                first.Sources.Add(new ProxySource
-                {
-                    Name = "Retired XYZS996 GR",
-                    Url = retiredUrl,
-                    DefaultProtocol = ProxyProtocol.Http
-                });
+                first.Sources.AddRange(
+                    new ProxySource
+                    {
+                        Name = "Retired XYZS996 GR",
+                        Url = retiredUrl,
+                        DefaultProtocol = ProxyProtocol.Http
+                    },
+                    new ProxySource
+                    {
+                        Name = "Operator source",
+                        Url = customUrl,
+                        DefaultProtocol = ProxyProtocol.Http
+                    });
                 await first.SaveChangesAsync();
             }
 
@@ -402,8 +410,9 @@ public sealed class DatabaseSeederIntegrationTests
 
             await using var verify = new ProxyHarborDbContext(options);
             Assert.False(await verify.Sources.AnyAsync(source => source.Url == retiredUrl));
-            Assert.True(await verify.Sources.AnyAsync(source => source.Url == replacementUrl));
-            Assert.Equal(BuiltInSourceCatalog.Sources.Count, await verify.Sources.CountAsync());
+            Assert.True(await verify.Sources.AnyAsync(source => source.Url == aggregateUrl));
+            Assert.True(await verify.Sources.AnyAsync(source => source.Url == customUrl));
+            Assert.Equal(BuiltInSourceCatalog.Sources.Count + 1, await verify.Sources.CountAsync());
         }
         finally
         {
@@ -416,18 +425,6 @@ public sealed class DatabaseSeederIntegrationTests
     [InlineData(
         "TheSpeedX HTTP",
         "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/refs/heads/master/http.txt")]
-    [InlineData(
-        "XYZS996 LV",
-        "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/bt/data.txt")]
-    [InlineData(
-        "XYZS996 LU",
-        "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/lt/data.txt")]
-    [InlineData(
-        "XYZS996 TH",
-        "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/gq/data.txt")]
-    [InlineData(
-        "XYZS996 TR",
-        "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/dk/data.txt")]
     [InlineData(
         "ProxyGenerator Cloudflare SOCKS4",
         "https://raw.githubusercontent.com/proxygenerator1/ProxyGenerator/main/MostStable/socks4.txt")]

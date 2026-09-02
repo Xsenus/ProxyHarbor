@@ -9,7 +9,7 @@ public static class BuiltInSourceCatalog
     public static DateOnly LastAuditedOn => new(2026, 9, 2);
 
     /// <summary>Источники ранжированы по свежести, объёму, стабильности ответа и разнообразию провайдеров.</summary>
-    public static IReadOnlyList<BuiltInSource> Sources { get; } =
+    public static IReadOnlyList<BuiltInSource> Sources { get; } = RankSources(
     [
         // HTTP/HTTPS и смешанные feed'ы.
         Feed(1, "ProxyScrape V4 Mixed", "ProxyScrape", "https://api.proxyscrape.com/v4/free-proxy-list/get?request=display_proxies&proxy_format=protocolipport&format=text", ProxyProtocol.Http),
@@ -204,8 +204,6 @@ public static class BuiltInSourceCatalog
         Feed(178, "Seeh-Saah SOCKS4", "Seeh-Saah", "https://raw.githubusercontent.com/Seeh-Saah/awesome-free-proxy-list/main/proxies/socks4.txt", ProxyProtocol.Socks4),
         Feed(179, "Seeh-Saah SOCKS5", "Seeh-Saah", "https://raw.githubusercontent.com/Seeh-Saah/awesome-free-proxy-list/main/proxies/socks5.txt", ProxyProtocol.Socks5),
         Feed(180, "7and1 HTTP", "7and1", "https://raw.githubusercontent.com/7and1/free-proxy-list/main/proxies/protocols/http/data.txt", ProxyProtocol.Http),
-        Feed(181, "XYZS996 NO", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/no/data.txt", ProxyProtocol.Http),
-        Feed(182, "XYZS996 PE", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/pe/data.txt", ProxyProtocol.Http),
         Feed(183, "TomJiu HTTP", "TomJiu", "https://raw.githubusercontent.com/tomjiu/proxy-pipeline/main/dist/online/http.txt", ProxyProtocol.Http),
         Feed(184, "TomJiu Mixed", "TomJiu", "https://raw.githubusercontent.com/tomjiu/proxy-pipeline/main/dist/online/all.txt", ProxyProtocol.Http),
         Feed(185, "TomJiu SOCKS4", "TomJiu", "https://raw.githubusercontent.com/tomjiu/proxy-pipeline/main/dist/online/socks4.txt", ProxyProtocol.Socks4),
@@ -223,81 +221,20 @@ public static class BuiltInSourceCatalog
         Feed(197, "Xnuvers Scheme mixed", "Xnuvers", "https://raw.githubusercontent.com/Xnuvers007/free-proxy/main/proxy_scheme.txt", ProxyProtocol.Http),
         Feed(198, "Xnuvers Scheme active", "Xnuvers", "https://raw.githubusercontent.com/Xnuvers007/free-proxy/main/proxy_scheme_active.txt", ProxyProtocol.Http),
 
-        // Дополнительные protocol- и country-feed'ы. Все URL проверены live 28.08.2026.
+        // Используем только агрегированные XYZS996 feed'ы. Country-файлы этого
+        // генератора исчезают при временно пустой стране и потому не являются
+        // стабильными независимыми источниками; их данные уже входят в all/http/https.
         Feed(199, "XYZS996 All", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/all.txt", ProxyProtocol.Http),
-        Feed(200, "XYZS996 IE", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/ie/data.txt", ProxyProtocol.Http),
         Feed(201, "XYZS996 HTTPS", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/https.txt", ProxyProtocol.Https),
-        Feed(202, "XYZS996 AE", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/ae/data.txt", ProxyProtocol.Http),
-        Feed(203, "XYZS996 AR", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/ar/data.txt", ProxyProtocol.Http),
-        Feed(204, "XYZS996 AT", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/at/data.txt", ProxyProtocol.Http),
-        Feed(205, "XYZS996 AU", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/au/data.txt", ProxyProtocol.Http),
-        Feed(206, "XYZS996 BD", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/bd/data.txt", ProxyProtocol.Http),
-        Feed(207, "XYZS996 BE", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/be/data.txt", ProxyProtocol.Http),
-        Feed(208, "XYZS996 BG", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/bg/data.txt", ProxyProtocol.Http),
-        Feed(209, "XYZS996 BR", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/br/data.txt", ProxyProtocol.Http),
-        Feed(210, "XYZS996 CA", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/ca/data.txt", ProxyProtocol.Http),
-        Feed(211, "XYZS996 CH", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/ch/data.txt", ProxyProtocol.Http),
-        Feed(212, "XYZS996 CN", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/cn/data.txt", ProxyProtocol.Http),
-        Feed(213, "XYZS996 CO", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/co/data.txt", ProxyProtocol.Http),
-        Feed(214, "XYZS996 CZ", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/cz/data.txt", ProxyProtocol.Http),
-        Feed(215, "XYZS996 DE", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/de/data.txt", ProxyProtocol.Http),
-        Feed(216, "XYZS996 TR", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/tr/data.txt", ProxyProtocol.Http),
-        Feed(217, "XYZS996 EC", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/ec/data.txt", ProxyProtocol.Http),
-        Feed(218, "XYZS996 EE", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/ee/data.txt", ProxyProtocol.Http),
-        Feed(219, "XYZS996 ES", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/es/data.txt", ProxyProtocol.Http),
-        Feed(220, "XYZS996 FI", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/fi/data.txt", ProxyProtocol.Http),
-        Feed(221, "XYZS996 FR", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/fr/data.txt", ProxyProtocol.Http),
-        Feed(222, "XYZS996 GB", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/gb/data.txt", ProxyProtocol.Http),
-        Feed(223, "XYZS996 HK", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/hk/data.txt", ProxyProtocol.Http),
-        Feed(224, "XYZS996 ID", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/id/data.txt", ProxyProtocol.Http),
-        Feed(225, "XYZS996 IL", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/il/data.txt", ProxyProtocol.Http),
-        Feed(226, "XYZS996 IN", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/in/data.txt", ProxyProtocol.Http),
-        Feed(227, "XYZS996 IR", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/ir/data.txt", ProxyProtocol.Http),
-        Feed(228, "XYZS996 IT", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/it/data.txt", ProxyProtocol.Http),
-        Feed(229, "XYZS996 JP", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/jp/data.txt", ProxyProtocol.Http),
-        Feed(230, "XYZS996 KR", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/kr/data.txt", ProxyProtocol.Http),
-        Feed(231, "XYZS996 KZ", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/kz/data.txt", ProxyProtocol.Http),
-        Feed(232, "XYZS996 MX", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/mx/data.txt", ProxyProtocol.Http),
-        Feed(233, "XYZS996 MY", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/my/data.txt", ProxyProtocol.Http),
-        Feed(234, "XYZS996 NG", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/ng/data.txt", ProxyProtocol.Http),
-        Feed(235, "XYZS996 NL", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/nl/data.txt", ProxyProtocol.Http),
-        Feed(236, "XYZS996 PH", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/ph/data.txt", ProxyProtocol.Http),
-        Feed(237, "XYZS996 PL", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/pl/data.txt", ProxyProtocol.Http),
-        Feed(238, "XYZS996 RO", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/ro/data.txt", ProxyProtocol.Http),
-        Feed(239, "XYZS996 RU", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/ru/data.txt", ProxyProtocol.Http),
-        Feed(240, "XYZS996 SE", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/se/data.txt", ProxyProtocol.Http),
-        Feed(241, "XYZS996 SG", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/sg/data.txt", ProxyProtocol.Http),
         Feed(242, "Proxio Mixed", "Proxio", "https://raw.githubusercontent.com/proxio-io/proxy-list/main/all.txt", ProxyProtocol.Http),
-        Feed(243, "XYZS996 AL", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/al/data.txt", ProxyProtocol.Http),
-        Feed(244, "XYZS996 AM", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/am/data.txt", ProxyProtocol.Http),
-        Feed(245, "XYZS996 AZ", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/az/data.txt", ProxyProtocol.Http),
-        Feed(246, "XYZS996 BF", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/bf/data.txt", ProxyProtocol.Http),
-        Feed(247, "XYZS996 BI", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/bi/data.txt", ProxyProtocol.Http),
-        Feed(248, "XYZS996 BO", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/bo/data.txt", ProxyProtocol.Http),
-        Feed(249, "XYZS996 LV", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/lv/data.txt", ProxyProtocol.Http),
-        Feed(250, "XYZS996 BW", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/bw/data.txt", ProxyProtocol.Http),
-        Feed(251, "XYZS996 BY", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/by/data.txt", ProxyProtocol.Http),
         Feed(252, "Proxio HTTP", "Proxio", "https://raw.githubusercontent.com/proxio-io/proxy-list/main/http.txt", ProxyProtocol.Http),
         Feed(253, "Syscallh00k Mixed", "Syscallh00k", "https://raw.githubusercontent.com/Syscallh00k/proxy-list/main/all.txt", ProxyProtocol.Http),
-        Feed(254, "XYZS996 CL", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/cl/data.txt", ProxyProtocol.Http),
-        Feed(255, "XYZS996 CM", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/cm/data.txt", ProxyProtocol.Http),
         Feed(256, "Gifted Proxies HTTP", "Gifted Proxies", "https://raw.githubusercontent.com/mauricegift/free-proxies/master/files/http.json", ProxyProtocol.Http),
         Feed(257, "Gifted Proxies SOCKS4", "Gifted Proxies", "https://raw.githubusercontent.com/mauricegift/free-proxies/master/files/socks4.json", ProxyProtocol.Socks4),
-        Feed(258, "XYZS996 CY", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/cy/data.txt", ProxyProtocol.Http),
-        Feed(259, "XYZS996 DO", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/do/data.txt", ProxyProtocol.Http),
-        Feed(260, "XYZS996 EG", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/eg/data.txt", ProxyProtocol.Http),
-        Feed(261, "XYZS996 GE", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/ge/data.txt", ProxyProtocol.Http),
-        Feed(262, "XYZS996 GH", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/gh/data.txt", ProxyProtocol.Http),
         Feed(263, "Pxys Daily CSV", "Pxys", "https://raw.githubusercontent.com/Pxys-io/DailyProxyList/master/working_proxies.csv", ProxyProtocol.Http),
-        Feed(264, "XYZS996 TH", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/th/data.txt", ProxyProtocol.Http),
-        Feed(265, "XYZS996 US", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/us/data.txt", ProxyProtocol.Http),
-        Feed(266, "XYZS996 GT", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/gt/data.txt", ProxyProtocol.Http),
-        Feed(267, "XYZS996 HN", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/hn/data.txt", ProxyProtocol.Http),
-        Feed(268, "XYZS996 LU", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/lu/data.txt", ProxyProtocol.Http),
         Feed(269, "ProxRipper HTTPS", "ProxRipper", "https://raw.githubusercontent.com/Mohammedcha/ProxRipper/main/full_proxies/https.txt", ProxyProtocol.Https),
         Feed(270, "ProxRipper SOCKS4", "ProxRipper", "https://raw.githubusercontent.com/Mohammedcha/ProxRipper/main/full_proxies/socks4.txt", ProxyProtocol.Socks4),
         Feed(271, "ProxRipper SOCKS5", "ProxRipper", "https://raw.githubusercontent.com/Mohammedcha/ProxRipper/main/full_proxies/socks5.txt", ProxyProtocol.Socks5),
-        Feed(272, "XYZS996 KE", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/ke/data.txt", ProxyProtocol.Http),
         Feed(273, "Tianndev HTTP", "Tianndev", "https://raw.githubusercontent.com/Tianndev/free-proxy/main/proxy/http.txt", ProxyProtocol.Http),
         Feed(274, "Tianndev HTTPS", "Tianndev", "https://raw.githubusercontent.com/Tianndev/free-proxy/main/proxy/https.txt", ProxyProtocol.Https),
         Feed(275, "Tianndev SOCKS4", "Tianndev", "https://raw.githubusercontent.com/Tianndev/free-proxy/main/proxy/socks4.txt", ProxyProtocol.Socks4),
@@ -352,7 +289,7 @@ public static class BuiltInSourceCatalog
         Feed(318, "Firmfox SOCKS5", "Firmfox", "https://raw.githubusercontent.com/Firmfox/Proxify/main/proxy/socks5.txt", ProxyProtocol.Socks5),
         Feed(319, "Berkay Digital Mixed", "Berkay Digital", "https://raw.githubusercontent.com/berkay-digital/Proxy-Scraper/main/proxies.txt", ProxyProtocol.Http),
         Feed(320, "Volkan Auto Proxy Mixed", "Volkan Auto Proxy", "https://raw.githubusercontent.com/VolkanSah/Auto-Proxy-Fetcher/main/proxies.txt", ProxyProtocol.Http),
-    ];
+    ]);
 
     private static readonly Dictionary<string, BuiltInSource> SourcesByUrl =
         Sources.ToDictionary(source => source.Url, StringComparer.Ordinal);
@@ -370,6 +307,9 @@ public static class BuiltInSourceCatalog
 
     private static BuiltInSource Feed(int rank, string name, string provider, string url, ProxyProtocol protocol) =>
         new(rank, name, provider, ProviderIdentity(url), url, protocol);
+
+    private static BuiltInSource[] RankSources(IEnumerable<BuiltInSource> sources) =>
+        sources.Select((source, index) => source with { Rank = index + 1 }).ToArray();
 
     /// <summary>Канонизирует технического владельца feed endpoint для completeness-gate.</summary>
     private static string ProviderIdentity(string url)
