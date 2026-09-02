@@ -26,6 +26,12 @@ docker compose up -d --build
 | `BACKGROUND_WORKERS_ENABLED` | Запуск collector, validator, maintenance и backup workers в API-реплике |
 | `VALIDATION_CONCURRENCY` | Параллельные сетевые проверки, `1..1000` |
 | `VALIDATION_BATCH_SIZE` | Размер распределённой validation lease, `1..100000` |
+| `VPN_VALIDATION_CONCURRENCY` | Независимый параллелизм TCP-проверок VPN, `1..1000` |
+| `VPN_VALIDATION_BATCH_SIZE` | Размер локальной VPN validation-партии, `1..20000`, не меньше concurrency |
+| `VPN_REACHABLE_VALIDATION_INTERVAL_MINUTES` | Повторная проверка доступных VPN, `1..1440` |
+| `VPN_UNREACHABLE_RETRY_MINUTES` | Повторная проверка недоступных VPN, `1..10080` |
+| `VPN_UNSUPPORTED_RETRY_MINUTES` | Повторная классификация неподдерживаемого транспорта, `1..43200` |
+| `VPN_PUBLIC_FRESHNESS_MINUTES` | Возраст успешной проверки в публичной выдаче, `2..2880`, не меньше reachable interval |
 | `BACKUP_ENABLED` | Плановый backup; production overlay всё равно принудительно задаёт `true` |
 | `BACKUP_HISTORY_RETENTION_DAYS` | Хранение строк аудита backup, `1..3650` |
 | `BACKUP_ENCRYPTION_KEY` | Ключ новых PHB3, 32–1024 символа без control characters |

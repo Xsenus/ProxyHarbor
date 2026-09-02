@@ -78,6 +78,15 @@ public sealed class MetricsControllerTests
         Assert.Contains("proxyharbor_maintenance_healthy -1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_collection_interval_seconds 300", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_public_freshness_seconds 900", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_vpn_validation_concurrency_limit 800", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_vpn_validation_batch_size 1600", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_vpn_reachable_validation_interval_seconds 600", metrics,
+            StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_vpn_unreachable_retry_seconds 1800", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_vpn_unsupported_retry_seconds 21600", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_vpn_public_freshness_seconds 900", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_vpn_validation_due 0", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_vpn_published 0", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_backup_enabled 0", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_backup_interval_seconds 86400", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_backup_telegram_configured 0", metrics, StringComparison.Ordinal);

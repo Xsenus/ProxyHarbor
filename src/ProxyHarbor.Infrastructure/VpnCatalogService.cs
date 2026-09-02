@@ -274,13 +274,13 @@ public sealed class VpnCatalogService(
         // поэтому tracking тысяч entity только раздувал память и DetectChanges CPU.
         var endpoints = await VpnValidationQueue.SelectAsync(
             db,
-            Math.Clamp(options.Value.ValidationBatchSize, 1, 5000),
+            Math.Clamp(options.Value.VpnValidationBatchSize, 1, 20_000),
             now,
             token);
         var results = new VpnProbeResult[endpoints.Length];
         await Parallel.ForAsync(0, endpoints.Length, new ParallelOptions
         {
-            MaxDegreeOfParallelism = Math.Clamp(options.Value.ValidationConcurrency, 1, 250),
+            MaxDegreeOfParallelism = Math.Clamp(options.Value.VpnValidationConcurrency, 1, 1_000),
             CancellationToken = token
         }, async (index, cancellationToken) =>
         {
@@ -312,7 +312,12 @@ public sealed class VpnCatalogService(
 
         var checkedAt = DateTimeOffset.UtcNow;
         var updates = results.Select(result =>
-            ToValidationUpdate(result, checkedAt, options.Value.ValidationIntervalMinutes)).ToArray();
+            ToValidationUpdate(
+                result,
+                checkedAt,
+                options.Value.VpnReachableValidationIntervalMinutes,
+                options.Value.VpnUnreachableRetryMinutes,
+                options.Value.VpnUnsupportedRetryMinutes)).ToArray();
         var persisted = await PersistValidationResultsAsync(updates, token);
         EnsureCompletePersistence(persisted, updates.Length);
         return new(
@@ -325,7 +330,9 @@ public sealed class VpnCatalogService(
     internal static VpnValidationUpdate ToValidationUpdate(
         VpnProbeResult result,
         DateTimeOffset checkedAt,
-        int validationIntervalMinutes)
+        int reachableIntervalMinutes,
+        int unreachableRetryMinutes,
+        int unsupportedRetryMinutes)
     {
         var status = result.Reachable switch
         {
@@ -333,7 +340,12 @@ public sealed class VpnCatalogService(
             false => VpnEndpointStatus.Unreachable,
             null => VpnEndpointStatus.UnsupportedTransport
         };
-        var interval = result.Reachable == false ? 15 : Math.Max(1, validationIntervalMinutes);
+        var interval = result.Reachable switch
+        {
+            true => Math.Max(1, reachableIntervalMinutes),
+            false => Math.Max(1, unreachableRetryMinutes),
+            null => Math.Max(1, unsupportedRetryMinutes)
+        };
         return new(result.Id, status, result.Latency, result.Error, checkedAt, checkedAt.AddMinutes(interval));
     }
 

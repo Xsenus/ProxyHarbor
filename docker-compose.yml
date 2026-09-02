@@ -66,6 +66,12 @@ services:
       Collector__BackgroundWorkersEnabled: ${BACKGROUND_WORKERS_ENABLED:-true}
       Collector__ValidationConcurrency: ${VALIDATION_CONCURRENCY:-800}
       Collector__ValidationBatchSize: ${VALIDATION_BATCH_SIZE:-1600}
+      Collector__VpnValidationConcurrency: ${VPN_VALIDATION_CONCURRENCY:-800}
+      Collector__VpnValidationBatchSize: ${VPN_VALIDATION_BATCH_SIZE:-1600}
+      Collector__VpnReachableValidationIntervalMinutes: ${VPN_REACHABLE_VALIDATION_INTERVAL_MINUTES:-10}
+      Collector__VpnUnreachableRetryMinutes: ${VPN_UNREACHABLE_RETRY_MINUTES:-30}
+      Collector__VpnUnsupportedRetryMinutes: ${VPN_UNSUPPORTED_RETRY_MINUTES:-360}
+      Collector__VpnPublicFreshnessMinutes: ${VPN_PUBLIC_FRESHNESS_MINUTES:-15}
       Collector__ValidationRunRetentionHours: ${VALIDATION_RUN_RETENTION_HOURS:-24}
       Backup__Enabled: ${BACKUP_ENABLED:-false}
       Backup__Directory: /app/backups

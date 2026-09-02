@@ -25,6 +25,18 @@ public sealed class CollectorOptions
     public int ValidationConcurrency { get; set; } = 800;
     /// <summary>Максимальное число proxy rows в одной распределённой аренде.</summary>
     public int ValidationBatchSize { get; set; } = 1_600;
+    /// <summary>Максимальное число одновременных TCP-проверок VPN endpoint.</summary>
+    public int VpnValidationConcurrency { get; set; } = 800;
+    /// <summary>Максимальное число VPN endpoint в одной локальной validation-партии.</summary>
+    public int VpnValidationBatchSize { get; set; } = 1_600;
+    /// <summary>Период повторной проверки доступного VPN endpoint.</summary>
+    public int VpnReachableValidationIntervalMinutes { get; set; } = 10;
+    /// <summary>Период повторной проверки недоступного VPN endpoint.</summary>
+    public int VpnUnreachableRetryMinutes { get; set; } = 30;
+    /// <summary>Период повторной классификации неподдерживаемого VPN-транспорта.</summary>
+    public int VpnUnsupportedRetryMinutes { get; set; } = 360;
+    /// <summary>Максимальный возраст успешной VPN-проверки для публичной выдачи.</summary>
+    public int VpnPublicFreshnessMinutes { get; set; } = 15;
     /// <summary>Полный timeout одной proxy-проверки.</summary>
     public int ProbeTimeoutSeconds { get; set; } = 8;
     /// <summary>Полный timeout одной попытки загрузки feed'а.</summary>

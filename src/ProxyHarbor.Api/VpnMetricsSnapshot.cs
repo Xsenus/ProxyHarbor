@@ -2,6 +2,7 @@ using System.Data;
 using System.Threading.Channels;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
+using Microsoft.Extensions.Options;
 using Npgsql;
 using NpgsqlTypes;
 using ProxyHarbor.Domain;
@@ -20,6 +21,12 @@ internal sealed record VpnMetricsSnapshot(
     long ReachableLatencyTotal,
     long ReachableLatencySamples,
     DateTimeOffset? OldestReachableAt,
+    long NeverChecked,
+    long Due,
+    long FreshReachable,
+    long StaleReachable,
+    long CheckedLastFiveMinutes,
+    DateTimeOffset? LatestCheckedAt,
     IReadOnlyList<VpnCountryMetrics> Countries,
     DateTimeOffset CapturedAt);
 
@@ -32,7 +39,13 @@ internal sealed record VpnMetricsRow(
     long EverReachable,
     long ReachableLatencyTotal,
     long ReachableLatencySamples,
-    DateTimeOffset? OldestReachableAt);
+    DateTimeOffset? OldestReachableAt,
+    long NeverChecked,
+    long Due,
+    long FreshReachable,
+    long StaleReachable,
+    long CheckedLastFiveMinutes,
+    DateTimeOffset? LatestCheckedAt);
 
 /// <summary>
 /// Строит summary и список стран одним физическим проходом VpnEndpoints вместо
@@ -49,7 +62,15 @@ internal static class VpnMetricsSnapshotReader
                    "Status" = @reachable_status AND "LatencyMs" IS NOT NULL), 0)::bigint AS "ReachableLatencyTotal",
                count(*) FILTER (WHERE
                    "Status" = @reachable_status AND "LatencyMs" IS NOT NULL)::bigint AS "ReachableLatencySamples",
-               min("FirstSeenAt") FILTER (WHERE "Status" = @reachable_status) AS "OldestReachableAt"
+               min("FirstSeenAt") FILTER (WHERE "Status" = @reachable_status) AS "OldestReachableAt",
+               count(*) FILTER (WHERE "LastCheckedAt" IS NULL)::bigint AS "NeverChecked",
+               count(*) FILTER (WHERE "NextCheckAt" IS NULL OR "NextCheckAt" <= @captured_at)::bigint AS "Due",
+               count(*) FILTER (WHERE "Status" = @reachable_status AND
+                   "LastCheckedAt" >= @fresh_after)::bigint AS "FreshReachable",
+               count(*) FILTER (WHERE "Status" = @reachable_status AND
+                   ("LastCheckedAt" IS NULL OR "LastCheckedAt" < @fresh_after))::bigint AS "StaleReachable",
+               count(*) FILTER (WHERE "LastCheckedAt" >= @recent_after)::bigint AS "CheckedLastFiveMinutes",
+               max("LastCheckedAt") AS "LatestCheckedAt"
         FROM "VpnEndpoints"
         GROUP BY "CountryCode", "Status"
         ORDER BY "CountryCode" NULLS FIRST, "Status"
@@ -58,17 +79,26 @@ internal static class VpnMetricsSnapshotReader
     internal static async Task<VpnMetricsSnapshot> ReadAsync(
         ProxyHarborDbContext db,
         DateTimeOffset capturedAt,
+        int publicFreshnessMinutes,
         CancellationToken token)
     {
         ArgumentNullException.ThrowIfNull(db);
         var rows = db.Database.IsNpgsql()
-            ? await ReadPostgresAsync(db, token)
-            : await ReadEfFallbackAsync(db, token);
+            ? await ReadPostgresAsync(db, capturedAt, publicFreshnessMinutes, token)
+            : await ReadEfFallbackAsync(db, capturedAt, publicFreshnessMinutes, token);
         return Aggregate(rows, capturedAt);
     }
 
+    internal static Task<VpnMetricsSnapshot> ReadAsync(
+        ProxyHarborDbContext db,
+        DateTimeOffset capturedAt,
+        CancellationToken token) =>
+        ReadAsync(db, capturedAt, new CollectorOptions().VpnPublicFreshnessMinutes, token);
+
     private static async Task<VpnMetricsRow[]> ReadPostgresAsync(
         ProxyHarborDbContext db,
+        DateTimeOffset capturedAt,
+        int publicFreshnessMinutes,
         CancellationToken token)
     {
         var connection = (NpgsqlConnection)db.Database.GetDbConnection();
@@ -77,6 +107,10 @@ internal static class VpnMetricsSnapshotReader
         await using var command = new NpgsqlCommand(PostgresSql, connection, transaction);
         command.Parameters.AddWithValue(
             "reachable_status", NpgsqlDbType.Integer, (int)VpnEndpointStatus.Reachable);
+        command.Parameters.AddWithValue("captured_at", NpgsqlDbType.TimestampTz, capturedAt);
+        command.Parameters.AddWithValue(
+            "fresh_after", NpgsqlDbType.TimestampTz, capturedAt.AddMinutes(-Math.Max(1, publicFreshnessMinutes)));
+        command.Parameters.AddWithValue("recent_after", NpgsqlDbType.TimestampTz, capturedAt.AddMinutes(-5));
 
         var rows = new List<VpnMetricsRow>(160);
         await using var reader = await command.ExecuteReaderAsync(CommandBehavior.SequentialAccess, token);
@@ -89,13 +123,21 @@ internal static class VpnMetricsSnapshotReader
                 reader.GetInt64(3),
                 reader.GetInt64(4),
                 reader.GetInt64(5),
-                reader.IsDBNull(6) ? null : reader.GetFieldValue<DateTimeOffset>(6)));
+                reader.IsDBNull(6) ? null : reader.GetFieldValue<DateTimeOffset>(6),
+                reader.GetInt64(7),
+                reader.GetInt64(8),
+                reader.GetInt64(9),
+                reader.GetInt64(10),
+                reader.GetInt64(11),
+                reader.IsDBNull(12) ? null : reader.GetFieldValue<DateTimeOffset>(12)));
         }
         return rows.ToArray();
     }
 
     private static Task<VpnMetricsRow[]> ReadEfFallbackAsync(
         ProxyHarborDbContext db,
+        DateTimeOffset capturedAt,
+        int publicFreshnessMinutes,
         CancellationToken token) =>
         db.VpnEndpoints.AsNoTracking()
             .GroupBy(endpoint => new { endpoint.CountryCode, endpoint.Status })
@@ -110,7 +152,16 @@ internal static class VpnMetricsSnapshotReader
                 group.LongCount(endpoint =>
                     endpoint.Status == VpnEndpointStatus.Reachable && endpoint.LatencyMs != null),
                 group.Where(endpoint => endpoint.Status == VpnEndpointStatus.Reachable)
-                    .Min(endpoint => (DateTimeOffset?)endpoint.FirstSeenAt)))
+                    .Min(endpoint => (DateTimeOffset?)endpoint.FirstSeenAt),
+                group.LongCount(endpoint => endpoint.LastCheckedAt == null),
+                group.LongCount(endpoint => endpoint.NextCheckAt == null || endpoint.NextCheckAt <= capturedAt),
+                group.LongCount(endpoint => endpoint.Status == VpnEndpointStatus.Reachable &&
+                    endpoint.LastCheckedAt >= capturedAt.AddMinutes(-Math.Max(1, publicFreshnessMinutes))),
+                group.LongCount(endpoint => endpoint.Status == VpnEndpointStatus.Reachable &&
+                    (endpoint.LastCheckedAt == null ||
+                     endpoint.LastCheckedAt < capturedAt.AddMinutes(-Math.Max(1, publicFreshnessMinutes)))),
+                group.LongCount(endpoint => endpoint.LastCheckedAt >= capturedAt.AddMinutes(-5)),
+                group.Max(endpoint => endpoint.LastCheckedAt)))
             .ToArrayAsync(token);
 
     private static VpnMetricsSnapshot Aggregate(IReadOnlyList<VpnMetricsRow> rows, DateTimeOffset capturedAt)
@@ -124,6 +175,12 @@ internal static class VpnMetricsSnapshotReader
         long latencyTotal = 0;
         long latencySamples = 0;
         DateTimeOffset? oldestReachableAt = null;
+        long neverChecked = 0;
+        long due = 0;
+        long freshReachable = 0;
+        long staleReachable = 0;
+        long checkedLastFiveMinutes = 0;
+        DateTimeOffset? latestCheckedAt = null;
         var countryCounts = new Dictionary<string, long>(StringComparer.Ordinal);
 
         foreach (var row in rows)
@@ -132,6 +189,11 @@ internal static class VpnMetricsSnapshotReader
             everReachable += row.EverReachable;
             latencyTotal += row.ReachableLatencyTotal;
             latencySamples += row.ReachableLatencySamples;
+            neverChecked += row.NeverChecked;
+            due += row.Due;
+            freshReachable += row.FreshReachable;
+            staleReachable += row.StaleReachable;
+            checkedLastFiveMinutes += row.CheckedLastFiveMinutes;
             switch (row.Status)
             {
                 case VpnEndpointStatus.Reachable: reachable += row.Count; break;
@@ -144,6 +206,9 @@ internal static class VpnMetricsSnapshotReader
             if (row.OldestReachableAt is { } candidate &&
                 (oldestReachableAt is null || candidate < oldestReachableAt.Value))
                 oldestReachableAt = candidate;
+            if (row.LatestCheckedAt is { } latest &&
+                (latestCheckedAt is null || latest > latestCheckedAt.Value))
+                latestCheckedAt = latest;
             if (row.CountryCode is { Length: > 0 } code)
                 countryCounts[code] = countryCounts.GetValueOrDefault(code) + row.Count;
         }
@@ -155,7 +220,9 @@ internal static class VpnMetricsSnapshotReader
             .ToArray();
         return new VpnMetricsSnapshot(
             total, reachable, pending, unreachable, unsupported, everReachable,
-            latencyTotal, latencySamples, oldestReachableAt, countries, capturedAt);
+            latencyTotal, latencySamples, oldestReachableAt, neverChecked, due,
+            freshReachable, staleReachable, checkedLastFiveMinutes, latestCheckedAt,
+            countries, capturedAt);
     }
 }
 
@@ -166,7 +233,8 @@ internal static class VpnMetricsSnapshotReader
 public sealed class VpnMetricsSnapshotCache(
     IDbContextFactory<ProxyHarborDbContext> dbFactory,
     ILogger<VpnMetricsSnapshotCache> logger,
-    TimeProvider timeProvider) : IDisposable
+    TimeProvider timeProvider,
+    IOptions<CollectorOptions> collectorOptions) : IDisposable
 {
     private static readonly Action<ILogger, DateTimeOffset, Exception?> RefreshFailed = LoggerMessage.Define<DateTimeOffset>(
         LogLevel.Warning,
@@ -232,7 +300,8 @@ public sealed class VpnMetricsSnapshotCache(
                 var now = timeProvider.GetUtcNow();
                 Interlocked.Increment(ref _databaseReads);
                 var snapshot = await BufferedReadSnapshot.ExecuteAsync(
-                    db, innerToken => VpnMetricsSnapshotReader.ReadAsync(db, now, innerToken), token);
+                    db, innerToken => VpnMetricsSnapshotReader.ReadAsync(
+                        db, now, collectorOptions.Value.VpnPublicFreshnessMinutes, innerToken), token);
                 Volatile.Write(ref _current, new CacheEntry(snapshot, timeProvider.GetUtcNow()));
                 return snapshot;
             }

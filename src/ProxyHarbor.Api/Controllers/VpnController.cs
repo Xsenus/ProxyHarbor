@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.OutputCaching;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using ProxyHarbor.Domain;
 using ProxyHarbor.Infrastructure;
 
@@ -20,7 +21,9 @@ namespace ProxyHarbor.Api.Controllers;
 [ApiController, Route("api/v1/vpn"), EnableRateLimiting("public")]
 public sealed class VpnController(
     IDbContextFactory<ProxyHarborDbContext> dbFactory,
-    IFreeExportAccessService accessService) : ControllerBase
+    IFreeExportAccessService accessService,
+    IOptions<CollectorOptions> collectorOptions,
+    TimeProvider timeProvider) : ControllerBase
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -29,7 +32,13 @@ public sealed class VpnController(
 
     /// <summary>Конструктор тестов старого контракта: явно предоставляет полный доступ.</summary>
     internal VpnController(IDbContextFactory<ProxyHarborDbContext> testDbFactory)
-        : this(testDbFactory, AlwaysPaidAccessService.Instance) { }
+        : this(testDbFactory, AlwaysPaidAccessService.Instance, Options.Create(new CollectorOptions()), TimeProvider.System) { }
+
+    /// <summary>Конструктор тестов free-контракта с production defaults.</summary>
+    internal VpnController(
+        IDbContextFactory<ProxyHarborDbContext> testDbFactory,
+        IFreeExportAccessService testAccessService)
+        : this(testDbFactory, testAccessService, Options.Create(new CollectorOptions()), TimeProvider.System) { }
 
     /// <summary>Возвращает страницу VPN endpoint; бесплатный тариф получает смешанные 10 записей.</summary>
     [HttpGet]
@@ -54,6 +63,12 @@ public sealed class VpnController(
         // /openapi/v1.json. Поведение по умолчанию сохраняем внутри метода.
         var effectiveStatus = status ?? VpnEndpointStatus.Reachable;
         query = query.Where(x => x.Status == effectiveStatus);
+        if (effectiveStatus == VpnEndpointStatus.Reachable)
+        {
+            var freshAfter = timeProvider.GetUtcNow()
+                .AddMinutes(-collectorOptions.Value.VpnPublicFreshnessMinutes);
+            query = query.Where(x => x.LastCheckedAt >= freshAfter);
+        }
         if (countries.Length > 0) query = query.Where(x => x.CountryCode != null && countries.Contains(x.CountryCode));
         var total = await query.CountAsync(token);
         var paid = await accessService.HasPaidAccessAsync(CurrentUser, token);
@@ -94,8 +109,11 @@ public sealed class VpnController(
     public async Task<ActionResult<IReadOnlyList<ProxyCountryDto>>> Countries(CancellationToken token)
     {
         await using var db = await dbFactory.CreateDbContextAsync(token);
+        var freshAfter = timeProvider.GetUtcNow()
+            .AddMinutes(-collectorOptions.Value.VpnPublicFreshnessMinutes);
         var rows = await db.VpnEndpoints.AsNoTracking()
-            .Where(x => x.Status == VpnEndpointStatus.Reachable && x.CountryCode != null && x.ConnectionUri != null)
+            .Where(x => x.Status == VpnEndpointStatus.Reachable && x.LastCheckedAt >= freshAfter &&
+                x.CountryCode != null && x.ConnectionUri != null)
             .GroupBy(x => x.CountryCode!)
             .Select(group => new ProxyCountryDto(group.Key, group.Count()))
             .ToArrayAsync(token);
@@ -118,8 +136,11 @@ public sealed class VpnController(
         if (!TryNormalizeCountries(country, out var countries)) return InvalidCountries();
         limit = Math.Clamp(limit, 1, 5_000);
         await using var db = await dbFactory.CreateDbContextAsync(token);
+        var freshAfter = timeProvider.GetUtcNow()
+            .AddMinutes(-collectorOptions.Value.VpnPublicFreshnessMinutes);
         var query = db.VpnEndpoints.AsNoTracking().Where(x =>
-            x.Status == VpnEndpointStatus.Reachable && x.ConnectionUri != null && x.CountryCode != null);
+            x.Status == VpnEndpointStatus.Reachable && x.LastCheckedAt >= freshAfter &&
+            x.ConnectionUri != null && x.CountryCode != null);
         if (protocol.HasValue) query = query.Where(x => x.Protocol == protocol.Value);
         if (countries.Length > 0) query = query.Where(x => x.CountryCode != null && countries.Contains(x.CountryCode));
         var total = await query.CountAsync(token);

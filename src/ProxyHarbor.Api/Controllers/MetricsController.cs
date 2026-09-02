@@ -21,7 +21,8 @@ public sealed class MetricsController(
     HttpRequestTelemetry? httpTelemetry = null,
     ProxyMetricsSnapshotCache? proxySnapshotCache = null,
     ValidationClaimIdleGate? validationIdleGate = null,
-    CheckerNodeCredentialCache? checkerCredentialCache = null) : ControllerBase
+    CheckerNodeCredentialCache? checkerCredentialCache = null,
+    VpnMetricsSnapshotCache? vpnSnapshotCache = null) : ControllerBase
 {
     /// <summary>Возвращает согласованный Prometheus text exposition operational-метрик.</summary>
     [HttpGet]
@@ -32,15 +33,19 @@ public sealed class MetricsController(
         var cachedProxySnapshot = proxySnapshotCache is null
             ? null
             : await proxySnapshotCache.GetAsync(requestToken);
+        var cachedVpnSnapshot = vpnSnapshotCache is null
+            ? null
+            : await vpnSnapshotCache.GetAsync(requestToken);
         await using var db = await dbFactory.CreateDbContextAsync(requestToken);
         return await BufferedReadSnapshot.ExecuteAsync(
-            db, token => GetSnapshotAsync(db, cachedProxySnapshot, token), requestToken);
+            db, token => GetSnapshotAsync(db, cachedProxySnapshot, cachedVpnSnapshot, token), requestToken);
     }
 
     /// <summary>Строит весь database-derived exposition внутри уже открытого read snapshot.</summary>
     private async Task<IActionResult> GetSnapshotAsync(
         ProxyHarborDbContext db,
         ProxyMetricsSnapshot? cachedProxySnapshot,
+        VpnMetricsSnapshot? cachedVpnSnapshot,
         CancellationToken token)
     {
         var now = DateTimeOffset.UtcNow;
@@ -51,6 +56,8 @@ public sealed class MetricsController(
             SourceCatalogHealth.FreshnessWindow(collectorOptions.Value.CollectionIntervalMinutes));
         var proxySnapshot = cachedProxySnapshot ?? await ProxyMetricsSnapshotReader.ReadAsync(
             db, now, unseenRetentionCutoff, freshAfter, token);
+        var vpnSnapshot = cachedVpnSnapshot ?? await VpnMetricsSnapshotReader.ReadAsync(
+            db, now, collectorOptions.Value.VpnPublicFreshnessMinutes, token);
         var validationRuns = await db.ValidationRuns.AsNoTracking()
             .Where(run => run.FinishedAt >= validationWindowStart || run.Status == "running")
             .ToListAsync(token);
@@ -171,6 +178,40 @@ public sealed class MetricsController(
         Counter(output, "proxyharbor_proxy_snapshot_refresh_requests_coalesced_total",
             "Stale snapshot demand signals coalesced behind an already queued refresh.",
             proxySnapshotCache?.RefreshRequestsCoalesced ?? 0);
+        Gauge(output, "proxyharbor_vpn_endpoints_total", "Known VPN endpoint records.", vpnSnapshot.Total);
+        Gauge(output, "proxyharbor_vpn_endpoints_reachable", "VPN endpoints whose latest TCP probe succeeded.", vpnSnapshot.Reachable);
+        Gauge(output, "proxyharbor_vpn_endpoints_pending", "VPN endpoints awaiting their first classification.", vpnSnapshot.Pending);
+        Gauge(output, "proxyharbor_vpn_endpoints_unreachable", "VPN endpoints whose latest TCP probe failed.", vpnSnapshot.Unreachable);
+        Gauge(output, "proxyharbor_vpn_endpoints_unsupported", "VPN endpoints requiring a protocol-aware probe.", vpnSnapshot.Unsupported);
+        Gauge(output, "proxyharbor_vpn_validation_never_checked", "VPN endpoints without a completed validation.", vpnSnapshot.NeverChecked);
+        Gauge(output, "proxyharbor_vpn_validation_due", "VPN endpoints currently eligible for validation.", vpnSnapshot.Due);
+        Gauge(output, "proxyharbor_vpn_published", "Fresh reachable VPN endpoints eligible for public output.", vpnSnapshot.FreshReachable);
+        Gauge(output, "proxyharbor_vpn_stale_reachable", "Reachable VPN endpoints older than the public freshness window.", vpnSnapshot.StaleReachable);
+        Gauge(output, "proxyharbor_vpn_validation_checked_last_5m", "VPN endpoints validated during the last five minutes.", vpnSnapshot.CheckedLastFiveMinutes);
+        GaugeDouble(output, "proxyharbor_vpn_validation_checks_per_second", "VPN validations per second over the last five minutes.",
+            vpnSnapshot.CheckedLastFiveMinutes / 300d);
+        Gauge(output, "proxyharbor_vpn_validation_estimated_drain_seconds", "Estimated seconds to drain the currently due VPN queue; zero means unavailable or empty.",
+            vpnSnapshot.CheckedLastFiveMinutes > 0
+                ? (long)Math.Ceiling(vpnSnapshot.Due * 300d / vpnSnapshot.CheckedLastFiveMinutes)
+                : 0);
+        Gauge(output, "proxyharbor_vpn_validation_last_check_timestamp_seconds", "Unix timestamp of the latest VPN validation.",
+            vpnSnapshot.LatestCheckedAt?.ToUnixTimeSeconds() ?? 0);
+        Gauge(output, "proxyharbor_vpn_validation_concurrency_limit", "Configured maximum concurrent VPN probes.",
+            collectorOptions.Value.VpnValidationConcurrency);
+        Gauge(output, "proxyharbor_vpn_validation_batch_size", "Configured maximum VPN endpoints selected per validation batch.",
+            collectorOptions.Value.VpnValidationBatchSize);
+        Gauge(output, "proxyharbor_vpn_reachable_validation_interval_seconds", "Configured interval between successful VPN probes.",
+            collectorOptions.Value.VpnReachableValidationIntervalMinutes * 60L);
+        Gauge(output, "proxyharbor_vpn_unreachable_retry_seconds", "Configured interval between failed VPN probes.",
+            collectorOptions.Value.VpnUnreachableRetryMinutes * 60L);
+        Gauge(output, "proxyharbor_vpn_unsupported_retry_seconds", "Configured interval between unsupported VPN classifications.",
+            collectorOptions.Value.VpnUnsupportedRetryMinutes * 60L);
+        Gauge(output, "proxyharbor_vpn_public_freshness_seconds", "Maximum VPN validation age accepted by public outputs.",
+            collectorOptions.Value.VpnPublicFreshnessMinutes * 60L);
+        GaugeDouble(output, "proxyharbor_vpn_snapshot_age_seconds", "Age of the shared exact VPN aggregate.",
+            Math.Max(0, (now - vpnSnapshot.CapturedAt).TotalSeconds));
+        Counter(output, "proxyharbor_vpn_snapshot_database_reads_total", "Exact full-table VPN aggregates executed by this API replica.",
+            vpnSnapshotCache?.DatabaseReads ?? 0);
         Gauge(output, "proxyharbor_probe_control_available", "Control endpoint health: 1 available, 0 unavailable, -1 not checked.",
             probeControlHealth.Availability);
         Gauge(output, "proxyharbor_probe_control_last_check_timestamp_seconds", "Unix timestamp of the latest control endpoint health check.",

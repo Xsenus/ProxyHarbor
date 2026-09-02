@@ -206,6 +206,82 @@ tests:
         alertname: ProxyHarborValidationBacklogAtRisk
         exp_alerts: []
 
+  - name: VPN validation stall requires due work and enabled workers
+    interval: 1m
+    input_series:
+      - series: proxyharbor_vpn_validation_due
+        values: '50000x17'
+      - series: proxyharbor_background_workers_enabled
+        values: '1x17'
+      - series: proxyharbor_vpn_validation_checked_last_5m
+        values: '0x17'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: ProxyHarborVpnValidationStalled
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: ProxyHarborVpnValidationStalled
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: Очередь проверки VPN не обрабатывается
+              description: Есть due VPN-узлы и включённые workers, но за последние пять минут не завершено ни одной проверки.
+
+  - name: VPN validation stall ignores intentionally disabled workers
+    interval: 1m
+    input_series:
+      - series: proxyharbor_vpn_validation_due
+        values: '50000x17'
+      - series: proxyharbor_background_workers_enabled
+        values: '0x17'
+      - series: proxyharbor_vpn_validation_checked_last_5m
+        values: '0x17'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: ProxyHarborVpnValidationStalled
+        exp_alerts: []
+
+  - name: VPN validation capacity warns before published nodes become stale
+    interval: 1m
+    input_series:
+      - series: proxyharbor_vpn_validation_due
+        values: '50000x12'
+      - series: proxyharbor_background_workers_enabled
+        values: '1x12'
+      - series: proxyharbor_vpn_validation_estimated_drain_seconds
+        values: '1200x12'
+      - series: proxyharbor_vpn_public_freshness_seconds
+        values: '900x12'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: ProxyHarborVpnValidationBacklogAtRisk
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: ProxyHarborVpnValidationBacklogAtRisk
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: VPN validator не успевает сохранить свежесть каталога
+              description: Расчётное время обработки due VPN-очереди превышает максимальный возраст узлов в публичной выдаче.
+
+  - name: VPN validation capacity ignores a drain inside freshness budget
+    interval: 1m
+    input_series:
+      - series: proxyharbor_vpn_validation_due
+        values: '50000x12'
+      - series: proxyharbor_background_workers_enabled
+        values: '1x12'
+      - series: proxyharbor_vpn_validation_estimated_drain_seconds
+        values: '600x12'
+      - series: proxyharbor_vpn_public_freshness_seconds
+        values: '900x12'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: ProxyHarborVpnValidationBacklogAtRisk
+        exp_alerts: []
+
   - name: Stale proxy retention survives multiple collection intervals
     interval: 1m
     input_series:

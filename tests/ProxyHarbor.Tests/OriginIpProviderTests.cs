@@ -17,6 +17,12 @@ public sealed class OriginIpProviderTests
     [InlineData("Collector:SourceFailureBackoffMaxHours", "SourceFailureBackoffMaxHours")]
     [InlineData("Collector:DeadRetentionDays", "DeadRetentionDays")]
     [InlineData("Collector:ValidationRunRetentionHours", "ValidationRunRetentionHours")]
+    [InlineData("Collector:VpnValidationConcurrency", "VpnValidationConcurrency")]
+    [InlineData("Collector:VpnValidationBatchSize", "VpnValidationBatchSize")]
+    [InlineData("Collector:VpnReachableValidationIntervalMinutes", "VpnReachableValidationIntervalMinutes")]
+    [InlineData("Collector:VpnUnreachableRetryMinutes", "VpnUnreachableRetryMinutes")]
+    [InlineData("Collector:VpnUnsupportedRetryMinutes", "VpnUnsupportedRetryMinutes")]
+    [InlineData("Collector:VpnPublicFreshnessMinutes", "VpnPublicFreshnessMinutes")]
     public void InfrastructureOptionsRejectExtremeDurationsWithValidationError(string key, string failureName)
     {
         using var provider = BuildOptionsProvider(key, int.MaxValue.ToString(System.Globalization.CultureInfo.InvariantCulture));
@@ -25,6 +31,38 @@ public sealed class OriginIpProviderTests
             _ = provider.GetRequiredService<IOptions<CollectorOptions>>().Value);
 
         Assert.Contains(exception.Failures, failure => failure.Contains(failureName, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void InfrastructureOptionsRejectVpnBatchSmallerThanConcurrency()
+    {
+        using var provider = BuildOptionsProvider(new Dictionary<string, string?>
+        {
+            ["Collector:VpnValidationConcurrency"] = "100",
+            ["Collector:VpnValidationBatchSize"] = "99"
+        });
+
+        var exception = Assert.Throws<OptionsValidationException>(() =>
+            _ = provider.GetRequiredService<IOptions<CollectorOptions>>().Value);
+
+        Assert.Contains(exception.Failures, failure => failure.Contains(
+            "VpnValidationBatchSize не может быть меньше", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void InfrastructureOptionsRejectVpnFreshnessShorterThanReachableSchedule()
+    {
+        using var provider = BuildOptionsProvider(new Dictionary<string, string?>
+        {
+            ["Collector:VpnReachableValidationIntervalMinutes"] = "16",
+            ["Collector:VpnPublicFreshnessMinutes"] = "15"
+        });
+
+        var exception = Assert.Throws<OptionsValidationException>(() =>
+            _ = provider.GetRequiredService<IOptions<CollectorOptions>>().Value);
+
+        Assert.Contains(exception.Failures, failure => failure.Contains(
+            "VpnPublicFreshnessMinutes не может быть меньше", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -413,12 +451,16 @@ public sealed class OriginIpProviderTests
     }
 
     private static ServiceProvider BuildOptionsProvider(string key, string value)
+        => BuildOptionsProvider(new Dictionary<string, string?> { [key] = value });
+
+    private static ServiceProvider BuildOptionsProvider(IReadOnlyDictionary<string, string?> values)
     {
-        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        var settings = new Dictionary<string, string?>
         {
-            ["ConnectionStrings:Postgres"] = "Host=127.0.0.1;Database=unused;Username=unused",
-            [key] = value
-        }).Build();
+            ["ConnectionStrings:Postgres"] = "Host=127.0.0.1;Database=unused;Username=unused"
+        };
+        foreach (var (key, value) in values) settings[key] = value;
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(settings).Build();
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddProxyHarborInfrastructure(configuration);
