@@ -1,7 +1,7 @@
-using System.Net;
+using System.Data.Common;
 using System.Security.Cryptography;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Options;
 using Npgsql;
 using ProxyHarbor.Domain;
@@ -117,13 +117,8 @@ public sealed class DistributedProxyValidationIntegrationTests
             }
 
             var settings = new CollectorOptions { ProbeTimeoutSeconds = 5 };
-            using var clients = new StubHttpClientFactory();
-            using var origin = new OriginIpProvider(clients, Options.Create(settings), new ProbeControlHealth());
-            using var validator = new ProxyValidator(factory,
-                new ProxyProbeService(Options.Create(settings), origin), Options.Create(settings),
-                NullLogger<ProxyValidator>.Instance);
             var dispatcher = new DistributedProxyValidationService(
-                factory, validator, Options.Create(settings), new ValidationClaimIdleGate());
+                factory, Options.Create(settings), new ValidationClaimIdleGate());
 
             var claims = await Task.WhenAll(
                 dispatcher.ClaimAsync(firstNode.Id, CancellationToken.None),
@@ -146,9 +141,11 @@ public sealed class DistributedProxyValidationIntegrationTests
             // Второй узел штатно завершает свою партию нейтральными результатами.
             var secondResult = new CheckerLeaseResultRequest(claims[1]!.Items.Select(item =>
                 new CheckerProxyResult(item.Id, false, null, null, false, "control unavailable", true)).ToArray());
+            factory.ResetCreateCount();
             var completed = await dispatcher.CompleteAsync(
                 secondNode.Id, claims[1]!.LeaseId, secondResult, CancellationToken.None);
             Assert.Equal(6, completed.Deferred);
+            Assert.Equal(2, factory.CreateCount);
 
             // Первый VPS «пропадает». Имитируем истечение TTL и убеждаемся, что его
             // пакет получает второй узел, а незавершённый аудит явно помечается failed.
@@ -172,6 +169,75 @@ public sealed class DistributedProxyValidationIntegrationTests
                 .Where(x => x.LeaseId == claims[1]!.LeaseId).Select(x => x.Status).SingleAsync());
             Assert.Equal(6, await verify.CheckerNodes.Where(x => x.Id == secondNode.Id)
                 .Select(x => x.CompletedChecks).SingleAsync());
+        }
+        finally
+        {
+            await using var drop = new NpgsqlCommand($"DROP SCHEMA IF EXISTS {schema} CASCADE", admin);
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
+    public async Task CompletionFailureRollsBackProxyRunAndNodeInOneTransaction()
+    {
+        var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
+        if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
+
+        var schema = $"proxyharbor_completion_atomic_{Guid.NewGuid():N}";
+        var connection = new NpgsqlConnectionStringBuilder(baseConnectionString) { SearchPath = schema };
+        await using var admin = new NpgsqlConnection(baseConnectionString);
+        await admin.OpenAsync();
+        await using (var create = new NpgsqlCommand($"CREATE SCHEMA {schema}", admin))
+            await create.ExecuteNonQueryAsync();
+
+        try
+        {
+            var failure = new CompletionFailureInterceptor();
+            var dbOptions = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+                .UseNpgsql(connection.ConnectionString, postgres => postgres.EnableRetryOnFailure())
+                .AddInterceptors(failure)
+                .Options;
+            var factory = new TestDbFactory(dbOptions);
+            await using (var migrationDb = await factory.CreateDbContextAsync())
+                await migrationDb.Database.MigrateAsync();
+
+            var node = Node("atomic", batchSize: 1);
+            var proxy = Endpoint("198.51.100.220", ProxyStatus.Pending, DateTimeOffset.UtcNow.AddMinutes(-1));
+            await using (var seed = await factory.CreateDbContextAsync())
+            {
+                seed.AddRange(node, proxy);
+                await seed.SaveChangesAsync();
+            }
+
+            var settings = new CollectorOptions { ProbeTimeoutSeconds = 5 };
+            var dispatcher = new DistributedProxyValidationService(
+                factory, Options.Create(settings), new ValidationClaimIdleGate());
+
+            var claim = Assert.IsType<CheckerLeaseResponse>(
+                await dispatcher.ClaimAsync(node.Id, CancellationToken.None));
+            var claimed = Assert.Single(claim.Items);
+            var request = new CheckerLeaseResultRequest([
+                new CheckerProxyResult(claimed.Id, true, 25, "8.8.8.8", true, null, false)
+            ]);
+            failure.Armed = true;
+
+            await Assert.ThrowsAsync<InjectedCompletionFailure>(() => dispatcher.CompleteAsync(
+                node.Id, claim.LeaseId, request, CancellationToken.None));
+
+            await using var verify = await factory.CreateDbContextAsync();
+            var savedProxy = await verify.Proxies.AsNoTracking().SingleAsync(x => x.Id == proxy.Id);
+            var savedRun = await verify.ValidationRuns.AsNoTracking().SingleAsync(x => x.LeaseId == claim.LeaseId);
+            var savedNode = await verify.CheckerNodes.AsNoTracking().SingleAsync(x => x.Id == node.Id);
+            Assert.Equal(ProxyStatus.Pending, savedProxy.Status);
+            Assert.Equal(0, savedProxy.SuccessfulChecks);
+            Assert.Equal(claim.LeaseId, savedProxy.CheckLeaseId);
+            Assert.Null(savedProxy.LastValidationAttemptAt);
+            Assert.Equal("running", savedRun.Status);
+            Assert.Null(savedRun.FinishedAt);
+            Assert.Equal(claim.LeaseId, savedNode.CurrentLeaseId);
+            Assert.Equal(0, savedNode.CompletedChecks);
+            Assert.Equal(0, savedNode.AliveChecks);
         }
         finally
         {
@@ -216,13 +282,8 @@ public sealed class DistributedProxyValidationIntegrationTests
             var idleGate = new ValidationClaimIdleGate(
                 () => timestamp, 1_000, TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(30));
             var settings = new CollectorOptions { ProbeTimeoutSeconds = 5 };
-            using var clients = new StubHttpClientFactory();
-            using var origin = new OriginIpProvider(clients, Options.Create(settings), new ProbeControlHealth());
-            using var validator = new ProxyValidator(factory,
-                new ProxyProbeService(Options.Create(settings), origin), Options.Create(settings),
-                NullLogger<ProxyValidator>.Instance);
             var dispatcher = new DistributedProxyValidationService(
-                factory, validator, Options.Create(settings), idleGate);
+                factory, Options.Create(settings), idleGate);
 
             Assert.Null(await dispatcher.ClaimAsync(probingNode.Id, CancellationToken.None));
             Assert.True(idleGate.CooldownActive);
@@ -335,13 +396,8 @@ public sealed class DistributedProxyValidationIntegrationTests
             }
 
             var settings = new CollectorOptions { ProbeTimeoutSeconds = 5 };
-            using var clients = new StubHttpClientFactory();
-            using var origin = new OriginIpProvider(clients, Options.Create(settings), new ProbeControlHealth());
-            using var validator = new ProxyValidator(factory,
-                new ProxyProbeService(Options.Create(settings), origin), Options.Create(settings),
-                NullLogger<ProxyValidator>.Instance);
             var dispatcher = new DistributedProxyValidationService(
-                factory, validator, Options.Create(settings), new ValidationClaimIdleGate());
+                factory, Options.Create(settings), new ValidationClaimIdleGate());
 
             var blockerConnectionString = new NpgsqlConnectionStringBuilder(baseConnectionString)
             {
@@ -419,24 +475,43 @@ public sealed class DistributedProxyValidationIntegrationTests
     private sealed class TestDbFactory(DbContextOptions<ProxyHarborDbContext> options)
         : IDbContextFactory<ProxyHarborDbContext>
     {
-        public ProxyHarborDbContext CreateDbContext() => new(options);
+        private int createCount;
+
+        public int CreateCount => Volatile.Read(ref createCount);
+        public void ResetCreateCount() => Volatile.Write(ref createCount, 0);
+
+        public ProxyHarborDbContext CreateDbContext()
+        {
+            Interlocked.Increment(ref createCount);
+            return new(options);
+        }
+
         public Task<ProxyHarborDbContext> CreateDbContextAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult(CreateDbContext());
     }
 
-    private sealed class StubHttpClientFactory : IHttpClientFactory, IDisposable
+    private sealed class CompletionFailureInterceptor : DbCommandInterceptor
     {
-        private readonly HttpClient client = new(new StubHandler());
-        public HttpClient CreateClient(string name) => client;
-        public void Dispose() => client.Dispose();
+        public bool Armed { get; set; }
+
+        public override ValueTask<InterceptionResult<int>> NonQueryExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<int> result,
+            CancellationToken cancellationToken = default)
+        {
+            if (Armed && command.CommandText.Contains("UPDATE \"ValidationRuns\"", StringComparison.Ordinal))
+            {
+                Armed = false;
+                throw new InjectedCompletionFailure();
+            }
+
+            return ValueTask.FromResult(result);
+        }
     }
 
-    private sealed class StubHandler : HttpMessageHandler
+    private sealed class InjectedCompletionFailure : Exception
     {
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
-            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent("{\"ip\":\"8.8.8.8\"}")
-            });
     }
+
 }

@@ -328,7 +328,45 @@ public sealed class ProxyValidator(
             var connection = (NpgsqlConnection)db.Database.GetDbConnection();
             await connection.OpenAsync(token);
             await using var transaction = await connection.BeginTransactionAsync(token);
-            await using (var create = new NpgsqlCommand("""
+            var persisted = await PersistResultsCoreAsync(updates, connection, transaction, token);
+            await transaction.CommitAsync(token);
+            // Локальная validation сохраняет объективные результаты строк, ownership
+            // которых ещё принадлежит партии, но не выдаёт частичный batch за успешный.
+            EnsureCompletePersistence(updates.Length, persisted);
+            return persisted;
+        });
+    }
+
+    /// <summary>
+    /// Применяет результаты внутри транзакции вызывающего кода. Используется внешними
+    /// checker-узлами, чтобы proxy rows, ValidationRun и CheckerNode завершались атомарно.
+    /// </summary>
+    internal static async Task<(int Checked, int Alive, int Deferred)> PersistResultsInTransactionAsync(
+        ScheduledProxyCheck[] updates,
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        CancellationToken token)
+    {
+        if (updates.Length == 0) return (0, 0, 0);
+        ArgumentNullException.ThrowIfNull(connection);
+        ArgumentNullException.ThrowIfNull(transaction);
+        if (!ReferenceEquals(transaction.Connection, connection))
+            throw new ArgumentException("Транзакция должна принадлежать переданному соединению.", nameof(transaction));
+
+        var persisted = await PersistResultsCoreAsync(updates, connection, transaction, token);
+        // Здесь проверяем полноту до commit вызывающего кода: при потере хотя бы одной
+        // строки откатятся и уже обновлённые прокси, и аудит, и состояние checker-узла.
+        EnsureCompletePersistence(updates.Length, persisted);
+        return persisted;
+    }
+
+    private static async Task<(int Checked, int Alive, int Deferred)> PersistResultsCoreAsync(
+        ScheduledProxyCheck[] updates,
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        CancellationToken token)
+    {
+        await using (var create = new NpgsqlCommand("""
                 CREATE TEMP TABLE proxy_check_update (
                     id uuid NOT NULL, lease_id uuid NOT NULL, outcome integer NOT NULL,
                     latency_ms integer NULL, exit_ip text NULL, is_anonymous boolean NOT NULL,
@@ -336,32 +374,32 @@ public sealed class ProxyValidator(
                     failure_streak integer NOT NULL
                 ) ON COMMIT DROP
                 """, connection, transaction))
-                await create.ExecuteNonQueryAsync(token);
+            await create.ExecuteNonQueryAsync(token);
 
-            await using (var writer = await connection.BeginBinaryImportAsync("""
+        await using (var writer = await connection.BeginBinaryImportAsync("""
                 COPY proxy_check_update
                     (id, lease_id, outcome, latency_ms, exit_ip, is_anonymous, error, checked_at, next_check_at, failure_streak)
                 FROM STDIN (FORMAT BINARY)
                 """, token))
+        {
+            foreach (var update in updates)
             {
-                foreach (var update in updates)
-                {
-                    await writer.StartRowAsync(token);
-                    await writer.WriteAsync(update.ProxyId, NpgsqlDbType.Uuid, token);
-                    await writer.WriteAsync(update.LeaseId, NpgsqlDbType.Uuid, token);
-                    await writer.WriteAsync((int)update.Outcome, NpgsqlDbType.Integer, token);
-                    if (update.LatencyMs.HasValue) await writer.WriteAsync(update.LatencyMs.Value, NpgsqlDbType.Integer, token); else await writer.WriteNullAsync(token);
-                    if (update.ExitIp is not null) await writer.WriteAsync(update.ExitIp, NpgsqlDbType.Text, token); else await writer.WriteNullAsync(token);
-                    await writer.WriteAsync(update.IsAnonymous, NpgsqlDbType.Boolean, token);
-                    if (update.Error is not null) await writer.WriteAsync(update.Error, NpgsqlDbType.Text, token); else await writer.WriteNullAsync(token);
-                    await writer.WriteAsync(update.CheckedAt, NpgsqlDbType.TimestampTz, token);
-                    await writer.WriteAsync(update.NextCheckAt, NpgsqlDbType.TimestampTz, token);
-                    await writer.WriteAsync(update.FailureStreak, NpgsqlDbType.Integer, token);
-                }
-                await writer.CompleteAsync(token);
+                await writer.StartRowAsync(token);
+                await writer.WriteAsync(update.ProxyId, NpgsqlDbType.Uuid, token);
+                await writer.WriteAsync(update.LeaseId, NpgsqlDbType.Uuid, token);
+                await writer.WriteAsync((int)update.Outcome, NpgsqlDbType.Integer, token);
+                if (update.LatencyMs.HasValue) await writer.WriteAsync(update.LatencyMs.Value, NpgsqlDbType.Integer, token); else await writer.WriteNullAsync(token);
+                if (update.ExitIp is not null) await writer.WriteAsync(update.ExitIp, NpgsqlDbType.Text, token); else await writer.WriteNullAsync(token);
+                await writer.WriteAsync(update.IsAnonymous, NpgsqlDbType.Boolean, token);
+                if (update.Error is not null) await writer.WriteAsync(update.Error, NpgsqlDbType.Text, token); else await writer.WriteNullAsync(token);
+                await writer.WriteAsync(update.CheckedAt, NpgsqlDbType.TimestampTz, token);
+                await writer.WriteAsync(update.NextCheckAt, NpgsqlDbType.TimestampTz, token);
+                await writer.WriteAsync(update.FailureStreak, NpgsqlDbType.Integer, token);
             }
+            await writer.CompleteAsync(token);
+        }
 
-            await using var merge = new NpgsqlCommand("""
+        await using var merge = new NpgsqlCommand("""
                 WITH locked AS MATERIALIZED (
                     SELECT proxy."Id"
                     FROM "Proxies" AS proxy
@@ -410,29 +448,30 @@ public sealed class ProxyValidator(
                   AND proxy."CheckLeaseId" = incoming.lease_id
                 RETURNING incoming.outcome
                 """, connection, transaction);
-            var checkedCount = 0;
-            var aliveCount = 0;
-            var deferredCount = 0;
-            await using (var reader = await merge.ExecuteReaderAsync(token))
+        var checkedCount = 0;
+        var aliveCount = 0;
+        var deferredCount = 0;
+        await using (var reader = await merge.ExecuteReaderAsync(token))
+        {
+            while (await reader.ReadAsync(token))
             {
-                while (await reader.ReadAsync(token))
-                {
-                    var outcome = (ProxyCheckOutcome)reader.GetInt32(0);
-                    if (outcome == ProxyCheckOutcome.Deferred) deferredCount++;
-                    else checkedCount++;
-                    if (outcome == ProxyCheckOutcome.Alive) aliveCount++;
-                }
+                var outcome = (ProxyCheckOutcome)reader.GetInt32(0);
+                if (outcome == ProxyCheckOutcome.Deferred) deferredCount++;
+                else checkedCount++;
+                if (outcome == ProxyCheckOutcome.Alive) aliveCount++;
             }
-            await transaction.CommitAsync(token);
-            var persistedCount = checkedCount + deferredCount;
-            // Сохраняем объективные результаты ещё принадлежащих строк, но не выдаём
-            // частичную persistence за completed batch: вызывающий catch запишет failed audit.
-            if (persistedCount != updates.Length)
-                throw new InvalidOperationException(
-                    $"Validation-партия потеряла ownership lease: сохранено {persistedCount} из {updates.Length} результатов.");
+        }
+        return (checkedCount, aliveCount, deferredCount);
+    }
 
-            return (checkedCount, aliveCount, deferredCount);
-        });
+    private static void EnsureCompletePersistence(
+        int expectedCount,
+        (int Checked, int Alive, int Deferred) persisted)
+    {
+        var persistedCount = persisted.Checked + persisted.Deferred;
+        if (persistedCount != expectedCount)
+            throw new InvalidOperationException(
+                $"Validation-партия потеряла ownership lease: сохранено {persistedCount} из {expectedCount} результатов.");
     }
 
     /// <summary>Освобождает синхронизатор конкурентных ручных и фоновых запусков.</summary>

@@ -1,5 +1,7 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Options;
+using Npgsql;
 using ProxyHarbor.Domain;
 
 namespace ProxyHarbor.Infrastructure;
@@ -10,7 +12,6 @@ namespace ProxyHarbor.Infrastructure;
 /// </summary>
 public sealed class DistributedProxyValidationService(
     IDbContextFactory<ProxyHarborDbContext> dbFactory,
-    ProxyValidator validator,
     IOptions<CollectorOptions> options,
     ValidationClaimIdleGate idleGate)
 {
@@ -204,7 +205,10 @@ public sealed class DistributedProxyValidationService(
             new ProxyCheckResult(result.ProxyId, result.IsAlive, result.LatencyMs, result.ExitIp,
                 result.IsAnonymous, result.Error, result.IsDeferred),
             streaks[result.ProxyId], leaseId, now, options.Value)).ToArray();
-        var persisted = await validator.PersistResultsAsync(updates, token);
+        var connection = (NpgsqlConnection)db.Database.GetDbConnection();
+        var npgsqlTransaction = (NpgsqlTransaction)transaction.GetDbTransaction();
+        var persisted = await ProxyValidator.PersistResultsInTransactionAsync(
+            updates, connection, npgsqlTransaction, token);
 
         var runUpdated = await db.ValidationRuns
             .Where(x => x.LeaseId == leaseId && x.CheckerNodeId == nodeId && x.Status == "running")
