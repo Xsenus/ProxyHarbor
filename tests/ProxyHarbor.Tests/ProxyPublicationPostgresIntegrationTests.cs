@@ -166,6 +166,100 @@ public sealed class ProxyPublicationPostgresIntegrationTests
         }
     }
 
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
+    public async Task CatalogAndExportDeduplicateHttpAndHttpsRowsWithSameTransportUrl()
+    {
+        var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
+        if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
+
+        var schema = $"proxyharbor_transport_dedup_{Guid.NewGuid():N}";
+        var builder = new NpgsqlConnectionStringBuilder(baseConnectionString) { SearchPath = schema };
+        await using var admin = new NpgsqlConnection(baseConnectionString);
+        await admin.OpenAsync();
+        await using (var create = new NpgsqlCommand($"CREATE SCHEMA {schema}", admin))
+            await create.ExecuteNonQueryAsync();
+
+        try
+        {
+            var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+                .UseNpgsql(builder.ConnectionString)
+                .Options;
+            var factory = new TestDbFactory(options);
+            var exportFactory = new NpgsqlExportDbContextFactory(builder.ConnectionString);
+            await using (var migrationDb = await factory.CreateDbContextAsync())
+                await migrationDb.Database.MigrateAsync();
+
+            var now = DateTimeOffset.UtcNow;
+            var http = Endpoint("1.1.1.1", "00000000-0000-0000-0000-000000000021", 120, 4, now);
+            http.CountryCode = "US";
+            var https = Endpoint("1.1.1.1", "00000000-0000-0000-0000-000000000022", 80, 5, now);
+            https.Protocol = ProxyProtocol.Https;
+            https.CountryCode = "US";
+            var socks = Endpoint("8.8.8.8", "00000000-0000-0000-0000-000000000023", 100, 5, now);
+            socks.Protocol = ProxyProtocol.Socks5;
+            socks.CountryCode = "US";
+            await using (var seed = await factory.CreateDbContextAsync())
+            {
+                seed.Proxies.AddRange(http, https, socks);
+                await seed.SaveChangesAsync();
+            }
+
+            var controller = new ProxiesController(
+                factory, Options.Create(new CollectorOptions { PublicFreshnessMinutes = 15 }));
+            var allAction = await controller.Get(
+                null, null, null, page: 1, pageSize: 10, cancellationToken: CancellationToken.None);
+            var all = Assert.IsType<PagedResult<ProxyDto>>(
+                Assert.IsType<OkObjectResult>(allAction.Result).Value);
+            Assert.Equal(2, all.Total);
+            Assert.Equal(2, all.Items.Select(item => item.Url).Distinct(StringComparer.Ordinal).Count());
+            Assert.Contains(all.Items, item => item.Protocol == ProxyProtocol.Http);
+            Assert.DoesNotContain(all.Items, item => item.Protocol == ProxyProtocol.Https);
+
+            var httpsAction = await controller.Get(
+                ProxyProtocol.Https, null, null, page: 1, pageSize: 10,
+                cancellationToken: CancellationToken.None);
+            var httpsOnly = Assert.IsType<PagedResult<ProxyDto>>(
+                Assert.IsType<OkObjectResult>(httpsAction.Result).Value);
+            Assert.Equal(ProxyProtocol.Https, Assert.Single(httpsOnly.Items).Protocol);
+
+            var firstSeekAction = await controller.Seek(
+                null, null, null, after: null, pageSize: 1, cancellationToken: CancellationToken.None);
+            var firstSeek = Assert.IsType<CursorPagedResult<ProxyDto>>(
+                Assert.IsType<OkObjectResult>(firstSeekAction.Result).Value);
+            Assert.Equal(ProxyProtocol.Socks5, Assert.Single(firstSeek.Items).Protocol);
+            Assert.True(firstSeek.HasMore);
+            var secondSeekAction = await controller.Seek(
+                null, null, null, firstSeek.NextCursor, pageSize: 1,
+                cancellationToken: CancellationToken.None);
+            var secondSeek = Assert.IsType<CursorPagedResult<ProxyDto>>(
+                Assert.IsType<OkObjectResult>(secondSeekAction.Result).Value);
+            Assert.Equal(ProxyProtocol.Http, Assert.Single(secondSeek.Items).Protocol);
+            Assert.False(secondSeek.HasMore);
+
+            var countriesAction = await controller.Countries(CancellationToken.None);
+            var countries = Assert.IsAssignableFrom<IReadOnlyList<ProxyCountryDto>>(
+                Assert.IsType<OkObjectResult>(countriesAction.Result).Value);
+            Assert.Equal(2, Assert.Single(countries).Count);
+
+            await using var output = new MemoryStream();
+            var export = ExportController(factory, output, exportFactory);
+            Assert.IsType<EmptyResult>(await export.Export(
+                "txt", null, null, null, CancellationToken.None, limit: 10));
+            var urls = Encoding.UTF8.GetString(output.ToArray())
+                .Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+            Assert.Equal(2, urls.Length);
+            Assert.Equal(2, urls.Distinct(StringComparer.Ordinal).Count());
+            Assert.Contains("http://1.1.1.1:8080", urls);
+            Assert.Contains("socks5://8.8.8.8:8080", urls);
+        }
+        finally
+        {
+            await using var drop = new NpgsqlCommand($"DROP SCHEMA IF EXISTS {schema} CASCADE", admin);
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
+
     private static ProxiesController ExportController(
         IDbContextFactory<ProxyHarborDbContext> factory,
         Stream output,

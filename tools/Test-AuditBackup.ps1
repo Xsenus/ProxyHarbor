@@ -64,17 +64,27 @@ function Start-BackupAuditMock(
     }
 }
 
-function Wait-BackupAuditMock([int]$Port) {
-    foreach ($attempt in 1..50) {
+function Wait-BackupAuditMock(
+    [int]$Port,
+    [Management.Automation.Job]$Job,
+    [TimeSpan]$Timeout = [TimeSpan]::FromSeconds(20)) {
+    $stopwatch = [Diagnostics.Stopwatch]::StartNew()
+    while ($stopwatch.Elapsed -lt $Timeout) {
+        if ($Job.State -in 'Failed', 'Stopped', 'Completed') {
+            $reason = @($Job.ChildJobs | ForEach-Object { $_.JobStateInfo.Reason.Message } |
+                Where-Object { $_ }) -join '; '
+            if (-not $reason) { $reason = 'причина не сообщена' }
+            throw "Backup-audit mock на порту $Port завершился до readiness " +
+                "(state=$($Job.State)): $reason."
+        }
         try {
             Invoke-WebRequest -Uri "http://127.0.0.1:$Port/ready" -TimeoutSec 1 | Out-Null
             return
         }
-        catch {
-            if ($attempt -eq 50) { throw "Backup-audit mock на порту $Port не запустился." }
-            Start-Sleep -Milliseconds 100
-        }
+        catch { Start-Sleep -Milliseconds 100 }
     }
+    throw "Backup-audit mock на порту $Port не перешёл в readiness за " +
+        "$([Math]::Round($Timeout.TotalSeconds, 1)) с (state=$($Job.State))."
 }
 
 function Invoke-BackupAuditCase(
@@ -87,7 +97,7 @@ function Invoke-BackupAuditCase(
     $job = Start-BackupAuditMock -Port $port -Mode $Mode -ExpectedRequests $expectedRequests
     $reportPath = Join-Path $fixtureRoot "$Name.json"
     try {
-        Wait-BackupAuditMock -Port $port
+        Wait-BackupAuditMock -Port $port -Job $job
         $rejected = $false
         try {
             & $auditScript -ApiBaseUrl "http://127.0.0.1:$port" -AdminKey 'contract-admin-key' `
