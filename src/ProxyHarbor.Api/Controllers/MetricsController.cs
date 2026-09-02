@@ -116,6 +116,25 @@ public sealed class MetricsController(
             builtInSources,
             now,
             SourceCatalogHealth.FreshnessWindow(collectorOptions.Value.CollectionIntervalMinutes));
+        var vpnSources = await db.VpnSources.AsNoTracking().GroupBy(_ => 1).Select(group => new
+        {
+            Enabled = group.Count(source => source.Enabled),
+            Failing = group.Count(source => source.Enabled &&
+                (source.ConsecutiveFailures > 0 || source.LastError != null)),
+            Healthy = group.Count(source => source.Enabled && source.LastSucceededAt != null &&
+                source.LastSucceededAt >= sourceFreshAfter && source.LastFetchedAt >= sourceFreshAfter &&
+                source.LastItemCount > 0 && source.ConsecutiveFailures == 0 && source.LastError == null),
+            NeverAudited = group.Count(source => source.Enabled && source.LastFetchedAt == null),
+            Stale = group.Count(source => source.Enabled && source.LastFetchedAt != null &&
+                source.LastFetchedAt < sourceFreshAfter)
+        }).SingleOrDefaultAsync(token);
+        var builtInVpnUrls = BuiltInVpnSourceCatalog.Sources.Select(source => source.Url).ToArray();
+        var builtInVpnSources = await db.VpnSources.AsNoTracking()
+            .Where(source => builtInVpnUrls.Contains(source.Url)).ToListAsync(token);
+        var vpnSourceCatalog = VpnSourceCatalogHealth.Calculate(
+            builtInVpnSources,
+            now,
+            SourceCatalogHealth.FreshnessWindow(collectorOptions.Value.CollectionIntervalMinutes));
         // Текущий running-цикл не должен обнулять показатели последнего действительно завершённого запуска.
         // На PostgreSQL шесть прежних point-read запросов объединены в один statement и один MVCC snapshot.
         var runMetrics = await ReadRunMetricsAsync(db, token);
@@ -285,6 +304,43 @@ public sealed class MetricsController(
             sourceCatalog.PresentProviders);
         Gauge(output, "proxyharbor_builtin_providers_enabled", "Independent built-in providers with at least one enabled feed.",
             sourceCatalog.EnabledProviders);
+        Gauge(output, "proxyharbor_vpn_sources_enabled", "Enabled VPN source feeds.", vpnSources?.Enabled ?? 0);
+        Gauge(output, "proxyharbor_vpn_sources_failing", "Enabled VPN feeds whose latest fetch failed.",
+            vpnSources?.Failing ?? 0);
+        Gauge(output, "proxyharbor_vpn_sources_healthy", "Enabled VPN feeds with a fresh successful non-empty fetch.",
+            vpnSources?.Healthy ?? 0);
+        Gauge(output, "proxyharbor_vpn_sources_never_audited", "Enabled VPN feeds not fetched yet.",
+            vpnSources?.NeverAudited ?? 0);
+        Gauge(output, "proxyharbor_vpn_sources_stale", "Enabled VPN feeds whose latest fetch is older than three collection intervals.",
+            vpnSources?.Stale ?? 0);
+        Gauge(output, "proxyharbor_vpn_source_catalog_complete", "Whether every built-in VPN feed and provider is present and enabled.",
+            vpnSourceCatalog.IsComplete ? 1 : 0);
+        Gauge(output, "proxyharbor_vpn_source_catalog_healthy", "Whether every built-in VPN feed has a fresh successful non-empty audit.",
+            vpnSourceCatalog.IsHealthy ? 1 : 0);
+        Gauge(output, "proxyharbor_builtin_vpn_catalog_audit_timestamp_seconds",
+            "UTC midnight Unix timestamp of the latest full release audit of every built-in VPN feed.",
+            new DateTimeOffset(
+                vpnSourceCatalog.LastAuditedOn.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc)).ToUnixTimeSeconds());
+        Gauge(output, "proxyharbor_builtin_vpn_sources_expected", "Built-in VPN feeds expected by this release.",
+            vpnSourceCatalog.ExpectedSources);
+        Gauge(output, "proxyharbor_builtin_vpn_sources_present", "Built-in VPN feeds currently present in the database.",
+            vpnSourceCatalog.PresentSources);
+        Gauge(output, "proxyharbor_builtin_vpn_sources_enabled", "Built-in VPN feeds currently enabled.",
+            vpnSourceCatalog.EnabledSources);
+        Gauge(output, "proxyharbor_builtin_vpn_sources_healthy", "Built-in VPN feeds with a fresh successful non-empty audit.",
+            vpnSourceCatalog.HealthySources);
+        Gauge(output, "proxyharbor_builtin_vpn_sources_failing", "Enabled built-in VPN feeds currently reporting a failure.",
+            vpnSourceCatalog.FailingSources);
+        Gauge(output, "proxyharbor_builtin_vpn_sources_never_audited", "Enabled built-in VPN feeds not fetched yet.",
+            vpnSourceCatalog.NeverAuditedSources);
+        Gauge(output, "proxyharbor_builtin_vpn_sources_stale", "Enabled built-in VPN feeds older than three collection intervals.",
+            vpnSourceCatalog.StaleSources);
+        Gauge(output, "proxyharbor_builtin_vpn_providers_expected", "Independent built-in VPN providers expected by this release.",
+            vpnSourceCatalog.ExpectedProviders);
+        Gauge(output, "proxyharbor_builtin_vpn_providers_present", "Independent built-in VPN providers represented in the database.",
+            vpnSourceCatalog.PresentProviders);
+        Gauge(output, "proxyharbor_builtin_vpn_providers_enabled", "Independent built-in VPN providers with at least one enabled feed.",
+            vpnSourceCatalog.EnabledProviders);
         Gauge(output, "proxyharbor_proxies_published", "Alive proxies fresh enough for public API and exports.",
             proxySnapshot.Published);
         Gauge(output, "proxyharbor_collection_runs_active", "Collection runs currently marked as active.",

@@ -46,6 +46,45 @@ public sealed class VpnFeedParserTests
         Assert.Equal(new VpnCandidate("1.0.0.1", 1194, VpnProtocol.OpenVpn, "udp"), openVpnCandidate);
     }
 
+    [Fact]
+    public void ParsesLabeledAndModernVmessLinks()
+    {
+        var json = "{\"add\":\"9.9.9.9\",\"port\":\"443\"}";
+        var labeled = "vmess://" + Convert.ToBase64String(Encoding.UTF8.GetBytes(json)) + "#fast node";
+        const string modern = "vmess://public-id@1.1.1.1:8443?encryption=auto&type=tcp#modern";
+
+        var candidates = VpnFeedParser.Parse($"{labeled}\n{modern}", VpnProtocol.Vmess);
+
+        Assert.Contains(candidates, candidate => candidate.Host == "9.9.9.9" &&
+            candidate.Port == 443 && candidate.ConnectionUri == labeled);
+        Assert.Contains(candidates, candidate => candidate.Host == "1.1.1.1" &&
+            candidate.Port == 8443 && candidate.ConnectionUri == modern);
+    }
+
+    [Fact]
+    public void PreservesCommaSeparatedWireGuardQueryValues()
+    {
+        const string link = "wireguard://public/key=@8.8.8.8:2408?reserved=87,62,29&keepalive=5";
+
+        var candidate = Assert.Single(VpnFeedParser.Parse(link, VpnProtocol.WireGuard));
+
+        Assert.Equal("8.8.8.8", candidate.Host);
+        Assert.Equal(2408, candidate.Port);
+        Assert.Equal(link, candidate.ConnectionUri);
+    }
+
+    [Fact]
+    public void SpecializedConfigurationParsersRespectResultLimit()
+    {
+        var openVpn = string.Join('\n', Enumerable.Range(1, 10)
+            .Select(index => $"remote 8.8.8.{index} {1100 + index} udp"));
+        var wireGuard = string.Join('\n', Enumerable.Range(1, 10)
+            .Select(index => $"Endpoint = 1.1.1.{index}:{5100 + index}"));
+
+        Assert.Equal(2, VpnFeedParser.Parse(openVpn, VpnProtocol.OpenVpn, 2).Count);
+        Assert.Equal(2, VpnFeedParser.Parse(wireGuard, VpnProtocol.WireGuard, 2).Count);
+    }
+
     [Theory]
     [InlineData("vless://id@127.0.0.1:443")]
     [InlineData("trojan://password@10.0.0.1:443")]
@@ -150,7 +189,8 @@ public sealed class BuiltInVpnSourceCatalogTests
         var sources = BuiltInVpnSourceCatalog.Sources;
 
         Assert.Equal(174, sources.Count);
-        Assert.Equal(new DateOnly(2026, 9, 1), BuiltInVpnSourceCatalog.LastAuditedOn);
+        Assert.Equal(new DateOnly(2026, 9, 2), BuiltInVpnSourceCatalog.LastAuditedOn);
+        Assert.Equal(32, BuiltInVpnSourceCatalog.ProviderCount);
         Assert.Equal(sources.Count, sources.Select(x => x.Url).Distinct(StringComparer.Ordinal).Count());
         Assert.Equal(32, sources.Select(x => x.Provider).Distinct(StringComparer.Ordinal).Count());
         Assert.All(sources, source =>
@@ -168,5 +208,7 @@ public sealed class BuiltInVpnSourceCatalogTests
         Assert.Contains(sources, x => x.Protocol == VpnProtocol.Shadowsocks);
         Assert.Contains(sources, x => x.Protocol == VpnProtocol.Hysteria2);
         Assert.Contains(sources, x => x.Protocol == VpnProtocol.Tuic);
+        Assert.Same(sources[0], BuiltInVpnSourceCatalog.FindByUrl(sources[0].Url));
+        Assert.Null(BuiltInVpnSourceCatalog.FindByUrl(sources[0].Url.ToUpperInvariant()));
     }
 }

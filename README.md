@@ -9,10 +9,10 @@ ProxyHarbor загружает 320 HTTPS-feed от 85 независимых п�
 ## Состояние проекта
 
 - 320 встроенных proxy-feed от 85 провайдеров и 174 VPN-feed от 32 провайдеров; операторский каталог: [docs/SOURCE_CATALOG.md](docs/SOURCE_CATALOG.md).
-- Все 320 proxy-feed прошли URL/live-аудит 2 сентября 2026 года, а 174 VPN-feed — 1 сентября; полный proxy end-to-end аудит выполняется CI и перед production-релизом.
+- Все 320 proxy-feed и 174 VPN-feed прошли URL/live-аудит 2 сентября 2026 года; полный proxy end-to-end аудит выполняется CI и перед production-релизом.
 - Последний полный production-цикл: 888 116 разобранных строк, 290 217 уникальных кандидатов за 4,965 секунды.
 - Проверочная партия: 1 600/1 600 результатов, без `Deferred`; одинаковый набор Alive во всех четырёх форматах.
-- Backend: 1147 автоматических тестов; frontend: 68 component/accessibility tests.
+- Backend: 1170 автоматических тестов; frontend: 68 component/accessibility tests.
 - Frontend: Vitest, ESLint, TypeScript production build и axe-core accessibility gate.
 - Release build компилируется с warnings-as-errors и обязательной XML-документацией публичного production API.
 - CI проверяет PostgreSQL migrations, backup/restore, OpenAPI, Docker Compose, security contracts, зависимости и Git-историю.
@@ -377,7 +377,7 @@ Runtime-примеры с `proxy.example.com` являются шаблонам�
 Код ProxyHarbor распространяется по лицензии [MIT](LICENSE). Внешние proxy-feed и возвращаемые ими данные принадлежат соответствующим владельцам; списки прокси не включаются в Git-репозиторий и загружаются только во время работы сервиса. Определение страны использует бесплатную базу [DB-IP Lite](https://db-ip.com), распространяемую по CC BY 4.0.
 ## Каталог VPN
 
-Помимо HTTP/HTTPS/SOCKS ProxyHarbor ведёт отдельный каталог метаданных публично опубликованных VPN-конфигураций. Поддерживаются OpenVPN, WireGuard, VLESS, VMess, Trojan, Shadowsocks, Hysteria2 и TUIC. Встроенный каталог включает официальный VPN Gate и открытые feed из проверенных репозиториев; администратор может подключать собственные публичные HTTPS-feed.
+Помимо HTTP/HTTPS/SOCKS ProxyHarbor ведёт отдельный каталог метаданных публично опубликованных VPN-конфигураций. Поддерживаются OpenVPN, WireGuard, VLESS, VMess, Trojan, Shadowsocks, Hysteria2 и TUIC. Встроенный каталог включает открытые feed из проверенных репозиториев; администратор может подключать собственные публичные HTTPS-feed.
 
 Для URI-протоколов сервис сохраняет явно опубликованную готовую ссылку для копирования и API-выдачи. Для TCP endpoint проверяется доступность публичного адреса. UDP endpoint помечаются как метаданные без ложного обещания полной работоспособности.
 

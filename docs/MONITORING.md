@@ -38,6 +38,8 @@ curl --fail http://127.0.0.1:9093/-/ready
 | `ProxyHarborCollectionHung` | run активен более 30 минут | Проверить зависшие HTTP-загрузки и cluster lock; не удалять audit row вручную |
 | `ProxyHarborSourceCatalogIncomplete` | отсутствует/выключена каноническая запись | Перезапустить актуальную версию для seed и проверить миграции |
 | `ProxyHarborSourceCatalogUnhealthy` | каталог нездоров более часа | Открыть diagnostics и разбирать failing/stale/truncated feed по провайдеру |
+| `ProxyHarborVpnSourceCatalogIncomplete` | отсутствует/выключен канонический VPN feed либо провайдер | Перезапустить актуальную версию для seed и проверить `VpnSources` |
+| `ProxyHarborVpnSourceCatalogUnhealthy` | VPN-каталог нездоров более часа | Открыть вкладку источников VPN и разбирать failing/stale/empty feed по провайдеру |
 | `ProxyHarborCollectionTruncated` | сработал source/global limit | Проверить feed на аномалию; повышать лимит только после измерения памяти |
 | `ProxyHarborProbeControlUnavailable` | control endpoint недоступен 10 минут | Проверить доверенный endpoint, DNS, TLS и исходящий firewall |
 | `ProxyHarborValidationStalled` | due queue есть, попыток нет 15 минут | Проверить worker logs, leases, лимит файлов и PostgreSQL |

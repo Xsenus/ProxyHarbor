@@ -104,6 +104,42 @@ tests:
         alertname: ProxyHarborTelegramDeliveryFailed
         exp_alerts: []
 
+  - name: Incomplete VPN source catalog raises a critical alert after grace period
+    interval: 1m
+    input_series:
+      - series: proxyharbor_vpn_source_catalog_complete
+        values: '0x12'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: ProxyHarborVpnSourceCatalogIncomplete
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: ProxyHarborVpnSourceCatalogIncomplete
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: Встроенный каталог VPN-источников неполон
+              description: Присутствуют или включены не все канонические VPN feed и провайдеры.
+
+  - name: Unhealthy VPN source catalog warns only after a sustained hour
+    interval: 5m
+    input_series:
+      - series: proxyharbor_vpn_source_catalog_healthy
+        values: '0x15'
+    alert_rule_test:
+      - eval_time: 55m
+        alertname: ProxyHarborVpnSourceCatalogUnhealthy
+        exp_alerts: []
+      - eval_time: 65m
+        alertname: ProxyHarborVpnSourceCatalogUnhealthy
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Каталог VPN-источников длительно нездоров
+              description: Не все встроенные VPN feed имеют свежий успешный непустой результат.
+
   - name: Runtime backup configuration read failure respects the grace period
     interval: 1m
     input_series:

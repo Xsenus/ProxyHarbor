@@ -133,6 +133,24 @@ groups:
           summary: Каталог источников длительно нездоров
           description: Не все встроенные feed имеют свежий полный успешный результат.
 
+      - alert: ProxyHarborVpnSourceCatalogIncomplete
+        expr: proxyharbor_vpn_source_catalog_complete == 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: Встроенный каталог VPN-источников неполон
+          description: Присутствуют или включены не все канонические VPN feed и провайдеры.
+
+      - alert: ProxyHarborVpnSourceCatalogUnhealthy
+        expr: proxyharbor_vpn_source_catalog_healthy == 0
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: Каталог VPN-источников длительно нездоров
+          description: Не все встроенные VPN feed имеют свежий успешный непустой результат.
+
       - alert: ProxyHarborCollectionTruncated
         expr: |
           proxyharbor_last_collection_candidate_limit_reached > 0

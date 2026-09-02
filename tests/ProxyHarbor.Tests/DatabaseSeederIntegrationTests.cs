@@ -504,6 +504,74 @@ public sealed class DatabaseSeederIntegrationTests
 
     [Fact]
     [Trait("Category", "PostgresIntegration")]
+    public async Task StartupMigratesUnreachableVpnGateSourceAndResetsResourceState()
+    {
+        var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
+        if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
+
+        var schema = $"proxyharbor_vpn_source_url_{Guid.NewGuid():N}";
+        var builder = new NpgsqlConnectionStringBuilder(baseConnectionString) { SearchPath = schema };
+        await using var admin = new NpgsqlConnection(baseConnectionString);
+        await admin.OpenAsync();
+        await using (var create = new NpgsqlCommand($"CREATE SCHEMA {schema}", admin))
+            await create.ExecuteNonQueryAsync();
+
+        try
+        {
+            var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+                .UseNpgsql(builder.ConnectionString)
+                .Options;
+            var canonical = BuiltInVpnSourceCatalog.Sources.Single(source =>
+                source.Name == "Auto OVPN Japan");
+            var sourceId = Guid.Empty;
+            await using (var first = new ProxyHarborDbContext(options))
+            {
+                await DatabaseSeeder.InitializeAsync(first);
+                var source = await first.VpnSources.SingleAsync(item => item.Url == canonical.Url);
+                sourceId = source.Id;
+                source.Url = "https://www.vpngate.net/api/iphone/";
+                source.Enabled = false;
+                source.LastFetchedAt = DateTimeOffset.UtcNow;
+                source.LastSucceededAt = source.LastFetchedAt.Value.AddHours(-1);
+                source.LastContentFetchedAt = source.LastSucceededAt;
+                source.LastItemCount = 123;
+                source.HttpETag = "stale-etag";
+                source.HttpLastModifiedAt = source.LastSucceededAt;
+                source.ConsecutiveFailures = 492;
+                source.NextFetchAt = DateTimeOffset.UtcNow.AddDays(1);
+                source.LastError = "timeout";
+                await first.SaveChangesAsync();
+            }
+
+            await using (var second = new ProxyHarborDbContext(options))
+                await DatabaseSeeder.InitializeAsync(second);
+
+            await using var verify = new ProxyHarborDbContext(options);
+            var migrated = await verify.VpnSources.SingleAsync(source => source.Url == canonical.Url);
+            Assert.Equal(sourceId, migrated.Id);
+            Assert.False(migrated.Enabled);
+            Assert.Equal(canonical.Name, migrated.Name);
+            Assert.Equal(canonical.Provider, migrated.Provider);
+            Assert.Null(migrated.LastFetchedAt);
+            Assert.Null(migrated.LastSucceededAt);
+            Assert.Null(migrated.LastContentFetchedAt);
+            Assert.Equal(0, migrated.LastItemCount);
+            Assert.Null(migrated.HttpETag);
+            Assert.Null(migrated.HttpLastModifiedAt);
+            Assert.Equal(0, migrated.ConsecutiveFailures);
+            Assert.Null(migrated.NextFetchAt);
+            Assert.Null(migrated.LastError);
+            Assert.Equal(BuiltInVpnSourceCatalog.Sources.Count, await verify.VpnSources.CountAsync());
+        }
+        finally
+        {
+            await using var drop = new NpgsqlCommand($"DROP SCHEMA {schema} CASCADE", admin);
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
     public async Task ConcurrentInitializationSerializesMigrationsAndSeed()
     {
         var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
