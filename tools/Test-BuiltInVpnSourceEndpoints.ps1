@@ -65,7 +65,15 @@ $results = @($feeds | ForEach-Object -Parallel {
         if ($response.BaseResponse.RequestMessage.RequestUri.Scheme -ne 'https') {
             throw 'redirected to non-HTTPS endpoint'
         }
-        $content = [string]$response.Content
+        # Invoke-WebRequest возвращает byte[] для application/octet-stream (частый
+        # Content-Type raw GitHub feed). Приведение [string][byte[]] даёт буквальное
+        # "System.Byte[]" и создаёт ложный отрицательный результат аудита.
+        $content = if ($response.Content -is [byte[]]) {
+            [Text.UTF8Encoding]::new($false, $true).GetString([byte[]]$response.Content)
+        }
+        else {
+            [string]$response.Content
+        }
         if ([Text.Encoding]::UTF8.GetByteCount($content) -gt $using:MaxBodyBytes) { throw 'body exceeds audit limit' }
 
         $parseable = $content -match '(?im)(vless|vmess|trojan|ss|hysteria2|hy2|tuic|wireguard|wg)://'

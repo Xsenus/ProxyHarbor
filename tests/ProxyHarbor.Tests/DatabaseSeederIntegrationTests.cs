@@ -431,6 +431,9 @@ public sealed class DatabaseSeederIntegrationTests
     [InlineData(
         "ProxyGenerator Cloudflare SOCKS4",
         "https://raw.githubusercontent.com/proxygenerator1/ProxyGenerator/main/MostStable/socks4.txt")]
+    [InlineData(
+        "Fyvri HTTP",
+        "https://raw.githubusercontent.com/fyvri/fresh-proxy-list/archive/storage/classic/http.txt")]
     [Trait("Category", "PostgresIntegration")]
     public async Task StartupMigratesReplacedBuiltInUrlWithoutLosingSourceHistory(
         string canonicalName,
