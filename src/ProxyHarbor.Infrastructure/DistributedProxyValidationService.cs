@@ -31,7 +31,7 @@ public sealed class DistributedProxyValidationService(
         var leaseDuration = ValidationLeasePolicy.Duration(settings.ProbeTimeoutSeconds);
         var leaseUntil = now.Add(leaseDuration);
         var leaseId = Guid.NewGuid();
-        var claimed = new List<ProxyEndpoint>();
+        var claimed = new List<ValidationClaimCandidate>();
         CheckerNode? nodeSnapshot = null;
         var queueWasProbed = false;
 
@@ -64,11 +64,12 @@ public sealed class DistributedProxyValidationService(
             node.CurrentLeaseUntil = null;
             var batchSize = Math.Clamp(node.BatchSize, 1, 10_000);
             queueWasProbed = true;
-            claimed.AddRange(await ValidationQueueClaim.ClaimAsync(db, batchSize, now, token));
+            claimed.AddRange(await ValidationQueueClaim.ClaimAndLeaseAsync(
+                db, batchSize, now, leaseUntil, leaseId, token));
 
             var expiredLeaseIds = claimed
-                .Where(x => x.CheckLeaseId.HasValue)
-                .Select(x => x.CheckLeaseId)
+                .Where(x => x.PreviousLeaseId.HasValue)
+                .Select(x => x.PreviousLeaseId)
                 .Append(expiredNodeLeaseId)
                 .Where(x => x.HasValue)
                 .Select(x => x!.Value)
@@ -97,10 +98,6 @@ public sealed class DistributedProxyValidationService(
 
             if (claimed.Count > 0)
             {
-                var ids = claimed.Select(x => x.Id).ToArray();
-                await db.Proxies.Where(x => ids.Contains(x.Id)).ExecuteUpdateAsync(setters => setters
-                    .SetProperty(x => x.CheckLeaseUntil, leaseUntil)
-                    .SetProperty(x => x.CheckLeaseId, leaseId), token);
                 db.ValidationRuns.Add(new ValidationRun
                 {
                     Id = Guid.NewGuid(),

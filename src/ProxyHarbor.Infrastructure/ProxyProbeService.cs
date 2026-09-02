@@ -34,7 +34,21 @@ public sealed class ProxyProbeService(IOptions<CollectorOptions> options, Origin
         _ = await originIpProvider.GetRequiredAsync(cancellationToken);
 
     /// <summary>Выполняет HTTP CONNECT, SOCKS4a или SOCKS5 handshake и реальный HTTPS-запрос.</summary>
-    public async Task<ProxyCheckResult> CheckAsync(ProxyEndpoint proxy, CancellationToken cancellationToken)
+    public Task<ProxyCheckResult> CheckAsync(ProxyEndpoint proxy, CancellationToken cancellationToken) =>
+        CheckAsync(proxy.Id, proxy.Host, proxy.Port, proxy.Protocol, cancellationToken);
+
+    /// <summary>Горячий validation-путь не материализует остальные поля ProxyEndpoint.</summary>
+    internal Task<ProxyCheckResult> CheckAsync(
+        ValidationClaimCandidate proxy,
+        CancellationToken cancellationToken) =>
+        CheckAsync(proxy.Id, proxy.Host, proxy.Port, proxy.Protocol, cancellationToken);
+
+    private async Task<ProxyCheckResult> CheckAsync(
+        Guid proxyId,
+        string proxyHost,
+        int proxyPort,
+        ProxyProtocol proxyProtocol,
+        CancellationToken cancellationToken)
     {
         // Origin IP нужен только для признака анонимности и не расходует timeout самого proxy-туннеля.
         var control = await originIpProvider.GetRequiredTargetAsync(cancellationToken);
@@ -44,16 +58,16 @@ public sealed class ProxyProbeService(IOptions<CollectorOptions> options, Origin
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(TimeSpan.FromSeconds(options.Value.ProbeTimeoutSeconds));
 
-            if (proxy.Protocol == ProxyProtocol.Socks4 &&
+            if (proxyProtocol == ProxyProtocol.Socks4 &&
                 IPAddress.TryParse(control.Host, out var controlAddress) &&
                 controlAddress.AddressFamily == AddressFamily.InterNetworkV6)
                 throw new ProxyTargetUnsupportedException(
                     "SOCKS4/SOCKS4a не поддерживает IPv6 literal назначения.");
 
-            using var tcp = await _connectAsync(proxy.Host, proxy.Port, timeout.Token);
+            using var tcp = await _connectAsync(proxyHost, proxyPort, timeout.Token);
             var stream = tcp.GetStream();
 
-            switch (proxy.Protocol)
+            switch (proxyProtocol)
             {
                 case ProxyProtocol.Http:
                 case ProxyProtocol.Https:
@@ -94,7 +108,7 @@ public sealed class ProxyProbeService(IOptions<CollectorOptions> options, Origin
             var exitIp = ProxyOriginResponse.ParseExitIp(response);
 
             timer.Stop();
-            return new ProxyCheckResult(proxy.Id, true, checked((int)timer.ElapsedMilliseconds), exitIp,
+            return new ProxyCheckResult(proxyId, true, checked((int)timer.ElapsedMilliseconds), exitIp,
                 !string.Equals(control.OriginIp, exitIp, StringComparison.OrdinalIgnoreCase), null);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
@@ -102,19 +116,19 @@ public sealed class ProxyProbeService(IOptions<CollectorOptions> options, Origin
         {
             // Валидный TLS-туннель вернул непригодный control-ответ. Это не является
             // доказательством неисправности прокси и не должно ухудшать его статистику.
-            return new ProxyCheckResult(proxy.Id, false, null, null, false,
+            return new ProxyCheckResult(proxyId, false, null, null, false,
                 exception.Message[..Math.Min(500, exception.Message.Length)], IsDeferred: true);
         }
         catch (ProxyTargetUnsupportedException exception)
         {
             // Ограничение wire-протокола/control-конфигурации ничего не говорит
             // о работоспособности самого прокси и не должно увеличивать failure streak.
-            return new ProxyCheckResult(proxy.Id, false, null, null, false,
+            return new ProxyCheckResult(proxyId, false, null, null, false,
                 exception.Message[..Math.Min(500, exception.Message.Length)], IsDeferred: true);
         }
         catch (Exception ex) when (ex is SocketException or IOException or AuthenticationException or JsonException or OperationCanceledException)
         {
-            return new ProxyCheckResult(proxy.Id, false, null, null, false,
+            return new ProxyCheckResult(proxyId, false, null, null, false,
                 ex is OperationCanceledException ? "timeout" : ex.Message[..Math.Min(500, ex.Message.Length)]);
         }
     }

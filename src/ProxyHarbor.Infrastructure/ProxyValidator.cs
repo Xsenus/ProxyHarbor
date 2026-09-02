@@ -190,14 +190,14 @@ public sealed class ProxyValidator(
         }
     }
 
-    private async Task<List<ProxyEndpoint>> ClaimBatchAsync(
+    private async Task<List<ValidationClaimCandidate>> ClaimBatchAsync(
         int batchSize,
         DateTimeOffset now,
         DateTimeOffset leaseUntil,
         Guid leaseId,
         CancellationToken token)
     {
-        var proxies = new List<ProxyEndpoint>();
+        var proxies = new List<ValidationClaimCandidate>();
         await using var strategyDb = await dbFactory.CreateDbContextAsync(token);
         var strategy = strategyDb.Database.CreateExecutionStrategy();
         await strategy.ExecuteAsync(async () =>
@@ -205,13 +205,8 @@ public sealed class ProxyValidator(
             proxies.Clear();
             await using var claimDb = await dbFactory.CreateDbContextAsync(token);
             await using var transaction = await claimDb.Database.BeginTransactionAsync(token);
-            proxies.AddRange(await ValidationQueueClaim.ClaimAsync(
-                claimDb, batchSize, now, token));
-            var ids = proxies.Select(x => x.Id).ToArray();
-            if (ids.Length > 0)
-                await claimDb.Proxies.Where(x => ids.Contains(x.Id)).ExecuteUpdateAsync(setters => setters
-                    .SetProperty(x => x.CheckLeaseUntil, leaseUntil)
-                    .SetProperty(x => x.CheckLeaseId, leaseId), token);
+            proxies.AddRange(await ValidationQueueClaim.ClaimAndLeaseAsync(
+                claimDb, batchSize, now, leaseUntil, leaseId, token));
             await transaction.CommitAsync(token);
         });
         return proxies;

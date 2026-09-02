@@ -29,8 +29,11 @@ public sealed class DistributedProxyValidationIntegrationTests
 
         try
         {
+            var claimShape = new ValidationClaimShapeInterceptor();
             var dbOptions = new DbContextOptionsBuilder<ProxyHarborDbContext>()
-                .UseNpgsql(connection.ConnectionString).Options;
+                .UseNpgsql(connection.ConnectionString)
+                .AddInterceptors(claimShape)
+                .Options;
             var now = DateTimeOffset.UtcNow;
             var aliveNeverChecked = Endpoint("198.51.100.1", ProxyStatus.Alive, null);
             var aliveDue = Endpoint("198.51.100.2", ProxyStatus.Alive, now.AddMinutes(-2));
@@ -51,8 +54,10 @@ public sealed class DistributedProxyValidationIntegrationTests
 
             await using var claimDb = new ProxyHarborDbContext(dbOptions);
             await using var transaction = await claimDb.Database.BeginTransactionAsync();
-            var claimed = await ValidationQueueClaim.ClaimAsync(
-                claimDb, 3, now, CancellationToken.None);
+            var leaseId = Guid.NewGuid();
+            var leaseUntil = now.AddMinutes(2);
+            var claimed = await ValidationQueueClaim.ClaimAndLeaseAsync(
+                claimDb, 3, now, leaseUntil, leaseId, CancellationToken.None);
 
             Assert.Equal(
                 [aliveNeverChecked.Id, aliveDue.Id, pendingDue.Id],
@@ -60,6 +65,17 @@ public sealed class DistributedProxyValidationIntegrationTests
             Assert.DoesNotContain(claimed, proxy => proxy.Id == aliveFuture.Id);
             Assert.DoesNotContain(claimed, proxy => proxy.Id == deadDue.Id);
             Assert.DoesNotContain(claimed, proxy => proxy.Id == leasedDead.Id);
+            Assert.All(claimed, proxy => Assert.Null(proxy.PreviousLeaseId));
+            Assert.Equal(3, await claimDb.Proxies.CountAsync(proxy =>
+                proxy.CheckLeaseId == leaseId && proxy.CheckLeaseUntil == leaseUntil));
+            Assert.NotEmpty(claimShape.Commands);
+            Assert.All(claimShape.Commands, command =>
+            {
+                Assert.Contains("UPDATE \"Proxies\"", command, StringComparison.Ordinal);
+                Assert.Contains("RETURNING proxy.\"Id\", proxy.\"Host\", proxy.\"Port\"", command,
+                    StringComparison.Ordinal);
+                Assert.DoesNotContain("SELECT *", command, StringComparison.OrdinalIgnoreCase);
+            });
             await transaction.RollbackAsync();
         }
         finally
@@ -340,6 +356,24 @@ public sealed class DistributedProxyValidationIntegrationTests
             FailedChecks = status == ProxyStatus.Dead ? 1 : 0,
             ConsecutiveFailedChecks = status == ProxyStatus.Dead ? 1 : 0
         };
+    }
+
+    private sealed class ValidationClaimShapeInterceptor : DbCommandInterceptor
+    {
+        private readonly System.Collections.Concurrent.ConcurrentQueue<string> _commands = new();
+
+        internal IReadOnlyCollection<string> Commands => _commands.ToArray();
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            if (command.CommandText.Contains("WITH candidate AS MATERIALIZED", StringComparison.Ordinal))
+                _commands.Enqueue(command.CommandText);
+            return ValueTask.FromResult(result);
+        }
     }
 
     [Fact]
