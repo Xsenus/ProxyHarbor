@@ -17,6 +17,7 @@ namespace ProxyHarbor.Api;
 internal sealed record ProxyMetricsSnapshot(
     IReadOnlyList<ProxyMetricsRow> Groups,
     IReadOnlyList<ProxyCountryMetrics> Countries,
+    IReadOnlyList<ProxyFacetMetrics> Facets,
     long Due,
     long Leased,
     long NeverAttempted,
@@ -27,6 +28,17 @@ internal sealed record ProxyMetricsSnapshot(
     DateTimeOffset CapturedAt);
 
 internal sealed record ProxyCountryMetrics(string Code, long Count);
+
+/// <summary>
+/// Точный компактный счётчик одного country/status/protocol-сегмента. Он уже
+/// получается тем же aggregate, поэтому административные фильтры не запускают
+/// дополнительный count(*) по большой постоянно изменяемой таблице.
+/// </summary>
+internal sealed record ProxyFacetMetrics(
+    string? CountryCode,
+    ProxyStatus Status,
+    ProxyProtocol Protocol,
+    long Count);
 
 /// <summary>Одна компактная status/protocol-строка PostgreSQL partial aggregate.</summary>
 internal sealed record ProxyMetricsRow(
@@ -245,6 +257,9 @@ internal static class ProxyMetricsSnapshotReader
 
     private static ProxyMetricsSnapshot Aggregate(IReadOnlyList<ProxyMetricsRawRow> rows, DateTimeOffset capturedAt)
     {
+        var facets = rows
+            .Select(row => new ProxyFacetMetrics(row.CountryCode, row.Status, row.Protocol, row.Count))
+            .ToArray();
         var groups = rows
             .GroupBy(row => (row.Status, row.Protocol))
             .Select(group => new ProxyMetricsRow(
@@ -299,7 +314,7 @@ internal static class ProxyMetricsSnapshotReader
         }
 
         return new ProxyMetricsSnapshot(
-            groups, countries, due, leased, neverAttempted, staleUnseen, published,
+            groups, countries, facets, due, leased, neverAttempted, staleUnseen, published,
             lastAttemptAt, oldestActiveAt, capturedAt);
     }
 }

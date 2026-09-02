@@ -70,7 +70,18 @@ public sealed class AdminProxiesController(
             filtered = filtered.Where(item => item.Host.Contains(search) || (item.ExitIp != null && item.ExitIp.Contains(search)));
         }
 
-        var total = await filtered.CountAsync(token);
+        // Summary и facet-счётчики получены одним общим snapshot-проходом и
+        // обновляются совместно. Повторный exact count(*) на почти миллионной,
+        // активно изменяемой таблице занимал секунды и создавал лишний I/O при
+        // каждом переключении обычного фильтра. Только произвольный текстовый
+        // поиск требует отдельного точного count.
+        var total = string.IsNullOrEmpty(query)
+            ? ToInt(proxySnapshot.Facets
+                .Where(item => !status.HasValue || item.Status == status.Value)
+                .Where(item => !protocol.HasValue || item.Protocol == protocol.Value)
+                .Where(item => string.IsNullOrEmpty(country) || item.CountryCode == country)
+                .Sum(item => item.Count))
+            : await filtered.CountAsync(token);
         var ordered = sort switch
         {
             "active" => filtered.OrderBy(item => item.CurrentAliveSince == null).ThenBy(item => item.CurrentAliveSince).ThenBy(item => item.Id),

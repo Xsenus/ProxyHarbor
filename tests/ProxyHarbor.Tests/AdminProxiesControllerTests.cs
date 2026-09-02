@@ -52,7 +52,13 @@ public sealed class AdminProxiesControllerTests
         Assert.Equal(2, page.Summary.Countries);
         Assert.Equal(2, page.Countries.Count);
 
-        Assert.IsType<OkObjectResult>((await controller.Get()).Result);
+        var standardFilter = Assert.IsType<AdminProxyPage>(Assert.IsType<OkObjectResult>(
+            (await controller.Get(status: ProxyStatus.Dead, protocol: ProxyProtocol.Http, country: "us")).Result).Value);
+        Assert.Equal(1, standardFilter.Total);
+        Assert.Equal("198.51.100.20", Assert.Single(standardFilter.Items).Host);
+
+        var all = Assert.IsType<AdminProxyPage>(Assert.IsType<OkObjectResult>((await controller.Get()).Result).Value);
+        Assert.Equal(3, all.Total);
         Assert.Equal(1, snapshotCache.DatabaseReads);
     }
 
