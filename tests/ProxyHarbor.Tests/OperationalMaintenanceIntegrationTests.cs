@@ -62,17 +62,30 @@ public sealed class OperationalMaintenanceIntegrationTests
             var fresh = now.AddHours(-1);
             await using (var seed = await factory.CreateDbContextAsync())
             {
+                var expiredLeaseProxy = Proxy("4.2.2.11", ProxyStatus.Dead, old, failedChecks: 1);
+                var activeLeaseProxy = Proxy("4.2.2.13", ProxyStatus.Pending, old);
                 seed.Proxies.AddRange(
                     Proxy("4.2.2.10", ProxyStatus.Pending, old),
-                    Proxy("4.2.2.11", ProxyStatus.Dead, old, failedChecks: 1,
-                        leaseUntil: now.AddMinutes(-1)),
+                    expiredLeaseProxy,
                     Proxy("4.2.2.12", ProxyStatus.Alive, old, successfulChecks: 1),
                     // Исторический endpoint однажды работал, но сейчас Dead: membership
                     // обязана сохраниться независимо от LastSeen retention.
                     Proxy("4.2.2.16", ProxyStatus.Dead, old, successfulChecks: 1, failedChecks: 1),
-                    Proxy("4.2.2.13", ProxyStatus.Pending, old,
-                        leaseUntil: now.AddMinutes(5)),
+                    activeLeaseProxy,
                     Proxy("4.2.2.14", ProxyStatus.Pending, fresh));
+                seed.ProxyValidationLeases.AddRange(
+                    new ProxyValidationLease
+                    {
+                        ProxyId = expiredLeaseProxy.Id,
+                        LeaseId = Guid.NewGuid(),
+                        LeaseUntil = now.AddMinutes(-1)
+                    },
+                    new ProxyValidationLease
+                    {
+                        ProxyId = activeLeaseProxy.Id,
+                        LeaseId = Guid.NewGuid(),
+                        LeaseUntil = now.AddMinutes(5)
+                    });
                 seed.Runs.AddRange(
                     CollectionRun(old, "completed"),
                     CollectionRun(old, "failed"),
@@ -97,23 +110,24 @@ public sealed class OperationalMaintenanceIntegrationTests
             var result = await maintenance.RunOnceAsync(CancellationToken.None);
 
             Assert.NotNull(result);
-            Assert.Equal(2, result.Proxies);
+            Assert.Equal(1, result.Proxies);
             Assert.Equal(3, result.CollectionRuns);
             Assert.Equal(4, result.ValidationRuns);
             Assert.Equal(3, result.BackupRuns);
             Assert.Equal(1, result.RecoveredCollectionRuns);
             Assert.Equal(1, result.RecoveredValidationRuns);
             Assert.Equal(1, result.RecoveredBackupRuns);
-            Assert.Equal(12, result.TotalDeleted);
+            Assert.Equal(11, result.TotalDeleted);
             Assert.Equal(3, result.TotalRecovered);
-            Assert.Equal(12, maintenance.LastDeletedRows);
+            Assert.Equal(11, maintenance.LastDeletedRows);
             Assert.Equal(3, maintenance.LastRecoveredRows);
             Assert.True(maintenance.LastSuccessUnixSeconds > 0);
             Assert.Equal(0, maintenance.LastFailureUnixSeconds);
             Assert.Equal(1, maintenance.Status);
 
             await using var verify = await factory.CreateDbContextAsync();
-            Assert.Equal(4, await verify.Proxies.CountAsync());
+            Assert.Equal(5, await verify.Proxies.CountAsync());
+            Assert.True(await verify.Proxies.AnyAsync(proxy => proxy.Host == "4.2.2.11"));
             Assert.True(await verify.Proxies.AnyAsync(proxy => proxy.Host == "4.2.2.12"));
             Assert.True(await verify.Proxies.AnyAsync(proxy => proxy.Host == "4.2.2.13"));
             Assert.True(await verify.Proxies.AnyAsync(proxy => proxy.Host == "4.2.2.14"));
@@ -135,7 +149,7 @@ public sealed class OperationalMaintenanceIntegrationTests
                 await metricsController.Get(CancellationToken.None));
             Assert.Contains($"proxyharbor_maintenance_last_success_timestamp_seconds {maintenance.LastSuccessUnixSeconds}",
                 metricsResult.Content, StringComparison.Ordinal);
-            Assert.Contains("proxyharbor_maintenance_last_deleted_rows 12",
+            Assert.Contains("proxyharbor_maintenance_last_deleted_rows 11",
                 metricsResult.Content, StringComparison.Ordinal);
             Assert.Contains("proxyharbor_maintenance_last_recovered_rows 3",
                 metricsResult.Content, StringComparison.Ordinal);
@@ -190,15 +204,20 @@ public sealed class OperationalMaintenanceIntegrationTests
                     Status = "running"
                 });
                 seed.BackupRuns.Add(BackupRun(old, "running"));
-                seed.Proxies.Add(new ProxyEndpoint
+                var leasedProxy = new ProxyEndpoint
                 {
                     Host = "4.2.2.20",
                     Port = 8080,
                     Status = ProxyStatus.Pending,
                     FirstSeenAt = old.AddDays(-1),
-                    LastSeenAt = old,
-                    CheckLeaseId = leaseId,
-                    CheckLeaseUntil = DateTimeOffset.UtcNow.AddMinutes(5)
+                    LastSeenAt = old
+                };
+                seed.Proxies.Add(leasedProxy);
+                seed.ProxyValidationLeases.Add(new ProxyValidationLease
+                {
+                    ProxyId = leasedProxy.Id,
+                    LeaseId = leaseId,
+                    LeaseUntil = DateTimeOffset.UtcNow.AddMinutes(5)
                 });
                 await seed.SaveChangesAsync();
             }
@@ -250,6 +269,130 @@ public sealed class OperationalMaintenanceIntegrationTests
         });
     }
 
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
+    public async Task RetentionAndClaimSerializeBeforeProxyDeleteOrLeaseInsert()
+    {
+        var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
+        if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
+
+        var suffix = Guid.NewGuid().ToString("N");
+        var schema = $"proxyharbor_retention_claim_{suffix}";
+        var cleanupApplication = $"proxyharbor-retention-{suffix}";
+        var claimApplication = $"proxyharbor-claim-{suffix}";
+        await using var admin = new NpgsqlConnection(baseConnectionString);
+        await admin.OpenAsync();
+        await using (var create = new NpgsqlCommand($"CREATE SCHEMA {schema}", admin))
+            await create.ExecuteNonQueryAsync();
+
+        try
+        {
+            static DbContextOptions<ProxyHarborDbContext> Options(
+                string connectionString,
+                string searchPath,
+                string applicationName)
+            {
+                var builder = new NpgsqlConnectionStringBuilder(connectionString)
+                {
+                    SearchPath = searchPath,
+                    ApplicationName = applicationName
+                };
+                return new DbContextOptionsBuilder<ProxyHarborDbContext>()
+                    .UseNpgsql(builder.ConnectionString, postgres => postgres.EnableRetryOnFailure())
+                    .Options;
+            }
+
+            var setupOptions = Options(baseConnectionString, schema, $"proxyharbor-setup-{suffix}");
+            await using (var migration = new ProxyHarborDbContext(setupOptions))
+                await migration.Database.MigrateAsync();
+            var now = DateTimeOffset.UtcNow;
+            var proxy = Proxy("4.2.2.30", ProxyStatus.Pending, now.AddDays(-30));
+            await using (var seed = new ProxyHarborDbContext(setupOptions))
+            {
+                seed.Proxies.Add(proxy);
+                await seed.SaveChangesAsync();
+            }
+
+            var blockerBuilder = new NpgsqlConnectionStringBuilder(baseConnectionString)
+            {
+                SearchPath = schema,
+                ApplicationName = $"proxyharbor-retention-blocker-{suffix}"
+            };
+            await using var blocker = new NpgsqlConnection(blockerBuilder.ConnectionString);
+            await blocker.OpenAsync();
+            await using var blockerTransaction = await blocker.BeginTransactionAsync();
+            await using (var lockProxy = new NpgsqlCommand(
+                "SELECT \"Id\" FROM \"Proxies\" WHERE \"Id\" = @id FOR UPDATE",
+                blocker,
+                blockerTransaction))
+            {
+                lockProxy.Parameters.AddWithValue("id", proxy.Id);
+                Assert.Equal(proxy.Id, await lockProxy.ExecuteScalarAsync());
+            }
+
+            await using var cleanupDb = new ProxyHarborDbContext(
+                Options(baseConnectionString, schema, cleanupApplication));
+            var cleanupTask = OperationalRetention.PruneProxyMembershipAsync(
+                cleanupDb, now, retentionDays: 3, CancellationToken.None);
+            Assert.True(await WaitForLockAsync(admin, cleanupApplication, "%DELETE FROM \"Proxies\"%"));
+
+            var claimBuilder = new NpgsqlConnectionStringBuilder(baseConnectionString)
+            {
+                SearchPath = schema,
+                ApplicationName = claimApplication
+            };
+            await using var claimDb = new ProxyHarborDbContext(
+                new DbContextOptionsBuilder<ProxyHarborDbContext>()
+                    .UseNpgsql(claimBuilder.ConnectionString)
+                    .Options);
+            await using var claimTransaction = await claimDb.Database.BeginTransactionAsync();
+            var claimTask = ValidationQueueClaim.ClaimAndLeaseAsync(
+                claimDb,
+                batchSize: 1,
+                now,
+                now.AddMinutes(5),
+                Guid.NewGuid(),
+                CancellationToken.None);
+            Assert.True(await WaitForLockAsync(admin, claimApplication, "%pg_advisory_xact_lock%"));
+
+            await blockerTransaction.CommitAsync();
+            Assert.Equal(1, await cleanupTask.WaitAsync(TimeSpan.FromSeconds(10)));
+            Assert.Empty(await claimTask.WaitAsync(TimeSpan.FromSeconds(10)));
+            await claimTransaction.CommitAsync();
+
+            await using var verify = new ProxyHarborDbContext(setupOptions);
+            Assert.False(await verify.Proxies.AnyAsync(item => item.Id == proxy.Id));
+            Assert.False(await verify.ProxyValidationLeases.AnyAsync(item => item.ProxyId == proxy.Id));
+        }
+        finally
+        {
+            await using var drop = new NpgsqlCommand($"DROP SCHEMA IF EXISTS {schema} CASCADE", admin);
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
+
+    private static async Task<bool> WaitForLockAsync(
+        NpgsqlConnection admin,
+        string applicationName,
+        string queryPattern)
+    {
+        for (var attempt = 0; attempt < 100; attempt++)
+        {
+            await using var activity = new NpgsqlCommand("""
+                SELECT EXISTS (
+                    SELECT 1 FROM pg_stat_activity
+                    WHERE application_name = @application_name
+                      AND wait_event_type = 'Lock'
+                      AND query LIKE @query_pattern)
+                """, admin);
+            activity.Parameters.AddWithValue("application_name", applicationName);
+            activity.Parameters.AddWithValue("query_pattern", queryPattern);
+            if ((bool)(await activity.ExecuteScalarAsync())!) return true;
+            await Task.Delay(50);
+        }
+        return false;
+    }
+
     private static OperationalMaintenanceService CreateService(TestDbFactory factory) => new(
         factory,
         Options.Create(new CollectorOptions
@@ -265,8 +408,7 @@ public sealed class OperationalMaintenanceIntegrationTests
         ProxyStatus status,
         DateTimeOffset seenAt,
         int successfulChecks = 0,
-        int failedChecks = 0,
-        DateTimeOffset? leaseUntil = null) => new()
+        int failedChecks = 0) => new()
         {
             Host = host,
             Port = 8080,
@@ -280,9 +422,7 @@ public sealed class OperationalMaintenanceIntegrationTests
             LatencyMs = successfulChecks > 0 ? 250 : null,
             SuccessfulChecks = successfulChecks,
             FailedChecks = failedChecks,
-            ConsecutiveFailedChecks = failedChecks,
-            CheckLeaseId = leaseUntil is null ? null : Guid.NewGuid(),
-            CheckLeaseUntil = leaseUntil
+            ConsecutiveFailedChecks = failedChecks
         };
 
     private static CollectionRun CollectionRun(DateTimeOffset startedAt, string status) => new()

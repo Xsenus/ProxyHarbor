@@ -1,65 +1,105 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 using Npgsql;
 using ProxyHarbor.Domain;
 
 namespace ProxyHarbor.Infrastructure;
 
 /// <summary>
-/// Общий bounded claim очереди прокси. Свободные строки и просроченные lease
-/// выбираются раздельно: горячий путь использует частичный индекс без активно
-/// занятых строк, а failover — компактный индекс только непустых сроков аренды.
-/// Каждый диапазон статуса и NULL/non-NULL NextCheckAt остаётся отдельным seek.
-/// Выборка и назначение lease выполняются одним UPDATE ... RETURNING; вызывающий
-/// код обязан удерживать транзакцию до фиксации сопутствующего аудита.
+/// Общий bounded claim очереди прокси. Короткая cluster-wide xact-lock сериализует
+/// только выбор партии, а эфемерная узкая таблица lease принимает все ownership-
+/// записи. Основная строка прокси при claim/heartbeat больше не переписывается.
+/// Каждый диапазон статуса и NULL/non-NULL NextCheckAt остаётся отдельным seek;
+/// просроченная аренда заменяется условным UPSERT и не может победить heartbeat.
 /// </summary>
 internal static class ValidationQueueClaim
 {
-    private const string ClaimSqlPrefix = """
+    private const string ExpiredClaimSql = """
         WITH candidate AS MATERIALIZED (
-            SELECT proxy."Id", proxy."CheckLeaseId", proxy."NextCheckAt", proxy."LastCheckedAt"
+            SELECT proxy."Id", proxy."Host", proxy."Port", proxy."Protocol",
+                   proxy."ConsecutiveFailedChecks",
+                   lease."LeaseId" AS "PreviousLeaseId",
+                   proxy."NextCheckAt", proxy."LastCheckedAt"
             FROM "Proxies" AS proxy
-        """;
-
-    private const string ClaimSqlSuffix = """
-            LIMIT @limit
-            FOR UPDATE OF proxy SKIP LOCKED
-        ), claimed AS (
-            UPDATE "Proxies" AS proxy
-            SET "CheckLeaseUntil" = @lease_until,
-                "CheckLeaseId" = @lease_id
-            FROM candidate
-            WHERE proxy."Id" = candidate."Id"
-            RETURNING proxy."Id", proxy."Host", proxy."Port", proxy."Protocol",
-                      proxy."ConsecutiveFailedChecks",
-                      candidate."CheckLeaseId" AS "PreviousLeaseId",
-                      candidate."NextCheckAt" AS "QueueNextCheckAt",
-                      candidate."LastCheckedAt" AS "QueueLastCheckedAt"
-        )
-        SELECT "Id", "Host", "Port", "Protocol", "ConsecutiveFailedChecks", "PreviousLeaseId"
-        FROM claimed
-        ORDER BY "QueueNextCheckAt" NULLS FIRST, "QueueLastCheckedAt" NULLS FIRST
-        """;
-
-    private const string ExpiredClaimSql = ClaimSqlPrefix + """
+            JOIN "ProxyValidationLeases" AS lease ON lease."ProxyId" = proxy."Id"
             WHERE CASE proxy."Status" WHEN 1 THEN 0 WHEN 0 THEN 1 ELSE 2 END = @priority
               AND (proxy."NextCheckAt" IS NULL OR proxy."NextCheckAt" <= @now)
-              AND proxy."CheckLeaseUntil" < @now
+              AND lease."LeaseUntil" < @now
             ORDER BY proxy."NextCheckAt" NULLS FIRST, proxy."LastCheckedAt" NULLS FIRST
-        """ + ClaimSqlSuffix;
+            LIMIT @limit
+            FOR UPDATE OF lease SKIP LOCKED
+        ), claimed AS (
+            INSERT INTO "ProxyValidationLeases" ("ProxyId", "LeaseId", "LeaseUntil")
+            SELECT candidate."Id", @lease_id, @lease_until
+            FROM candidate
+            ON CONFLICT ("ProxyId") DO UPDATE
+            SET "LeaseId" = EXCLUDED."LeaseId",
+                "LeaseUntil" = EXCLUDED."LeaseUntil"
+            WHERE "ProxyValidationLeases"."LeaseUntil" < @now
+            RETURNING "ProxyId"
+        )
+        SELECT candidate."Id", candidate."Host", candidate."Port", candidate."Protocol",
+               candidate."ConsecutiveFailedChecks", candidate."PreviousLeaseId"
+        FROM claimed
+        JOIN candidate ON candidate."Id" = claimed."ProxyId"
+        ORDER BY candidate."NextCheckAt" NULLS FIRST, candidate."LastCheckedAt" NULLS FIRST
+        """;
 
-    private const string NeverCheckedClaimSql = ClaimSqlPrefix + """
+    private const string NeverCheckedClaimSql = """
+        WITH candidate AS MATERIALIZED (
+            SELECT proxy."Id", proxy."Host", proxy."Port", proxy."Protocol",
+                   proxy."ConsecutiveFailedChecks",
+                   NULL::uuid AS "PreviousLeaseId",
+                   proxy."NextCheckAt", proxy."LastCheckedAt"
+            FROM "Proxies" AS proxy
             WHERE CASE proxy."Status" WHEN 1 THEN 0 WHEN 0 THEN 1 ELSE 2 END = @priority
               AND proxy."NextCheckAt" IS NULL
-              AND proxy."CheckLeaseUntil" IS NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM "ProxyValidationLeases" AS lease
+                  WHERE lease."ProxyId" = proxy."Id")
             ORDER BY proxy."LastCheckedAt" NULLS FIRST
-        """ + ClaimSqlSuffix;
+            LIMIT @limit
+        ), claimed AS (
+            INSERT INTO "ProxyValidationLeases" ("ProxyId", "LeaseId", "LeaseUntil")
+            SELECT candidate."Id", @lease_id, @lease_until
+            FROM candidate
+            ON CONFLICT ("ProxyId") DO NOTHING
+            RETURNING "ProxyId"
+        )
+        SELECT candidate."Id", candidate."Host", candidate."Port", candidate."Protocol",
+               candidate."ConsecutiveFailedChecks", candidate."PreviousLeaseId"
+        FROM claimed
+        JOIN candidate ON candidate."Id" = claimed."ProxyId"
+        ORDER BY candidate."NextCheckAt" NULLS FIRST, candidate."LastCheckedAt" NULLS FIRST
+        """;
 
-    private const string DueClaimSql = ClaimSqlPrefix + """
+    private const string DueClaimSql = """
+        WITH candidate AS MATERIALIZED (
+            SELECT proxy."Id", proxy."Host", proxy."Port", proxy."Protocol",
+                   proxy."ConsecutiveFailedChecks",
+                   NULL::uuid AS "PreviousLeaseId",
+                   proxy."NextCheckAt", proxy."LastCheckedAt"
+            FROM "Proxies" AS proxy
             WHERE CASE proxy."Status" WHEN 1 THEN 0 WHEN 0 THEN 1 ELSE 2 END = @priority
               AND proxy."NextCheckAt" <= @now
-              AND proxy."CheckLeaseUntil" IS NULL
-            ORDER BY proxy."NextCheckAt", proxy."LastCheckedAt" NULLS FIRST
-        """ + ClaimSqlSuffix;
+              AND NOT EXISTS (
+                  SELECT 1 FROM "ProxyValidationLeases" AS lease
+                  WHERE lease."ProxyId" = proxy."Id")
+            ORDER BY proxy."NextCheckAt" NULLS FIRST, proxy."LastCheckedAt" NULLS FIRST
+            LIMIT @limit
+        ), claimed AS (
+            INSERT INTO "ProxyValidationLeases" ("ProxyId", "LeaseId", "LeaseUntil")
+            SELECT candidate."Id", @lease_id, @lease_until
+            FROM candidate
+            ON CONFLICT ("ProxyId") DO NOTHING
+            RETURNING "ProxyId"
+        )
+        SELECT candidate."Id", candidate."Host", candidate."Port", candidate."Protocol",
+               candidate."ConsecutiveFailedChecks", candidate."PreviousLeaseId"
+        FROM claimed
+        JOIN candidate ON candidate."Id" = claimed."ProxyId"
+        ORDER BY candidate."NextCheckAt" NULLS FIRST, candidate."LastCheckedAt" NULLS FIRST
+        """;
 
     internal static async Task<List<ValidationClaimCandidate>> ClaimAndLeaseAsync(
         ProxyHarborDbContext db,
@@ -75,10 +115,16 @@ internal static class ValidationQueueClaim
         if (db.Database.CurrentTransaction is null)
             throw new InvalidOperationException("Validation claim требует явной транзакции.");
 
+        var connection = (NpgsqlConnection)db.Database.GetDbConnection();
+        if (connection.State != System.Data.ConnectionState.Open)
+            await connection.OpenAsync(token);
+        var transaction = (NpgsqlTransaction)db.Database.CurrentTransaction.GetDbTransaction();
+        await PostgresAdvisoryLock.AcquireTransactionAsync(
+            connection, transaction, PostgresAdvisoryLock.ProxyValidationClaimKey, token);
+
         var claimed = new List<ValidationClaimCandidate>(batchSize);
-        var hasExpiredLeases = await db.Proxies.AsNoTracking().AnyAsync(
-            proxy => proxy.CheckLeaseUntil < now &&
-                     (proxy.NextCheckAt == null || proxy.NextCheckAt <= now), token);
+        var hasExpiredLeases = await db.ProxyValidationLeases.AsNoTracking()
+            .AnyAsync(lease => lease.LeaseUntil < now, token);
         for (var priority = 0; priority <= 2 && claimed.Count < batchSize; priority++)
         {
             if (hasExpiredLeases)

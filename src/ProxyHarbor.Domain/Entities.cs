@@ -221,6 +221,20 @@ public sealed class ProxyEndpoint
         : Math.Round(100m * SuccessfulChecks / (SuccessfulChecks + FailedChecks), 1);
 }
 
+/// <summary>
+/// Краткоживущая распределённая аренда проверки. Она вынесена из широкой строки
+/// прокси, чтобы claim/heartbeat не переписывали все индексы каталога.
+/// </summary>
+public sealed class ProxyValidationLease
+{
+    /// <summary>Ровно одна активная или просроченная аренда на endpoint.</summary>
+    public Guid ProxyId { get; set; }
+    /// <summary>Непредсказуемый токен ownership одной партии.</summary>
+    public Guid LeaseId { get; set; }
+    /// <summary>После этого момента строку разрешено атомарно забрать другому узлу.</summary>
+    public DateTimeOffset LeaseUntil { get; set; }
+}
+
 /// <summary>Настраиваемый источник текстового списка прокси.</summary>
 public sealed class ProxySource
 {

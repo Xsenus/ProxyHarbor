@@ -358,7 +358,10 @@ public sealed class BackupRestoreRoundTripIntegrationTests
     {
         await using var db = new ProxyHarborDbContext(options);
         var proxy = await db.Proxies.AsNoTracking().SingleAsync();
-        Assert.Equivalent(ExpectedProxy(), proxy, strict: true);
+        var expectedRestoredProxy = ExpectedProxy();
+        expectedRestoredProxy.CheckLeaseId = null;
+        expectedRestoredProxy.CheckLeaseUntil = null;
+        Assert.Equivalent(expectedRestoredProxy, proxy, strict: true);
 
         Assert.Equal(BuiltInSourceCatalog.Sources.Count + 1, await db.Sources.CountAsync());
         var customSource = await db.Sources.AsNoTracking().SingleAsync(source => source.Id == SnapshotIds.CustomSource);

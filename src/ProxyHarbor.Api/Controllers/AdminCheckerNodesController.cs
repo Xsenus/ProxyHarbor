@@ -48,7 +48,9 @@ public sealed class AdminCheckerNodesController(
             x.AliveChecks,
             HostKeyFingerprint = x.HostKeyFingerprint,
             Online = x.Enabled && x.LastHeartbeatAt >= now.AddMinutes(-2),
-            Busy = x.CurrentLeaseId != null && x.CurrentLeaseUntil >= now
+            Busy = x.CurrentLeaseId != null && x.CurrentLeaseUntil >= now &&
+                db.ProxyValidationLeases.Any(lease =>
+                    lease.LeaseId == x.CurrentLeaseId && lease.LeaseUntil >= now)
         }).ToListAsync(token);
         return Ok(new
         {

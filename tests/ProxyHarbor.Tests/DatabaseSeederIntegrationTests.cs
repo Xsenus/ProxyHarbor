@@ -1,4 +1,6 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Npgsql;
 using ProxyHarbor.Domain;
 using ProxyHarbor.Infrastructure;
@@ -9,6 +11,65 @@ namespace ProxyHarbor.Tests;
 [Collection(PostgresIntegrationGroup.Name)]
 public sealed class DatabaseSeederIntegrationTests
 {
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
+    public async Task LeaseMigrationPreservesInFlightOwnershipAndSupportsRollback()
+    {
+        var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
+        if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
+
+        var schema = $"proxyharbor_lease_migration_{Guid.NewGuid():N}";
+        var builder = new NpgsqlConnectionStringBuilder(baseConnectionString) { SearchPath = schema };
+        await using var admin = new NpgsqlConnection(baseConnectionString);
+        await admin.OpenAsync();
+        await using (var create = new NpgsqlCommand($"CREATE SCHEMA {schema}", admin))
+            await create.ExecuteNonQueryAsync();
+
+        try
+        {
+            var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+                .UseNpgsql(builder.ConnectionString)
+                .Options;
+            var proxyId = Guid.NewGuid();
+            var leaseId = Guid.NewGuid();
+            var leaseUntil = new DateTimeOffset(2026, 9, 2, 12, 34, 56, TimeSpan.Zero);
+            await using var db = new ProxyHarborDbContext(options);
+            var migrator = db.GetService<IMigrator>();
+            const string previousMigration = "20260902050000_OptimizeAccessRegistryLookup";
+            await migrator.MigrateAsync(previousMigration);
+            db.Proxies.Add(new ProxyEndpoint
+            {
+                Id = proxyId,
+                Host = "198.51.100.250",
+                Port = 8250,
+                CheckLeaseId = leaseId,
+                CheckLeaseUntil = leaseUntil
+            });
+            await db.SaveChangesAsync();
+
+            await migrator.MigrateAsync();
+            db.ChangeTracker.Clear();
+            var migratedProxy = await db.Proxies.AsNoTracking().SingleAsync(proxy => proxy.Id == proxyId);
+            var migratedLease = await db.ProxyValidationLeases.AsNoTracking()
+                .SingleAsync(lease => lease.ProxyId == proxyId);
+            Assert.Null(migratedProxy.CheckLeaseId);
+            Assert.Null(migratedProxy.CheckLeaseUntil);
+            Assert.Equal(leaseId, migratedLease.LeaseId);
+            Assert.Equal(leaseUntil, migratedLease.LeaseUntil);
+
+            await migrator.MigrateAsync(previousMigration);
+            db.ChangeTracker.Clear();
+            var rolledBack = await db.Proxies.AsNoTracking().SingleAsync(proxy => proxy.Id == proxyId);
+            Assert.Equal(leaseId, rolledBack.CheckLeaseId);
+            Assert.Equal(leaseUntil, rolledBack.CheckLeaseUntil);
+        }
+        finally
+        {
+            await using var drop = new NpgsqlCommand($"DROP SCHEMA IF EXISTS {schema} CASCADE", admin);
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
+
     [Fact]
     [Trait("Category", "PostgresIntegration")]
     public async Task ValidationQueueIndexesMatchExactPriorityAndDueOrders()
@@ -36,7 +97,7 @@ public sealed class DatabaseSeederIntegrationTests
                 SELECT indexdef
                 FROM pg_indexes
                 WHERE schemaname = @schema
-                  AND indexname = 'IX_Proxies_ValidationClaimUnleased'
+                  AND indexname = 'IX_Proxies_ValidationQueueOrder'
                 """,
                 admin);
             inspect.Parameters.AddWithValue("schema", schema);
@@ -47,28 +108,49 @@ public sealed class DatabaseSeederIntegrationTests
             Assert.Contains("WHEN 0 THEN 1", definition, StringComparison.Ordinal);
             Assert.Contains("\"NextCheckAt\" NULLS FIRST", definition, StringComparison.Ordinal);
             Assert.Contains("\"LastCheckedAt\" NULLS FIRST", definition, StringComparison.Ordinal);
-            Assert.Contains("WHERE (\"CheckLeaseUntil\" IS NULL)", definition, StringComparison.Ordinal);
-
-            await using var inspectExpiredLease = new NpgsqlCommand(
+            await using var inspectLeaseTable = new NpgsqlCommand(
                 """
-                SELECT indexdef
-                FROM pg_indexes
-                WHERE schemaname = @schema
-                  AND indexname = 'IX_Proxies_ExpiredLeaseClaim'
+                SELECT c.relpersistence,
+                       EXISTS (
+                           SELECT 1 FROM pg_indexes
+                           WHERE schemaname = @schema
+                             AND indexname = 'IX_ProxyValidationLeases_LeaseId'),
+                       EXISTS (
+                           SELECT 1 FROM pg_indexes
+                           WHERE schemaname = @schema
+                             AND indexname = 'IX_ProxyValidationLeases_LeaseUntil'),
+                       c.reloptions
+                FROM pg_class c
+                JOIN pg_namespace n ON n.oid = c.relnamespace
+                WHERE n.nspname = @schema AND c.relname = 'ProxyValidationLeases'
                 """,
                 admin);
-            inspectExpiredLease.Parameters.AddWithValue("schema", schema);
-            var expiredLeaseDefinition = Assert.IsType<string>(await inspectExpiredLease.ExecuteScalarAsync());
-            Assert.Contains("(\"CheckLeaseUntil\")", expiredLeaseDefinition, StringComparison.Ordinal);
-            Assert.Contains("WHERE (\"CheckLeaseUntil\" IS NOT NULL)", expiredLeaseDefinition,
-                StringComparison.Ordinal);
+            inspectLeaseTable.Parameters.AddWithValue("schema", schema);
+            await using (var leaseReader = await inspectLeaseTable.ExecuteReaderAsync())
+            {
+                Assert.True(await leaseReader.ReadAsync());
+                Assert.Equal('u', leaseReader.GetChar(0));
+                Assert.True(leaseReader.GetBoolean(1));
+                Assert.True(leaseReader.GetBoolean(2));
+                var relationOptions = leaseReader.GetFieldValue<string[]>(3);
+                Assert.Contains("fillfactor=90", relationOptions);
+                Assert.Contains("autovacuum_vacuum_scale_factor=0.02", relationOptions);
+                Assert.Contains("autovacuum_vacuum_threshold=500", relationOptions);
+                Assert.Contains("autovacuum_analyze_scale_factor=0.02", relationOptions);
+                Assert.Contains("autovacuum_analyze_threshold=250", relationOptions);
+            }
 
             await using var inspectRetired = new NpgsqlCommand(
                 """
                 SELECT EXISTS (
                     SELECT 1 FROM pg_indexes
                     WHERE schemaname = @schema
-                      AND indexname = 'IX_Proxies_ValidationClaimOrder')
+                      AND indexname IN (
+                          'IX_Proxies_ValidationClaimOrder',
+                          'IX_Proxies_ValidationClaimUnleased',
+                          'IX_Proxies_ExpiredLeaseClaim',
+                          'IX_Proxies_CheckLeaseId',
+                          'IX_Proxies_NextCheckAt_CheckLeaseUntil'))
                 """,
                 admin);
             inspectRetired.Parameters.AddWithValue("schema", schema);

@@ -15,7 +15,7 @@ public sealed class ProxyValidationPersistenceIntegrationTests
 {
     [Fact]
     [Trait("Category", "PostgresIntegration")]
-    public async Task HeartbeatAndCompletionLockLeaseRowsInStableIdOrder()
+    public async Task HeartbeatCompletionAndReleaseLockLeaseRowsInStableIdOrder()
     {
         var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
         if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
@@ -54,17 +54,26 @@ public sealed class ProxyValidationPersistenceIntegrationTests
                     {
                         Id = higherId,
                         Host = "198.51.100.102",
-                        Port = 8102,
-                        CheckLeaseId = leaseId,
-                        CheckLeaseUntil = now.AddMinutes(5)
+                        Port = 8102
                     },
                     new ProxyEndpoint
                     {
                         Id = lowerId,
                         Host = "198.51.100.101",
-                        Port = 8101,
-                        CheckLeaseId = leaseId,
-                        CheckLeaseUntil = now.AddMinutes(5)
+                        Port = 8101
+                    });
+                seed.ProxyValidationLeases.AddRange(
+                    new ProxyValidationLease
+                    {
+                        ProxyId = higherId,
+                        LeaseId = leaseId,
+                        LeaseUntil = now.AddMinutes(5)
+                    },
+                    new ProxyValidationLease
+                    {
+                        ProxyId = lowerId,
+                        LeaseId = leaseId,
+                        LeaseUntil = now.AddMinutes(5)
                     });
                 await seed.SaveChangesAsync();
             }
@@ -106,6 +115,32 @@ public sealed class ProxyValidationPersistenceIntegrationTests
                     var result = await validator.PersistResultsAsync(updates, CancellationToken.None);
                     return result.Deferred;
                 });
+
+            var releaseLeaseId = Guid.NewGuid();
+            await using (var reseed = await factory.CreateDbContextAsync())
+            {
+                reseed.ProxyValidationLeases.AddRange(
+                    new ProxyValidationLease
+                    {
+                        ProxyId = higherId,
+                        LeaseId = releaseLeaseId,
+                        LeaseUntil = now.AddMinutes(7)
+                    },
+                    new ProxyValidationLease
+                    {
+                        ProxyId = lowerId,
+                        LeaseId = releaseLeaseId,
+                        LeaseUntil = now.AddMinutes(7)
+                    });
+                await reseed.SaveChangesAsync();
+            }
+            await AssertWaitsOnLowerBeforeLockingHigherAsync(
+                builder.ConnectionString,
+                admin,
+                applicationName,
+                lowerId,
+                higherId,
+                () => validator.ReleaseLeaseAsync(releaseLeaseId, CancellationToken.None));
         }
         finally
         {
@@ -192,6 +227,7 @@ public sealed class ProxyValidationPersistenceIntegrationTests
             var saved = await verify.Proxies.AsNoTracking().SingleAsync(proxy => proxy.Id == proxyId);
             Assert.Null(saved.CheckLeaseId);
             Assert.Null(saved.CheckLeaseUntil);
+            Assert.False(await verify.ProxyValidationLeases.AnyAsync(lease => lease.ProxyId == proxyId));
             Assert.Equal(lastCheckedAt.ToUnixTimeMilliseconds(), saved.LastCheckedAt?.ToUnixTimeMilliseconds());
             Assert.Equal(120, saved.LatencyMs);
             Assert.Null(saved.LastValidationAttemptAt);
@@ -229,12 +265,17 @@ public sealed class ProxyValidationPersistenceIntegrationTests
                     LeaseId = activeLease,
                     StartedAt = DateTimeOffset.UtcNow.AddMinutes(-10)
                 });
-            verify.Proxies.Add(new ProxyEndpoint
+            var activeProxy = new ProxyEndpoint
             {
                 Host = "203.0.113.200",
-                Port = 65_000,
-                CheckLeaseId = activeLease,
-                CheckLeaseUntil = DateTimeOffset.UtcNow.AddMinutes(5)
+                Port = 65_000
+            };
+            verify.Proxies.Add(activeProxy);
+            verify.ProxyValidationLeases.Add(new ProxyValidationLease
+            {
+                ProxyId = activeProxy.Id,
+                LeaseId = activeLease,
+                LeaseUntil = DateTimeOffset.UtcNow.AddMinutes(5)
             });
             await verify.SaveChangesAsync();
             await verify.Proxies.Where(proxy => proxy.Id == proxyId).ExecuteUpdateAsync(setters => setters
@@ -292,18 +333,17 @@ public sealed class ProxyValidationPersistenceIntegrationTests
                 {
                     Id = ownedId,
                     Host = $"12.34.{ownedId.ToByteArray()[0]}.{ownedId.ToByteArray()[1]}",
-                    Port = 40_000 + ownedId.ToByteArray()[2],
-                    CheckLeaseId = ownedLease,
-                    CheckLeaseUntil = initialExpiry
+                    Port = 40_000 + ownedId.ToByteArray()[2]
                 },
                 new ProxyEndpoint
                 {
                     Id = foreignId,
                     Host = $"13.35.{foreignId.ToByteArray()[0]}.{foreignId.ToByteArray()[1]}",
-                    Port = 40_000 + foreignId.ToByteArray()[2],
-                    CheckLeaseId = foreignLease,
-                    CheckLeaseUntil = initialExpiry
+                    Port = 40_000 + foreignId.ToByteArray()[2]
                 });
+            seed.ProxyValidationLeases.AddRange(
+                new ProxyValidationLease { ProxyId = ownedId, LeaseId = ownedLease, LeaseUntil = initialExpiry },
+                new ProxyValidationLease { ProxyId = foreignId, LeaseId = foreignLease, LeaseUntil = initialExpiry });
             await seed.SaveChangesAsync();
         }
 
@@ -322,19 +362,20 @@ public sealed class ProxyValidationPersistenceIntegrationTests
             await using (var renewed = await factory.CreateDbContextAsync())
             {
                 Assert.Equal(renewedExpiry,
-                    await renewed.Proxies.Where(proxy => proxy.Id == ownedId).Select(proxy => proxy.CheckLeaseUntil).SingleAsync());
+                    await renewed.ProxyValidationLeases.Where(lease => lease.ProxyId == ownedId)
+                        .Select(lease => lease.LeaseUntil).SingleAsync());
                 Assert.Equal(initialExpiry,
-                    await renewed.Proxies.Where(proxy => proxy.Id == foreignId).Select(proxy => proxy.CheckLeaseUntil).SingleAsync());
+                    await renewed.ProxyValidationLeases.Where(lease => lease.ProxyId == foreignId)
+                        .Select(lease => lease.LeaseUntil).SingleAsync());
             }
 
             Assert.Equal(1, await validator.ReleaseLeaseAsync(ownedLease, CancellationToken.None));
             await using var released = await factory.CreateDbContextAsync();
-            var owned = await released.Proxies.AsNoTracking().SingleAsync(proxy => proxy.Id == ownedId);
-            var foreign = await released.Proxies.AsNoTracking().SingleAsync(proxy => proxy.Id == foreignId);
-            Assert.Null(owned.CheckLeaseId);
-            Assert.Null(owned.CheckLeaseUntil);
-            Assert.Equal(foreignLease, foreign.CheckLeaseId);
-            Assert.Equal(initialExpiry, foreign.CheckLeaseUntil);
+            Assert.False(await released.ProxyValidationLeases.AnyAsync(lease => lease.ProxyId == ownedId));
+            var foreign = await released.ProxyValidationLeases.AsNoTracking()
+                .SingleAsync(lease => lease.ProxyId == foreignId);
+            Assert.Equal(foreignLease, foreign.LeaseId);
+            Assert.Equal(initialExpiry, foreign.LeaseUntil);
         }
         finally
         {
@@ -345,7 +386,7 @@ public sealed class ProxyValidationPersistenceIntegrationTests
 
     [Fact]
     [Trait("Category", "PostgresIntegration")]
-    public async Task PartialLeaseOwnershipPersistsOwnedResultButFailsClosed()
+    public async Task PartialLeaseOwnershipRollsBackEveryResultAndLeaseMutation()
     {
         var connectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
         if (string.IsNullOrWhiteSpace(connectionString)) return;
@@ -371,9 +412,7 @@ public sealed class ProxyValidationPersistenceIntegrationTests
                     Host = $"14.36.{ownedId.ToByteArray()[0]}.{ownedId.ToByteArray()[1]}",
                     Port = 30_000 + ownedId.ToByteArray()[2],
                     FirstSeenAt = checkedAt.AddMinutes(-1),
-                    LastSeenAt = checkedAt.AddMinutes(-1),
-                    CheckLeaseId = expectedLease,
-                    CheckLeaseUntil = checkedAt.AddMinutes(5)
+                    LastSeenAt = checkedAt.AddMinutes(-1)
                 },
                 new ProxyEndpoint
                 {
@@ -381,9 +420,20 @@ public sealed class ProxyValidationPersistenceIntegrationTests
                     Host = $"15.37.{foreignId.ToByteArray()[0]}.{foreignId.ToByteArray()[1]}",
                     Port = 30_000 + foreignId.ToByteArray()[2],
                     FirstSeenAt = checkedAt.AddMinutes(-1),
-                    LastSeenAt = checkedAt.AddMinutes(-1),
-                    CheckLeaseId = foreignLease,
-                    CheckLeaseUntil = checkedAt.AddMinutes(5)
+                    LastSeenAt = checkedAt.AddMinutes(-1)
+                });
+            seed.ProxyValidationLeases.AddRange(
+                new ProxyValidationLease
+                {
+                    ProxyId = ownedId,
+                    LeaseId = expectedLease,
+                    LeaseUntil = checkedAt.AddMinutes(5)
+                },
+                new ProxyValidationLease
+                {
+                    ProxyId = foreignId,
+                    LeaseId = foreignLease,
+                    LeaseUntil = checkedAt.AddMinutes(5)
                 });
             await seed.SaveChangesAsync();
         }
@@ -415,12 +465,14 @@ public sealed class ProxyValidationPersistenceIntegrationTests
             await using var verify = await factory.CreateDbContextAsync();
             var owned = await verify.Proxies.AsNoTracking().SingleAsync(proxy => proxy.Id == ownedId);
             var foreign = await verify.Proxies.AsNoTracking().SingleAsync(proxy => proxy.Id == foreignId);
-            Assert.Equal(ProxyStatus.Alive, owned.Status);
-            Assert.Equal(1, owned.SuccessfulChecks);
-            Assert.Null(owned.CheckLeaseId);
+            Assert.Equal(ProxyStatus.Pending, owned.Status);
+            Assert.Equal(0, owned.SuccessfulChecks);
             Assert.Equal(ProxyStatus.Pending, foreign.Status);
             Assert.Equal(0, foreign.SuccessfulChecks);
-            Assert.Equal(foreignLease, foreign.CheckLeaseId);
+            Assert.Equal(expectedLease, await verify.ProxyValidationLeases
+                .Where(lease => lease.ProxyId == ownedId).Select(lease => lease.LeaseId).SingleAsync());
+            Assert.Equal(foreignLease, await verify.ProxyValidationLeases
+                .Where(lease => lease.ProxyId == foreignId).Select(lease => lease.LeaseId).SingleAsync());
         }
         finally
         {
@@ -462,8 +514,6 @@ public sealed class ProxyValidationPersistenceIntegrationTests
             LastSeenAt = checkedAt,
             LastCheckedAt = checkedAt,
             NextCheckAt = checkedAt,
-            CheckLeaseId = leaseId,
-            CheckLeaseUntil = checkedAt.AddMinutes(5),
             SuccessfulChecks = 5,
             FailedChecks = 3,
             ConsecutiveFailedChecks = 3
@@ -471,6 +521,12 @@ public sealed class ProxyValidationPersistenceIntegrationTests
         await using (var seed = await factory.CreateDbContextAsync())
         {
             seed.Proxies.Add(proxy);
+            seed.ProxyValidationLeases.Add(new ProxyValidationLease
+            {
+                ProxyId = proxyId,
+                LeaseId = leaseId,
+                LeaseUntil = checkedAt.AddMinutes(5)
+            });
             await seed.SaveChangesAsync();
         }
 
@@ -508,6 +564,7 @@ public sealed class ProxyValidationPersistenceIntegrationTests
             Assert.Equal(3, saved.ConsecutiveFailedChecks);
             Assert.Null(saved.CheckLeaseId);
             Assert.Null(saved.CheckLeaseUntil);
+            Assert.False(await verify.ProxyValidationLeases.AnyAsync(lease => lease.ProxyId == proxyId));
             Assert.Equal(checkedAt.AddMinutes(2), saved.NextCheckAt);
             Assert.Equal("control unavailable", saved.LastError);
 
@@ -515,9 +572,15 @@ public sealed class ProxyValidationPersistenceIntegrationTests
             // сделать LastCheckedAt временем объективного результата.
             var aliveLease = Guid.NewGuid();
             await using (var owner = await factory.CreateDbContextAsync())
-                await owner.Proxies.Where(x => x.Id == proxyId).ExecuteUpdateAsync(setters => setters
-                    .SetProperty(x => x.CheckLeaseId, aliveLease)
-                    .SetProperty(x => x.CheckLeaseUntil, checkedAt.AddMinutes(6)));
+            {
+                owner.ProxyValidationLeases.Add(new ProxyValidationLease
+                {
+                    ProxyId = proxyId,
+                    LeaseId = aliveLease,
+                    LeaseUntil = checkedAt.AddMinutes(6)
+                });
+                await owner.SaveChangesAsync();
+            }
             var alive = ProxyCheckScheduler.Create(
                 new ProxyCheckResult(proxyId, true, 88, "1.1.1.1", true, null),
                 saved.ConsecutiveFailedChecks,
@@ -556,7 +619,7 @@ public sealed class ProxyValidationPersistenceIntegrationTests
         await blocker.OpenAsync();
         await using var blockerTransaction = await blocker.BeginTransactionAsync();
         await using (var lockLower = new NpgsqlCommand(
-            "SELECT \"Id\" FROM \"Proxies\" WHERE \"Id\" = @id FOR UPDATE", blocker, blockerTransaction))
+            "SELECT \"ProxyId\" FROM \"ProxyValidationLeases\" WHERE \"ProxyId\" = @id FOR UPDATE", blocker, blockerTransaction))
         {
             lockLower.Parameters.AddWithValue("id", lowerId);
             Assert.Equal(lowerId, await lockLower.ExecuteScalarAsync());
@@ -571,7 +634,7 @@ public sealed class ProxyValidationPersistenceIntegrationTests
                     SELECT 1 FROM pg_stat_activity
                     WHERE application_name = @application_name
                       AND wait_event_type = 'Lock'
-                      AND query LIKE '%Proxies%')
+                      AND query LIKE '%ProxyValidationLeases%')
                 """, admin);
             activity.Parameters.AddWithValue("application_name", applicationName);
             waitingForLower = (bool)(await activity.ExecuteScalarAsync())!;
@@ -586,7 +649,7 @@ public sealed class ProxyValidationPersistenceIntegrationTests
         await probe.OpenAsync();
         await using var probeTransaction = await probe.BeginTransactionAsync();
         await using var probeHigher = new NpgsqlCommand(
-            "SELECT \"Id\" FROM \"Proxies\" WHERE \"Id\" = @id FOR UPDATE SKIP LOCKED", probe, probeTransaction);
+            "SELECT \"ProxyId\" FROM \"ProxyValidationLeases\" WHERE \"ProxyId\" = @id FOR UPDATE SKIP LOCKED", probe, probeTransaction);
         probeHigher.Parameters.AddWithValue("id", higherId);
         var unlockedHigherId = await probeHigher.ExecuteScalarAsync();
         await probeTransaction.RollbackAsync();

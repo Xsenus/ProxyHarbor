@@ -1,7 +1,9 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Npgsql;
 using ProxyHarbor.Domain;
 
 namespace ProxyHarbor.Infrastructure;
@@ -13,21 +15,38 @@ internal static class OperationalRetention
     // большую транзакцию и постепенно освобождает историю без всплеска WAL/IO.
     internal const int RunCleanupBatchSize = 10_000;
 
-    internal static Task<int> PruneProxyMembershipAsync(
+    internal static async Task<int> PruneProxyMembershipAsync(
         ProxyHarborDbContext db,
         DateTimeOffset now,
         int retentionDays,
         CancellationToken token)
     {
         var cutoff = now.AddDays(-Math.Max(1, retentionDays));
-        return db.Proxies.Where(proxy =>
-                (proxy.Status == ProxyStatus.Pending || proxy.Status == ProxyStatus.Dead) &&
-                // Любой когда-либо работавший endpoint остаётся исторической записью.
-                // Retention удаляет только кандидатов, ни разу не прошедших проверку.
-                proxy.FirstAliveAt == null && proxy.SuccessfulChecks == 0 &&
-                proxy.LastSeenAt < cutoff &&
-                (proxy.CheckLeaseUntil == null || proxy.CheckLeaseUntil < now))
-            .ExecuteDeleteAsync(token);
+        return await db.Database.CreateExecutionStrategy().ExecuteAsync(async () =>
+        {
+            await using var transaction = await db.Database.BeginTransactionAsync(token);
+            var connection = (NpgsqlConnection)db.Database.GetDbConnection();
+            await PostgresAdvisoryLock.AcquireTransactionAsync(
+                connection,
+                (NpgsqlTransaction)transaction.GetDbTransaction(),
+                PostgresAdvisoryLock.ProxyValidationClaimKey,
+                token);
+            // Сериализация с claim закрывает окно между NOT EXISTS и FK INSERT:
+            // stale proxy либо удаляется первым, либо уже имеет lease и пропускается.
+            var deleted = await db.Proxies.Where(proxy =>
+                    (proxy.Status == ProxyStatus.Pending || proxy.Status == ProxyStatus.Dead) &&
+                    // Любой когда-либо работавший endpoint остаётся исторической записью.
+                    // Retention удаляет только кандидатов, ни разу не прошедших проверку.
+                    proxy.FirstAliveAt == null && proxy.SuccessfulChecks == 0 &&
+                    proxy.LastSeenAt < cutoff &&
+                    // Любая lease-строка, даже уже просроченная, исключает обратный
+                    // порядок proxy -> lease с completion. Следующий claim сначала
+                    // заменит и завершит ownership, после чего новый цикл удалит proxy.
+                    !db.ProxyValidationLeases.Any(lease => lease.ProxyId == proxy.Id))
+                .ExecuteDeleteAsync(token);
+            await transaction.CommitAsync(token);
+            return deleted;
+        });
     }
 
     internal static async Task<(int CollectionRuns, int ValidationRuns)> PruneRunHistoryAsync(
@@ -171,8 +190,8 @@ public sealed class OperationalMaintenanceService(
             ValidationLeasePolicy.Duration(collectorOptions.Value.ProbeTimeoutSeconds));
         return await db.ValidationRuns.Where(run => run.Status == "running" &&
                 run.StartedAt < staleBefore &&
-                !db.Proxies.Any(proxy => proxy.CheckLeaseId == run.LeaseId &&
-                    proxy.CheckLeaseUntil >= now))
+                !db.ProxyValidationLeases.Any(lease => lease.LeaseId == run.LeaseId &&
+                    lease.LeaseUntil >= now))
             .ExecuteUpdateAsync(setters => setters
                 .SetProperty(run => run.FinishedAt, now)
                 .SetProperty(run => run.Status, "failed")

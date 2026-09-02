@@ -645,6 +645,11 @@ internal static class RestoreEntityValidator
             Invalid("proxy currentAliveSince не соответствует текущему статусу.");
         if (entity.CheckLeaseUntil.HasValue != entity.CheckLeaseId.HasValue)
             Invalid("proxy check lease должен содержать одновременно время и token.");
+        // Lease — эфемерное operational ownership, а не восстановимое состояние.
+        // Старые архивы могли содержать его в строке Proxies; после restore все
+        // проверки безопасно возвращаются в общую очередь.
+        entity.CheckLeaseUntil = null;
+        entity.CheckLeaseId = null;
         if (entity.LastValidationDeferred && entity.LastValidationAttemptAt is null)
             Invalid("deferred proxy должен содержать lastValidationAttemptAt.");
         RequireNonNegative(entity.SuccessfulChecks, "proxy.successfulChecks");

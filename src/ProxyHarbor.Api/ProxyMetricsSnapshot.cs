@@ -79,44 +79,44 @@ internal sealed record ProxyMetricsRawRow(
 internal static class ProxyMetricsSnapshotReader
 {
     internal const string PostgresSql = """
-        SELECT "CountryCode",
-               "Status",
-               "Protocol",
+        SELECT proxy."CountryCode",
+               proxy."Status",
+               proxy."Protocol",
                count(*)::bigint AS "Count",
                count(*) FILTER (WHERE
-                   "FirstAliveAt" IS NOT NULL OR "SuccessfulChecks" > 0)::bigint AS "EverAlive",
+                   proxy."FirstAliveAt" IS NOT NULL OR proxy."SuccessfulChecks" > 0)::bigint AS "EverAlive",
                count(*) FILTER (WHERE
-                   "Status" = @dead_status AND
-                   ("FirstAliveAt" IS NOT NULL OR "SuccessfulChecks" > 0))::bigint AS "HistoricalDead",
+                   proxy."Status" = @dead_status AND
+                   (proxy."FirstAliveAt" IS NOT NULL OR proxy."SuccessfulChecks" > 0))::bigint AS "HistoricalDead",
                count(*) FILTER (WHERE
-                   ("NextCheckAt" IS NULL OR "NextCheckAt" <= @now) AND
-                   ("CheckLeaseUntil" IS NULL OR "CheckLeaseUntil" < @now))::bigint AS "Due",
-               count(*) FILTER (WHERE "CheckLeaseUntil" >= @now)::bigint AS "Leased",
-               count(*) FILTER (WHERE "LastCheckedAt" IS NULL)::bigint AS "NeverChecked",
-               count(*) FILTER (WHERE "LastValidationAttemptAt" IS NULL)::bigint AS "NeverAttempted",
-               count(*) FILTER (WHERE "ConsecutiveFailedChecks" >= 3)::bigint AS "RepeatedlyFailing",
+                   (proxy."NextCheckAt" IS NULL OR proxy."NextCheckAt" <= @now) AND
+                   (lease."LeaseUntil" IS NULL OR lease."LeaseUntil" < @now))::bigint AS "Due",
+               count(*) FILTER (WHERE lease."LeaseUntil" >= @now)::bigint AS "Leased",
+               count(*) FILTER (WHERE proxy."LastCheckedAt" IS NULL)::bigint AS "NeverChecked",
+               count(*) FILTER (WHERE proxy."LastValidationAttemptAt" IS NULL)::bigint AS "NeverAttempted",
+               count(*) FILTER (WHERE proxy."ConsecutiveFailedChecks" >= 3)::bigint AS "RepeatedlyFailing",
                count(*) FILTER (WHERE
-                   "Status" IN (@pending_status, @dead_status) AND
-                   "LastSeenAt" < @retention_cutoff AND
-                   ("CheckLeaseUntil" IS NULL OR "CheckLeaseUntil" < @now))::bigint AS "StaleUnseen",
+                   proxy."Status" IN (@pending_status, @dead_status) AND
+                   proxy."LastSeenAt" < @retention_cutoff AND
+                   (lease."LeaseUntil" IS NULL OR lease."LeaseUntil" < @now))::bigint AS "StaleUnseen",
                count(*) FILTER (WHERE
-                   "Status" = @alive_status AND "LastCheckedAt" >= @fresh_after)::bigint AS "Published",
+                   proxy."Status" = @alive_status AND proxy."LastCheckedAt" >= @fresh_after)::bigint AS "Published",
+               count(*) FILTER (WHERE proxy."Status" = @alive_status AND
+                   (proxy."LastCheckedAt" IS NULL OR proxy."LastCheckedAt" < @fresh_after))::bigint AS "StaleAlive",
+               count(*) FILTER (WHERE proxy."NextCheckAt" > @now)::bigint AS "Scheduled",
+               coalesce(sum(proxy."LatencyMs"::bigint) FILTER (WHERE
+                   proxy."Status" = @alive_status AND proxy."LastCheckedAt" >= @fresh_after AND
+                   proxy."LatencyMs" IS NOT NULL), 0)::bigint AS "FreshLatencyTotal",
                count(*) FILTER (WHERE
-                   "Status" = @alive_status AND
-                   ("LastCheckedAt" IS NULL OR "LastCheckedAt" < @fresh_after))::bigint AS "StaleAlive",
-               count(*) FILTER (WHERE "NextCheckAt" > @now)::bigint AS "Scheduled",
-               coalesce(sum("LatencyMs"::bigint) FILTER (WHERE
-                   "Status" = @alive_status AND "LastCheckedAt" >= @fresh_after AND
-                   "LatencyMs" IS NOT NULL), 0)::bigint AS "FreshLatencyTotal",
-               count(*) FILTER (WHERE
-                   "Status" = @alive_status AND "LastCheckedAt" >= @fresh_after AND
-                   "LatencyMs" IS NOT NULL)::bigint AS "FreshLatencySamples",
-               max("LastValidationAttemptAt") AS "LastAttemptAt",
-               min("CurrentAliveSince") FILTER (WHERE
-                   "Status" = @alive_status AND "CurrentAliveSince" IS NOT NULL) AS "OldestActiveAt"
-        FROM "Proxies"
-        GROUP BY "CountryCode", "Status", "Protocol"
-        ORDER BY "CountryCode" NULLS FIRST, "Status", "Protocol"
+                   proxy."Status" = @alive_status AND proxy."LastCheckedAt" >= @fresh_after AND
+                   proxy."LatencyMs" IS NOT NULL)::bigint AS "FreshLatencySamples",
+               max(proxy."LastValidationAttemptAt") AS "LastAttemptAt",
+               min(proxy."CurrentAliveSince") FILTER (WHERE
+                   proxy."Status" = @alive_status AND proxy."CurrentAliveSince" IS NOT NULL) AS "OldestActiveAt"
+        FROM "Proxies" AS proxy
+        LEFT JOIN "ProxyValidationLeases" AS lease ON lease."ProxyId" = proxy."Id"
+        GROUP BY proxy."CountryCode", proxy."Status", proxy."Protocol"
+        ORDER BY proxy."CountryCode" NULLS FIRST, proxy."Status", proxy."Protocol"
         """;
 
     internal static async Task<ProxyMetricsSnapshot> ReadAsync(
@@ -193,40 +193,52 @@ internal static class ProxyMetricsSnapshotReader
         DateTimeOffset freshAfter,
         CancellationToken token)
     {
-        var rows = await db.Proxies.AsNoTracking()
-            .GroupBy(proxy => new { proxy.CountryCode, proxy.Status, proxy.Protocol })
+        var query =
+            from proxy in db.Proxies.AsNoTracking()
+            join lease in db.ProxyValidationLeases.AsNoTracking()
+                on proxy.Id equals lease.ProxyId into proxyLeases
+            from lease in proxyLeases.DefaultIfEmpty()
+            select new { Proxy = proxy, Lease = lease };
+        var rows = await query
+            .GroupBy(item => new
+            {
+                item.Proxy.CountryCode,
+                item.Proxy.Status,
+                item.Proxy.Protocol
+            })
             .Select(group => new ProxyMetricsRawRow(
                 group.Key.CountryCode,
                 group.Key.Status,
                 group.Key.Protocol,
                 group.LongCount(),
-                group.LongCount(proxy => proxy.FirstAliveAt != null || proxy.SuccessfulChecks > 0),
-                group.LongCount(proxy => proxy.Status == ProxyStatus.Dead &&
-                    (proxy.FirstAliveAt != null || proxy.SuccessfulChecks > 0)),
-                group.LongCount(proxy =>
-                    (proxy.NextCheckAt == null || proxy.NextCheckAt <= now) &&
-                    (proxy.CheckLeaseUntil == null || proxy.CheckLeaseUntil < now)),
-                group.LongCount(proxy => proxy.CheckLeaseUntil >= now),
-                group.LongCount(proxy => proxy.LastCheckedAt == null),
-                group.LongCount(proxy => proxy.LastValidationAttemptAt == null),
-                group.LongCount(proxy => proxy.ConsecutiveFailedChecks >= 3),
-                group.LongCount(proxy =>
-                    (proxy.Status == ProxyStatus.Pending || proxy.Status == ProxyStatus.Dead) &&
-                    proxy.LastSeenAt < retentionCutoff &&
-                    (proxy.CheckLeaseUntil == null || proxy.CheckLeaseUntil < now)),
-                group.LongCount(proxy =>
-                    proxy.Status == ProxyStatus.Alive && proxy.LastCheckedAt >= freshAfter),
-                group.LongCount(proxy => proxy.Status == ProxyStatus.Alive &&
-                    (proxy.LastCheckedAt == null || proxy.LastCheckedAt < freshAfter)),
-                group.LongCount(proxy => proxy.NextCheckAt > now),
-                group.Where(proxy => proxy.Status == ProxyStatus.Alive &&
-                    proxy.LastCheckedAt >= freshAfter && proxy.LatencyMs != null)
-                    .Sum(proxy => (long?)proxy.LatencyMs) ?? 0,
-                group.LongCount(proxy => proxy.Status == ProxyStatus.Alive &&
-                    proxy.LastCheckedAt >= freshAfter && proxy.LatencyMs != null),
-                group.Max(proxy => proxy.LastValidationAttemptAt),
-                group.Where(proxy => proxy.Status == ProxyStatus.Alive && proxy.CurrentAliveSince != null)
-                    .Min(proxy => (DateTimeOffset?)proxy.CurrentAliveSince)))
+                group.LongCount(item => item.Proxy.FirstAliveAt != null || item.Proxy.SuccessfulChecks > 0),
+                group.LongCount(item => item.Proxy.Status == ProxyStatus.Dead &&
+                    (item.Proxy.FirstAliveAt != null || item.Proxy.SuccessfulChecks > 0)),
+                group.LongCount(item =>
+                    (item.Proxy.NextCheckAt == null || item.Proxy.NextCheckAt <= now) &&
+                    (item.Lease == null || item.Lease.LeaseUntil < now)),
+                group.LongCount(item => item.Lease != null && item.Lease.LeaseUntil >= now),
+                group.LongCount(item => item.Proxy.LastCheckedAt == null),
+                group.LongCount(item => item.Proxy.LastValidationAttemptAt == null),
+                group.LongCount(item => item.Proxy.ConsecutiveFailedChecks >= 3),
+                group.LongCount(item =>
+                    (item.Proxy.Status == ProxyStatus.Pending || item.Proxy.Status == ProxyStatus.Dead) &&
+                    item.Proxy.LastSeenAt < retentionCutoff &&
+                    (item.Lease == null || item.Lease.LeaseUntil < now)),
+                group.LongCount(item => item.Proxy.Status == ProxyStatus.Alive &&
+                    item.Proxy.LastCheckedAt >= freshAfter),
+                group.LongCount(item => item.Proxy.Status == ProxyStatus.Alive &&
+                    (item.Proxy.LastCheckedAt == null || item.Proxy.LastCheckedAt < freshAfter)),
+                group.LongCount(item => item.Proxy.NextCheckAt > now),
+                group.Where(item => item.Proxy.Status == ProxyStatus.Alive &&
+                    item.Proxy.LastCheckedAt >= freshAfter && item.Proxy.LatencyMs != null)
+                    .Sum(item => (long?)item.Proxy.LatencyMs) ?? 0,
+                group.LongCount(item => item.Proxy.Status == ProxyStatus.Alive &&
+                    item.Proxy.LastCheckedAt >= freshAfter && item.Proxy.LatencyMs != null),
+                group.Max(item => item.Proxy.LastValidationAttemptAt),
+                group.Where(item => item.Proxy.Status == ProxyStatus.Alive &&
+                    item.Proxy.CurrentAliveSince != null)
+                    .Min(item => (DateTimeOffset?)item.Proxy.CurrentAliveSince)))
             .ToArrayAsync(token);
         return Aggregate(rows, now);
     }
