@@ -3,7 +3,7 @@ param(
     [string]$ApiBaseUrl = 'http://localhost:8080',
     [ValidateSet('Paid', 'Anonymous')][string]$AccessMode = 'Paid',
     [string]$BearerTokenFile,
-    [ValidateRange(5, 30)][int]$SamplesPerRoute = 10,
+    [ValidateRange(5, 30)][int]$SamplesPerRoute = 20,
     [ValidateRange(1, 10000)][int]$MaxHotP95Ms = 250,
     [ValidateRange(1, 30000)][int]$MaxColdP95Ms = 1500,
     [ValidateRange(0, 49970)][int]$ColdPageBase = 0,
@@ -13,6 +13,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $resolvedColdPageBase = if ($ColdPageBase -eq 0) { [Random]::Shared.Next(1, 49971) } else { $ColdPageBase }
 $report = [ordered]@{
+    schemaVersion = 2
     auditedAt = [DateTimeOffset]::UtcNow.ToString('O')
     apiBaseUrl = $ApiBaseUrl
     accessMode = $AccessMode
@@ -20,17 +21,19 @@ $report = [ordered]@{
     maxHotP95Ms = $MaxHotP95Ms
     maxColdP95Ms = $MaxColdP95Ms
     coldPageBase = $resolvedColdPageBase
+    transportSession = 'reused'
     success = $false
     totalRequests = 0
     routes = @()
     error = $null
 }
-$requestHeaders = @{ 'User-Agent' = 'ProxyHarbor-Performance-Audit/1.1' }
+$requestHeaders = @{ 'User-Agent' = 'ProxyHarbor-Performance-Audit/1.2' }
+$requestSession = [Microsoft.PowerShell.Commands.WebRequestSession]::new()
 function Invoke-TimedJsonRequest([string]$Path) {
     $timer = [Diagnostics.Stopwatch]::StartNew()
     try {
         $response = Invoke-WebRequest -Uri "$ApiBaseUrl$Path" -TimeoutSec 30 -NoProxy `
-            -Headers $requestHeaders
+            -Headers $requestHeaders -WebSession $requestSession
         $timer.Stop()
         if ($response.StatusCode -ne 200) {
             throw "GET $Path вернул HTTP $($response.StatusCode)."
@@ -70,6 +73,7 @@ function New-RouteMetric([string]$Name, [object[]]$Samples, [int]$ThresholdMs) {
         p95Ms = [Math]::Round((Get-Percentile $latencies 0.95), 2)
         maxMs = [Math]::Round(($latencies | Measure-Object -Maximum).Maximum, 2)
         averageMs = [Math]::Round(($latencies | Measure-Object -Average).Average, 2)
+        sampleLatenciesMs = [double[]]@($latencies | ForEach-Object { [Math]::Round($_, 2) })
         responseBytes = [long](($Samples | Measure-Object -Property bytes -Sum).Sum)
         thresholdMs = $ThresholdMs
     }

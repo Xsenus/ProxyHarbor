@@ -95,8 +95,14 @@ function Invoke-PerformanceCase(
         $expectedRequests = if ($AccessMode -eq 'Anonymous') { 18 } else { 17 }
         if ($ShouldSucceed -and ($rejected -or -not $report.success -or
             $report.totalRequests -ne $expectedRequests -or $report.routes.Count -ne 3 -or
-            $report.coldPageBase -lt 1 -or $report.coldPageBase -gt 49970 -or $report.error)) {
+            $report.coldPageBase -lt 1 -or $report.coldPageBase -gt 49970 -or
+            $report.schemaVersion -ne 2 -or $report.transportSession -ne 'reused' -or $report.error)) {
             throw 'Положительный performance contract нарушен.'
+        }
+        if ($ShouldSucceed -and @($report.routes | Where-Object {
+            @($_.sampleLatenciesMs).Count -ne $_.samples
+        }).Count -gt 0) {
+            throw 'Performance report не сохранил все исходные latency samples.'
         }
         if ($ShouldSucceed -and $report.accessMode -ne $AccessMode) {
             throw "Performance report потерял режим доступа $AccessMode."
