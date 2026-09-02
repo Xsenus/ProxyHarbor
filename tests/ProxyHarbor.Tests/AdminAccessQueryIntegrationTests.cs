@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Data;
 using System.Data.Common;
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
@@ -12,7 +13,7 @@ using ProxyHarbor.Infrastructure;
 
 namespace ProxyHarbor.Tests;
 
-/// <summary>Не допускает возврата отдельных полных aggregate-запросов в access registry.</summary>
+/// <summary>Фиксирует двухзапросный snapshot и bounded account lookup в access registry.</summary>
 [Collection(PostgresIntegrationGroup.Name)]
 public sealed class AdminAccessQueryIntegrationTests
 {
@@ -20,7 +21,7 @@ public sealed class AdminAccessQueryIntegrationTests
 
     [Fact]
     [Trait("Category", "PostgresIntegration")]
-    public async Task AccessRegistriesUseOneSummaryAndBoundedAccountLookup()
+    public async Task AccessRegistriesUseTwoSnapshotReadersAndBoundedAccountLookup()
     {
         var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
         if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
@@ -86,6 +87,21 @@ public sealed class AdminAccessQueryIntegrationTests
                 await seed.SaveChangesAsync();
             }
 
+            await using (var indexConnection = new NpgsqlConnection(builder.ConnectionString))
+            {
+                await indexConnection.OpenAsync();
+                await using var indexCommand = new NpgsqlCommand("""
+                    SELECT indexdef
+                    FROM pg_indexes
+                    WHERE schemaname = current_schema()
+                      AND indexname = 'IX_ProxyAccessBuckets_IpAddress_LastSeenAt_Id'
+                    """, indexConnection);
+                var indexDefinition = Assert.IsType<string>(await indexCommand.ExecuteScalarAsync());
+                Assert.Contains("\"IpAddress\", \"LastSeenAt\" DESC, \"Id\" DESC", indexDefinition, StringComparison.Ordinal);
+                Assert.Contains("INCLUDE (\"UserId\", \"Endpoint\")", indexDefinition, StringComparison.Ordinal);
+                Assert.Contains("WHERE (\"UserId\" IS NOT NULL)", indexDefinition, StringComparison.Ordinal);
+            }
+
             var reads = new RelationReadCounter();
             var measuredOptions = new DbContextOptionsBuilder<ProxyHarborDbContext>()
                 .UseNpgsql(builder.ConnectionString)
@@ -96,11 +112,9 @@ public sealed class AdminAccessQueryIntegrationTests
             var controller = new AdminAccessController(db,
                 new ProxyAccessMonitor(factory, NullLogger<ProxyAccessMonitor>.Instance));
 
+            reads.Reset();
             var traffic = Assert.IsType<OkObjectResult>(await controller.List(token: CancellationToken.None));
-            Assert.Equal(3, reads.AccessBucketReads);
-            Assert.Equal(1, reads.RuleReads);
-            Assert.Contains(reads.AccessBucketSql, sql =>
-                sql.Contains("ROW_NUMBER()", StringComparison.OrdinalIgnoreCase));
+            AssertAccessBudget(reads, expectedRuleReaders: 2);
             using (var json = JsonDocument.Parse(JsonSerializer.Serialize(traffic.Value, WebJsonOptions)))
             {
                 var root = json.RootElement;
@@ -116,10 +130,7 @@ public sealed class AdminAccessQueryIntegrationTests
 
             reads.Reset();
             var visitors = Assert.IsType<OkObjectResult>(await controller.Visitors(token: CancellationToken.None));
-            Assert.Equal(3, reads.AccessBucketReads);
-            Assert.Equal(1, reads.RuleReads);
-            Assert.Contains(reads.AccessBucketSql, sql =>
-                sql.Contains("ROW_NUMBER()", StringComparison.OrdinalIgnoreCase));
+            AssertAccessBudget(reads, expectedRuleReaders: 1);
             using var visitorJson = JsonDocument.Parse(JsonSerializer.Serialize(visitors.Value, WebJsonOptions));
             var visitorRoot = visitorJson.RootElement;
             Assert.Equal(2, visitorRoot.GetProperty("total").GetInt32());
@@ -128,7 +139,17 @@ public sealed class AdminAccessQueryIntegrationTests
             Assert.Equal(1, visitorRoot.GetProperty("summary").GetProperty("active24Hours").GetInt32());
             Assert.Contains(visitorRoot.GetProperty("items").EnumerateArray(), item =>
                 item.GetProperty("ipAddress").GetString() == "203.0.113.10" &&
-                item.GetProperty("email").GetString() == member.Email);
+                item.GetProperty("email").GetString() == member.Email &&
+                item.GetProperty("isBlocked").GetBoolean());
+
+            await db.ProxyAccessBuckets.ExecuteDeleteAsync();
+            reads.Reset();
+            var empty = Assert.IsType<OkObjectResult>(await controller.List(token: CancellationToken.None));
+            AssertAccessBudget(reads, expectedRuleReaders: 2);
+            using var emptyJson = JsonDocument.Parse(JsonSerializer.Serialize(empty.Value, WebJsonOptions));
+            Assert.Equal(0, emptyJson.RootElement.GetProperty("total").GetInt32());
+            Assert.Empty(emptyJson.RootElement.GetProperty("items").EnumerateArray());
+            Assert.Equal(2, emptyJson.RootElement.GetProperty("summary").GetProperty("activeRules").GetInt32());
         }
         finally
         {
@@ -149,6 +170,21 @@ public sealed class AdminAccessQueryIntegrationTests
             LastSeenAt = lastSeenAt
         };
 
+    private static void AssertAccessBudget(RelationReadCounter reads, int expectedRuleReaders)
+    {
+        Assert.Equal(2, reads.Reads.Length);
+        Assert.Equal(2, reads.AccessBucketReads);
+        Assert.Equal(expectedRuleReaders, reads.RuleReads);
+        Assert.All(reads.Reads, read => Assert.Equal(IsolationLevel.RepeatableRead, read.IsolationLevel));
+        var page = Assert.Single(reads.Reads, read =>
+            read.Sql.Contains("AspNetUsers", StringComparison.Ordinal));
+        Assert.Contains("AccessBlockRules", page.Sql, StringComparison.Ordinal);
+        Assert.Contains("LIMIT", page.Sql, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("PasswordHash", page.Sql, StringComparison.Ordinal);
+        Assert.DoesNotContain("SecurityStamp", page.Sql, StringComparison.Ordinal);
+        Assert.DoesNotContain("ConcurrencyStamp", page.Sql, StringComparison.Ordinal);
+    }
+
     private sealed class TestDbFactory(DbContextOptions<ProxyHarborDbContext> options)
         : IDbContextFactory<ProxyHarborDbContext>
     {
@@ -159,17 +195,17 @@ public sealed class AdminAccessQueryIntegrationTests
     {
         private int accessBucketReads;
         private int ruleReads;
-        private readonly ConcurrentQueue<string> accessBucketSql = new();
+        private readonly ConcurrentQueue<AccessRead> reads = new();
 
         internal int AccessBucketReads => Volatile.Read(ref accessBucketReads);
         internal int RuleReads => Volatile.Read(ref ruleReads);
-        internal IReadOnlyList<string> AccessBucketSql => accessBucketSql.ToArray();
+        internal AccessRead[] Reads => reads.ToArray();
 
         internal void Reset()
         {
             Volatile.Write(ref accessBucketReads, 0);
             Volatile.Write(ref ruleReads, 0);
-            while (accessBucketSql.TryDequeue(out _)) { }
+            while (reads.TryDequeue(out _)) { }
         }
 
         public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
@@ -178,14 +214,16 @@ public sealed class AdminAccessQueryIntegrationTests
             InterceptionResult<DbDataReader> result,
             CancellationToken cancellationToken = default)
         {
+            if (command.CommandText.StartsWith("SELECT", StringComparison.OrdinalIgnoreCase) ||
+                command.CommandText.StartsWith("WITH", StringComparison.OrdinalIgnoreCase))
+                reads.Enqueue(new AccessRead(command.CommandText, command.Transaction?.IsolationLevel));
             if (command.CommandText.Contains("\"ProxyAccessBuckets\"", StringComparison.Ordinal))
-            {
                 Interlocked.Increment(ref accessBucketReads);
-                accessBucketSql.Enqueue(command.CommandText);
-            }
             if (command.CommandText.Contains("\"AccessBlockRules\"", StringComparison.Ordinal))
                 Interlocked.Increment(ref ruleReads);
             return ValueTask.FromResult(result);
         }
     }
+
+    private sealed record AccessRead(string Sql, IsolationLevel? IsolationLevel);
 }
