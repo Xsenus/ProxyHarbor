@@ -41,13 +41,19 @@ public sealed class AdminAccessController(ProxyHarborDbContext db, ProxyAccessMo
                     bytesSent = x.Sum(y => y.BytesSent),
                     lastSeenAt = x.Max(y => y.LastSeenAt)
                 });
-            var summaryRow = await buckets.GroupBy(_ => 1).Select(group => new
-            {
-                requests = group.Sum(x => (long)x.Requests),
-                proxyItems = group.Sum(x => x.ProxyItems),
-                uniqueIps = group.Select(x => x.IpAddress).Distinct().Count()
-            }).SingleOrDefaultAsync(token);
-            var total = summaryRow?.uniqueIps ?? 0;
+            // DefaultIfEmpty keeps the administrative rule count correct even when the
+            // 30-day traffic window is empty, without adding a third database reader.
+            var summaryRow = await db.AccessBlockRules.AsNoTracking()
+                .Select(_ => 1).Take(1).DefaultIfEmpty()
+                .Select(_ => new
+                {
+                    requests = buckets.Sum(x => (long?)x.Requests) ?? 0,
+                    proxyItems = buckets.Sum(x => (long?)x.ProxyItems) ?? 0,
+                    uniqueIps = buckets.Select(x => x.IpAddress).Distinct().Count(),
+                    activeRules = db.AccessBlockRules.Count(x =>
+                        x.Enabled && (x.ExpiresAt == null || x.ExpiresAt > now))
+                }).SingleAsync(token);
+            var total = summaryRow.uniqueIps;
             var ordered = sort switch
             {
                 "ip" => descending ? grouped.OrderByDescending(x => x.IpAddress) : grouped.OrderBy(x => x.IpAddress),
@@ -56,44 +62,55 @@ public sealed class AdminAccessController(ProxyHarborDbContext db, ProxyAccessMo
                 "lastSeen" => descending ? grouped.OrderByDescending(x => x.lastSeenAt) : grouped.OrderBy(x => x.lastSeenAt),
                 _ => descending ? grouped.OrderByDescending(x => x.requests) : grouped.OrderBy(x => x.requests)
             };
-            var rows = await ordered.ThenBy(x => x.IpAddress)
-                .Skip((page - 1) * pageSize).Take(pageSize).ToListAsync(token);
-            var ips = rows.Select(x => x.IpAddress).ToArray();
-            var accountLinks = await buckets.Where(x => ips.Contains(x.IpAddress) && x.UserId != null)
-                .GroupBy(x => x.IpAddress)
-                .Select(group => group.OrderByDescending(x => x.LastSeenAt).ThenByDescending(x => x.Id)
-                    .Select(x => new { x.IpAddress, x.UserId, x.LastSeenAt }).First())
-                .ToListAsync(token);
-            var accountLinksByIp = accountLinks.ToDictionary(x => x.IpAddress, StringComparer.Ordinal);
-            var accountIds = accountLinks.Select(x => x.UserId!.Value).Distinct().ToArray();
-            var accounts = await db.Users.AsNoTracking().Where(x => accountIds.Contains(x.Id))
-                .Select(x => new { x.Id, x.UserName, x.Email, x.DisplayName }).ToDictionaryAsync(x => x.Id, token);
-            var activeRules = await ActiveRules(now, token);
-            var items = rows.Select(row =>
+            var paged = ordered.ThenBy(x => x.IpAddress)
+                .Skip((page - 1) * pageSize).Take(pageSize);
+            var rows = await paged.Select(row => new
             {
-                accountLinksByIp.TryGetValue(row.IpAddress, out var link);
-                var account = link?.UserId is Guid id && accounts.TryGetValue(id, out var found) ? found : null;
-                return new
-                {
-                    row.IpAddress,
-                    userId = link?.UserId,
-                    userName = account?.UserName,
-                    email = account?.Email,
-                    displayName = account?.DisplayName,
-                    row.requests,
-                    row.blockedRequests,
-                    row.proxyItems,
-                    row.bytesSent,
-                    row.lastSeenAt,
-                    isBlocked = activeRules.IpAddresses.Contains(row.IpAddress)
-                };
+                row.IpAddress,
+                row.requests,
+                row.blockedRequests,
+                row.proxyItems,
+                row.bytesSent,
+                row.lastSeenAt,
+                UserId = buckets.Where(x => x.IpAddress == row.IpAddress && x.UserId != null)
+                        .OrderByDescending(x => x.LastSeenAt).ThenByDescending(x => x.Id)
+                        .Select(x => x.UserId).FirstOrDefault(),
+                UserName = buckets.Where(x => x.IpAddress == row.IpAddress && x.UserId != null)
+                        .OrderByDescending(x => x.LastSeenAt).ThenByDescending(x => x.Id)
+                        .Select(x => x.User == null ? null : x.User.UserName).FirstOrDefault(),
+                Email = buckets.Where(x => x.IpAddress == row.IpAddress && x.UserId != null)
+                        .OrderByDescending(x => x.LastSeenAt).ThenByDescending(x => x.Id)
+                        .Select(x => x.User == null ? null : x.User.Email).FirstOrDefault(),
+                DisplayName = buckets.Where(x => x.IpAddress == row.IpAddress && x.UserId != null)
+                        .OrderByDescending(x => x.LastSeenAt).ThenByDescending(x => x.Id)
+                        .Select(x => x.User == null ? null : x.User.DisplayName).FirstOrDefault(),
+                isBlocked = db.AccessBlockRules.Any(rule =>
+                    rule.Enabled &&
+                    (rule.ExpiresAt == null || rule.ExpiresAt > now) &&
+                    rule.Kind == AccessBlockKinds.Ip &&
+                    rule.Value == row.IpAddress)
+            })
+                .ToListAsync(token);
+            var items = rows.Select(row => new
+            {
+                row.IpAddress,
+                userId = row.UserId,
+                userName = row.UserName,
+                email = row.Email,
+                displayName = row.DisplayName,
+                row.requests,
+                row.blockedRequests,
+                row.proxyItems,
+                row.bytesSent,
+                row.lastSeenAt,
+                row.isBlocked
             }).ToArray();
             var summary = new
             {
-                requests = summaryRow?.requests ?? 0,
-                proxyItems = summaryRow?.proxyItems ?? 0,
+                summaryRow.requests,
+                summaryRow.proxyItems,
                 uniqueIps = total,
-                activeRules = activeRules.Count
+                summaryRow.activeRules
             };
             return (IActionResult)Ok(new { items, page, pageSize, total, sort, order, summary });
         }, token);
@@ -143,34 +160,46 @@ public sealed class AdminAccessController(ProxyHarborDbContext db, ProxyAccessMo
                 "firstSeen" => descending ? grouped.OrderByDescending(x => x.FirstSeenAt) : grouped.OrderBy(x => x.FirstSeenAt),
                 _ => descending ? grouped.OrderByDescending(x => x.LastSeenAt) : grouped.OrderBy(x => x.LastSeenAt)
             };
-            var rows = await ordered.ThenBy(x => x.IpAddress)
-                .Skip((page - 1) * pageSize).Take(pageSize).ToListAsync(token);
-            var ips = rows.Select(x => x.IpAddress).ToArray();
-            var links = await buckets.Where(x => ips.Contains(x.IpAddress) && x.UserId != null)
-                .GroupBy(x => x.IpAddress)
-                .Select(group => group.OrderByDescending(x => x.LastSeenAt).ThenByDescending(x => x.Id)
-                    .Select(x => new { x.IpAddress, x.UserId }).First())
-                .ToListAsync(token);
-            var linksByIp = links.ToDictionary(x => x.IpAddress, StringComparer.Ordinal);
-            var userIds = links.Select(x => x.UserId!.Value).Distinct().ToArray();
-            var users = await db.Users.AsNoTracking().Where(x => userIds.Contains(x.Id))
-                .Select(x => new { x.Id, x.UserName, x.Email, x.DisplayName }).ToDictionaryAsync(x => x.Id, token);
-            var items = rows.Select(x =>
+            var paged = ordered.ThenBy(x => x.IpAddress)
+                .Skip((page - 1) * pageSize).Take(pageSize);
+            var rows = await paged.Select(row => new
             {
-                linksByIp.TryGetValue(x.IpAddress, out var link);
-                var account = link?.UserId is Guid id && users.TryGetValue(id, out var found) ? found : null;
-                return new
-                {
-                    x.IpAddress,
-                    userId = link?.UserId,
-                    userName = account?.UserName,
-                    email = account?.Email,
-                    displayName = account?.DisplayName,
-                    x.PageViews,
-                    x.Pages,
-                    x.FirstSeenAt,
-                    x.LastSeenAt
-                };
+                row.IpAddress,
+                row.PageViews,
+                row.Pages,
+                row.FirstSeenAt,
+                row.LastSeenAt,
+                UserId = buckets.Where(x => x.IpAddress == row.IpAddress && x.UserId != null)
+                        .OrderByDescending(x => x.LastSeenAt).ThenByDescending(x => x.Id)
+                        .Select(x => x.UserId).FirstOrDefault(),
+                UserName = buckets.Where(x => x.IpAddress == row.IpAddress && x.UserId != null)
+                        .OrderByDescending(x => x.LastSeenAt).ThenByDescending(x => x.Id)
+                        .Select(x => x.User == null ? null : x.User.UserName).FirstOrDefault(),
+                Email = buckets.Where(x => x.IpAddress == row.IpAddress && x.UserId != null)
+                        .OrderByDescending(x => x.LastSeenAt).ThenByDescending(x => x.Id)
+                        .Select(x => x.User == null ? null : x.User.Email).FirstOrDefault(),
+                DisplayName = buckets.Where(x => x.IpAddress == row.IpAddress && x.UserId != null)
+                        .OrderByDescending(x => x.LastSeenAt).ThenByDescending(x => x.Id)
+                        .Select(x => x.User == null ? null : x.User.DisplayName).FirstOrDefault(),
+                isBlocked = db.AccessBlockRules.Any(rule =>
+                    rule.Enabled &&
+                    (rule.ExpiresAt == null || rule.ExpiresAt > now) &&
+                    rule.Kind == AccessBlockKinds.Ip &&
+                    rule.Value == row.IpAddress)
+            })
+                .ToListAsync(token);
+            var items = rows.Select(x => new
+            {
+                x.IpAddress,
+                userId = x.UserId,
+                userName = x.UserName,
+                email = x.Email,
+                displayName = x.DisplayName,
+                x.PageViews,
+                x.Pages,
+                x.FirstSeenAt,
+                x.LastSeenAt,
+                x.isBlocked
             }).ToArray();
             var summary = new
             {
@@ -179,21 +208,7 @@ public sealed class AdminAccessController(ProxyHarborDbContext db, ProxyAccessMo
                 authenticatedVisitors = summaryRow?.authenticatedVisitors ?? 0,
                 active24Hours = summaryRow?.active24Hours ?? 0
             };
-            var blockedIps = (await ActiveRules(now, token)).IpAddresses;
-            var enriched = items.Select(x => new
-            {
-                x.IpAddress,
-                x.userId,
-                x.userName,
-                x.email,
-                x.displayName,
-                x.PageViews,
-                x.Pages,
-                x.FirstSeenAt,
-                x.LastSeenAt,
-                isBlocked = blockedIps.Contains(x.IpAddress)
-            }).ToArray();
-            return (IActionResult)Ok(new { items = enriched, page, pageSize, total, sort, order, summary, retentionDays = 90 });
+            return (IActionResult)Ok(new { items, page, pageSize, total, sort, order, summary, retentionDays = 90 });
         }, token);
     }
 
@@ -313,19 +328,6 @@ public sealed class AdminAccessController(ProxyHarborDbContext db, ProxyAccessMo
         rule.Enabled = request.Enabled; rule.ExpiresAt = request.ExpiresAt; rule.UpdatedAt = DateTimeOffset.UtcNow;
         await db.SaveChangesAsync(token); await monitor.ReloadRulesAsync(token); return NoContent();
     }
-
-    private async Task<ActiveRuleState> ActiveRules(DateTimeOffset now, CancellationToken token)
-    {
-        var rows = await db.AccessBlockRules.AsNoTracking()
-            .Where(x => x.Enabled && (x.ExpiresAt == null || x.ExpiresAt > now))
-            .Select(x => new { x.Kind, x.Value })
-            .ToListAsync(token);
-        return new ActiveRuleState(rows.Count,
-            rows.Where(x => x.Kind == AccessBlockKinds.Ip).Select(x => x.Value)
-                .ToHashSet(StringComparer.Ordinal));
-    }
-
-    private sealed record ActiveRuleState(int Count, HashSet<string> IpAddresses);
 
     private static bool TryDescending(string order, out bool descending)
     {

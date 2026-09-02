@@ -236,6 +236,10 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
         accessBucket.HasIndex(x => new { x.BucketStartedAt, x.IpAddress, x.UserId, x.Endpoint })
             .IsUnique().AreNullsDistinct(false);
         accessBucket.HasIndex(x => new { x.LastSeenAt, x.Requests });
+        accessBucket.HasIndex(x => new { x.IpAddress, x.LastSeenAt, x.Id })
+            .IsDescending(false, true, true)
+            .HasFilter("\"UserId\" IS NOT NULL")
+            .IncludeProperties(x => new { x.UserId, x.Endpoint });
         accessBucket.Property(x => x.IpAddress).HasMaxLength(45);
         accessBucket.Property(x => x.Endpoint).HasMaxLength(32);
         accessBucket.HasOne(x => x.User).WithMany().HasForeignKey(x => x.UserId)
