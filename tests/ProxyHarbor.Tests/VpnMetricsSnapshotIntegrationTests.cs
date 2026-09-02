@@ -50,11 +50,15 @@ public sealed class VpnMetricsSnapshotIntegrationTests
             };
             db.VpnSources.Add(source);
             db.VpnEndpoints.AddRange(
-                Endpoint(source, "203.0.113.1", VpnEndpointStatus.Reachable, "US", 20, 2, now.AddDays(-3)),
-                Endpoint(source, "203.0.113.2", VpnEndpointStatus.Reachable, "DE", 40, 1, now.AddDays(-1)),
+                Endpoint(source, "203.0.113.1", VpnEndpointStatus.Reachable, "US", 20, 2,
+                    now.AddDays(-3), now.AddMinutes(-2), now.AddMinutes(8)),
+                Endpoint(source, "203.0.113.2", VpnEndpointStatus.Reachable, "DE", 40, 1,
+                    now.AddDays(-1), now.AddMinutes(-20), now.AddMinutes(-10)),
                 Endpoint(source, "203.0.113.3", VpnEndpointStatus.Pending, "US", null, 0, now),
-                Endpoint(source, "203.0.113.4", VpnEndpointStatus.Unreachable, null, null, 1, now),
-                Endpoint(source, "203.0.113.5", VpnEndpointStatus.UnsupportedTransport, "DE", null, 0, now));
+                Endpoint(source, "203.0.113.4", VpnEndpointStatus.Unreachable, null, null, 1,
+                    now, now.AddMinutes(-3), now.AddMinutes(27)),
+                Endpoint(source, "203.0.113.5", VpnEndpointStatus.UnsupportedTransport, "DE", null, 0,
+                    now, now.AddMinutes(-4), now.AddMinutes(356)));
             await db.SaveChangesAsync();
 
             var snapshot = await VpnMetricsSnapshotReader.ReadAsync(db, now, CancellationToken.None);
@@ -68,6 +72,12 @@ public sealed class VpnMetricsSnapshotIntegrationTests
             Assert.Equal(60, snapshot.ReachableLatencyTotal);
             Assert.Equal(2, snapshot.ReachableLatencySamples);
             Assert.Equal(now.AddDays(-3), snapshot.OldestReachableAt);
+            Assert.Equal(1, snapshot.NeverChecked);
+            Assert.Equal(2, snapshot.Due);
+            Assert.Equal(1, snapshot.FreshReachable);
+            Assert.Equal(1, snapshot.StaleReachable);
+            Assert.Equal(3, snapshot.CheckedLastFiveMinutes);
+            Assert.Equal(now.AddMinutes(-2), snapshot.LatestCheckedAt);
             Assert.Collection(snapshot.Countries,
                 country => { Assert.Equal("DE", country.Code); Assert.Equal(2, country.Count); },
                 country => { Assert.Equal("US", country.Code); Assert.Equal(2, country.Count); });
@@ -77,6 +87,9 @@ public sealed class VpnMetricsSnapshotIntegrationTests
                 (NpgsqlConnection)db.Database.GetDbConnection());
             explain.Parameters.AddWithValue(
                 "reachable_status", NpgsqlDbType.Integer, (int)VpnEndpointStatus.Reachable);
+            explain.Parameters.AddWithValue("captured_at", NpgsqlDbType.TimestampTz, now);
+            explain.Parameters.AddWithValue("fresh_after", NpgsqlDbType.TimestampTz, now.AddMinutes(-15));
+            explain.Parameters.AddWithValue("recent_after", NpgsqlDbType.TimestampTz, now.AddMinutes(-5));
             var rawPlan = await explain.ExecuteScalarAsync();
             var planJson = Convert.ToString(rawPlan, CultureInfo.InvariantCulture);
             Assert.False(string.IsNullOrWhiteSpace(planJson));
@@ -97,7 +110,9 @@ public sealed class VpnMetricsSnapshotIntegrationTests
         string? countryCode,
         int? latencyMs,
         int successfulChecks,
-        DateTimeOffset firstSeenAt) => new()
+        DateTimeOffset firstSeenAt,
+        DateTimeOffset? lastCheckedAt = null,
+        DateTimeOffset? nextCheckAt = null) => new()
         {
             Host = host,
             Port = 443,
@@ -107,6 +122,8 @@ public sealed class VpnMetricsSnapshotIntegrationTests
             CountryCode = countryCode,
             LatencyMs = latencyMs,
             SuccessfulChecks = successfulChecks,
+            LastCheckedAt = lastCheckedAt,
+            NextCheckAt = nextCheckAt,
             FirstSeenAt = firstSeenAt,
             LastSeenAt = firstSeenAt,
             FirstSource = source,

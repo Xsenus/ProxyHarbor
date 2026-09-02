@@ -190,6 +190,31 @@ groups:
           summary: Validator не успевает сохранить свежесть каталога
           description: Расчётное время обработки due-очереди превышает максимальный возраст прокси в публичной выдаче.
 
+      - alert: ProxyHarborVpnValidationStalled
+        expr: |
+          proxyharbor_vpn_validation_due > 0
+          and on() proxyharbor_background_workers_enabled == 1
+          and on() proxyharbor_vpn_validation_checked_last_5m == 0
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: Очередь проверки VPN не обрабатывается
+          description: Есть due VPN-узлы и включённые workers, но за последние пять минут не завершено ни одной проверки.
+
+      - alert: ProxyHarborVpnValidationBacklogAtRisk
+        expr: |
+          proxyharbor_vpn_validation_due > 0
+          and on() proxyharbor_background_workers_enabled == 1
+          and on() proxyharbor_vpn_validation_estimated_drain_seconds
+            > proxyharbor_vpn_public_freshness_seconds
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: VPN validator не успевает сохранить свежесть каталога
+          description: Расчётное время обработки due VPN-очереди превышает максимальный возраст узлов в публичной выдаче.
+
       - alert: ProxyHarborStaleProxyRetention
         expr: |
           proxyharbor_proxies_stale_unseen > 0

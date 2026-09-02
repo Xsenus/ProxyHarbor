@@ -135,7 +135,8 @@ public sealed class AdminDiagnosticsIntegrationTests
             using var vpnSnapshotCache = new VpnMetricsSnapshotCache(
                 diagnosticsFactory,
                 NullLogger<VpnMetricsSnapshotCache>.Instance,
-                TimeProvider.System);
+                TimeProvider.System,
+                collectorOptions);
             var controller = new AdminController(
                 diagnosticsFactory,
                 null!,

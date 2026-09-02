@@ -25,6 +25,10 @@ public sealed class VpnMetricsSnapshotCacheTests
         Assert.All(snapshots, snapshot => Assert.Same(snapshots[0], snapshot));
         Assert.Equal(1, snapshots[0].Reachable);
         Assert.Equal(25, snapshots[0].ReachableLatencyTotal);
+        Assert.Equal(1, snapshots[0].NeverChecked);
+        Assert.Equal(1, snapshots[0].Due);
+        Assert.Equal(0, snapshots[0].FreshReachable);
+        Assert.Equal(1, snapshots[0].StaleReachable);
     }
 
     [Fact]
@@ -103,7 +107,8 @@ public sealed class VpnMetricsSnapshotCacheTests
         TimeProvider timeProvider) => new(
             factory,
             NullLogger<VpnMetricsSnapshotCache>.Instance,
-            timeProvider);
+            timeProvider,
+            Microsoft.Extensions.Options.Options.Create(new CollectorOptions()));
 
     private sealed class CountingFactory(DbContextOptions<ProxyHarborDbContext> options)
         : IDbContextFactory<ProxyHarborDbContext>

@@ -199,16 +199,17 @@ internal static class VpnValidationQueue
 
         // Загружаем только четыре поля, реально нужные сетевому probe. ConnectionUri и
         // остальные широкие catalog-поля больше не материализуются в каждом цикле.
+        var neverCheckedQuota = NeverCheckedQuota(batchSize);
         var neverChecked = await db.VpnEndpoints.AsNoTracking()
             .Where(endpoint => endpoint.NextCheckAt == null)
             .OrderBy(endpoint => endpoint.LastCheckedAt)
             .ThenBy(endpoint => endpoint.Id)
             .Select(endpoint => new VpnValidationCandidate(
                 endpoint.Id, endpoint.Host, endpoint.Port, endpoint.Transport))
-            .Take(batchSize)
+            .Take(neverCheckedQuota)
             .ToArrayAsync(token);
 
-        var reservedForNeverChecked = Math.Min(neverChecked.Length, NeverCheckedQuota(batchSize));
+        var reservedForNeverChecked = neverChecked.Length;
         var dueCapacity = batchSize - reservedForNeverChecked;
         var due = dueCapacity == 0
             ? []

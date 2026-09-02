@@ -24,6 +24,20 @@ public static class ServiceCollectionExtensions
                 "DeadRetryBaseMinutes не может превышать DeadRetryMaxHours")
             .Validate(x => x.ValidationConcurrency is >= 1 and <= 1_000, "ValidationConcurrency: 1..1000")
             .Validate(x => x.ValidationBatchSize is >= 1 and <= 100_000, "ValidationBatchSize: 1..100000")
+            .Validate(x => x.VpnValidationConcurrency is >= 1 and <= 1_000, "VpnValidationConcurrency: 1..1000")
+            .Validate(x => x.VpnValidationBatchSize is >= 1 and <= 20_000, "VpnValidationBatchSize: 1..20000")
+            .Validate(x => x.VpnValidationBatchSize >= x.VpnValidationConcurrency,
+                "VpnValidationBatchSize не может быть меньше VpnValidationConcurrency")
+            .Validate(x => x.VpnReachableValidationIntervalMinutes is >= 1 and <= 1_440,
+                "VpnReachableValidationIntervalMinutes: 1..1440")
+            .Validate(x => x.VpnUnreachableRetryMinutes is >= 1 and <= 10_080,
+                "VpnUnreachableRetryMinutes: 1..10080")
+            .Validate(x => x.VpnUnsupportedRetryMinutes is >= 1 and <= 43_200,
+                "VpnUnsupportedRetryMinutes: 1..43200")
+            .Validate(x => x.VpnPublicFreshnessMinutes is >= 2 and <= 2_880,
+                "VpnPublicFreshnessMinutes: 2..2880")
+            .Validate(x => x.VpnPublicFreshnessMinutes >= x.VpnReachableValidationIntervalMinutes,
+                "VpnPublicFreshnessMinutes не может быть меньше VpnReachableValidationIntervalMinutes")
             .Validate(x => x.ProbeTimeoutSeconds is >= 1 and <= 120, "ProbeTimeoutSeconds: 1..120")
             .Validate(x => x.SourceTimeoutSeconds is >= 2 and <= 300, "SourceTimeoutSeconds: 2..300")
             .Validate(x => x.SourceConcurrency is >= 1 and <= 32, "SourceConcurrency: 1..32")

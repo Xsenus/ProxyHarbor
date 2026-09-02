@@ -110,6 +110,43 @@ public sealed class VpnControllerTests
     }
 
     [Fact]
+    public async Task PublicCatalogCountriesAndExportExcludeStaleReachableEndpoints()
+    {
+        var database = Options();
+        var source = Source("Catalog", "https://8.8.8.8/catalog.txt");
+        var now = new DateTimeOffset(2026, 9, 2, 12, 0, 0, TimeSpan.Zero);
+        var fresh = Endpoint(source, "1.1.1.1", VpnProtocol.Vless,
+            VpnEndpointStatus.Reachable, 20, "US", "vless://fresh@1.1.1.1:443");
+        fresh.LastCheckedAt = now.AddMinutes(-14);
+        var stale = Endpoint(source, "8.8.8.8", VpnProtocol.Vless,
+            VpnEndpointStatus.Reachable, 10, "DE", "vless://stale@8.8.8.8:443");
+        stale.LastCheckedAt = now.AddMinutes(-16);
+        await SeedAsync(database, source, fresh, stale);
+        var controller = new VpnController(
+            new TestDbFactory(database),
+            new FreeAccessService(),
+            Microsoft.Extensions.Options.Options.Create(new CollectorOptions
+            {
+                VpnPublicFreshnessMinutes = 15
+            }),
+            new FixedTimeProvider(now));
+        controller.ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() };
+
+        var page = Page(await controller.Get(token: CancellationToken.None));
+        var countries = Assert.IsAssignableFrom<IReadOnlyList<ProxyCountryDto>>(
+            Assert.IsType<OkObjectResult>((await controller.Countries(CancellationToken.None)).Result).Value);
+        var export = Assert.IsType<FileContentResult>(await controller.Export(
+            "txt", token: CancellationToken.None));
+        var text = System.Text.Encoding.UTF8.GetString(export.FileContents);
+
+        Assert.Equal(1, page.Total);
+        Assert.Equal("1.1.1.1", Assert.Single(page.Items).Host);
+        Assert.Equal("US", Assert.Single(countries).Code);
+        Assert.Contains("vless://fresh@1.1.1.1:443", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("vless://stale@8.8.8.8:443", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task PublicVpnApiRejectsUnknownFormatAndMalformedCountryCodes()
     {
         var options = Options();
@@ -266,6 +303,7 @@ public sealed class VpnControllerTests
             LatencyMs = latency,
             CountryCode = countryCode,
             ConnectionUri = connectionUri,
+            LastCheckedAt = DateTimeOffset.UtcNow,
             FirstSourceId = source.Id,
             FirstSource = source
         };
@@ -306,5 +344,10 @@ public sealed class VpnControllerTests
             CancellationToken cancellationToken) => Task.FromResult(new FreeExportAccess(true, false, 10, null, "free"));
         public Task<bool> HasPaidAccessAsync(System.Security.Claims.ClaimsPrincipal principal,
             CancellationToken cancellationToken) => Task.FromResult(false);
+    }
+
+    private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => now;
     }
 }

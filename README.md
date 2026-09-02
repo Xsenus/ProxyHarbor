@@ -257,6 +257,9 @@ Docker-пользователю обычно достаточно `.env.example`
 | `BACKGROUND_WORKERS_ENABLED` | `true` | Collector/validator workers этой реплики |
 | `VALIDATION_CONCURRENCY` | `800` | Одновременные proxy probes |
 | `VALIDATION_BATCH_SIZE` | `1600` | Размер одной lease-партии |
+| `VPN_VALIDATION_CONCURRENCY` | `800` | Одновременные TCP-проверки VPN |
+| `VPN_VALIDATION_BATCH_SIZE` | `1600` | Размер VPN validation-партии |
+| `VPN_PUBLIC_FRESHNESS_MINUTES` | `15` | Максимальный возраст VPN в публичной выдаче |
 | `BACKUP_ENABLED` | `true` в `.env.example` | Плановый PHB3 backup |
 | `BACKUP_HISTORY_RETENTION_DAYS` | `365` | История backup audit |
 | `BACKEND_SUBNET` | `172.30.0.0/24` | Единственная trusted proxy network |
