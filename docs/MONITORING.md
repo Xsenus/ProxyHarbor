@@ -6,6 +6,8 @@
 
 Runtime HTTP SLI публикуются как `proxyharbor_http_requests_total` и cumulative `proxyharbor_http_request_duration_seconds`. Labels ограничены фиксированными группами route/status; произвольные URL, IP и заголовки никогда не попадают в time-series, а `/metrics` исключён из измерения. Counters локальны реплике и сбрасываются при рестарте, поэтому alarms используют `rate()` и суммируют все scrape targets.
 
+Checker-auth snapshot наблюдается через `proxyharbor_checker_auth_attempts_total`, `..._failures_total`, `..._snapshot_hits_total`, `..._database_reads_total` и `..._invalidations_total`. Они не содержат node ID, IP или token labels. Устойчивый рост failures требует проверить рассинхронизацию токена/узла и попытки доступа; число database reads при штатном потоке должно быть существенно меньше числа attempts.
+
 Все database-derived series одного scrape вычисляются в общем retry-safe PostgreSQL `REPEATABLE READ` snapshot. Concurrent collection/validation не может смешать старый proxy count с новым source/run состоянием и создать ложную комбинацию alarms; in-process HTTP/maintenance counters считываются после тех же DB-запросов и остаются локальными реплике.
 
 Отдельная PostgreSQL lifetime-lock session каждой API-реплики проверяется bounded heartbeat каждые пять секунд. Потеря owning backend создаёт critical `RuntimeLeaseLost` и инициирует controlled shutdown; Docker restart policy восстанавливает реплику, а per-operation shared locks до остановки не позволяют write pipeline пересечься с exclusive restore.

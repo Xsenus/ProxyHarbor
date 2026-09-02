@@ -20,7 +20,8 @@ public sealed class MetricsController(
     OperationalMaintenanceService? maintenance = null,
     HttpRequestTelemetry? httpTelemetry = null,
     ProxyMetricsSnapshotCache? proxySnapshotCache = null,
-    ValidationClaimIdleGate? validationIdleGate = null) : ControllerBase
+    ValidationClaimIdleGate? validationIdleGate = null,
+    CheckerNodeCredentialCache? checkerCredentialCache = null) : ControllerBase
 {
     /// <summary>Возвращает согласованный Prometheus text exposition operational-метрик.</summary>
     [HttpGet]
@@ -114,6 +115,21 @@ public sealed class MetricsController(
         Gauge(output, "proxyharbor_validation_empty_claim_cooldown_active",
             "Whether the short process-local empty validation queue cooldown is currently active.",
             validationIdleGate?.CooldownActive == true ? 1 : 0);
+        Counter(output, "proxyharbor_checker_auth_attempts_total",
+            "Checker-agent authentication attempts handled by this API replica.",
+            checkerCredentialCache?.AuthenticationAttempts ?? 0);
+        Counter(output, "proxyharbor_checker_auth_failures_total",
+            "Checker-agent authentication attempts rejected by this API replica.",
+            checkerCredentialCache?.AuthenticationFailures ?? 0);
+        Counter(output, "proxyharbor_checker_auth_snapshot_hits_total",
+            "Checker-agent authentication attempts served from an existing credential snapshot.",
+            checkerCredentialCache?.SnapshotHits ?? 0);
+        Counter(output, "proxyharbor_checker_auth_database_reads_total",
+            "Enabled checker credential snapshots read from PostgreSQL by this API replica.",
+            checkerCredentialCache?.DatabaseReads ?? 0);
+        Counter(output, "proxyharbor_checker_auth_invalidations_total",
+            "Credential snapshots invalidated after checker-node administration on this API replica.",
+            checkerCredentialCache?.Invalidations ?? 0);
         Gauge(output, "proxyharbor_background_workers_enabled", "Whether built-in collection and validation workers are enabled.",
             collectorOptions.Value.BackgroundWorkersEnabled ? 1 : 0);
         Counter(output, "proxyharbor_advisory_lock_cleanup_failures_total",

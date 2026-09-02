@@ -38,12 +38,19 @@ public sealed class MetricsControllerTests
             () => idleTimestamp, 1_000, TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(30));
         idleGate.MarkEmpty();
         Assert.True(idleGate.TryCoalesce(Guid.NewGuid()).Coalesced);
+        using var checkerCredentials = new CheckerNodeCredentialCache(
+            new TestDbFactory(options), TimeProvider.System);
+        checkerCredentials.Invalidate();
+        var invalidCheckerToken = new string('x', 48);
+        Assert.False(await checkerCredentials.AuthenticateAsync(Guid.NewGuid(), invalidCheckerToken, default));
+        Assert.False(await checkerCredentials.AuthenticateAsync(Guid.NewGuid(), invalidCheckerToken, default));
         var controller = new MetricsController(
             new TestDbFactory(options), Options.Create(new CollectorOptions { CollectionIntervalMinutes = 5 }),
             Options.Create(new BackupOptions()),
             new ProbeControlHealth(),
             httpTelemetry: httpTelemetry,
-            validationIdleGate: idleGate);
+            validationIdleGate: idleGate,
+            checkerCredentialCache: checkerCredentials);
 
         var result = Assert.IsType<ContentResult>(await controller.Get(CancellationToken.None));
         var metrics = result.Content!;
@@ -59,6 +66,11 @@ public sealed class MetricsControllerTests
             StringComparison.Ordinal);
         Assert.Contains("proxyharbor_validation_empty_claim_cooldown_active 1", metrics,
             StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_checker_auth_attempts_total 2", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_checker_auth_failures_total 2", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_checker_auth_snapshot_hits_total 1", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_checker_auth_database_reads_total 1", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_checker_auth_invalidations_total 1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_maintenance_last_success_timestamp_seconds 0", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_maintenance_last_failure_timestamp_seconds 0", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_maintenance_last_deleted_rows 0", metrics, StringComparison.Ordinal);

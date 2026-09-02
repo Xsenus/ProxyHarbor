@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using ProxyHarbor.Api;
 using ProxyHarbor.Domain;
 using ProxyHarbor.Infrastructure;
 
@@ -14,7 +15,8 @@ namespace ProxyHarbor.Api.Controllers;
 public sealed class AdminCheckerNodesController(
     ProxyHarborDbContext db,
     CheckerNodeProvisioner provisioner,
-    IOptions<CheckerAgentDeploymentOptions> deployment) : ControllerBase
+    IOptions<CheckerAgentDeploymentOptions> deployment,
+    CheckerNodeCredentialCache credentials) : ControllerBase
 {
     /// <summary>Returns nodes with derived online and lease state.</summary>
     [HttpGet]
@@ -79,6 +81,7 @@ public sealed class AdminCheckerNodesController(
         };
         db.CheckerNodes.Add(node);
         await db.SaveChangesAsync(token);
+        credentials.Invalidate();
         try
         {
             var result = await provisioner.DeployAsync(node.Id, request, secret, null, token);
@@ -117,7 +120,9 @@ public sealed class AdminCheckerNodesController(
             .SetProperty(x => x.Concurrency, request.Concurrency)
             .SetProperty(x => x.BatchSize, request.BatchSize)
             .SetProperty(x => x.UpdatedAt, DateTimeOffset.UtcNow), token);
-        return updated == 1 ? NoContent() : NotFound();
+        if (updated != 1) return NotFound();
+        credentials.Invalidate();
+        return NoContent();
     }
 
     /// <summary>Rotates the agent token and safely redeploys the checker container.</summary>
@@ -141,6 +146,7 @@ public sealed class AdminCheckerNodesController(
             node.LastError = null;
             node.UpdatedAt = DateTimeOffset.UtcNow;
             await db.SaveChangesAsync(token);
+            credentials.Invalidate();
             return Accepted(new { node.Id, node.DeploymentStatus, result.DeploymentMode });
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
@@ -169,6 +175,7 @@ public sealed class AdminCheckerNodesController(
         }
         db.CheckerNodes.Remove(node);
         await db.SaveChangesAsync(token);
+        credentials.Invalidate();
         return NoContent();
     }
 
