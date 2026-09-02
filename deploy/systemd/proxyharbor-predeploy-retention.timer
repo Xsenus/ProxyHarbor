@@ -1,0 +1,13 @@
+[Unit]
+Description=Run ProxyHarbor predeploy backup retention daily
+Documentation=file:///opt/proxyharbor/docs/DEPLOYMENT.md
+
+[Timer]
+OnCalendar=*-*-* 04:17:00
+RandomizedDelaySec=30m
+AccuracySec=1m
+Persistent=true
+Unit=proxyharbor-predeploy-retention.service
+
+[Install]
+WantedBy=timers.target
