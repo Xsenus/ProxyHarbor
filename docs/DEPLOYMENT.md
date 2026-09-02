@@ -92,6 +92,23 @@ docker compose -f docker-compose.yml -f docker-compose.production.yml up -d --bu
 docker compose -f docker-compose.yml -f docker-compose.production.yml logs --tail 200 api caddy
 ```
 
+Ручные PostgreSQL-снимки `predeploy-<commit>-<timestamp>.dump` не должны
+накапливаться без ограничения рядом с checkout. Перед удалением сначала
+посмотрите точный список кандидатов; инструмент по умолчанию ничего не меняет:
+
+```bash
+./tools/Prune-PredeployBackups.sh --directory /opt/proxyharbor --keep-count 7
+```
+
+После проверки списка примените тот же расчёт явно. Семь самых свежих управляемых
+копий сохраняются; пользовательские `.dump`, неканонические имена, вложенные
+каталоги и символические ссылки не затрагиваются. До первого удаления инструмент
+обязательно проверяет каталог каждого сохраняемого архива через `pg_restore`:
+
+```bash
+./tools/Prune-PredeployBackups.sh --directory /opt/proxyharbor --keep-count 7 --apply
+```
+
 Откат выполняйте на предыдущий проверенный Git commit той же командой. Не откатывайте код через уже применённые необратимые миграции без заранее проверенного плана восстановления БД.
 
 Для версионированного GHCR-релиза добавьте `docker-compose.release.yml` между base и production-файлами и задайте `PROXYHARBOR_IMAGE_PREFIX`/`PROXYHARBOR_IMAGE_TAG`. Такой запуск использует опубликованные multi-architecture manifests и не содержит локальных build-секций. Точные digest находятся в приложенном `proxyharbor-release.json`; полный порядок выпуска и attestation-проверки приведён в [RELEASING.md](RELEASING.md).

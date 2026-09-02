@@ -66,6 +66,8 @@ jobs:
             foreach ($parseError in $errors) { Write-Error "$($script.Name): $parseError"; $failed = $true }
           }
           if ($failed) { throw 'Operational PowerShell scripts contain syntax errors.' }
+      - name: Verify predeploy backup retention contracts
+        run: bash ./tools/Test-PredeployBackupRetention.sh
       - name: Verify source-audit evidence contracts
         shell: pwsh
         run: ./tools/Test-AuditSourceFeeds.ps1
