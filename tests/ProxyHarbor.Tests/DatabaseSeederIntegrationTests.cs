@@ -522,7 +522,7 @@ public sealed class DatabaseSeederIntegrationTests
                 .UseNpgsql(builder.ConnectionString)
                 .Options;
             var canonical = BuiltInVpnSourceCatalog.Sources.Single(source =>
-                source.Name == "Auto OVPN Japan");
+                source.Name == "Auto OVPN catalog");
             var sourceId = Guid.Empty;
             await using (var first = new ProxyHarborDbContext(options))
             {

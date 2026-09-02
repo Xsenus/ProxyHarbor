@@ -33,7 +33,11 @@ public static class VpnFeedParser
         int maxResults)
     {
         // OpenVPN-конфигурации и WireGuard INI могут занимать несколько строк.
-        if (fallback == VpnProtocol.OpenVpn) ParseOpenVpn(content, result, maxResults);
+        if (fallback == VpnProtocol.OpenVpn)
+        {
+            ParseOpenVpnJson(content, result, maxResults);
+            ParseOpenVpn(content, result, maxResults);
+        }
         if (fallback == VpnProtocol.WireGuard) ParseWireGuardConfig(content, result, maxResults);
 
         // Не используем string.Split: крупный публичный feed создавал массив из сотен
@@ -127,6 +131,50 @@ public static class VpnFeedParser
             if (parts.Length < 3 || !parts[0].Equals("remote", StringComparison.OrdinalIgnoreCase) || !int.TryParse(parts[2], out var port)) continue;
             var transport = parts.Length > 3 && parts[3].StartsWith("udp", StringComparison.OrdinalIgnoreCase) ? "udp" : "tcp";
             Add(new VpnCandidate(parts[1], port, VpnProtocol.OpenVpn, transport), result);
+        }
+    }
+
+    private static void ParseOpenVpnJson(
+        string content,
+        Dictionary<string, VpnCandidate> result,
+        int maxResults)
+    {
+        var trimmed = content.AsSpan().TrimStart();
+        if (trimmed.IsEmpty || trimmed[0] is not ('{' or '[')) return;
+
+        try
+        {
+            using var document = JsonDocument.Parse(content, new JsonDocumentOptions { MaxDepth = 16 });
+            if (document.RootElement.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var item in document.RootElement.EnumerateArray())
+                {
+                    ParseOpenVpnJsonContainer(item, result, maxResults);
+                    if (result.Count >= maxResults) return;
+                }
+            }
+            else ParseOpenVpnJsonContainer(document.RootElement, result, maxResults);
+        }
+        catch (JsonException) { }
+    }
+
+    private static void ParseOpenVpnJsonContainer(
+        JsonElement container,
+        Dictionary<string, VpnCandidate> result,
+        int maxResults)
+    {
+        if (container.ValueKind != JsonValueKind.Object ||
+            !container.TryGetProperty("servers", out var servers) ||
+            servers.ValueKind != JsonValueKind.Array) return;
+
+        foreach (var server in servers.EnumerateArray())
+        {
+            if (result.Count >= maxResults) return;
+            if (server.ValueKind != JsonValueKind.Object ||
+                !server.TryGetProperty("openvpn_configdata_base64", out var encoded) ||
+                encoded.ValueKind != JsonValueKind.String ||
+                !TryDecodeBase64(encoded.GetString() ?? string.Empty, out var configuration)) continue;
+            ParseOpenVpn(configuration, result, maxResults);
         }
     }
 

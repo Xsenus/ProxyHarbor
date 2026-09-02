@@ -85,6 +85,21 @@ public sealed class VpnFeedParserTests
         Assert.Equal(2, VpnFeedParser.Parse(wireGuard, VpnProtocol.WireGuard, 2).Count);
     }
 
+    [Fact]
+    public void ParsesOpenVpnConfigurationsFromStableJsonCatalog()
+    {
+        var first = Convert.ToBase64String(Encoding.UTF8.GetBytes("remote 8.8.8.8 1194 udp"));
+        var second = Convert.ToBase64String(Encoding.UTF8.GetBytes("remote 1.1.1.1 443 tcp"));
+        var json = $$"""[{"servers":[{"openvpn_configdata_base64":"{{first}}"},{"openvpn_configdata_base64":"{{second}}"}]}]""";
+
+        var candidates = VpnFeedParser.Parse(json, VpnProtocol.OpenVpn, 1);
+
+        var candidate = Assert.Single(candidates);
+        Assert.Equal("8.8.8.8", candidate.Host);
+        Assert.Equal(1194, candidate.Port);
+        Assert.Equal("udp", candidate.Transport);
+    }
+
     [Theory]
     [InlineData("vless://id@127.0.0.1:443")]
     [InlineData("trojan://password@10.0.0.1:443")]
