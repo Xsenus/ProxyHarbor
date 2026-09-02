@@ -349,7 +349,17 @@ public sealed class AdminVpnController(
             filtered = filtered.Where(item => item.Host.Contains(search));
         }
 
-        var total = await filtered.CountAsync(token);
+        // Summary и facet-счётчики уже получены одним общим snapshot-проходом.
+        // Обычные фильтры поэтому не запускают отдельный exact count(*) по
+        // активно изменяемой таблице; он остаётся только для free-text поиска.
+        var total = string.IsNullOrEmpty(query)
+            ? ToInt(metrics.Facets
+                .Where(item => !protocol.HasValue || item.Protocol == protocol.Value)
+                .Where(item => !status.HasValue || item.Status == status.Value)
+                .Where(item => string.IsNullOrEmpty(transport) || item.Transport == transport)
+                .Where(item => string.IsNullOrEmpty(country) || item.CountryCode == country)
+                .Sum(item => item.Count))
+            : await filtered.CountAsync(token);
         var ascending = order == "asc";
         var ordered = (sort, ascending) switch
         {

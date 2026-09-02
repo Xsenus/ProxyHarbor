@@ -28,13 +28,28 @@ internal sealed record VpnMetricsSnapshot(
     long CheckedLastFiveMinutes,
     DateTimeOffset? LatestCheckedAt,
     IReadOnlyList<VpnCountryMetrics> Countries,
+    IReadOnlyList<VpnFacetMetrics> Facets,
     DateTimeOffset CapturedAt);
 
 internal sealed record VpnCountryMetrics(string Code, long Count);
 
+/// <summary>
+/// Точный компактный счётчик одного country/status/protocol/transport-сегмента.
+/// Он строится тем же snapshot-проходом и устраняет отдельный count(*) при
+/// переключении обычных фильтров административного VPN-каталога.
+/// </summary>
+internal sealed record VpnFacetMetrics(
+    string? CountryCode,
+    VpnEndpointStatus Status,
+    VpnProtocol Protocol,
+    string Transport,
+    long Count);
+
 internal sealed record VpnMetricsRow(
     string? CountryCode,
     VpnEndpointStatus Status,
+    VpnProtocol Protocol,
+    string Transport,
     long Count,
     long EverReachable,
     long ReachableLatencyTotal,
@@ -48,14 +63,16 @@ internal sealed record VpnMetricsRow(
     DateTimeOffset? LatestCheckedAt);
 
 /// <summary>
-/// Строит summary и список стран одним физическим проходом VpnEndpoints вместо
-/// отдельных total/status/country aggregate административной страницы.
+/// Строит summary, список стран и facet-счётчики одним физическим проходом
+/// VpnEndpoints вместо отдельных aggregate административной страницы.
 /// </summary>
 internal static class VpnMetricsSnapshotReader
 {
     internal const string PostgresSql = """
         SELECT "CountryCode",
                "Status",
+               "Protocol",
+               "Transport",
                count(*)::bigint AS "Count",
                count(*) FILTER (WHERE "SuccessfulChecks" > 0)::bigint AS "EverReachable",
                coalesce(sum("LatencyMs"::bigint) FILTER (WHERE
@@ -72,8 +89,8 @@ internal static class VpnMetricsSnapshotReader
                count(*) FILTER (WHERE "LastCheckedAt" >= @recent_after)::bigint AS "CheckedLastFiveMinutes",
                max("LastCheckedAt") AS "LatestCheckedAt"
         FROM "VpnEndpoints"
-        GROUP BY "CountryCode", "Status"
-        ORDER BY "CountryCode" NULLS FIRST, "Status"
+        GROUP BY "CountryCode", "Status", "Protocol", "Transport"
+        ORDER BY "CountryCode" NULLS FIRST, "Status", "Protocol", "Transport"
         """;
 
     internal static async Task<VpnMetricsSnapshot> ReadAsync(
@@ -112,24 +129,26 @@ internal static class VpnMetricsSnapshotReader
             "fresh_after", NpgsqlDbType.TimestampTz, capturedAt.AddMinutes(-Math.Max(1, publicFreshnessMinutes)));
         command.Parameters.AddWithValue("recent_after", NpgsqlDbType.TimestampTz, capturedAt.AddMinutes(-5));
 
-        var rows = new List<VpnMetricsRow>(160);
+        var rows = new List<VpnMetricsRow>(1_024);
         await using var reader = await command.ExecuteReaderAsync(CommandBehavior.SequentialAccess, token);
         while (await reader.ReadAsync(token))
         {
             rows.Add(new VpnMetricsRow(
                 reader.IsDBNull(0) ? null : reader.GetString(0),
                 (VpnEndpointStatus)reader.GetInt32(1),
-                reader.GetInt64(2),
-                reader.GetInt64(3),
+                (VpnProtocol)reader.GetInt32(2),
+                reader.GetString(3),
                 reader.GetInt64(4),
                 reader.GetInt64(5),
-                reader.IsDBNull(6) ? null : reader.GetFieldValue<DateTimeOffset>(6),
+                reader.GetInt64(6),
                 reader.GetInt64(7),
-                reader.GetInt64(8),
+                reader.IsDBNull(8) ? null : reader.GetFieldValue<DateTimeOffset>(8),
                 reader.GetInt64(9),
                 reader.GetInt64(10),
                 reader.GetInt64(11),
-                reader.IsDBNull(12) ? null : reader.GetFieldValue<DateTimeOffset>(12)));
+                reader.GetInt64(12),
+                reader.GetInt64(13),
+                reader.IsDBNull(14) ? null : reader.GetFieldValue<DateTimeOffset>(14)));
         }
         return rows.ToArray();
     }
@@ -140,10 +159,18 @@ internal static class VpnMetricsSnapshotReader
         int publicFreshnessMinutes,
         CancellationToken token) =>
         db.VpnEndpoints.AsNoTracking()
-            .GroupBy(endpoint => new { endpoint.CountryCode, endpoint.Status })
+            .GroupBy(endpoint => new
+            {
+                endpoint.CountryCode,
+                endpoint.Status,
+                endpoint.Protocol,
+                endpoint.Transport
+            })
             .Select(group => new VpnMetricsRow(
                 group.Key.CountryCode,
                 group.Key.Status,
+                group.Key.Protocol,
+                group.Key.Transport,
                 group.LongCount(),
                 group.LongCount(endpoint => endpoint.SuccessfulChecks > 0),
                 group.Where(endpoint =>
@@ -166,6 +193,10 @@ internal static class VpnMetricsSnapshotReader
 
     private static VpnMetricsSnapshot Aggregate(IReadOnlyList<VpnMetricsRow> rows, DateTimeOffset capturedAt)
     {
+        var facets = rows
+            .Select(row => new VpnFacetMetrics(
+                row.CountryCode, row.Status, row.Protocol, row.Transport, row.Count))
+            .ToArray();
         long total = 0;
         long reachable = 0;
         long pending = 0;
@@ -222,7 +253,7 @@ internal static class VpnMetricsSnapshotReader
             total, reachable, pending, unreachable, unsupported, everReachable,
             latencyTotal, latencySamples, oldestReachableAt, neverChecked, due,
             freshReachable, staleReachable, checkedLastFiveMinutes, latestCheckedAt,
-            countries, capturedAt);
+            countries, facets, capturedAt);
     }
 }
 
