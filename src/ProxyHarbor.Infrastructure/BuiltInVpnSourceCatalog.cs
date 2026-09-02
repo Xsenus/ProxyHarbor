@@ -14,7 +14,7 @@ public static class BuiltInVpnSourceCatalog
     /// <summary>Начальный набор разрешённых VPN feed'ов.</summary>
     public static IReadOnlyList<VpnSourceDefinition> Sources { get; } =
     [
-        new("Auto OVPN Japan", "9xN/auto-ovpn", "https://raw.githubusercontent.com/9xN/auto-ovpn/main/configs/server_0_JP.ovpn", VpnProtocol.OpenVpn, "AGPL-3.0"),
+        new("Auto OVPN catalog", "9xN/auto-ovpn", "https://raw.githubusercontent.com/9xN/auto-ovpn/main/json/data.json", VpnProtocol.OpenVpn, "AGPL-3.0"),
 
         new("V2ray-Config VLESS", "barry-far/V2ray-Config", "https://raw.githubusercontent.com/barry-far/V2ray-Config/main/Splitted-By-Protocol/vless.txt", VpnProtocol.Vless, "MIT"),
         new("V2ray-Config VMess", "barry-far/V2ray-Config", "https://raw.githubusercontent.com/barry-far/V2ray-Config/main/Splitted-By-Protocol/vmess.txt", VpnProtocol.Vmess, "MIT"),

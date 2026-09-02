@@ -24,7 +24,7 @@
 - Каталог release: 320 proxy-feed/85 providers и 174 VPN-feed/32 providers; все endpoint проверены live 02.09.2026, полный сетевой CI-аудит обязателен перед production.
 - Collection audit: 888 116 разобранных строк и 290 217 уникальных кандидатов за 4,965 секунды.
 - Validation sample: 1 600/1 600 объективных результатов без `Deferred`; Alive-множество совпало во всех export formats.
-- Backend: 1170 tests; обязательные unit- и PostgreSQL coverage-gates выполняются в CI и release workflow.
+- Backend: 1172 tests; обязательные unit- и PostgreSQL coverage-gates выполняются в CI и release workflow.
 - Frontend: 66 tests, ESLint, TypeScript/Vite production build и axe-core accessibility checks.
 - Release build: warnings-as-errors, XML documentation и OpenAPI contracts.
 - Полная Git history проверялась Gitleaks; CI повторяет scan с закреплённым scanner archive hash.

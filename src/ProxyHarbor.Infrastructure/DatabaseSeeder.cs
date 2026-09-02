@@ -43,7 +43,9 @@ public static class DatabaseSeeder
         new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["https://www.vpngate.net/api/iphone/"] =
-                "https://raw.githubusercontent.com/9xN/auto-ovpn/main/configs/server_0_JP.ovpn"
+                "https://raw.githubusercontent.com/9xN/auto-ovpn/main/json/data.json",
+            ["https://raw.githubusercontent.com/9xN/auto-ovpn/main/configs/server_0_JP.ovpn"] =
+                "https://raw.githubusercontent.com/9xN/auto-ovpn/main/json/data.json"
         };
 
     /// <summary>Добавляет недостающие feed'ы и обновляет их метаданные, сохраняя выбор Enabled/Disabled.</summary>

@@ -502,9 +502,11 @@ public sealed class DatabaseSeederIntegrationTests
         }
     }
 
-    [Fact]
+    [Theory]
+    [InlineData("https://www.vpngate.net/api/iphone/")]
+    [InlineData("https://raw.githubusercontent.com/9xN/auto-ovpn/main/configs/server_0_JP.ovpn")]
     [Trait("Category", "PostgresIntegration")]
-    public async Task StartupMigratesUnreachableVpnGateSourceAndResetsResourceState()
+    public async Task StartupMigratesReplacedOpenVpnSourceAndResetsResourceState(string replacedUrl)
     {
         var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
         if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
@@ -522,14 +524,14 @@ public sealed class DatabaseSeederIntegrationTests
                 .UseNpgsql(builder.ConnectionString)
                 .Options;
             var canonical = BuiltInVpnSourceCatalog.Sources.Single(source =>
-                source.Name == "Auto OVPN Japan");
+                source.Name == "Auto OVPN catalog");
             var sourceId = Guid.Empty;
             await using (var first = new ProxyHarborDbContext(options))
             {
                 await DatabaseSeeder.InitializeAsync(first);
                 var source = await first.VpnSources.SingleAsync(item => item.Url == canonical.Url);
                 sourceId = source.Id;
-                source.Url = "https://www.vpngate.net/api/iphone/";
+                source.Url = replacedUrl;
                 source.Enabled = false;
                 source.LastFetchedAt = DateTimeOffset.UtcNow;
                 source.LastSucceededAt = source.LastFetchedAt.Value.AddHours(-1);
