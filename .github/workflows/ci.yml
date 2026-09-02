@@ -958,16 +958,18 @@ jobs:
              .recentBackups[0].telegramConfigured == false and
              .recentBackups[0].sentToTelegram == false'
           backup_metric_ready=false
-          # /metrics кешируется на 30 секунд. Даём предыдущему snapshot гарантированно
-          # истечь, но продолжаем опрашивать быстро, если кеш ещё не был заполнен.
-          for attempt in {1..140}; do
-            backup_metrics=$(curl --fail --silent http://127.0.0.1:5080/metrics)
+          backup_metrics=''
+          # /metrics кешируется на 30 секунд и защищён public rate limit (120/мин).
+          # Опрос раз в секунду оставляет большой запас для остальных smoke-запросов;
+          # временный non-2xx не прерывает bounded polling, но итоговый timeout — ошибка.
+          for attempt in {1..40}; do
+            backup_metrics=$(curl --silent http://127.0.0.1:5080/metrics || true)
             if grep --quiet '^proxyharbor_last_backup_success 1$' <<< "$backup_metrics"; then
               backup_metric_ready=true
               break
             fi
-            if [ "$attempt" -eq 140 ]; then echo "$backup_metrics"; fi
-            sleep 0.25
+            if [ "$attempt" -eq 40 ]; then echo "$backup_metrics"; fi
+            sleep 1
           done
           test "$backup_metric_ready" = true
           PGPASSWORD=integration-password psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -U proxyharbor -d proxyharbor \
