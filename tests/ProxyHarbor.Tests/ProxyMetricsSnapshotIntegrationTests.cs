@@ -73,11 +73,36 @@ public sealed class ProxyMetricsSnapshotIntegrationTests
             Assert.Equal(now.AddMinutes(-2), snapshot.LastAttemptAt);
             Assert.Equal(now.AddHours(-2), snapshot.OldestActiveAt);
             Assert.Equal(5, snapshot.Groups.Sum(row => row.Count));
+            Assert.Equal(5, snapshot.Facets.Sum(row => row.Count));
+            Assert.Equal(2, snapshot.Facets
+                .Where(row => row.CountryCode == "DE")
+                .Sum(row => row.Count));
+            Assert.Equal(2, snapshot.Facets
+                .Where(row => row.Status == ProxyStatus.Alive && row.Protocol == ProxyProtocol.Http)
+                .Sum(row => row.Count));
             Assert.Collection(snapshot.Countries,
                 country => { Assert.Equal("DE", country.Code); Assert.Equal(2, country.Count); },
                 country => { Assert.Equal("US", country.Code); Assert.Equal(2, country.Count); });
             Assert.Equal(2, Assert.Single(snapshot.Groups,
                 row => row.Status == ProxyStatus.Alive && row.Protocol == ProxyProtocol.Http).Count);
+
+            await using (var indexCommand = new NpgsqlCommand(
+                """
+                SELECT indexdef
+                FROM pg_indexes
+                WHERE schemaname = current_schema()
+                  AND indexname = 'IX_Proxies_Admin_LastCheckedAt'
+                """,
+                (NpgsqlConnection)db.Database.GetDbConnection()))
+            {
+                var indexDefinition = Convert.ToString(
+                    await indexCommand.ExecuteScalarAsync(), CultureInfo.InvariantCulture);
+                Assert.False(string.IsNullOrWhiteSpace(indexDefinition));
+                Assert.Contains("(\"LastCheckedAt\" IS NULL)", indexDefinition, StringComparison.Ordinal);
+                Assert.Contains("\"LastCheckedAt\" DESC", indexDefinition, StringComparison.Ordinal);
+                Assert.Contains("INCLUDE (\"Status\", \"Protocol\", \"CountryCode\")",
+                    indexDefinition, StringComparison.Ordinal);
+            }
 
             await using var explain = new NpgsqlCommand(
                 $"EXPLAIN (FORMAT JSON, COSTS OFF) {ProxyMetricsSnapshotReader.PostgresSql}",
