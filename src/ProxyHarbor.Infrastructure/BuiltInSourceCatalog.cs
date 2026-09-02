@@ -94,7 +94,7 @@ public static class BuiltInSourceCatalog
         Feed(74, "HookzOf SOCKS5", "HookzOf", "https://raw.githubusercontent.com/hookzof/socks5_list/master/proxy.txt", ProxyProtocol.Socks5),
         Feed(75, "Vakhov HTTP", "Vakhov", "https://raw.githubusercontent.com/vakhov/fresh-proxy-list/master/http.txt", ProxyProtocol.Http),
         Feed(76, "ShiftyTR HTTP", "ShiftyTR", "https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/http.txt", ProxyProtocol.Http),
-        Feed(77, "Fyvri HTTP", "Fyvri", "https://raw.githubusercontent.com/fyvri/fresh-proxy-list/archive/storage/classic/http.txt", ProxyProtocol.Http),
+        Feed(77, "Fyvri HTTP", "Fyvri", "https://raw.githubusercontent.com/fyvri/fresh-proxy-list/refs/heads/archive/storage/classic/http.txt", ProxyProtocol.Http),
         Feed(78, "BesJS Mixed", "BesJS", "https://raw.githubusercontent.com/Bes-js/public-proxy-list/main/proxies.txt", ProxyProtocol.Http),
         Feed(79, "TheRituRajPS HTTP", "TheRituRajPS", "https://raw.githubusercontent.com/theriturajps/proxy-list/main/proxies.txt", ProxyProtocol.Http),
         Feed(80, "NotThinks Mixed", "NotThinks", "https://raw.githubusercontent.com/notthinks/proxy-lists/main/alive.txt", ProxyProtocol.Http),

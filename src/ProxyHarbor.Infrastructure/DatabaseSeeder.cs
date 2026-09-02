@@ -35,7 +35,9 @@ public static class DatabaseSeeder
             ["https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/dk/data.txt"] =
                 "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/tr/data.txt",
             ["https://raw.githubusercontent.com/proxygenerator1/ProxyGenerator/main/MostStable/socks4.txt"] =
-                "https://raw.githubusercontent.com/proxygenerator1/ProxyGenerator/main/ForSites/cloudflare.com/socks4.txt"
+                "https://raw.githubusercontent.com/proxygenerator1/ProxyGenerator/main/ForSites/cloudflare.com/socks4.txt",
+            ["https://raw.githubusercontent.com/fyvri/fresh-proxy-list/archive/storage/classic/http.txt"] =
+                "https://raw.githubusercontent.com/fyvri/fresh-proxy-list/refs/heads/archive/storage/classic/http.txt"
         };
 
     /// <summary>Добавляет недостающие feed'ы и обновляет их метаданные, сохраняя выбор Enabled/Disabled.</summary>
