@@ -69,36 +69,48 @@ public sealed class AdminUsersController(
                 : query.Where(user => db.Subscriptions.Any(item => item.UserId == user.Id && item.Plan == plan));
         }
 
-        var total = await query.CountAsync(cancellationToken);
-        var rows = await query.OrderByDescending(x => x.CreatedAt).ThenBy(x => x.Id)
-            .Skip((page - 1) * pageSize).Take(pageSize).ToListAsync(cancellationToken);
-        var ids = rows.Select(x => x.Id).ToArray();
-        var subscriptions = await db.Subscriptions.AsNoTracking().Where(x => ids.Contains(x.UserId))
-            .ToDictionaryAsync(x => x.UserId, cancellationToken);
-
-        // Роли всей страницы извлекаются одним запросом вместо N+1 запросов через
-        // UserManager.GetRolesAsync для каждой строки.
-        var roleRows = await db.UserRoles.AsNoTracking()
-            .Where(link => ids.Contains(link.UserId))
-            .Join(db.Roles.AsNoTracking(), link => link.RoleId, role => role.Id,
-                (link, role) => new { link.UserId, role.Name })
-            .ToListAsync(cancellationToken);
-        var rolesByUser = roleRows.GroupBy(row => row.UserId)
-            .ToDictionary(group => group.Key, group => group.Select(row => row.Name!)
-                .Where(name => !string.IsNullOrWhiteSpace(name)).OrderBy(name => name).ToArray());
-
-        var result = new List<AdminUserResponse>(rows.Count);
-        foreach (var user in rows)
+        return await BufferedReadSnapshot.ExecuteAsync<ActionResult<PagedResult<AdminUserResponse>>>(db,
+            async token =>
         {
-            subscriptions.TryGetValue(user.Id, out var subscription);
-            rolesByUser.TryGetValue(user.Id, out var roles);
-            result.Add(new AdminUserResponse(user.Id, user.UserName ?? string.Empty,
-                user.Email ?? string.Empty, user.DisplayName, user.PreferredLanguage, user.IsActive, user.CreatedAt,
-                user.LastLoginAt, roles ?? [], subscription is null ? null :
-                    new AdminUserSubscriptionResponse(subscription.Plan, subscription.Status,
-                        subscription.StartedAt, subscription.ExpiresAt)));
-        }
-        return Ok(new PagedResult<AdminUserResponse>(result, page, pageSize, total));
+            var total = await query.CountAsync(token);
+            // Пользователь, его единственная подписка и все роли страницы формируются одним SQL reader.
+            // Проекция намеренно перечисляет только публичные поля: password/security stamps не загружаются.
+            var rows = await query.OrderByDescending(x => x.CreatedAt).ThenBy(x => x.Id)
+                .Skip((page - 1) * pageSize).Take(pageSize)
+                .Select(user => new AdminUserReadRow(
+                    user.Id,
+                    user.UserName ?? string.Empty,
+                    user.Email ?? string.Empty,
+                    user.DisplayName,
+                    user.PreferredLanguage,
+                    user.IsActive,
+                    user.CreatedAt,
+                    user.LastLoginAt,
+                    db.UserRoles.AsNoTracking().Where(link => link.UserId == user.Id)
+                        .Join(db.Roles.AsNoTracking(), link => link.RoleId, role => role.Id,
+                            (_, role) => role.Name)
+                        .Where(name => name != null && name != string.Empty)
+                        .OrderBy(name => name)
+                        .Select(name => name!)
+                        .ToArray(),
+                    db.Subscriptions.AsNoTracking().Where(item => item.UserId == user.Id)
+                        .Select(item => new AdminUserSubscriptionResponse(
+                            item.Plan, item.Status, item.StartedAt, item.ExpiresAt))
+                        .SingleOrDefault()))
+                .ToListAsync(token);
+            var result = rows.Select(user => new AdminUserResponse(
+                user.Id,
+                user.UserName,
+                user.Email,
+                user.DisplayName,
+                user.PreferredLanguage,
+                user.IsActive,
+                user.CreatedAt,
+                user.LastLoginAt,
+                user.Roles,
+                user.Subscription)).ToArray();
+            return Ok(new PagedResult<AdminUserResponse>(result, page, pageSize, total));
+        }, cancellationToken);
     }
 
     /// <summary>Атомарно обновляет активность, роли и тариф выбранной учётной записи.</summary>
@@ -174,6 +186,19 @@ public sealed record AdminUserResponse(Guid Id, string UserName, string Email, s
 /// <summary>Коммерческий доступ пользователя без платёжных реквизитов.</summary>
 public sealed record AdminUserSubscriptionResponse(string Plan, string Status,
     DateTimeOffset StartedAt, DateTimeOffset? ExpiresAt);
+
+/// <summary>Узкая SQL-проекция страницы без секретных Identity-полей.</summary>
+internal sealed record AdminUserReadRow(
+    Guid Id,
+    string UserName,
+    string Email,
+    string? DisplayName,
+    string PreferredLanguage,
+    bool IsActive,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset? LastLoginAt,
+    string[] Roles,
+    AdminUserSubscriptionResponse? Subscription);
 
 /// <summary>Полный желаемый снимок прав и подписки выбранного аккаунта.</summary>
 public sealed class UpdateUserAccessRequest
