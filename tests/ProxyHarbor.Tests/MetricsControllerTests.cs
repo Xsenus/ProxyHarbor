@@ -12,6 +12,70 @@ namespace ProxyHarbor.Tests;
 public sealed class MetricsControllerTests
 {
     [Fact]
+    public async Task MetricsExposeVpnSourceAndBuiltInCatalogHealth()
+    {
+        var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+            .UseInMemoryDatabase($"metrics-vpn-sources-{Guid.NewGuid():N}").Options;
+        var auditedAt = DateTimeOffset.UtcNow;
+        var builtIn = BuiltInVpnSourceCatalog.Sources[0];
+        await using (var seed = new ProxyHarborDbContext(options))
+        {
+            seed.VpnSources.AddRange(
+                new VpnSource
+                {
+                    Name = builtIn.Name,
+                    Provider = builtIn.Provider,
+                    Url = builtIn.Url,
+                    DefaultProtocol = builtIn.Protocol,
+                    License = builtIn.License,
+                    LastFetchedAt = auditedAt,
+                    LastSucceededAt = auditedAt,
+                    LastItemCount = 10
+                },
+                new VpnSource
+                {
+                    Name = "custom failure",
+                    Provider = "Custom",
+                    Url = "https://example.com/custom-vpn.txt",
+                    DefaultProtocol = VpnProtocol.Vless,
+                    License = "custom",
+                    LastFetchedAt = auditedAt,
+                    LastError = "timeout",
+                    ConsecutiveFailures = 1
+                });
+            await seed.SaveChangesAsync();
+        }
+
+        var controller = new MetricsController(
+            new TestDbFactory(options),
+            Options.Create(new CollectorOptions { CollectionIntervalMinutes = 15 }),
+            Options.Create(new BackupOptions()),
+            new ProbeControlHealth());
+
+        var result = Assert.IsType<ContentResult>(await controller.Get(CancellationToken.None));
+        var metrics = result.Content!;
+        Assert.Contains("proxyharbor_vpn_sources_enabled 2", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_vpn_sources_failing 1", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_vpn_sources_healthy 1", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_vpn_sources_never_audited 0", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_vpn_sources_stale 0", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_vpn_source_catalog_complete 0", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_vpn_source_catalog_healthy 0", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_builtin_vpn_catalog_audit_timestamp_seconds 1788307200", metrics,
+            StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_builtin_vpn_sources_expected 174", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_builtin_vpn_sources_present 1", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_builtin_vpn_sources_enabled 1", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_builtin_vpn_sources_healthy 1", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_builtin_vpn_sources_failing 0", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_builtin_vpn_sources_never_audited 0", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_builtin_vpn_sources_stale 0", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_builtin_vpn_providers_expected 32", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_builtin_vpn_providers_present 1", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_builtin_vpn_providers_enabled 1", metrics, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task MetricsDoNotReportHistoricallySuccessfulStaleSourceAsHealthy()
     {
         var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()

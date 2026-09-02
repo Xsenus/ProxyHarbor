@@ -33,8 +33,8 @@ public static class VpnFeedParser
         int maxResults)
     {
         // OpenVPN-конфигурации и WireGuard INI могут занимать несколько строк.
-        if (fallback == VpnProtocol.OpenVpn) ParseOpenVpn(content, result);
-        if (fallback == VpnProtocol.WireGuard) ParseWireGuardConfig(content, result);
+        if (fallback == VpnProtocol.OpenVpn) ParseOpenVpn(content, result, maxResults);
+        if (fallback == VpnProtocol.WireGuard) ParseWireGuardConfig(content, result, maxResults);
 
         // Не используем string.Split: крупный публичный feed создавал массив из сотен
         // тысяч строк и кратковременно удваивал расход памяти контейнера. Здесь в памяти
@@ -42,15 +42,25 @@ public static class VpnFeedParser
         for (var start = 0; start <= content.Length && result.Count < maxResults;)
         {
             var end = start;
-            while (end < content.Length && content[end] is not ('\r' or '\n' or ',' or ';')) end++;
-            var lineSpan = content.AsSpan(start, end - start).Trim().Trim('"');
+            while (end < content.Length && content[end] is not ('\r' or '\n')) end++;
+            var lineSpan = content.AsSpan(start, end - start).Trim();
             start = end + 1;
+            // JSON-массивы часто добавляют к строке внешние кавычки и запятую. Запятые
+            // внутри query VPN URI при этом являются частью конфигурации и не могут быть
+            // глобальным разделителем строк.
+            if (lineSpan.EndsWith(",", StringComparison.Ordinal)) lineSpan = lineSpan[..^1].TrimEnd();
+            lineSpan = lineSpan.Trim('"');
             if (lineSpan.Length is 0 or > 16_384 || lineSpan[0] == '#') continue;
             var line = lineSpan.ToString();
             if (line.Length is 0 or > 16_384 || line[0] == '#') continue;
-            if (line.StartsWith("vmess://", StringComparison.OrdinalIgnoreCase)) ParseVmess(line, result);
+            if (line.StartsWith("vmess://", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!TryParseVmess(line, result) && TryProtocolUri(line, fallback, out var candidate))
+                    Add(candidate, result);
+            }
             else if (TryProtocolUri(line, fallback, out var candidate)) Add(candidate, result);
-            else if (fallback == VpnProtocol.OpenVpn && TryDecodeBase64(line, out var ovpn)) ParseOpenVpn(ovpn, result);
+            else if (fallback == VpnProtocol.OpenVpn && TryDecodeBase64(line, out var ovpn))
+                ParseOpenVpn(ovpn, result, maxResults);
         }
     }
 
@@ -70,33 +80,49 @@ public static class VpnFeedParser
             "wireguard" or "wg" => VpnProtocol.WireGuard,
             _ => fallback
         };
-        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) || uri.Port is < 1 or > 65_535)
+        var authorityStart = separator + 3;
+        var authorityEnd = value.AsSpan(authorityStart).IndexOfAny('?', '#');
+        authorityEnd = authorityEnd < 0 ? value.Length : authorityStart + authorityEnd;
+        if (authorityEnd <= authorityStart) return false;
+        var userInfoEnd = value.LastIndexOf('@', authorityEnd - 1, authorityEnd - authorityStart);
+        var hostStart = userInfoEnd >= authorityStart ? userInfoEnd + 1 : authorityStart;
+        var pathOffset = value.AsSpan(hostStart, authorityEnd - hostStart).IndexOf('/');
+        var hostEnd = pathOffset < 0 ? authorityEnd : hostStart + pathOffset;
+        if (!TryHostPort(value[hostStart..hostEnd], out var host, out var port))
             return false;
         var transport = protocol is VpnProtocol.WireGuard or VpnProtocol.Hysteria2 or VpnProtocol.Tuic ? "udp" : "tcp";
-        candidate = new VpnCandidate(uri.Host, uri.Port, protocol, transport, value);
+        candidate = new VpnCandidate(host, port, protocol, transport, value);
         return IsSafe(candidate);
     }
 
-    private static void ParseVmess(string value, Dictionary<string, VpnCandidate> result)
+    private static bool TryParseVmess(string value, Dictionary<string, VpnCandidate> result)
     {
-        if (!TryDecodeBase64(value[8..], out var json)) return;
+        var payloadEnd = value.AsSpan(8).IndexOfAny('?', '#');
+        var payload = payloadEnd < 0 ? value[8..] : value[8..(8 + payloadEnd)];
+        if (!TryDecodeBase64(payload, out var json)) return false;
         try
         {
             using var document = JsonDocument.Parse(json, new JsonDocumentOptions { MaxDepth = 16 });
             var root = document.RootElement;
-            if (!root.TryGetProperty("add", out var address) || !root.TryGetProperty("port", out var portElement)) return;
+            if (!root.TryGetProperty("add", out var address) || !root.TryGetProperty("port", out var portElement)) return false;
             var host = address.GetString();
             var portText = portElement.ValueKind == JsonValueKind.Number ? portElement.GetRawText() : portElement.GetString();
-            if (host is null || !int.TryParse(portText, out var port)) return;
+            if (host is null || !int.TryParse(portText, out var port)) return false;
+            var before = result.Count;
             Add(new VpnCandidate(host, port, VpnProtocol.Vmess, "tcp", value), result);
+            return result.Count > before;
         }
-        catch (JsonException) { }
+        catch (JsonException) { return false; }
     }
 
-    private static void ParseOpenVpn(string content, Dictionary<string, VpnCandidate> result)
+    private static void ParseOpenVpn(
+        string content,
+        Dictionary<string, VpnCandidate> result,
+        int maxResults)
     {
         foreach (var raw in content.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
+            if (result.Count >= maxResults) return;
             var parts = raw.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
             if (parts.Length < 3 || !parts[0].Equals("remote", StringComparison.OrdinalIgnoreCase) || !int.TryParse(parts[2], out var port)) continue;
             var transport = parts.Length > 3 && parts[3].StartsWith("udp", StringComparison.OrdinalIgnoreCase) ? "udp" : "tcp";
@@ -104,10 +130,14 @@ public static class VpnFeedParser
         }
     }
 
-    private static void ParseWireGuardConfig(string content, Dictionary<string, VpnCandidate> result)
+    private static void ParseWireGuardConfig(
+        string content,
+        Dictionary<string, VpnCandidate> result,
+        int maxResults)
     {
         foreach (var raw in content.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
+            if (result.Count >= maxResults) return;
             if (!raw.StartsWith("Endpoint", StringComparison.OrdinalIgnoreCase)) continue;
             var value = raw[(raw.IndexOf('=') + 1)..].Trim();
             if (TryHostPort(value, out var host, out var port)) Add(new(host, port, VpnProtocol.WireGuard, "udp"), result);

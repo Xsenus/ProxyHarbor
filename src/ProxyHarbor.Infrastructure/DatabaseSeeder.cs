@@ -39,6 +39,12 @@ public static class DatabaseSeeder
             ["https://raw.githubusercontent.com/fyvri/fresh-proxy-list/archive/storage/classic/http.txt"] =
                 "https://raw.githubusercontent.com/fyvri/fresh-proxy-list/refs/heads/archive/storage/classic/http.txt"
         };
+    private static readonly IReadOnlyDictionary<string, string> CanonicalVpnSourceUrlReplacements =
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["https://www.vpngate.net/api/iphone/"] =
+                "https://raw.githubusercontent.com/9xN/auto-ovpn/main/configs/server_0_JP.ovpn"
+        };
 
     /// <summary>Добавляет недостающие feed'ы и обновляет их метаданные, сохраняя выбор Enabled/Disabled.</summary>
     public static Task InitializeAsync(ProxyHarborDbContext db, CancellationToken cancellationToken = default) =>
@@ -238,7 +244,33 @@ public static class DatabaseSeeder
             });
         }
 
-        var existingVpnSources = await db.VpnSources.ToDictionaryAsync(x => x.Url, StringComparer.Ordinal, cancellationToken);
+        var existingVpnSourcesList = await db.VpnSources.ToListAsync(cancellationToken);
+        foreach (var (replacedUrl, canonicalUrl) in CanonicalVpnSourceUrlReplacements)
+        {
+            var replaced = existingVpnSourcesList.SingleOrDefault(source => source.Url == replacedUrl);
+            if (replaced is null) continue;
+
+            var canonical = existingVpnSourcesList.SingleOrDefault(source => source.Url == canonicalUrl);
+            if (canonical is not null)
+            {
+                db.VpnSources.Remove(replaced);
+                existingVpnSourcesList.Remove(replaced);
+                continue;
+            }
+
+            replaced.Url = canonicalUrl;
+            replaced.LastFetchedAt = null;
+            replaced.LastSucceededAt = null;
+            replaced.LastContentFetchedAt = null;
+            replaced.NextFetchAt = null;
+            replaced.HttpETag = null;
+            replaced.HttpLastModifiedAt = null;
+            replaced.LastItemCount = 0;
+            replaced.ConsecutiveFailures = 0;
+            replaced.LastError = null;
+        }
+
+        var existingVpnSources = existingVpnSourcesList.ToDictionary(x => x.Url, StringComparer.Ordinal);
         for (var index = 0; index < BuiltInVpnSourceCatalog.Sources.Count; index++)
         {
             var definition = BuiltInVpnSourceCatalog.Sources[index];

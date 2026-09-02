@@ -9,12 +9,12 @@ namespace ProxyHarbor.Infrastructure;
 public static class BuiltInVpnSourceCatalog
 {
     /// <summary>Дата последней ручной проверки происхождения и лицензий.</summary>
-    public static DateOnly LastAuditedOn { get; } = new(2026, 9, 1);
+    public static DateOnly LastAuditedOn { get; } = new(2026, 9, 2);
 
     /// <summary>Начальный набор разрешённых VPN feed'ов.</summary>
     public static IReadOnlyList<VpnSourceDefinition> Sources { get; } =
     [
-        new("VPN Gate OpenVPN", "VPN Gate", "https://www.vpngate.net/api/iphone/", VpnProtocol.OpenVpn, "VPN Gate public relay terms"),
+        new("Auto OVPN Japan", "9xN/auto-ovpn", "https://raw.githubusercontent.com/9xN/auto-ovpn/main/configs/server_0_JP.ovpn", VpnProtocol.OpenVpn, "AGPL-3.0"),
 
         new("V2ray-Config VLESS", "barry-far/V2ray-Config", "https://raw.githubusercontent.com/barry-far/V2ray-Config/main/Splitted-By-Protocol/vless.txt", VpnProtocol.Vless, "MIT"),
         new("V2ray-Config VMess", "barry-far/V2ray-Config", "https://raw.githubusercontent.com/barry-far/V2ray-Config/main/Splitted-By-Protocol/vmess.txt", VpnProtocol.Vmess, "MIT"),
@@ -199,6 +199,14 @@ public static class BuiltInVpnSourceCatalog
         new("Au1rxx verified 8", "Au1rxx/free-vpn-subscriptions", "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/all-verified/v2ray-base64-0008.txt", VpnProtocol.Vless, "MIT"),
         new("Au1rxx verified 9", "Au1rxx/free-vpn-subscriptions", "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/all-verified/v2ray-base64-0009.txt", VpnProtocol.Vless, "MIT"),
     ];
+
+    /// <summary>Число независимых владельцев встроенных VPN feed.</summary>
+    public static int ProviderCount { get; } = Sources.Select(source => source.Provider)
+        .Distinct(StringComparer.Ordinal).Count();
+
+    /// <summary>Возвращает каноническое описание только для точного URL.</summary>
+    public static VpnSourceDefinition? FindByUrl(string url) =>
+        Sources.FirstOrDefault(source => string.Equals(source.Url, url, StringComparison.Ordinal));
 }
 
 /// <summary>Неизменяемое описание встроенного VPN feed.</summary>
