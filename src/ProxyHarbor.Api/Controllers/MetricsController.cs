@@ -79,17 +79,8 @@ public sealed class MetricsController(
             now,
             SourceCatalogHealth.FreshnessWindow(collectorOptions.Value.CollectionIntervalMinutes));
         // Текущий running-цикл не должен обнулять показатели последнего действительно завершённого запуска.
-        var lastFinishedRun = await db.Runs.AsNoTracking().Where(x => x.FinishedAt != null)
-            .OrderByDescending(x => x.FinishedAt).FirstOrDefaultAsync(token);
-        var lastSuccessfulRun = await db.Runs.AsNoTracking().Where(x => x.Status == "completed" && x.FinishedAt != null)
-            .OrderByDescending(x => x.FinishedAt).FirstOrDefaultAsync(token);
-        var activeRuns = await db.Runs.AsNoTracking().CountAsync(x => x.Status == "running" && x.FinishedAt == null, token);
-        var lastFinishedBackup = await db.BackupRuns.AsNoTracking().Where(x => x.FinishedAt != null)
-            .OrderByDescending(x => x.FinishedAt).FirstOrDefaultAsync(token);
-        var lastSuccessfulBackup = await db.BackupRuns.AsNoTracking().Where(x => x.Status == "completed" && x.FinishedAt != null)
-            .OrderByDescending(x => x.FinishedAt).FirstOrDefaultAsync(token);
-        var activeBackups = await db.BackupRuns.AsNoTracking()
-            .CountAsync(x => x.Status == "running" && x.FinishedAt == null, token);
+        // На PostgreSQL шесть прежних point-read запросов объединены в один statement и один MVCC snapshot.
+        var runMetrics = await ReadRunMetricsAsync(db, token);
 
         var output = new StringBuilder(16_384);
         (httpTelemetry ?? new HttpRequestTelemetry()).AppendPrometheus(output);
@@ -209,24 +200,25 @@ public sealed class MetricsController(
             sourceCatalog.EnabledProviders);
         Gauge(output, "proxyharbor_proxies_published", "Alive proxies fresh enough for public API and exports.",
             proxySnapshot.Published);
-        Gauge(output, "proxyharbor_collection_runs_active", "Collection runs currently marked as active.", activeRuns);
+        Gauge(output, "proxyharbor_collection_runs_active", "Collection runs currently marked as active.",
+            runMetrics.ActiveCollectionRuns);
         Gauge(output, "proxyharbor_last_collection_success", "Whether the latest finished collection completed successfully.",
-            lastFinishedRun?.Status == "completed" ? 1 : 0);
+            runMetrics.LastCollectionStatus == "completed" ? 1 : 0);
         Gauge(output, "proxyharbor_last_collection_candidates", "Candidates found by the latest finished collection run.",
-            lastFinishedRun?.CandidatesFound ?? 0);
+            runMetrics.LastCollectionCandidates);
         Gauge(output, "proxyharbor_last_collection_sources_skipped", "Feeds skipped by adaptive failure backoff in the latest finished run.",
-            lastFinishedRun?.SourcesSkipped ?? 0);
+            runMetrics.LastCollectionSourcesSkipped);
         Gauge(output, "proxyharbor_last_collection_sources_truncated", "Feeds truncated by the per-source limit in the latest finished run.",
-            lastFinishedRun?.SourcesTruncated ?? 0);
+            runMetrics.LastCollectionSourcesTruncated);
         Gauge(output, "proxyharbor_last_collection_candidate_limit_reached", "Whether the latest finished run reached the global candidate limit.",
-            lastFinishedRun?.CandidateLimitReached == true ? 1 : 0);
+            runMetrics.LastCollectionCandidateLimitReached ? 1 : 0);
         Gauge(output, "proxyharbor_last_collection_timestamp_seconds", "Unix timestamp of the last collection completion.",
-            lastFinishedRun?.FinishedAt?.ToUnixTimeSeconds() ?? 0);
+            runMetrics.LastCollectionFinishedAt?.ToUnixTimeSeconds() ?? 0);
         Gauge(output, "proxyharbor_last_successful_collection_timestamp_seconds", "Unix timestamp of the latest successful collection.",
-            lastSuccessfulRun?.FinishedAt?.ToUnixTimeSeconds() ?? 0);
+            runMetrics.LastSuccessfulCollectionAt?.ToUnixTimeSeconds() ?? 0);
         GaugeDouble(output, "proxyharbor_last_collection_duration_seconds", "Duration of the latest finished collection in seconds.",
-            lastFinishedRun?.FinishedAt is { } finishedAt
-                ? Math.Max(0, (finishedAt - lastFinishedRun.StartedAt).TotalSeconds)
+            runMetrics.LastCollectionFinishedAt is { } finishedAt && runMetrics.LastCollectionStartedAt is { } startedAt
+                ? Math.Max(0, (finishedAt - startedAt).TotalSeconds)
                 : 0);
         Gauge(output, "proxyharbor_backup_enabled", "Whether scheduled encrypted backups are enabled.",
             backupOptions.Value.Enabled ? 1 : 0);
@@ -235,23 +227,125 @@ public sealed class MetricsController(
         Gauge(output, "proxyharbor_backup_telegram_configured", "Whether both Telegram delivery settings are currently configured.",
             !string.IsNullOrWhiteSpace(backupOptions.Value.TelegramBotToken) &&
             !string.IsNullOrWhiteSpace(backupOptions.Value.TelegramChatId) ? 1 : 0);
-        Gauge(output, "proxyharbor_backup_runs_active", "Backup runs currently marked as active.", activeBackups);
+        Gauge(output, "proxyharbor_backup_runs_active", "Backup runs currently marked as active.",
+            runMetrics.ActiveBackupRuns);
         Gauge(output, "proxyharbor_last_backup_success", "Whether the latest finished backup completed successfully.",
-            lastFinishedBackup?.Status == "completed" ? 1 : 0);
+            runMetrics.LastBackupStatus == "completed" ? 1 : 0);
         Gauge(output, "proxyharbor_last_backup_telegram_configured", "Whether Telegram was configured for the latest successful backup.",
-            lastSuccessfulBackup?.TelegramConfigured == true ? 1 : 0);
+            runMetrics.LastSuccessfulBackupTelegramConfigured ? 1 : 0);
         Gauge(output, "proxyharbor_last_backup_sent_to_telegram", "Whether the latest successful backup was delivered to Telegram.",
-            lastSuccessfulBackup?.SentToTelegram == true ? 1 : 0);
+            runMetrics.LastSuccessfulBackupSentToTelegram ? 1 : 0);
         Gauge(output, "proxyharbor_last_backup_size_bytes", "Encrypted size of the latest successful backup.",
-            lastSuccessfulBackup?.SizeBytes ?? 0);
+            runMetrics.LastSuccessfulBackupSizeBytes);
         Gauge(output, "proxyharbor_last_backup_timestamp_seconds", "Unix timestamp of the latest successful backup completion.",
-            lastSuccessfulBackup?.FinishedAt?.ToUnixTimeSeconds() ?? 0);
+            runMetrics.LastSuccessfulBackupFinishedAt?.ToUnixTimeSeconds() ?? 0);
         var content = output.ToString();
         // Prometheus text exposition требует LF. AppendLine использует CRLF на Windows,
         // поэтому локальный promtool/Prometheus иначе отклоняет TYPE как `counter\r`.
         if (Environment.NewLine.Length != 1)
             content = content.Replace(Environment.NewLine, "\n", StringComparison.Ordinal);
         return Content(content, "text/plain; version=0.0.4; charset=utf-8", Encoding.UTF8);
+    }
+
+    /// <summary>
+    /// Читает active/latest/successful состояния collection и backup run'ов одним PostgreSQL command.
+    /// Каждый LATERAL lookup использует существующие status/finished indexes; единый statement устраняет
+    /// пять сетевых round-trip и не смешивает состояния между последовательными запросами.
+    /// </summary>
+    private static async Task<OperationalRunMetrics> ReadRunMetricsAsync(
+        ProxyHarborDbContext db,
+        CancellationToken token)
+    {
+        if (db.Database.IsRelational())
+        {
+            return await db.Database.SqlQuery<OperationalRunMetrics>($"""
+                SELECT
+                    collection_active."Value" AS "ActiveCollectionRuns",
+                    collection_finished."Status" AS "LastCollectionStatus",
+                    COALESCE(collection_finished."CandidatesFound", 0)::int AS "LastCollectionCandidates",
+                    COALESCE(collection_finished."SourcesSkipped", 0)::int AS "LastCollectionSourcesSkipped",
+                    COALESCE(collection_finished."SourcesTruncated", 0)::int AS "LastCollectionSourcesTruncated",
+                    COALESCE(collection_finished."CandidateLimitReached", FALSE) AS "LastCollectionCandidateLimitReached",
+                    collection_finished."StartedAt" AS "LastCollectionStartedAt",
+                    collection_finished."FinishedAt" AS "LastCollectionFinishedAt",
+                    collection_success."FinishedAt" AS "LastSuccessfulCollectionAt",
+                    backup_active."Value" AS "ActiveBackupRuns",
+                    backup_finished."Status" AS "LastBackupStatus",
+                    COALESCE(backup_success."TelegramConfigured", FALSE) AS "LastSuccessfulBackupTelegramConfigured",
+                    COALESCE(backup_success."SentToTelegram", FALSE) AS "LastSuccessfulBackupSentToTelegram",
+                    COALESCE(backup_success."SizeBytes", 0)::bigint AS "LastSuccessfulBackupSizeBytes",
+                    backup_success."FinishedAt" AS "LastSuccessfulBackupFinishedAt"
+                FROM
+                    (SELECT COUNT(*)::int AS "Value"
+                     FROM "Runs"
+                     WHERE "Status" = {"running"} AND "FinishedAt" IS NULL) AS collection_active
+                CROSS JOIN
+                    (SELECT COUNT(*)::int AS "Value"
+                     FROM "BackupRuns"
+                     WHERE "Status" = {"running"} AND "FinishedAt" IS NULL) AS backup_active
+                LEFT JOIN LATERAL
+                    (SELECT "Status", "CandidatesFound", "SourcesSkipped", "SourcesTruncated",
+                            "CandidateLimitReached", "StartedAt", "FinishedAt"
+                     FROM "Runs"
+                     WHERE "FinishedAt" IS NOT NULL
+                     ORDER BY "FinishedAt" DESC, "Id" DESC
+                     LIMIT 1) AS collection_finished ON TRUE
+                LEFT JOIN LATERAL
+                    (SELECT "FinishedAt"
+                     FROM "Runs"
+                     WHERE "Status" = {"completed"} AND "FinishedAt" IS NOT NULL
+                     ORDER BY "FinishedAt" DESC, "Id" DESC
+                     LIMIT 1) AS collection_success ON TRUE
+                LEFT JOIN LATERAL
+                    (SELECT "Status"
+                     FROM "BackupRuns"
+                     WHERE "FinishedAt" IS NOT NULL
+                     ORDER BY "FinishedAt" DESC, "Id" DESC
+                     LIMIT 1) AS backup_finished ON TRUE
+                LEFT JOIN LATERAL
+                    (SELECT "TelegramConfigured", "SentToTelegram", "SizeBytes", "FinishedAt"
+                     FROM "BackupRuns"
+                     WHERE "Status" = {"completed"} AND "FinishedAt" IS NOT NULL
+                     ORDER BY "FinishedAt" DESC, "Id" DESC
+                     LIMIT 1) AS backup_success ON TRUE
+                """).SingleAsync(token);
+        }
+
+        // InMemory provider не исполняет PostgreSQL LATERAL. Этот bounded fallback сохраняет
+        // provider-independent unit tests; production всегда использует путь выше.
+        var lastFinishedRun = await db.Runs.AsNoTracking().Where(x => x.FinishedAt != null)
+            .OrderByDescending(x => x.FinishedAt).ThenByDescending(x => x.Id).FirstOrDefaultAsync(token);
+        var lastSuccessfulRun = await db.Runs.AsNoTracking()
+            .Where(x => x.Status == "completed" && x.FinishedAt != null)
+            .OrderByDescending(x => x.FinishedAt).ThenByDescending(x => x.Id).FirstOrDefaultAsync(token);
+        var activeRuns = await db.Runs.AsNoTracking()
+            .CountAsync(x => x.Status == "running" && x.FinishedAt == null, token);
+        var lastFinishedBackup = await db.BackupRuns.AsNoTracking().Where(x => x.FinishedAt != null)
+            .OrderByDescending(x => x.FinishedAt).ThenByDescending(x => x.Id).FirstOrDefaultAsync(token);
+        var lastSuccessfulBackup = await db.BackupRuns.AsNoTracking()
+            .Where(x => x.Status == "completed" && x.FinishedAt != null)
+            .OrderByDescending(x => x.FinishedAt).ThenByDescending(x => x.Id).FirstOrDefaultAsync(token);
+        var activeBackups = await db.BackupRuns.AsNoTracking()
+            .CountAsync(x => x.Status == "running" && x.FinishedAt == null, token);
+
+        return new OperationalRunMetrics
+        {
+            ActiveCollectionRuns = activeRuns,
+            LastCollectionStatus = lastFinishedRun?.Status,
+            LastCollectionCandidates = lastFinishedRun?.CandidatesFound ?? 0,
+            LastCollectionSourcesSkipped = lastFinishedRun?.SourcesSkipped ?? 0,
+            LastCollectionSourcesTruncated = lastFinishedRun?.SourcesTruncated ?? 0,
+            LastCollectionCandidateLimitReached = lastFinishedRun?.CandidateLimitReached == true,
+            LastCollectionStartedAt = lastFinishedRun?.StartedAt,
+            LastCollectionFinishedAt = lastFinishedRun?.FinishedAt,
+            LastSuccessfulCollectionAt = lastSuccessfulRun?.FinishedAt,
+            ActiveBackupRuns = activeBackups,
+            LastBackupStatus = lastFinishedBackup?.Status,
+            LastSuccessfulBackupTelegramConfigured = lastSuccessfulBackup?.TelegramConfigured == true,
+            LastSuccessfulBackupSentToTelegram = lastSuccessfulBackup?.SentToTelegram == true,
+            LastSuccessfulBackupSizeBytes = lastSuccessfulBackup?.SizeBytes ?? 0,
+            LastSuccessfulBackupFinishedAt = lastSuccessfulBackup?.FinishedAt
+        };
     }
 
     private static void Gauge(StringBuilder output, string name, string help, long value)
@@ -274,4 +368,24 @@ public sealed class MetricsController(
         output.Append("# TYPE ").Append(name).AppendLine(" counter");
         output.Append(name).Append(' ').AppendLine(value.ToString(CultureInfo.InvariantCulture));
     }
+}
+
+/// <summary>Компактный операционный snapshot collection и backup циклов для Prometheus.</summary>
+internal sealed class OperationalRunMetrics
+{
+    public int ActiveCollectionRuns { get; set; }
+    public string? LastCollectionStatus { get; set; }
+    public int LastCollectionCandidates { get; set; }
+    public int LastCollectionSourcesSkipped { get; set; }
+    public int LastCollectionSourcesTruncated { get; set; }
+    public bool LastCollectionCandidateLimitReached { get; set; }
+    public DateTimeOffset? LastCollectionStartedAt { get; set; }
+    public DateTimeOffset? LastCollectionFinishedAt { get; set; }
+    public DateTimeOffset? LastSuccessfulCollectionAt { get; set; }
+    public int ActiveBackupRuns { get; set; }
+    public string? LastBackupStatus { get; set; }
+    public bool LastSuccessfulBackupTelegramConfigured { get; set; }
+    public bool LastSuccessfulBackupSentToTelegram { get; set; }
+    public long LastSuccessfulBackupSizeBytes { get; set; }
+    public DateTimeOffset? LastSuccessfulBackupFinishedAt { get; set; }
 }

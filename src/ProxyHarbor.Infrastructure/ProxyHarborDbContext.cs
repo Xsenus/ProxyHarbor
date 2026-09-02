@@ -447,6 +447,9 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
             .OnDelete(DeleteBehavior.Cascade);
 
         var collectionRun = builder.Entity<CollectionRun>();
+        collectionRun.HasIndex(x => x.StartedAt);
+        collectionRun.HasIndex(x => x.FinishedAt);
+        collectionRun.HasIndex(x => new { x.Status, x.FinishedAt });
         collectionRun.Property(x => x.Error).HasMaxLength(2000);
         collectionRun.ToTable(table =>
         {
@@ -486,6 +489,7 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
 
         var backupRun = builder.Entity<BackupRun>();
         backupRun.HasIndex(x => x.StartedAt);
+        backupRun.HasIndex(x => x.FinishedAt);
         backupRun.HasIndex(x => new { x.Status, x.FinishedAt });
         backupRun.Property(x => x.Status).HasMaxLength(32);
         backupRun.Property(x => x.FileName).HasMaxLength(255);
