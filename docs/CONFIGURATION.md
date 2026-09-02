@@ -36,6 +36,7 @@ docker compose up -d --build
 | `BACKUP_HISTORY_RETENTION_DAYS` | Хранение строк аудита backup, `1..3650` |
 | `BACKUP_ENCRYPTION_KEY` | Ключ новых PHB3, 32–1024 символа без control characters |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | Обязательная пара для включённого backup |
+| `ALERTMANAGER_WEBHOOK_TOKEN` | Отдельный случайный secret 32–256 ASCII-символов для внутреннего Alertmanager → API webhook; это не Telegram token |
 | `TELEGRAM_MARKETING_BROADCASTS_ENABLED` | Deploy-блокировка массовой рекламной рассылки; по умолчанию `false`, включать только после отдельной правовой проверки |
 | `BACKEND_SUBNET` | Единственная доверенная container-сеть reverse proxy |
 | `PUBLIC_HOST`, `ACME_EMAIL` | Публичное DNS-имя и контакт ACME для production Caddy |

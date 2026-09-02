@@ -20,6 +20,7 @@ public sealed class RuntimeSecretConfigurationTests
             var encryptionPath = WriteSecret(directory, "encryption", "encryption-key-at-least-32-characters");
             var tokenPath = WriteSecret(directory, "telegram-token", "123456:bot-token");
             var chatPath = WriteSecret(directory, "telegram-chat", "-1001234567890");
+            var alertmanagerPath = WriteSecret(directory, "alertmanager", "monitoring-webhook-secret-at-least-32-characters");
             var configuration = new ConfigurationManager();
             configuration.AddInMemoryCollection(new Dictionary<string, string?>
             {
@@ -31,7 +32,8 @@ public sealed class RuntimeSecretConfigurationTests
                 ["SecretFiles:AdminPassword"] = adminPasswordPath,
                 ["SecretFiles:BackupEncryptionKey"] = encryptionPath,
                 ["SecretFiles:TelegramBotToken"] = tokenPath,
-                ["SecretFiles:TelegramChatId"] = chatPath
+                ["SecretFiles:TelegramChatId"] = chatPath,
+                ["SecretFiles:AlertmanagerWebhookToken"] = alertmanagerPath
             });
 
             RuntimeSecretConfiguration.Apply(configuration);
@@ -44,6 +46,8 @@ public sealed class RuntimeSecretConfigurationTests
             Assert.Equal("encryption-key-at-least-32-characters", configuration["Backup:EncryptionKey"]);
             Assert.Equal("123456:bot-token", configuration["Backup:TelegramBotToken"]);
             Assert.Equal("-1001234567890", configuration["Backup:TelegramChatId"]);
+            Assert.Equal("monitoring-webhook-secret-at-least-32-characters",
+                configuration["Monitoring:AlertmanagerWebhookToken"]);
         }
         finally
         {

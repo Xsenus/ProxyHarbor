@@ -120,11 +120,9 @@ services:
       retries: 3
     volumes:
       - ./deploy/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
-      - ./deploy/alertmanager/templates:/etc/alertmanager/templates:ro
       - alertmanager-data:/alertmanager
     secrets:
-      - telegram_bot_token
-      - telegram_chat_id
+      - alertmanager_webhook_token
     networks: [backend]
     user: "65534:65534"
     init: true
