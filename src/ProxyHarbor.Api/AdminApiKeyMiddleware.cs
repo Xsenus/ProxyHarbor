@@ -5,7 +5,7 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace ProxyHarbor.Api;
 
-/// <summary>Защищает административные маршруты ключом из итоговой безопасной configuration.</summary>
+/// <summary>Защищает admin API и аутентифицирует operational export по безопасному ключу.</summary>
 public sealed class AdminApiKeyMiddleware
 {
     private readonly RequestDelegate _next;
@@ -26,26 +26,43 @@ public sealed class AdminApiKeyMiddleware
     /// <summary>Принимает admin cookie-сессию либо constant-time проверяет X-Admin-Key для automation API.</summary>
     public async Task InvokeAsync(HttpContext context)
     {
-        if (!context.Request.Path.StartsWithSegments("/api/v1/admin"))
-        {
-            await _next(context);
-            return;
-        }
-
-        // Admin-ответы и результаты операций никогда не должны сохраняться browser/shared cache.
-        context.Response.Headers.CacheControl = "no-store";
-        context.Response.Headers.Pragma = "no-cache";
-        context.Response.Headers.Expires = "0";
-
-        // Браузер работает через HttpOnly cookie, а CLI/автоматизация сохраняют
-        // обратную совместимость с отдельным X-Admin-Key.
-        if (context.User.IsInRole("Administrator"))
+        var adminRoute = context.Request.Path.StartsWithSegments("/api/v1/admin");
+        var operationalExportRoute = HttpMethods.IsGet(context.Request.Method) &&
+            context.Request.Path.StartsWithSegments("/api/v1/export");
+        if (!adminRoute && !operationalExportRoute)
         {
             await _next(context);
             return;
         }
 
         var headerValues = context.Request.Headers["X-Admin-Key"];
+        var hasHeader = headerValues.Count > 0;
+        var administratorPrincipal = context.User.IsInRole("Administrator");
+        if (adminRoute || hasHeader || (operationalExportRoute && administratorPrincipal))
+        {
+            // Admin-ответы и полный operational export никогда не сохраняются browser/shared cache.
+            context.Response.Headers.CacheControl = "no-store";
+            context.Response.Headers.Pragma = "no-cache";
+            context.Response.Headers.Expires = "0";
+        }
+
+        // Браузер работает через HttpOnly cookie, а CLI/автоматизация сохраняют
+        // обратную совместимость с отдельным X-Admin-Key.
+        if (administratorPrincipal)
+        {
+            await _next(context);
+            return;
+        }
+
+        // Публичная выгрузка остаётся доступной по free-политике без заголовка.
+        // Наличие X-Admin-Key явно запрашивает полный operational export и поэтому
+        // проверяется fail-closed, а не молча понижается до бесплатного режима.
+        if (!adminRoute && !hasHeader)
+        {
+            await _next(context);
+            return;
+        }
+
         var hasSingleBoundedValue = headerValues.Count == 1 &&
             headerValues[0] is { Length: > 0 and <= 256 };
         // ToString() объединяет несколько header values запятой. Явная проверка количества

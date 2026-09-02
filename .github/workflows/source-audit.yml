@@ -74,7 +74,8 @@ jobs:
             -ApiBaseUrl http://127.0.0.1:5080 \
             -AdminKey source-audit-admin-key-at-least-24-chars \
             -ReportPath validation-audit.json \
-            -ExportLimit 1000 || validation_status=$?
+            -ExportLimit 1000 \
+            -RequirePublishedRowsMatchBatch || validation_status=$?
           test "$source_status" -eq 0
           test "$validation_status" -eq 0
       - name: Publish audit summary

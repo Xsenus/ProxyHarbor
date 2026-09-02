@@ -60,6 +60,85 @@ public sealed class ApiSecurityMiddlewareTests
     }
 
     [Fact]
+    public async Task CorrectAdminKeyAuthenticatesOperationalExportAsAdministrator()
+    {
+        var context = Context("/api/v1/export/json");
+        context.Request.Method = HttpMethods.Get;
+        context.Request.Headers["X-Admin-Key"] = AdminKey;
+        var nextCalled = false;
+        var pipeline = Pipeline(httpContext =>
+        {
+            nextCalled = true;
+            Assert.True(httpContext.User.IsInRole("Administrator"));
+            return Task.CompletedTask;
+        });
+
+        await pipeline(context);
+
+        Assert.True(nextCalled);
+        Assert.Equal("no-store", context.Response.Headers.CacheControl);
+        Assert.True(context.User.Identity?.IsAuthenticated);
+    }
+
+    [Fact]
+    public async Task PublicExportWithoutAdminKeyRemainsAnonymous()
+    {
+        var context = Context("/api/v1/export/json");
+        context.Request.Method = HttpMethods.Get;
+        var nextCalled = false;
+        var pipeline = Pipeline(httpContext =>
+        {
+            nextCalled = true;
+            Assert.False(httpContext.User.Identity?.IsAuthenticated);
+            return Task.CompletedTask;
+        });
+
+        await pipeline(context);
+
+        Assert.True(nextCalled);
+        Assert.Equal(StatusCodes.Status200OK, context.Response.StatusCode);
+        Assert.False(context.Response.Headers.ContainsKey("Cache-Control"));
+    }
+
+    [Fact]
+    public async Task AdministratorCookieOperationalExportIsNotCacheable()
+    {
+        var context = Context("/api/v1/export/json");
+        context.Request.Method = HttpMethods.Get;
+        context.User = new ClaimsPrincipal(new ClaimsIdentity(
+        [
+            new Claim(ClaimTypes.Name, "admin"),
+            new Claim(ClaimTypes.Role, "Administrator")
+        ], "Cookies"));
+        var nextCalled = false;
+        var pipeline = Pipeline(_ =>
+        {
+            nextCalled = true;
+            return Task.CompletedTask;
+        });
+
+        await pipeline(context);
+
+        Assert.True(nextCalled);
+        Assert.Equal("no-store", context.Response.Headers.CacheControl);
+        Assert.Equal("no-cache", context.Response.Headers.Pragma);
+    }
+
+    [Fact]
+    public async Task InvalidAdminKeyCannotDowngradeOperationalExportToFreeAccess()
+    {
+        var context = Context("/api/v1/export/json");
+        context.Request.Method = HttpMethods.Get;
+        context.Request.Headers["X-Admin-Key"] = "incorrect-operational-export-key";
+        var pipeline = Pipeline(_ => throw new InvalidOperationException("invalid key must not reach export"));
+
+        await pipeline(context);
+
+        Assert.Equal(StatusCodes.Status401Unauthorized, context.Response.StatusCode);
+        Assert.Equal("no-store", context.Response.Headers.CacheControl);
+    }
+
+    [Fact]
     public async Task AuthenticatedAdministratorCookiePrincipalPassesWithoutApiKeyHeader()
     {
         var context = Context("/api/v1/admin/diagnostics");

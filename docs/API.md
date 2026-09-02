@@ -151,6 +151,11 @@ curl -OJ 'https://proxy.example.com/api/v1/export/txt?protocol=Socks5&limit=1000
 бесплатная выгрузка доступна ровно через 600 секунд; состояние хранится в PostgreSQL
 и не сбрасывается при рестарте API.
 
+Operational automation может передать `X-Admin-Key` со значением `ADMIN_API_KEY`
+и получить полный экспорт без browser cookie. Отсутствующий заголовок сохраняет
+обычную публичную free-политику, но явно переданный неверный, oversized или
+многозначный ключ отклоняется и не понижает запрос до free-режима.
+
 Успешный free JSON имеет форму:
 
 ```json

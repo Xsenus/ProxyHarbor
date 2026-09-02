@@ -193,6 +193,7 @@ PUT    /api/v1/admin/users/{id}
 POST   /api/v1/admin/collect
 POST   /api/v1/admin/validate
 POST   /api/v1/admin/backup
+GET    /api/v1/export/{json|xml|txt|csv} (полный operational export)
 ```
 
 ```powershell
@@ -201,7 +202,7 @@ Invoke-RestMethod http://localhost:8080/api/v1/admin/diagnostics -Headers $admin
 Invoke-RestMethod http://localhost:8080/api/v1/admin/collect -Method Post -Headers $adminHeaders
 ```
 
-Передавайте credentials только через HTTPS. Ответы auth/admin API получают `Cache-Control: no-store`; вход защищён rate limit и 15-минутной блокировкой после пяти ошибок. Пароли хеширует ASP.NET Identity, а API key сравнивается по SHA-256 в constant time. Cookie-сессия живёт до восьми часов и подписывается ключами из отдельного постоянного Docker volume.
+Передавайте credentials только через HTTPS. Экспорт без заголовка остаётся публичной бесплатной выдачей; если `X-Admin-Key` передан явно, неверное значение отклоняется и не понижает запрос до free-режима. Ответы auth/admin API и полный operational export получают `Cache-Control: no-store`; вход защищён rate limit и 15-минутной блокировкой после пяти ошибок. Пароли хеширует ASP.NET Identity, а API key сравнивается по SHA-256 в constant time. Cookie-сессия живёт до восьми часов и подписывается ключами из отдельного постоянного Docker volume.
 
 ## Backup и восстановление
 
