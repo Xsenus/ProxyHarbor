@@ -178,7 +178,7 @@ public sealed class MetricsController(
         Counter(output, "proxyharbor_proxy_snapshot_refresh_requests_coalesced_total",
             "Stale snapshot demand signals coalesced behind an already queued refresh.",
             proxySnapshotCache?.RefreshRequestsCoalesced ?? 0);
-        Gauge(output, "proxyharbor_vpn_endpoints_total", "Known VPN endpoint records.", vpnSnapshot.Total);
+        Gauge(output, "proxyharbor_vpn_endpoints", "Known VPN endpoint records.", vpnSnapshot.Total);
         Gauge(output, "proxyharbor_vpn_endpoints_reachable", "VPN endpoints whose latest TCP probe succeeded.", vpnSnapshot.Reachable);
         Gauge(output, "proxyharbor_vpn_endpoints_pending", "VPN endpoints awaiting their first classification.", vpnSnapshot.Pending);
         Gauge(output, "proxyharbor_vpn_endpoints_unreachable", "VPN endpoints whose latest TCP probe failed.", vpnSnapshot.Unreachable);
