@@ -220,8 +220,9 @@ public sealed class AdminController(
         var now = DateTimeOffset.UtcNow;
         var validationWindowStart = now.AddMinutes(-5);
         var unseenRetentionCutoff = now.AddDays(-Math.Max(1, collectorOptions.Value.DeadRetentionDays));
-        var databaseBytes = await db.Database.SqlQueryRaw<long>("SELECT pg_database_size(current_database()) AS \"Value\"")
-            .SingleAsync(token);
+        var builtInUrls = BuiltInSourceCatalog.Sources.Select(source => source.Url).ToArray();
+        var databaseSnapshot = await DiagnosticsDatabaseSnapshotReader.ReadAsync(
+            db, builtInUrls, validationWindowStart, token);
         // Production использует общий минутный snapshot административной VPN-страницы.
         // Null сохраняет provider-neutral и транзакционную семантику изолированных тестов.
         var vpnEndpoints = vpnSnapshot is null
@@ -233,11 +234,8 @@ public sealed class AdminController(
         var queue = proxySnapshot is null
             ? await ReadValidationQueueAsync(db, now, unseenRetentionCutoff, token)
             : ValidationQueueAggregate.From(proxySnapshot);
-        var validationRuns = await db.ValidationRuns.AsNoTracking()
-            .Where(run => run.FinishedAt >= validationWindowStart || run.Status == "running")
-            .ToListAsync(token);
         var validationTelemetry = ValidationTelemetry.Calculate(
-            validationRuns, validationWindowStart, queue?.Due ?? 0);
+            databaseSnapshot.ValidationRuns, validationWindowStart, queue?.Due ?? 0);
         var validationQueue = queue is null ? null : new ValidationQueueResponse(
             queue.Total,
             queue.EverAlive,
@@ -260,24 +258,19 @@ public sealed class AdminController(
             validationTelemetry.ChecksPerSecond,
             validationTelemetry.EstimatedDrainSeconds,
             queue.LastAttemptAt);
-        var builtInUrls = BuiltInSourceCatalog.Sources.Select(source => source.Url).ToArray();
         var sourceCatalog = SourceCatalogHealth.Calculate(
-            await db.Sources.AsNoTracking().Where(source => builtInUrls.Contains(source.Url)).ToListAsync(token),
+            databaseSnapshot.Sources,
             now,
             SourceCatalogHealth.FreshnessWindow(collectorOptions.Value.CollectionIntervalMinutes));
-        var recentRuns = await db.Runs.AsNoTracking().OrderByDescending(x => x.StartedAt).Take(10).ToListAsync(token);
-        var recentValidationRuns = await db.ValidationRuns.AsNoTracking()
-            .OrderByDescending(x => x.StartedAt).Take(10).ToListAsync(token);
-        var recentBackups = await db.BackupRuns.AsNoTracking().OrderByDescending(x => x.StartedAt).Take(10).ToListAsync(token);
         return Ok(new DiagnosticsResponse(
             now,
-            databaseBytes,
+            databaseSnapshot.DatabaseBytes,
             vpnEndpoints,
             validationQueue,
             sourceCatalog,
-            recentRuns,
-            recentValidationRuns,
-            recentBackups));
+            databaseSnapshot.RecentRuns,
+            databaseSnapshot.RecentValidationRuns,
+            databaseSnapshot.RecentBackups));
     }
 
     private static async Task<ValidationQueueAggregate?> ReadValidationQueueAsync(

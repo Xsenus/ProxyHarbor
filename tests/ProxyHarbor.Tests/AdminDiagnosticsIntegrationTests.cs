@@ -1,8 +1,10 @@
+using System.Data;
 using System.Data.Common;
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Npgsql;
@@ -85,10 +87,20 @@ public sealed class AdminDiagnosticsIntegrationTests
                     FinishedAt = now.AddMinutes(-1),
                     Status = "completed"
                 });
+                var builtInSource = BuiltInSourceCatalog.Sources[0];
+                seed.Sources.Add(new ProxySource
+                {
+                    Name = builtInSource.Name,
+                    Url = builtInSource.Url,
+                    DefaultProtocol = builtInSource.Protocol,
+                    LastFetchedAt = now.AddMinutes(-1),
+                    LastSucceededAt = now.AddMinutes(-1),
+                    LastItemCount = 12
+                });
                 await seed.SaveChangesAsync();
             }
 
-            var mutation = new MutateBeforeReadInterceptor("FROM \"ValidationRuns\"", async token =>
+            var mutation = new MutateAfterReadStartInterceptor("FROM \"ValidationRuns\"", async token =>
             {
                 await using var update = await factory.CreateDbContextAsync(token);
                 await update.Proxies.ExecuteDeleteAsync(token);
@@ -103,7 +115,8 @@ public sealed class AdminDiagnosticsIntegrationTests
                 });
                 await update.SaveChangesAsync(token);
             });
-            var diagnosticsFactory = RetryFactory(builder.ConnectionString, mutation);
+            var commandBudget = new DiagnosticsCommandBudgetInterceptor();
+            var diagnosticsFactory = RetryFactory(builder.ConnectionString, mutation, commandBudget);
             var collectorOptions = Options.Create(new CollectorOptions
             {
                 ValidationConcurrency = 10,
@@ -148,12 +161,23 @@ public sealed class AdminDiagnosticsIntegrationTests
             Assert.Equal(10, queue.GetProperty("concurrencyLimit").GetInt32());
             Assert.Equal(20, queue.GetProperty("batchSize").GetInt32());
             Assert.True(root.GetProperty("databaseBytes").GetInt64() > 0);
+            var sourceCatalog = root.GetProperty("sourceCatalog");
+            Assert.Equal(1, sourceCatalog.GetProperty("presentSources").GetInt32());
+            Assert.Equal(1, sourceCatalog.GetProperty("enabledSources").GetInt32());
+            Assert.Equal(1, sourceCatalog.GetProperty("healthySources").GetInt32());
             Assert.Single(root.GetProperty("recentRuns").EnumerateArray());
             Assert.Single(root.GetProperty("recentValidationRuns").EnumerateArray());
             Assert.Single(root.GetProperty("recentBackups").EnumerateArray());
+            Assert.Equal(1, commandBudget.Reads);
+            Assert.Equal(0, commandBudget.ReadsOutsideRepeatableRead);
+            Assert.Contains("FROM \"Sources\"", commandBudget.LastCommand, StringComparison.Ordinal);
+            Assert.Contains("FROM \"Runs\"", commandBudget.LastCommand, StringComparison.Ordinal);
+            Assert.Contains("FROM \"ValidationRuns\"", commandBudget.LastCommand, StringComparison.Ordinal);
+            Assert.Contains("FROM \"BackupRuns\"", commandBudget.LastCommand, StringComparison.Ordinal);
 
             var secondAction = await controller.Diagnostics(CancellationToken.None);
             Assert.IsType<OkObjectResult>(secondAction.Result);
+            Assert.Equal(2, commandBudget.Reads);
             Assert.Equal(1, proxySnapshotCache.DatabaseReads);
             Assert.Equal(1, vpnSnapshotCache.DatabaseReads);
 
@@ -170,12 +194,14 @@ public sealed class AdminDiagnosticsIntegrationTests
         }
     }
 
-    private static TestDbFactory RetryFactory(string connectionString, DbCommandInterceptor interceptor)
+    private static TestDbFactory RetryFactory(
+        string connectionString,
+        params DbCommandInterceptor[] interceptors)
     {
         var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
             .UseNpgsql(connectionString, npgsql =>
                 npgsql.EnableRetryOnFailure(3, TimeSpan.FromMilliseconds(100), null))
-            .AddInterceptors(interceptor)
+            .AddInterceptors(interceptors)
             .Options;
         return new TestDbFactory(options);
     }
@@ -188,24 +214,56 @@ public sealed class AdminDiagnosticsIntegrationTests
             Task.FromResult(CreateDbContext());
     }
 
-    /// <summary>Коммитит изменение непосредственно перед первым чтением validation history.</summary>
-    private sealed class MutateBeforeReadInterceptor(
+    /// <summary>
+    /// Коммитит изменение после того, как единый SQL уже получил PostgreSQL snapshot,
+    /// но до чтения JSON-строки клиентом. Ответ не должен смешивать две эпохи.
+    /// </summary>
+    private sealed class MutateAfterReadStartInterceptor(
         string commandMarker,
         Func<CancellationToken, Task> mutate) : DbCommandInterceptor
     {
         private int _mutationInvoked;
         internal bool MutationInvoked => Volatile.Read(ref _mutationInvoked) != 0;
 
-        public override async ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+        public override async ValueTask<DbDataReader> ReaderExecutedAsync(
             DbCommand command,
-            CommandEventData eventData,
-            InterceptionResult<DbDataReader> result,
+            CommandExecutedEventData eventData,
+            DbDataReader result,
             CancellationToken cancellationToken = default)
         {
             if (command.CommandText.Contains(commandMarker, StringComparison.Ordinal) &&
                 Interlocked.CompareExchange(ref _mutationInvoked, 1, 0) == 0)
                 await mutate(cancellationToken);
             return result;
+        }
+    }
+
+    /// <summary>Фиксирует один physical reader и обязательную snapshot isolation.</summary>
+    private sealed class DiagnosticsCommandBudgetInterceptor : DbCommandInterceptor
+    {
+        private int _reads;
+        private int _readsOutsideRepeatableRead;
+        private string? _lastCommand;
+
+        internal int Reads => Volatile.Read(ref _reads);
+        internal int ReadsOutsideRepeatableRead => Volatile.Read(ref _readsOutsideRepeatableRead);
+        internal string LastCommand => Volatile.Read(ref _lastCommand) ?? string.Empty;
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            if (!command.CommandText.Contains("pg_database_size(current_database())", StringComparison.Ordinal))
+                return ValueTask.FromResult(result);
+
+            Interlocked.Increment(ref _reads);
+            Volatile.Write(ref _lastCommand, command.CommandText);
+            if (eventData.Context?.Database.CurrentTransaction?.GetDbTransaction().IsolationLevel !=
+                IsolationLevel.RepeatableRead)
+                Interlocked.Increment(ref _readsOutsideRepeatableRead);
+            return ValueTask.FromResult(result);
         }
     }
 }
