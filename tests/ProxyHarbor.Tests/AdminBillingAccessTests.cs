@@ -157,6 +157,26 @@ public sealed class AdminBillingAccessTests
     }
 
     [Fact]
+    public async Task AccessRegistriesReturnZeroSummariesWhenNoTrafficExists()
+    {
+        await using var fixture = new Fixture();
+        var controller = new AdminAccessController(fixture.Db,
+            new ProxyAccessMonitor(fixture.Factory, NullLogger<ProxyAccessMonitor>.Instance));
+
+        var traffic = Assert.IsType<OkObjectResult>(await controller.List(token: CancellationToken.None));
+        var trafficJson = System.Text.Json.JsonSerializer.Serialize(traffic.Value);
+        Assert.Contains("\"total\":0", trafficJson);
+        Assert.Contains("\"requests\":0", trafficJson);
+        Assert.Contains("\"proxyItems\":0", trafficJson);
+
+        var visitors = Assert.IsType<OkObjectResult>(await controller.Visitors(token: CancellationToken.None));
+        var visitorJson = System.Text.Json.JsonSerializer.Serialize(visitors.Value);
+        Assert.Contains("\"total\":0", visitorJson);
+        Assert.Contains("\"pageViews\":0", visitorJson);
+        Assert.Contains("\"uniqueVisitors\":0", visitorJson);
+    }
+
+    [Fact]
     public async Task AccessRegistryAggregatesTrafficAndReturnsRules()
     {
         await using var fixture = new Fixture();
