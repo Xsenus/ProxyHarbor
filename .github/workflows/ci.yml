@@ -403,6 +403,10 @@ jobs:
             if [ "$attempt" -eq 90 ]; then exit 1; fi
             sleep 2
           done
+          if docker logs "$api_id" 2>&1 | grep --fixed-strings "Overriding HTTP_PORTS"; then
+            echo "API image configures both ASPNETCORE_HTTP_PORTS and ASPNETCORE_URLS."
+            exit 1
+          fi
           stats=$(curl --fail --silent http://127.0.0.1:8080/api/v1/stats)
           echo "$stats" | jq --exit-status \
             '(.alive | type) == "number" and (.byProtocol | type) == "array" and has("lastRun")'
