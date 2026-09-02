@@ -22,64 +22,99 @@ public sealed class AccountController(
 {
     /// <summary>Возвращает данные профиля и текущего тарифа.</summary>
     [HttpGet("profile")]
-    public async Task<IActionResult> Profile()
+    public async Task<IActionResult> Profile(CancellationToken token = default)
     {
-        var user = await users.GetUserAsync(User);
-        if (user is null || !user.IsActive) return Unauthorized();
-        var roles = await users.GetRolesAsync(user);
-        var subscription = await db.Subscriptions.AsNoTracking().SingleOrDefaultAsync(x => x.UserId == user.Id);
-        var paidAccess = UserApiTokenService.HasPaidAccess(subscription, roles, DateTimeOffset.UtcNow);
-        var tokens = await apiTokens.ListAsync(user.Id, HttpContext.RequestAborted);
-        var referralCount = await db.ReferralRelationships.CountAsync(x => x.ReferrerUserId == user.Id);
-        var referralRewardDays = await db.ReferralRewards
-            .Where(x => x.ReferralRelationship.ReferrerUserId == user.Id)
-            .SumAsync(x => (int?)x.DaysGranted) ?? 0;
-        var botUsername = await db.TelegramBotConfigurations.AsNoTracking()
-            .Where(x => x.Id == 1)
-            .Select(x => x.BotUsername)
-            .SingleOrDefaultAsync();
-        return Ok(new
+        if (!TryGetCurrentUserId(out var userId)) return Unauthorized();
+        return await BufferedReadSnapshot.ExecuteAsync<IActionResult>(db,
+            async (CancellationToken snapshotToken) =>
         {
-            user.Id,
-            user.UserName,
-            user.Email,
-            user.DisplayName,
-            user.PreferredLanguage,
-            user.CreatedAt,
-            user.LastLoginAt,
-            user.ReferralCode,
-            roles,
-            subscription = subscription is null ? null : new
+            // Профиль, подписка, реферальная сводка и username бота возвращаются
+            // одним SQL вместо пяти независимых round-trip. Роли и активные токены
+            // остаются отдельными ограниченными выборками в том же snapshot.
+            var account = await db.Users.AsNoTracking()
+                .Where(x => x.Id == userId && x.IsActive)
+                .Select(x => new
+                {
+                    x.Id,
+                    x.UserName,
+                    x.Email,
+                    x.DisplayName,
+                    x.PreferredLanguage,
+                    x.CreatedAt,
+                    x.LastLoginAt,
+                    x.ReferralCode,
+                    Subscription = x.Subscription == null ? null : new
+                    {
+                        x.Subscription.Plan,
+                        x.Subscription.Status,
+                        x.Subscription.StartedAt,
+                        x.Subscription.ExpiresAt
+                    },
+                    ReferralCount = x.Referrals.Count,
+                    ReferralRewardDays = x.Referrals.SelectMany(referral => referral.Rewards)
+                        .Sum(reward => (int?)reward.DaysGranted) ?? 0,
+                    BotUsername = db.TelegramBotConfigurations
+                        .Where(configuration => configuration.Id == 1)
+                        .Select(configuration => configuration.BotUsername)
+                        .SingleOrDefault()
+                })
+                .SingleOrDefaultAsync(snapshotToken);
+            if (account is null) return Unauthorized();
+
+            // Identity store uses only the stable Id for this bounded role lookup.
+            // Password hash, security stamp and other private Identity columns therefore
+            // never leave PostgreSQL merely to render the profile.
+            var roles = await users.GetRolesAsync(new ApplicationUser { Id = account.Id });
+            var tokens = await apiTokens.ListAsync(userId, snapshotToken);
+            var paidAccess = UserApiTokenService.HasPaidAccess(
+                account.Subscription?.Plan,
+                account.Subscription?.Status,
+                account.Subscription?.ExpiresAt,
+                roles,
+                DateTimeOffset.UtcNow);
+            return Ok(new
             {
-                subscription.Plan,
-                subscription.Status,
-                subscription.StartedAt,
-                subscription.ExpiresAt
-            },
-            entitlements = new { unlimitedProxyAccess = paidAccess, apiTokens = paidAccess },
-            referral = new
-            {
-                code = user.ReferralCode,
-                link = $"{Request.Scheme}://{Request.Host}/register?ref={Uri.EscapeDataString(user.ReferralCode)}",
-                telegramLink = string.IsNullOrWhiteSpace(botUsername) ? null :
-                    $"https://t.me/{Uri.EscapeDataString(botUsername)}?start=ref_{Uri.EscapeDataString(user.ReferralCode)}",
-                invited = referralCount,
-                remaining = Math.Max(0, ReferralRewards.MaximumReferralsPerUser - referralCount),
-                maximum = ReferralRewards.MaximumReferralsPerUser,
-                rewardDays = referralRewardDays
-            },
-            apiTokens = tokens.Select(x => new
-            {
-                x.Id,
-                x.Name,
-                x.DisplaySuffix,
-                scopes = x.Scopes.Split(' ', StringSplitOptions.RemoveEmptyEntries),
-                x.CreatedAt,
-                x.LastUsedAt,
-                x.RevokedAt,
-                active = x.RevokedAt is null && paidAccess
-            })
-        });
+                account.Id,
+                account.UserName,
+                account.Email,
+                account.DisplayName,
+                account.PreferredLanguage,
+                account.CreatedAt,
+                account.LastLoginAt,
+                account.ReferralCode,
+                roles,
+                subscription = account.Subscription is null ? null : new
+                {
+                    account.Subscription.Plan,
+                    account.Subscription.Status,
+                    account.Subscription.StartedAt,
+                    account.Subscription.ExpiresAt
+                },
+                entitlements = new { unlimitedProxyAccess = paidAccess, apiTokens = paidAccess },
+                referral = new
+                {
+                    code = account.ReferralCode,
+                    link = $"{Request.Scheme}://{Request.Host}/register?ref={Uri.EscapeDataString(account.ReferralCode)}",
+                    telegramLink = string.IsNullOrWhiteSpace(account.BotUsername) ? null :
+                        $"https://t.me/{Uri.EscapeDataString(account.BotUsername)}?start=ref_{Uri.EscapeDataString(account.ReferralCode)}",
+                    invited = account.ReferralCount,
+                    remaining = Math.Max(0, ReferralRewards.MaximumReferralsPerUser - account.ReferralCount),
+                    maximum = ReferralRewards.MaximumReferralsPerUser,
+                    rewardDays = account.ReferralRewardDays
+                },
+                apiTokens = tokens.Select(x => new
+                {
+                    x.Id,
+                    x.Name,
+                    x.DisplaySuffix,
+                    scopes = x.Scopes.Split(' ', StringSplitOptions.RemoveEmptyEntries),
+                    x.CreatedAt,
+                    x.LastUsedAt,
+                    x.RevokedAt,
+                    active = x.RevokedAt is null && paidAccess
+                })
+            });
+        }, token);
     }
 
     /// <summary>Постранично показывает приглашённых клиентов и каждое начисление владельцу ссылки.</summary>
@@ -89,28 +124,38 @@ public sealed class AccountController(
         [FromQuery, Range(1, 100)] int pageSize = 10,
         CancellationToken token = default)
     {
-        var user = await users.GetUserAsync(User);
-        if (user is null || !user.IsActive) return Unauthorized();
-        var query = db.ReferralRelationships.AsNoTracking().Where(x => x.ReferrerUserId == user.Id);
-        var total = await query.CountAsync(token);
-        var items = await query.OrderByDescending(x => x.CreatedAt).ThenBy(x => x.Id)
-            .Skip((page - 1) * pageSize).Take(pageSize)
-            .Select(x => new
-            {
-                x.Id,
-                x.CreatedAt,
-                user = new { x.ReferredUser.UserName, x.ReferredUser.Email, x.ReferredUser.DisplayName },
-                rewards = x.Rewards.OrderByDescending(r => r.CreatedAt).Select(r => new
+        if (!TryGetCurrentUserId(out var userId)) return Unauthorized();
+        return await BufferedReadSnapshot.ExecuteAsync<IActionResult>(db,
+            async (CancellationToken snapshotToken) =>
+        {
+            // Активность аккаунта и точный total определяются одним запросом.
+            var account = await db.Users.AsNoTracking()
+                .Where(x => x.Id == userId && x.IsActive)
+                .Select(x => new { Total = x.Referrals.Count })
+                .SingleOrDefaultAsync(snapshotToken);
+            if (account is null) return Unauthorized();
+
+            var items = await db.ReferralRelationships.AsNoTracking()
+                .Where(x => x.ReferrerUserId == userId)
+                .OrderByDescending(x => x.CreatedAt).ThenBy(x => x.Id)
+                .Skip((page - 1) * pageSize).Take(pageSize)
+                .Select(x => new
                 {
-                    r.Id,
-                    r.Kind,
-                    r.DaysGranted,
-                    r.CreatedAt,
-                    productCode = r.PaymentOrder == null ? null : r.PaymentOrder.ProductCode,
-                    durationDays = r.PaymentOrder == null ? (int?)null : r.PaymentOrder.DurationDays
-                })
-            }).ToArrayAsync(token);
-        return Ok(new { items, page, pageSize, total });
+                    x.Id,
+                    x.CreatedAt,
+                    user = new { x.ReferredUser.UserName, x.ReferredUser.Email, x.ReferredUser.DisplayName },
+                    rewards = x.Rewards.OrderByDescending(r => r.CreatedAt).Select(r => new
+                    {
+                        r.Id,
+                        r.Kind,
+                        r.DaysGranted,
+                        r.CreatedAt,
+                        productCode = r.PaymentOrder == null ? null : r.PaymentOrder.ProductCode,
+                        durationDays = r.PaymentOrder == null ? (int?)null : r.PaymentOrder.DurationDays
+                    })
+                }).ToArrayAsync(snapshotToken);
+            return Ok(new { items, page, pageSize, total = account.Total });
+        }, token);
     }
 
     /// <summary>Выпускает токен и показывает полный секрет ровно один раз.</summary>
@@ -147,32 +192,42 @@ public sealed class AccountController(
         [FromQuery] Guid? tokenId = null,
         CancellationToken token = default)
     {
-        var user = await users.GetUserAsync(User);
-        if (user is null || !user.IsActive) return Unauthorized();
-        var query = db.UserApiTokenRequests.AsNoTracking().Where(x => x.UserId == user.Id);
-        if (tokenId.HasValue)
+        if (!TryGetCurrentUserId(out var userId)) return Unauthorized();
+        return await BufferedReadSnapshot.ExecuteAsync<IActionResult>(db,
+            async (CancellationToken snapshotToken) =>
         {
-            if (!await db.UserApiTokens.AsNoTracking().AnyAsync(x => x.Id == tokenId && x.UserId == user.Id, token))
-                return NotFound();
-            query = query.Where(x => x.UserApiTokenId == tokenId.Value);
-        }
-        var total = await query.CountAsync(token);
-        var items = await query.OrderByDescending(x => x.RequestedAt).ThenByDescending(x => x.Id)
-            .Skip((page - 1) * pageSize).Take(pageSize)
-            .Select(x => new
-            {
-                x.Id,
-                token = new { x.UserApiTokenId, x.UserApiToken.Name, x.UserApiToken.DisplaySuffix, x.UserApiToken.RevokedAt },
-                x.IpAddress,
-                x.Method,
-                x.Path,
-                x.Query,
-                x.StatusCode,
-                x.ItemCount,
-                x.DurationMs,
-                x.RequestedAt
-            }).ToArrayAsync(token);
-        return Ok(new { items, page, pageSize, total });
+            // Проверка активного владельца и принадлежности фильтра токена не требует
+            // двух последовательных lookup-запросов.
+            var account = await db.Users.AsNoTracking()
+                .Where(x => x.Id == userId && x.IsActive)
+                .Select(x => new
+                {
+                    TokenExists = !tokenId.HasValue || x.ApiTokens.Any(apiToken => apiToken.Id == tokenId.Value)
+                })
+                .SingleOrDefaultAsync(snapshotToken);
+            if (account is null) return Unauthorized();
+            if (!account.TokenExists) return NotFound();
+
+            var query = db.UserApiTokenRequests.AsNoTracking().Where(x => x.UserId == userId);
+            if (tokenId.HasValue) query = query.Where(x => x.UserApiTokenId == tokenId.Value);
+            var total = await query.CountAsync(snapshotToken);
+            var items = await query.OrderByDescending(x => x.RequestedAt).ThenByDescending(x => x.Id)
+                .Skip((page - 1) * pageSize).Take(pageSize)
+                .Select(x => new
+                {
+                    x.Id,
+                    token = new { x.UserApiTokenId, x.UserApiToken.Name, x.UserApiToken.DisplaySuffix, x.UserApiToken.RevokedAt },
+                    x.IpAddress,
+                    x.Method,
+                    x.Path,
+                    x.Query,
+                    x.StatusCode,
+                    x.ItemCount,
+                    x.DurationMs,
+                    x.RequestedAt
+                }).ToArrayAsync(snapshotToken);
+            return Ok(new { items, page, pageSize, total });
+        }, token);
     }
 
     /// <summary>Меняет безопасные отображаемые данные без изменения email и прав.</summary>
@@ -191,20 +246,37 @@ public sealed class AccountController(
 
     /// <summary>Меняет пароль после проверки текущего и отзывает остальные сессии.</summary>
     [HttpPost("change-password")]
-    public async Task<IActionResult> ChangePassword([FromBody] ChangePasswordRequest request)
+    public async Task<IActionResult> ChangePassword(
+        [FromBody] ChangePasswordRequest request,
+        CancellationToken token = default)
     {
         var user = await users.GetUserAsync(User);
         if (user is null || !user.IsActive) return Unauthorized();
         var result = await users.ChangePasswordAsync(user, request.CurrentPassword, request.NewPassword);
         if (!result.Succeeded) return IdentityProblem(result);
-        var activeTokens = await db.UserApiTokens.Where(x => x.UserId == user.Id && x.RevokedAt == null).ToListAsync();
-        foreach (var apiToken in activeTokens) apiToken.RevokedAt = DateTimeOffset.UtcNow;
-        await db.SaveChangesAsync();
+        var revokedAt = DateTimeOffset.UtcNow;
+        if (db.Database.IsRelational())
+        {
+            // Один UPDATE независимо от числа токенов вместо SELECT + N UPDATE.
+            await db.UserApiTokens.Where(x => x.UserId == user.Id && x.RevokedAt == null)
+                .ExecuteUpdateAsync(setters => setters.SetProperty(x => x.RevokedAt, revokedAt), token);
+        }
+        else
+        {
+            // InMemory используется быстрыми unit-тестами и не реализует ExecuteUpdate.
+            var activeTokens = await db.UserApiTokens
+                .Where(x => x.UserId == user.Id && x.RevokedAt == null).ToListAsync(token);
+            foreach (var apiToken in activeTokens) apiToken.RevokedAt = revokedAt;
+            await db.SaveChangesAsync(token);
+        }
         // ChangePasswordAsync отзывает старый security stamp. Обновляем только текущую
         // cookie, чтобы остальные браузеры завершили сессии при ближайшей проверке.
         await signIn.RefreshSignInAsync(user);
         return NoContent();
     }
+
+    private bool TryGetCurrentUserId(out Guid userId) =>
+        Guid.TryParse(users.GetUserId(User), out userId);
 
     private static BadRequestObjectResult IdentityProblem(IdentityResult result) =>
         new(new ValidationProblemDetails(result.Errors.GroupBy(x => x.Code, StringComparer.Ordinal)

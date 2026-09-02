@@ -101,6 +101,15 @@ public sealed class UserApiTokenService(
     /// <inheritdoc />
     public async Task<bool> RevokeAsync(Guid userId, Guid tokenId, CancellationToken token)
     {
+        if (db.Database.IsRelational())
+        {
+            var revokedAt = DateTimeOffset.UtcNow;
+            return await db.UserApiTokens
+                .Where(x => x.Id == tokenId && x.UserId == userId && x.RevokedAt == null)
+                .ExecuteUpdateAsync(setters => setters.SetProperty(x => x.RevokedAt, revokedAt), token) > 0;
+        }
+
+        // InMemory provider используется unit-тестами и не поддерживает ExecuteUpdate.
         var entity = await db.UserApiTokens.SingleOrDefaultAsync(
             x => x.Id == tokenId && x.UserId == userId && x.RevokedAt == null, token);
         if (entity is null) return false;
@@ -113,11 +122,20 @@ public sealed class UserApiTokenService(
     internal static bool HasPaidAccess(
         UserSubscription? subscription,
         IEnumerable<string> roles,
+        DateTimeOffset now) => HasPaidAccess(
+            subscription?.Plan, subscription?.Status, subscription?.ExpiresAt, roles, now);
+
+    /// <summary>Entitlement-проверка для узких read model без загрузки всей подписки.</summary>
+    internal static bool HasPaidAccess(
+        string? plan,
+        string? status,
+        DateTimeOffset? expiresAt,
+        IEnumerable<string> roles,
         DateTimeOffset now) =>
         roles.Contains(UserRoles.Administrator, StringComparer.Ordinal) ||
-        subscription is { Status: SubscriptionStatuses.Active or SubscriptionStatuses.Trialing } &&
-        subscription.Plan is SubscriptionPlans.Pro or SubscriptionPlans.Unlimited &&
-        (subscription.ExpiresAt is null || subscription.ExpiresAt > now);
+        status is SubscriptionStatuses.Active or SubscriptionStatuses.Trialing &&
+        plan is SubscriptionPlans.Pro or SubscriptionPlans.Unlimited &&
+        (expiresAt is null || expiresAt > now);
 
     private static bool TryParse(string value, out Guid id, out byte[] secret)
     {
