@@ -2,7 +2,8 @@ param(
     [string]$ApiBaseUrl = 'http://localhost:8080',
     [Parameter(Mandatory)][string]$AdminKey,
     [string]$ReportPath,
-    [ValidateRange(1, 50000)][int]$ExportLimit = 1000
+    [ValidateRange(1, 50000)][int]$ExportLimit = 1000,
+    [switch]$RequirePublishedRowsMatchBatch
 )
 
 $ErrorActionPreference = 'Stop'
@@ -19,6 +20,7 @@ $report = [ordered]@{
     xmlRows = 0
     txtRows = 0
     csvRows = 0
+    requirePublishedRowsMatchBatch = [bool]$RequirePublishedRowsMatchBatch
     publishedSetSha256 = $null
     error = $null
 }
@@ -60,9 +62,10 @@ try {
         throw 'Persisted validation telemetry не отражает только что завершённую партию.'
     }
 
-    # На чистой weekly-audit БД все опубликованные Alive появились в этой партии.
-    # Один и тот же набор должен без потерь разбираться во всех публичных форматах.
-    $jsonResponse = Invoke-WebRequest -Uri "$ApiBaseUrl/api/v1/export/json?limit=$ExportLimit"
+    # Один и тот же текущий published-set должен без потерь разбираться во всех
+    # форматах. Только чистая weekly-audit БД требует равенство размеру этой партии:
+    # production уже содержит Alive-прокси из предыдущих validation run.
+    $jsonResponse = Invoke-WebRequest -Uri "$ApiBaseUrl/api/v1/export/json?limit=$ExportLimit" -Headers $headers
     $jsonRows = @($jsonResponse.Content | ConvertFrom-Json)
     $report.jsonRows = $jsonRows.Count
     if ($jsonResponse.Headers.'Content-Type' -notlike 'application/json*') {
@@ -74,7 +77,7 @@ try {
         throw 'JSON export содержит пустые, некорректные или дублированные proxy URL.'
     }
 
-    $xmlResponse = Invoke-WebRequest -Uri "$ApiBaseUrl/api/v1/export/xml?limit=$ExportLimit"
+    $xmlResponse = Invoke-WebRequest -Uri "$ApiBaseUrl/api/v1/export/xml?limit=$ExportLimit" -Headers $headers
     [xml]$xml = $xmlResponse.Content
     $xmlRows = @($xml.proxies.proxy | Where-Object { $null -ne $_ })
     $xmlUrls = @($xmlRows | ForEach-Object { [string]$_.url })
@@ -83,7 +86,7 @@ try {
         throw 'XML export не является корректным документом proxies.'
     }
 
-    $txtResponse = Invoke-WebRequest -Uri "$ApiBaseUrl/api/v1/export/txt?limit=$ExportLimit"
+    $txtResponse = Invoke-WebRequest -Uri "$ApiBaseUrl/api/v1/export/txt?limit=$ExportLimit" -Headers $headers
     $txtRows = @($txtResponse.Content -split '\r?\n' | Where-Object { $_ })
     $report.txtRows = $txtRows.Count
     if ($txtResponse.Headers.'Content-Type' -notlike 'text/plain*' -or
@@ -91,7 +94,7 @@ try {
         throw 'TXT export содержит некорректный Content-Type или proxy URL.'
     }
 
-    $csvResponse = Invoke-WebRequest -Uri "$ApiBaseUrl/api/v1/export/csv?limit=$ExportLimit"
+    $csvResponse = Invoke-WebRequest -Uri "$ApiBaseUrl/api/v1/export/csv?limit=$ExportLimit" -Headers $headers
     $csvRows = @($csvResponse.Content | ConvertFrom-Csv)
     $csvUrls = @($csvRows | ForEach-Object { [string]$_.url })
     $report.csvRows = $csvRows.Count
@@ -99,7 +102,7 @@ try {
         throw 'CSV export вернул некорректный Content-Type.'
     }
 
-    if ($jsonUrls.Count -ne $report.alive) {
+    if ($RequirePublishedRowsMatchBatch -and $jsonUrls.Count -ne $report.alive) {
         throw "JSON вернул $($jsonUrls.Count) строк вместо $($report.alive) Alive-прокси."
     }
     Assert-OrderedProxyUrls -Format 'XML' -Expected $jsonUrls -Actual $xmlUrls

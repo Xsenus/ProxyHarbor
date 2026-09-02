@@ -13,7 +13,7 @@ function Get-FreeTcpPort {
     finally { $listener.Stop() }
 }
 
-function Start-ValidationAuditMock([int]$Port, [ValidateSet('success', 'mismatch', 'zero-alive')][string]$Mode) {
+function Start-ValidationAuditMock([int]$Port, [ValidateSet('success', 'accumulated', 'mismatch', 'zero-alive')][string]$Mode) {
     return Start-Job -ArgumentList $Port, $Mode -ScriptBlock {
         param($Port, $Mode)
 
@@ -31,11 +31,17 @@ function Start-ValidationAuditMock([int]$Port, [ValidateSet('success', 'mismatch
                     $body = '{}'
                 } else {
                     $handled++
+                    if ($path.StartsWith('/api/v1/export/', [StringComparison]::Ordinal) -and
+                        $context.Request.Headers['X-Admin-Key'] -cne 'contract-key') {
+                        throw "Export $path вызван без ожидаемого административного ключа."
+                    }
                     $contentType = 'application/json'
                     $body = switch ($path) {
                         '/api/v1/admin/validate' {
                             if ($Mode -eq 'zero-alive') {
                                 '{"checked":2,"alive":0,"deferred":0}'
+                            } elseif ($Mode -eq 'accumulated') {
+                                '{"checked":2,"alive":1,"deferred":0}'
                             } else {
                                 '{"checked":2,"alive":2,"deferred":0}'
                             }
@@ -97,7 +103,13 @@ function Invoke-ValidationAuditCase([string]$Mode, [bool]$ShouldSucceed) {
         Wait-ValidationAuditMock -Port $port
         $rejected = $false
         try {
-            & $auditScript -ApiBaseUrl "http://127.0.0.1:$port" -AdminKey 'contract-key' -ReportPath $reportPath
+            $auditParameters = @{
+                ApiBaseUrl = "http://127.0.0.1:$port"
+                AdminKey = 'contract-key'
+                ReportPath = $reportPath
+                RequirePublishedRowsMatchBatch = $Mode -ne 'accumulated'
+            }
+            & $auditScript @auditParameters
         } catch {
             $rejected = $true
         }
@@ -111,9 +123,12 @@ function Invoke-ValidationAuditCase([string]$Mode, [bool]$ShouldSucceed) {
         $report = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json
 
         if ($ShouldSucceed) {
-            if ($rejected -or -not $report.success -or $report.alive -ne 2 -or
+            $expectedAlive = if ($Mode -eq 'accumulated') { 1 } else { 2 }
+            $expectedStrictBatchMatch = $Mode -ne 'accumulated'
+            if ($rejected -or -not $report.success -or $report.alive -ne $expectedAlive -or
                 $report.jsonRows -ne 2 -or $report.xmlRows -ne 2 -or
                 $report.txtRows -ne 2 -or $report.csvRows -ne 2 -or
+                $report.requirePublishedRowsMatchBatch -ne $expectedStrictBatchMatch -or
                 $report.publishedSetSha256 -notmatch '^[0-9a-f]{64}$' -or $report.error) {
                 throw 'Положительный validation-audit контракт нарушен.'
             }
@@ -129,6 +144,7 @@ function Invoke-ValidationAuditCase([string]$Mode, [bool]$ShouldSucceed) {
 
 try {
     $success = Invoke-ValidationAuditCase -Mode 'success' -ShouldSucceed $true
+    $accumulated = Invoke-ValidationAuditCase -Mode 'accumulated' -ShouldSucceed $true
     $mismatch = Invoke-ValidationAuditCase -Mode 'mismatch' -ShouldSucceed $false
     $zeroAlive = Invoke-ValidationAuditCase -Mode 'zero-alive' -ShouldSucceed $false
     if ($mismatch.error -notmatch 'CSV.*JSON') {
@@ -140,7 +156,7 @@ try {
 
     $repositoryRoot = Split-Path -Parent $PSScriptRoot
     $sourceWorkflow = Get-Content (Join-Path $repositoryRoot '.github/workflows/source-audit.yml') -Raw
-    foreach ($fragment in @('futureEvidence', 'publishedSetSha256')) {
+    foreach ($fragment in @('futureEvidence', 'publishedSetSha256', '-RequirePublishedRowsMatchBatch')) {
         if (-not $sourceWorkflow.Contains($fragment, [StringComparison]::Ordinal)) {
             throw "Source-audit summary не публикует обязательное поле $fragment."
         }
@@ -152,7 +168,7 @@ try {
         }
     }
 
-    Write-Host 'Validation-audit contracts пройдены: non-empty ordered JSON/XML/TXT/CSV set, mismatch/zero-Alive rejection, summary и CI/release wiring.' -ForegroundColor Green
+    Write-Host 'Validation-audit contracts пройдены: strict clean-DB и accumulated production modes, authenticated ordered exports, mismatch/zero-Alive rejection, summary и CI/release wiring.' -ForegroundColor Green
 } finally {
     if (Test-Path -LiteralPath $testRoot) {
         Remove-Item -LiteralPath $testRoot -Recurse -Force
