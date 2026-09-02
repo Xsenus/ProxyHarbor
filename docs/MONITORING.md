@@ -47,6 +47,7 @@ curl --fail http://127.0.0.1:9093/-/ready
 | `ProxyHarborVpnValidationBacklogAtRisk` | ETA due VPN-очереди 10 минут превышает окно публичной свежести | Проверить TCP timeout, файловые дескрипторы, CPU/RAM и новые VPN concurrency/batch settings; повышать concurrency только после измерения ресурсов |
 | `ProxyHarborStaleProxyRetention` | устаревшие неарендованные Pending/Dead остаются более 30 минут | Проверить успешность collection, PostgreSQL delete и cluster lock |
 | `ProxyHarborMaintenanceFailed` | ошибка hourly retention не перекрыта успехом 15 минут | Проверить maintenance log, PostgreSQL locks/permissions и свободное место |
+| `ProxyHarborBackupConfigurationUnreadable` | runtime-настройки backup не читаются 5 минут | Проверить PostgreSQL, Data Protection key-ring и запись настроек backup; до восстановления метрики используют deploy-конфигурацию |
 | `ProxyHarborBackupFailed` | последний/первый backup неуспешен | Проверить место, ключ, DB snapshot и audit; transient failure повторяется через 15 минут, oversized delivery-policy — через штатный interval |
 | `ProxyHarborBackupStale` | успех старше 1.5 интервалов | Запустить admin backup, затем проверить scheduler и cluster lock |
 | `ProxyHarborBackupHung` | backup активен более часа | Проверить размер БД/volume и Telegram delivery; не удалять partial во время работы |

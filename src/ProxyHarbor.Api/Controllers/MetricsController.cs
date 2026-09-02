@@ -1,3 +1,4 @@
+using System.Data.Common;
 using System.Globalization;
 using System.Text;
 using Microsoft.AspNetCore.Mvc;
@@ -22,14 +23,22 @@ public sealed class MetricsController(
     ProxyMetricsSnapshotCache? proxySnapshotCache = null,
     ValidationClaimIdleGate? validationIdleGate = null,
     CheckerNodeCredentialCache? checkerCredentialCache = null,
-    VpnMetricsSnapshotCache? vpnSnapshotCache = null) : ControllerBase
+    VpnMetricsSnapshotCache? vpnSnapshotCache = null,
+    IBackupConfigurationStore? backupConfigurationStore = null,
+    ILogger<MetricsController>? logger = null) : ControllerBase
 {
+    private static readonly Action<ILogger, Exception?> BackupConfigurationReadFailed =
+        LoggerMessage.Define(LogLevel.Error, new EventId(1701, "BackupConfigurationReadFailed"),
+            "Не удалось прочитать runtime-настройки резервного копирования для метрик.");
+
     /// <summary>Возвращает согласованный Prometheus text exposition operational-метрик.</summary>
     [HttpGet]
     [Produces("text/plain")]
     [OutputCache(PolicyName = PublicOutputCachePolicies.Metrics)]
     public async Task<IActionResult> Get(CancellationToken requestToken)
     {
+        var (effectiveBackupOptions, backupConfigurationReadSucceeded) =
+            await ResolveBackupOptionsAsync(requestToken);
         var cachedProxySnapshot = proxySnapshotCache is null
             ? null
             : await proxySnapshotCache.GetAsync(requestToken);
@@ -38,7 +47,26 @@ public sealed class MetricsController(
             : await vpnSnapshotCache.GetAsync(requestToken);
         await using var db = await dbFactory.CreateDbContextAsync(requestToken);
         return await BufferedReadSnapshot.ExecuteAsync(
-            db, token => GetSnapshotAsync(db, cachedProxySnapshot, cachedVpnSnapshot, token), requestToken);
+            db, token => GetSnapshotAsync(
+                db, cachedProxySnapshot, cachedVpnSnapshot, effectiveBackupOptions,
+                backupConfigurationReadSucceeded, token), requestToken);
+    }
+
+    private async Task<(BackupOptions Options, bool ReadSucceeded)> ResolveBackupOptionsAsync(
+        CancellationToken token)
+    {
+        if (backupConfigurationStore is null) return (backupOptions.Value, true);
+        try
+        {
+            return (await backupConfigurationStore.GetAsync(token), true);
+        }
+        catch (Exception exception) when (
+            !token.IsCancellationRequested &&
+            exception is InvalidOperationException or DbException or TimeoutException)
+        {
+            if (logger is not null) BackupConfigurationReadFailed(logger, exception);
+            return (backupOptions.Value, false);
+        }
     }
 
     /// <summary>Строит весь database-derived exposition внутри уже открытого read snapshot.</summary>
@@ -46,6 +74,8 @@ public sealed class MetricsController(
         ProxyHarborDbContext db,
         ProxyMetricsSnapshot? cachedProxySnapshot,
         VpnMetricsSnapshot? cachedVpnSnapshot,
+        BackupOptions effectiveBackupOptions,
+        bool backupConfigurationReadSucceeded,
         CancellationToken token)
     {
         var now = DateTimeOffset.UtcNow;
@@ -277,13 +307,20 @@ public sealed class MetricsController(
             runMetrics.LastCollectionFinishedAt is { } finishedAt && runMetrics.LastCollectionStartedAt is { } startedAt
                 ? Math.Max(0, (finishedAt - startedAt).TotalSeconds)
                 : 0);
+        Gauge(output, "proxyharbor_backup_configuration_read_success", "Whether the effective runtime backup configuration was read successfully.",
+            backupConfigurationReadSucceeded ? 1 : 0);
         Gauge(output, "proxyharbor_backup_enabled", "Whether scheduled encrypted backups are enabled.",
-            backupOptions.Value.Enabled ? 1 : 0);
+            effectiveBackupOptions.Enabled ? 1 : 0);
         Gauge(output, "proxyharbor_backup_interval_seconds", "Configured interval between scheduled backups in seconds.",
-            backupOptions.Value.IntervalHours * 3_600L);
-        Gauge(output, "proxyharbor_backup_telegram_configured", "Whether both Telegram delivery settings are currently configured.",
-            !string.IsNullOrWhiteSpace(backupOptions.Value.TelegramBotToken) &&
-            !string.IsNullOrWhiteSpace(backupOptions.Value.TelegramChatId) ? 1 : 0);
+            effectiveBackupOptions.IntervalHours * 3_600L);
+        var backupTelegramConfigured = effectiveBackupOptions.TelegramRecipientId.HasValue ||
+            !string.IsNullOrWhiteSpace(effectiveBackupOptions.TelegramBotToken) &&
+            !string.IsNullOrWhiteSpace(effectiveBackupOptions.TelegramChatId);
+        Gauge(output, "proxyharbor_backup_telegram_configured", "Whether a CRM recipient or the legacy Telegram delivery pair is configured.",
+            backupTelegramConfigured ? 1 : 0);
+        Gauge(output, "proxyharbor_backup_object_storage_configured", "Whether effective runtime settings contain a valid enabled object-storage destination.",
+            effectiveBackupOptions.SendToObjectStorage &&
+            BackupOptions.IsObjectStorageConfigurationValid(effectiveBackupOptions) ? 1 : 0);
         Gauge(output, "proxyharbor_backup_runs_active", "Backup runs currently marked as active.",
             runMetrics.ActiveBackupRuns);
         Gauge(output, "proxyharbor_last_backup_success", "Whether the latest finished backup completed successfully.",
