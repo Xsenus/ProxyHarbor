@@ -47,14 +47,27 @@ function Start-PerformanceMock(
     }
 }
 
-function Wait-PerformanceMock([int]$Port) {
-    foreach ($attempt in 1..50) {
-        try { Invoke-WebRequest -Uri "http://127.0.0.1:$Port/ready" -TimeoutSec 1 | Out-Null; return }
-        catch {
-            if ($attempt -eq 50) { throw "Performance mock на порту $Port не запустился." }
-            Start-Sleep -Milliseconds 100
+function Wait-PerformanceMock(
+    [int]$Port,
+    [Management.Automation.Job]$Job,
+    [TimeSpan]$Timeout = [TimeSpan]::FromSeconds(20)) {
+    $stopwatch = [Diagnostics.Stopwatch]::StartNew()
+    while ($stopwatch.Elapsed -lt $Timeout) {
+        if ($Job.State -in 'Failed', 'Stopped', 'Completed') {
+            $reason = @($Job.ChildJobs | ForEach-Object { $_.JobStateInfo.Reason.Message } |
+                Where-Object { $_ }) -join '; '
+            if (-not $reason) { $reason = 'причина не сообщена' }
+            throw "Performance mock на порту $Port завершился до readiness " +
+                "(state=$($Job.State)): $reason."
         }
+        try {
+            Invoke-WebRequest -Uri "http://127.0.0.1:$Port/ready" -TimeoutSec 1 | Out-Null
+            return
+        }
+        catch { Start-Sleep -Milliseconds 100 }
     }
+    throw "Performance mock на порту $Port не перешёл в readiness за " +
+        "$([Math]::Round($Timeout.TotalSeconds, 1)) с (state=$($Job.State))."
 }
 
 function Invoke-PerformanceCase(
@@ -65,7 +78,7 @@ function Invoke-PerformanceCase(
     $job = Start-PerformanceMock -Port $port -Mode $Mode -AccessMode $AccessMode
     $reportPath = Join-Path $fixtureRoot "$Mode.json"
     try {
-        Wait-PerformanceMock $port
+        Wait-PerformanceMock -Port $port -Job $job
         $rejected = $false
         try {
             $hotLimit = if ($Mode -eq 'slow') { 5 } else { 1000 }
