@@ -119,6 +119,20 @@ public sealed class AdminBillingAccessTests
     }
 
     [Fact]
+    public async Task EmptySubscriptionRegistryReturnsZeroSummary()
+    {
+        await using var fixture = new Fixture();
+        var result = Assert.IsType<OkObjectResult>(await new AdminSubscriptionsController(fixture.Db, null!).List(
+            token: CancellationToken.None));
+        var json = System.Text.Json.JsonSerializer.Serialize(result.Value);
+        Assert.Contains("\"total\":0", json);
+        Assert.Contains("\"active\":0", json);
+        Assert.Contains("\"trialing\":0", json);
+        Assert.Contains("\"suspended\":0", json);
+        Assert.Contains("\"expiringSoon\":0", json);
+    }
+
+    [Fact]
     public async Task AccessRulesValidateTargetsReloadImmediatelyAndCanBeDisabled()
     {
         await using var fixture = new Fixture();

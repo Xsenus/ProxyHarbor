@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using System.Data;
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
@@ -42,32 +43,35 @@ public sealed class AdminPaymentOrdersController(ProxyHarborDbContext db) : Cont
             orders = orders.Where(x => x.User.UserName!.Contains(term) || x.User.Email!.Contains(term) ||
                 x.ProviderPaymentId != null && x.ProviderPaymentId.Contains(term));
         }
-        var total = await orders.CountAsync(token);
-        var items = await orders.OrderByDescending(x => x.CreatedAt).ThenByDescending(x => x.Id)
-            .Skip((page - 1) * pageSize).Take(pageSize)
-            .Select(x => new
-            {
-                x.Id,
-                x.UserId,
-                x.User.UserName,
-                x.User.Email,
-                x.ProductCode,
-                x.Plan,
-                x.Provider,
-                x.PaymentMethod,
-                x.PaymentInstrument,
-                x.AmountMinor,
-                x.Currency,
-                x.Status,
-                x.ProviderPaymentId,
-                x.CreatedAt,
-                x.PaidAt,
-                x.UpdatedAt
-            }).ToListAsync(token);
-        var summary = await db.PaymentOrders.AsNoTracking().GroupBy(x => x.Status)
-            .Select(x => new { status = x.Key, count = x.Count(), amountMinor = x.Sum(y => y.AmountMinor) })
-            .ToListAsync(token);
-        return Ok(new { items, page, pageSize, total, summary });
+        return await BufferedReadSnapshot.ExecuteAsync(db, async _ =>
+        {
+            var total = await orders.CountAsync(token);
+            var items = await orders.OrderByDescending(x => x.CreatedAt).ThenByDescending(x => x.Id)
+                .Skip((page - 1) * pageSize).Take(pageSize)
+                .Select(x => new
+                {
+                    x.Id,
+                    x.UserId,
+                    x.User.UserName,
+                    x.User.Email,
+                    x.ProductCode,
+                    x.Plan,
+                    x.Provider,
+                    x.PaymentMethod,
+                    x.PaymentInstrument,
+                    x.AmountMinor,
+                    x.Currency,
+                    x.Status,
+                    x.ProviderPaymentId,
+                    x.CreatedAt,
+                    x.PaidAt,
+                    x.UpdatedAt
+                }).ToListAsync(token);
+            var summary = await db.PaymentOrders.AsNoTracking().GroupBy(x => x.Status)
+                .Select(x => new { status = x.Key, count = x.Count(), amountMinor = x.Sum(y => y.AmountMinor) })
+                .ToListAsync(token);
+            return (IActionResult)Ok(new { items, page, pageSize, total, summary });
+        }, token);
     }
 }
 
@@ -94,32 +98,44 @@ public sealed class AdminSubscriptionsController(ProxyHarborDbContext db, UserMa
             var term = query.Trim();
             rows = rows.Where(x => x.User.UserName!.Contains(term) || x.User.Email!.Contains(term));
         }
-        var now = DateTimeOffset.UtcNow;
-        var total = await rows.CountAsync(token);
-        var items = await rows.OrderByDescending(x => x.Status == SubscriptionStatuses.Active)
-            .ThenBy(x => x.ExpiresAt).ThenBy(x => x.Id)
-            .Skip((page - 1) * pageSize).Take(pageSize)
-            .Select(x => new
-            {
-                x.Id,
-                x.UserId,
-                x.User.UserName,
-                x.User.Email,
-                x.User.DisplayName,
-                x.Plan,
-                x.Status,
-                x.StartedAt,
-                x.ExpiresAt,
-                x.UpdatedAt
-            }).ToListAsync(token);
-        var summary = new
+        return await BufferedReadSnapshot.ExecuteAsync(db, async _ =>
         {
-            active = await db.Subscriptions.CountAsync(x => x.Status == SubscriptionStatuses.Active, token),
-            trialing = await db.Subscriptions.CountAsync(x => x.Status == SubscriptionStatuses.Trialing, token),
-            suspended = await db.Subscriptions.CountAsync(x => x.Status == SubscriptionStatuses.Suspended, token),
-            expiringSoon = await db.Subscriptions.CountAsync(x => x.Status == SubscriptionStatuses.Active && x.ExpiresAt >= now && x.ExpiresAt <= now.AddDays(7), token)
-        };
-        return Ok(new { items, page, pageSize, total, summary });
+            var now = DateTimeOffset.UtcNow;
+            var total = await rows.CountAsync(token);
+            var items = await rows.OrderByDescending(x => x.Status == SubscriptionStatuses.Active)
+                .ThenBy(x => x.ExpiresAt).ThenBy(x => x.Id)
+                .Skip((page - 1) * pageSize).Take(pageSize)
+                .Select(x => new
+                {
+                    x.Id,
+                    x.UserId,
+                    x.User.UserName,
+                    x.User.Email,
+                    x.User.DisplayName,
+                    x.Plan,
+                    x.Status,
+                    x.StartedAt,
+                    x.ExpiresAt,
+                    x.UpdatedAt
+                }).ToListAsync(token);
+            var summary = await db.Subscriptions.AsNoTracking().GroupBy(_ => 1)
+                .Select(group => new
+                {
+                    active = group.Count(x => x.Status == SubscriptionStatuses.Active),
+                    trialing = group.Count(x => x.Status == SubscriptionStatuses.Trialing),
+                    suspended = group.Count(x => x.Status == SubscriptionStatuses.Suspended),
+                    expiringSoon = group.Count(x => x.Status == SubscriptionStatuses.Active &&
+                        x.ExpiresAt >= now && x.ExpiresAt <= now.AddDays(7))
+                }).SingleOrDefaultAsync(token);
+            return (IActionResult)Ok(new
+            {
+                items,
+                page,
+                pageSize,
+                total,
+                summary = summary ?? new { active = 0, trialing = 0, suspended = 0, expiringSoon = 0 }
+            });
+        }, token);
     }
 
     /// <summary>Изменяет, продлевает или приостанавливает подписку с записью аудита.</summary>
@@ -130,57 +146,61 @@ public sealed class AdminSubscriptionsController(ProxyHarborDbContext db, UserMa
             !SubscriptionStatuses.All.Contains(request.Status, StringComparer.Ordinal) ||
             request.ExtensionDays is < -3660 or > 3660)
             return BadRequest(new ProblemDetails { Title = "Параметры подписки недопустимы", Status = 400 });
-        await using var transaction = db.Database.IsRelational()
-            ? await db.Database.BeginTransactionAsync(token) : null;
-        var subscription = await db.Subscriptions.SingleOrDefaultAsync(x => x.Id == id, token);
-        if (subscription is null) return NotFound();
-        var previousPlan = subscription.Plan;
-        var previousStatus = subscription.Status;
-        var previousExpires = subscription.ExpiresAt;
-        var now = DateTimeOffset.UtcNow;
-        var expires = request.ExpiresAt;
-        if (request.ExtensionDays != 0)
-            expires = (subscription.ExpiresAt.HasValue && subscription.ExpiresAt.Value > now
-                ? subscription.ExpiresAt.Value : now).AddDays(request.ExtensionDays);
-        if (expires < subscription.StartedAt)
-            return BadRequest(new ProblemDetails { Title = "Конец подписки не может быть раньше её начала", Status = 400 });
-        subscription.Plan = request.Plan;
-        subscription.Status = request.Status;
-        subscription.ExpiresAt = expires;
-        subscription.UpdatedAt = now;
-        db.SubscriptionAdminActions.Add(new SubscriptionAdminAction
+        var strategy = db.Database.CreateExecutionStrategy();
+        return await strategy.ExecuteAsync<IActionResult>(async () =>
         {
-            SubscriptionId = subscription.Id,
-            AdministratorId = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!),
-            Action = request.ExtensionDays == 0 ? "update" : "extend",
-            PreviousPlan = previousPlan,
-            PreviousStatus = previousStatus,
-            PreviousExpiresAt = previousExpires,
-            NewPlan = subscription.Plan,
-            NewStatus = subscription.Status,
-            NewExpiresAt = subscription.ExpiresAt,
-            Reason = string.IsNullOrWhiteSpace(request.Reason) ? null : request.Reason.Trim()
+            await using var transaction = db.Database.IsRelational()
+                ? await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, token) : null;
+            var subscription = await db.Subscriptions.SingleOrDefaultAsync(x => x.Id == id, token);
+            if (subscription is null) return NotFound();
+            var previousPlan = subscription.Plan;
+            var previousStatus = subscription.Status;
+            var previousExpires = subscription.ExpiresAt;
+            var now = DateTimeOffset.UtcNow;
+            var expires = request.ExpiresAt;
+            if (request.ExtensionDays != 0)
+                expires = (subscription.ExpiresAt.HasValue && subscription.ExpiresAt.Value > now
+                    ? subscription.ExpiresAt.Value : now).AddDays(request.ExtensionDays);
+            if (expires < subscription.StartedAt)
+                return BadRequest(new ProblemDetails { Title = "Конец подписки не может быть раньше её начала", Status = 400 });
+            subscription.Plan = request.Plan;
+            subscription.Status = request.Status;
+            subscription.ExpiresAt = expires;
+            subscription.UpdatedAt = now;
+            db.SubscriptionAdminActions.Add(new SubscriptionAdminAction
+            {
+                SubscriptionId = subscription.Id,
+                AdministratorId = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!),
+                Action = request.ExtensionDays == 0 ? "update" : "extend",
+                PreviousPlan = previousPlan,
+                PreviousStatus = previousStatus,
+                PreviousExpiresAt = previousExpires,
+                NewPlan = subscription.Plan,
+                NewStatus = subscription.Status,
+                NewExpiresAt = subscription.ExpiresAt,
+                Reason = string.IsNullOrWhiteSpace(request.Reason) ? null : request.Reason.Trim()
+            });
+            await db.SaveChangesAsync(token);
+            var user = await users.FindByIdAsync(subscription.UserId.ToString());
+            if (user is not null)
+            {
+                var shouldSubscribe = subscription.Plan != SubscriptionPlans.Free &&
+                    subscription.Status is SubscriptionStatuses.Active or SubscriptionStatuses.Trialing;
+                var hasRole = await users.IsInRoleAsync(user, UserRoles.Subscriber);
+                var roleResult = shouldSubscribe && !hasRole
+                    ? await users.AddToRoleAsync(user, UserRoles.Subscriber)
+                    : !shouldSubscribe && hasRole
+                        ? await users.RemoveFromRoleAsync(user, UserRoles.Subscriber)
+                        : IdentityResult.Success;
+                if (!roleResult.Succeeded)
+                    return Problem("Не удалось синхронизировать роль Subscriber.", statusCode: 500);
+                var stampResult = await users.UpdateSecurityStampAsync(user);
+                if (!stampResult.Succeeded)
+                    return Problem("Не удалось завершить обновление защищённой сессии.", statusCode: 500);
+            }
+            if (transaction is not null) await transaction.CommitAsync(token);
+            return NoContent();
         });
-        await db.SaveChangesAsync(token);
-        var user = await users.FindByIdAsync(subscription.UserId.ToString());
-        if (user is not null)
-        {
-            var shouldSubscribe = subscription.Plan != SubscriptionPlans.Free &&
-                subscription.Status is SubscriptionStatuses.Active or SubscriptionStatuses.Trialing;
-            var hasRole = await users.IsInRoleAsync(user, UserRoles.Subscriber);
-            var roleResult = shouldSubscribe && !hasRole
-                ? await users.AddToRoleAsync(user, UserRoles.Subscriber)
-                : !shouldSubscribe && hasRole
-                    ? await users.RemoveFromRoleAsync(user, UserRoles.Subscriber)
-                    : IdentityResult.Success;
-            if (!roleResult.Succeeded)
-                return Problem("Не удалось синхронизировать роль Subscriber.", statusCode: 500);
-            var stampResult = await users.UpdateSecurityStampAsync(user);
-            if (!stampResult.Succeeded)
-                return Problem("Не удалось завершить обновление защищённой сессии.", statusCode: 500);
-        }
-        if (transaction is not null) await transaction.CommitAsync(token);
-        return NoContent();
     }
 }
 
