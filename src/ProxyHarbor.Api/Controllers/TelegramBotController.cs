@@ -64,22 +64,7 @@ public sealed class AdminTelegramController(
                 return stars;
             }, StringComparer.OrdinalIgnoreCase);
         var now = DateTimeOffset.UtcNow;
-        var stats = new
-        {
-            users = await db.TelegramChats.CountAsync(token),
-            activeUsers30d = await db.TelegramChats.CountAsync(x => x.LastInteractionAt >= now.AddDays(-30), token),
-            notificationsEnabled = await db.TelegramChats.CountAsync(x => x.NotificationsEnabled && !x.IsBlocked, token),
-            marketingConsents = options.MarketingBroadcastsEnabled
-                ? await db.TelegramChats.CountAsync(x => x.MarketingNotificationsEnabled &&
-                    x.MarketingConsentVersion == LegalDocumentVersions.MarketingConsent && !x.IsBlocked, token)
-                : 0,
-            blocked = await db.TelegramChats.CountAsync(x => x.IsBlocked, token),
-            paidOrders = await db.PaymentOrders.CountAsync(x => x.Provider == "telegram_stars" && x.Status == PaymentStatuses.Paid, token),
-            starsRevenue = await db.PaymentOrders.Where(x => x.Provider == "telegram_stars" && x.Status == PaymentStatuses.Paid)
-                .SumAsync(x => (long?)x.AmountMinor, token) ?? 0,
-            queued = await db.TelegramOutboundMessages.CountAsync(x => x.Status == TelegramOutboundStatuses.Pending || x.Status == TelegramOutboundStatuses.Processing, token),
-            failed = await db.TelegramOutboundMessages.CountAsync(x => x.Status == TelegramOutboundStatuses.Failed, token)
-        };
+        var stats = await ReadStatsAsync(options.MarketingBroadcastsEnabled, now, token);
         return Ok(new
         {
             options.Enabled,
@@ -345,7 +330,106 @@ public sealed class AdminTelegramController(
         value.Username.All(x => !char.IsControl(x)) &&
         (value.Password is null || value.Password.Length is >= 1 and <= 256 && value.Password.All(x => !char.IsControl(x)));
 
+    /// <summary>
+    /// PostgreSQL получает весь dashboard одним statement: один MVCC snapshot, один round-trip
+    /// и ровно по одному conditional aggregate для chats, Stars orders и outbound queue.
+    /// InMemory fallback сохраняет быстрые controller-тесты без provider-specific SQL.
+    /// </summary>
+    private async Task<AdminTelegramStats> ReadStatsAsync(
+        bool marketingBroadcastsEnabled,
+        DateTimeOffset now,
+        CancellationToken token)
+    {
+        var activeSince = now.AddDays(-30);
+        if (db.Database.IsRelational())
+        {
+            return await db.Database.SqlQuery<AdminTelegramStats>($"""
+                WITH chat_stats AS
+                (
+                    SELECT
+                        COUNT(*)::int AS "Users",
+                        (COUNT(*) FILTER (WHERE "LastInteractionAt" >= {activeSince}))::int AS "ActiveUsers30d",
+                        (COUNT(*) FILTER (WHERE "NotificationsEnabled" AND NOT "IsBlocked"))::int AS "NotificationsEnabled",
+                        (COUNT(*) FILTER (WHERE {marketingBroadcastsEnabled}
+                            AND "MarketingNotificationsEnabled"
+                            AND "MarketingConsentVersion" = {LegalDocumentVersions.MarketingConsent}
+                            AND NOT "IsBlocked"))::int AS "MarketingConsents",
+                        (COUNT(*) FILTER (WHERE "IsBlocked"))::int AS "Blocked"
+                    FROM "TelegramChats"
+                ),
+                payment_stats AS
+                (
+                    SELECT
+                        (COUNT(*) FILTER (WHERE "Provider" = {"telegram_stars"}
+                            AND "Status" = {PaymentStatuses.Paid}))::int AS "PaidOrders",
+                        COALESCE(SUM("AmountMinor") FILTER (WHERE "Provider" = {"telegram_stars"}
+                            AND "Status" = {PaymentStatuses.Paid}), 0)::bigint AS "StarsRevenue"
+                    FROM "PaymentOrders"
+                ),
+                queue_stats AS
+                (
+                    SELECT
+                        (COUNT(*) FILTER (WHERE "Status" = {TelegramOutboundStatuses.Pending}
+                            OR "Status" = {TelegramOutboundStatuses.Processing}))::int AS "Queued",
+                        (COUNT(*) FILTER (WHERE "Status" = {TelegramOutboundStatuses.Failed}))::int AS "Failed"
+                    FROM "TelegramOutboundMessages"
+                )
+                SELECT chat_stats.*, payment_stats.*, queue_stats.*
+                FROM chat_stats CROSS JOIN payment_stats CROSS JOIN queue_stats
+                """).SingleAsync(token);
+        }
+
+        var chats = await db.TelegramChats.AsNoTracking().GroupBy(_ => 1).Select(group => new
+        {
+            Users = group.Count(),
+            ActiveUsers30d = group.Count(x => x.LastInteractionAt >= activeSince),
+            NotificationsEnabled = group.Count(x => x.NotificationsEnabled && !x.IsBlocked),
+            MarketingConsents = group.Count(x => marketingBroadcastsEnabled &&
+                x.MarketingNotificationsEnabled &&
+                x.MarketingConsentVersion == LegalDocumentVersions.MarketingConsent && !x.IsBlocked),
+            Blocked = group.Count(x => x.IsBlocked)
+        }).SingleOrDefaultAsync(token);
+        var payments = await db.PaymentOrders.AsNoTracking().GroupBy(_ => 1).Select(group => new
+        {
+            PaidOrders = group.Count(x => x.Provider == "telegram_stars" && x.Status == PaymentStatuses.Paid),
+            StarsRevenue = group.Where(x => x.Provider == "telegram_stars" && x.Status == PaymentStatuses.Paid)
+                .Sum(x => (long?)x.AmountMinor) ?? 0
+        }).SingleOrDefaultAsync(token);
+        var queue = await db.TelegramOutboundMessages.AsNoTracking().GroupBy(_ => 1).Select(group => new
+        {
+            Queued = group.Count(x => x.Status == TelegramOutboundStatuses.Pending ||
+                x.Status == TelegramOutboundStatuses.Processing),
+            Failed = group.Count(x => x.Status == TelegramOutboundStatuses.Failed)
+        }).SingleOrDefaultAsync(token);
+        return new AdminTelegramStats
+        {
+            Users = chats?.Users ?? 0,
+            ActiveUsers30d = chats?.ActiveUsers30d ?? 0,
+            NotificationsEnabled = chats?.NotificationsEnabled ?? 0,
+            MarketingConsents = chats?.MarketingConsents ?? 0,
+            Blocked = chats?.Blocked ?? 0,
+            PaidOrders = payments?.PaidOrders ?? 0,
+            StarsRevenue = payments?.StarsRevenue ?? 0,
+            Queued = queue?.Queued ?? 0,
+            Failed = queue?.Failed ?? 0
+        };
+    }
+
     private static BadRequestObjectResult Invalid(string title) => new(new ProblemDetails { Title = title, Status = 400 });
+}
+
+/// <summary>Согласованная операционная сводка административного Telegram dashboard.</summary>
+internal sealed class AdminTelegramStats
+{
+    public int Users { get; set; }
+    public int ActiveUsers30d { get; set; }
+    public int NotificationsEnabled { get; set; }
+    public int MarketingConsents { get; set; }
+    public int Blocked { get; set; }
+    public int PaidOrders { get; set; }
+    public long StarsRevenue { get; set; }
+    public int Queued { get; set; }
+    public int Failed { get; set; }
 }
 
 /// <summary>Полный снимок настроек торгового бота; null token сохраняет прежний.</summary>
