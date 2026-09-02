@@ -425,6 +425,12 @@ public sealed class DatabaseSeederIntegrationTests
     [InlineData(
         "XYZS996 TH",
         "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/gq/data.txt")]
+    [InlineData(
+        "XYZS996 TR",
+        "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/dk/data.txt")]
+    [InlineData(
+        "ProxyGenerator Cloudflare SOCKS4",
+        "https://raw.githubusercontent.com/proxygenerator1/ProxyGenerator/main/MostStable/socks4.txt")]
     [Trait("Category", "PostgresIntegration")]
     public async Task StartupMigratesReplacedBuiltInUrlWithoutLosingSourceHistory(
         string canonicalName,
