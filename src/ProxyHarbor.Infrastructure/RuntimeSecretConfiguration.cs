@@ -38,6 +38,7 @@ public static class RuntimeSecretConfiguration
         AddSecretOverride(configuration, overrides, "SecretFiles:BackupEncryptionKey", "Backup:EncryptionKey");
         AddSecretOverride(configuration, overrides, "SecretFiles:TelegramBotToken", "Backup:TelegramBotToken");
         AddSecretOverride(configuration, overrides, "SecretFiles:TelegramChatId", "Backup:TelegramChatId");
+        AddSecretOverride(configuration, overrides, "SecretFiles:AlertmanagerWebhookToken", "Monitoring:AlertmanagerWebhookToken");
         AddSecretOverride(configuration, overrides, "SecretFiles:YooKassaSecret", "Payments:Providers:yookassa:SecretKey");
         AddSecretOverride(configuration, overrides, "SecretFiles:YooMoneyNotificationSecret", "Payments:Providers:yoomoney:SecretKey");
         AddSecretOverride(configuration, overrides, "SecretFiles:CloudPaymentsSecret", "Payments:Providers:cloudpayments:SecretKey");

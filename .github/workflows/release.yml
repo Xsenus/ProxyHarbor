@@ -107,6 +107,7 @@ jobs:
           BACKUP_ENCRYPTION_KEY: release-verify-encryption-key-at-least-32-chars
           TELEGRAM_BOT_TOKEN: 9000000000000000000:CI_ONLY_PLACEHOLDER_NOT_A_REAL_TOKEN
           TELEGRAM_CHAT_ID: "123456"
+          ALERTMANAGER_WEBHOOK_TOKEN: release-alertmanager-webhook-token-at-least-32-chars
           PUBLIC_HOST: release.example.test
           ACME_EMAIL: release@example.test
           PROXYHARBOR_IMAGE_PREFIX: ghcr.io/example

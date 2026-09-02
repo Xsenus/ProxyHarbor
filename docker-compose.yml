@@ -62,6 +62,7 @@ services:
       SecretFiles__BackupEncryptionKey: /run/secrets/backup_encryption_key
       SecretFiles__TelegramBotToken: /run/secrets/telegram_bot_token
       SecretFiles__TelegramChatId: /run/secrets/telegram_chat_id
+      SecretFiles__AlertmanagerWebhookToken: /run/secrets/alertmanager_webhook_token
       ForwardedHeaders__KnownNetworks__0: ${BACKEND_SUBNET:-172.30.0.0/24}
       Collector__BackgroundWorkersEnabled: ${BACKGROUND_WORKERS_ENABLED:-true}
       Collector__ValidationConcurrency: ${VALIDATION_CONCURRENCY:-800}
@@ -116,6 +117,7 @@ services:
       - backup_encryption_key
       - telegram_bot_token
       - telegram_chat_id
+      - alertmanager_webhook_token
       - yookassa_secret
       - yoomoney_notification_secret
       - cloudpayments_secret
@@ -230,6 +232,8 @@ secrets:
     environment: TELEGRAM_BOT_TOKEN
   telegram_chat_id:
     environment: TELEGRAM_CHAT_ID
+  alertmanager_webhook_token:
+    environment: ALERTMANAGER_WEBHOOK_TOKEN
   yookassa_secret:
     environment: YOOKASSA_SECRET_KEY
   yoomoney_notification_secret:

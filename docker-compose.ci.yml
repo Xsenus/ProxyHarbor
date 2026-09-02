@@ -20,6 +20,8 @@ secrets:
     file: ./.tmp-ci-secrets/telegram_bot_token
   telegram_chat_id: !override
     file: ./.tmp-ci-secrets/telegram_chat_id
+  alertmanager_webhook_token: !override
+    file: ./.tmp-ci-secrets/alertmanager_webhook_token
   yookassa_secret: !override
     file: ./.tmp-ci-secrets/yookassa_secret
   yoomoney_notification_secret: !override

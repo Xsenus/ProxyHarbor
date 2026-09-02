@@ -188,6 +188,7 @@ jobs:
           ACME_EMAIL: ci@example.com
           TELEGRAM_BOT_TOKEN: 9000000000000000000:CI_ONLY_PLACEHOLDER_NOT_A_REAL_TOKEN
           TELEGRAM_CHAT_ID: "-1009000000001234"
+          ALERTMANAGER_WEBHOOK_TOKEN: ci-alertmanager-webhook-token-at-least-32-chars
           PROXYHARBOR_IMAGE_PREFIX: ghcr.io/example
           PROXYHARBOR_IMAGE_TAG: 1.2.3
         run: |
@@ -226,10 +227,10 @@ jobs:
             .services.api.environment.Security__AdminApiKey == null and
             .services.api.environment.Backup__EncryptionKey == null and
             .services.api.environment.Backup__TelegramBotToken == null and
-            (.services.api.secrets | length) == 17 and
+            (.services.api.secrets | length) == 18 and
             (.services.restore.secrets | length) == 2 and
-            (.services.alertmanager.secrets | length) == 2'
-          for secret_value in ci-password 'Ci-admin-password-at-least-24-chars!' ci-admin-key ci-encryption-key-at-least-32-chars 9000000000000000000:CI_ONLY_PLACEHOLDER_NOT_A_REAL_TOKEN -1009000000001234; do
+            (.services.alertmanager.secrets | length) == 1'
+          for secret_value in ci-password 'Ci-admin-password-at-least-24-chars!' ci-admin-key ci-encryption-key-at-least-32-chars 9000000000000000000:CI_ONLY_PLACEHOLDER_NOT_A_REAL_TOKEN -1009000000001234 ci-alertmanager-webhook-token-at-least-32-chars; do
             if echo "$production_config" | grep --fixed-strings -- "$secret_value"; then
               echo "Secret value leaked into rendered Compose configuration."
               exit 1
@@ -268,23 +269,12 @@ jobs:
             --volume "$PWD/deploy/alertmanager:/etc/alertmanager:ro" \
             prom/alertmanager:v0.32.1 \
             config routes test --config.file=/etc/alertmanager/alertmanager.yml \
-            --verify.receivers=telegram severity=critical alertname=CriticalTest
+            --verify.receivers=proxyharbor-api severity=critical alertname=CriticalTest
           docker run --rm --entrypoint /bin/amtool \
             --volume "$PWD/deploy/alertmanager:/etc/alertmanager:ro" \
             prom/alertmanager:v0.32.1 \
             config routes test --config.file=/etc/alertmanager/alertmanager.yml \
-            --verify.receivers=telegram severity=warning alertname=WarningTest
-          rendered_alert=$(docker run --rm --entrypoint /bin/amtool \
-            --volume "$PWD/deploy/alertmanager:/etc/alertmanager:ro" \
-            prom/alertmanager:v0.32.1 \
-            template render \
-            --template.glob='/etc/alertmanager/templates/*.tmpl' \
-            --template.text='{{ template "telegram.proxyharbor.message" . }}' \
-            --template.type=html \
-            --template.data=/etc/alertmanager/telegram.test.json \
-            --no-version-check)
-          echo "$rendered_alert" | grep 'Proxy&lt;Down&gt;'
-          echo "$rendered_alert" | grep 'Unsafe &lt;b&gt;tag&lt;/b&gt; &amp; text'
+            --verify.receivers=proxyharbor-api severity=warning alertname=WarningTest
       - name: Container smoke test
         env:
           POSTGRES_DB: proxyharbor
@@ -298,6 +288,7 @@ jobs:
           ACME_EMAIL: ci@example.com
           TELEGRAM_BOT_TOKEN: 9000000000000000000:CI_ONLY_PLACEHOLDER_NOT_A_REAL_TOKEN
           TELEGRAM_CHAT_ID: "-1009000000001234"
+          ALERTMANAGER_WEBHOOK_TOKEN: ci-alertmanager-webhook-token-at-least-32-chars
         run: |
           mkdir --mode=700 .tmp-ci-secrets
           printf '%s' "$POSTGRES_PASSWORD" > .tmp-ci-secrets/postgres_password
@@ -306,6 +297,7 @@ jobs:
           printf '%s' "$BACKUP_ENCRYPTION_KEY" > .tmp-ci-secrets/backup_encryption_key
           printf '%s' "$TELEGRAM_BOT_TOKEN" > .tmp-ci-secrets/telegram_bot_token
           printf '%s' "$TELEGRAM_CHAT_ID" > .tmp-ci-secrets/telegram_chat_id
+          printf '%s' "$ALERTMANAGER_WEBHOOK_TOKEN" > .tmp-ci-secrets/alertmanager_webhook_token
           # Платёжные провайдеры выключены в smoke-профиле, но file-backed
           # secrets всё равно должны существовать для совместимости Compose v5.
           touch .tmp-ci-secrets/yookassa_secret \
@@ -356,7 +348,8 @@ jobs:
             container_id=$1
             environment=$(docker inspect --format '{{json .Config.Env}}' "$container_id")
             for secret_value in ci-password 'Ci-admin-password-at-least-24-chars!' ci-admin-key-at-least-24-chars \
-              ci-encryption-key-at-least-32-chars 9000000000000000000:CI_ONLY_PLACEHOLDER_NOT_A_REAL_TOKEN -1009000000001234; do
+              ci-encryption-key-at-least-32-chars 9000000000000000000:CI_ONLY_PLACEHOLDER_NOT_A_REAL_TOKEN -1009000000001234 \
+              ci-alertmanager-webhook-token-at-least-32-chars; do
               if echo "$environment" | grep --fixed-strings -- "$secret_value"; then
                 echo "Secret value leaked into container environment."
                 exit 1
@@ -367,7 +360,7 @@ jobs:
           assert_secret_values_absent "$postgres_id"
           assert_secret_values_absent "$restore_id"
           docker inspect --format '{{json .Mounts}}' "$api_id" | jq --exit-status \
-            '[.[] | select(.Destination | startswith("/run/secrets/"))] | length == 17'
+            '[.[] | select(.Destination | startswith("/run/secrets/"))] | length == 18'
           docker inspect --format '{{json .Mounts}}' "$postgres_id" | jq --exit-status \
             '[.[] | select(.Destination == "/run/secrets/postgres_password")] | length == 1'
           docker inspect --format '{{json .Mounts}}' "$restore_id" | jq --exit-status \
@@ -610,7 +603,7 @@ jobs:
             grep --ignore-case 'telegram'; then exit 1; fi
           assert_secret_values_absent "$alertmanager_id"
           docker inspect --format '{{json .Mounts}}' "$alertmanager_id" | jq --exit-status \
-            '[.[] | select(.Destination | startswith("/run/secrets/"))] | length == 2'
+            '[.[] | select(.Destination == "/run/secrets/alertmanager_webhook_token")] | length == 1'
           docker inspect "$production_web_id" | jq --exit-status \
             '.[0].HostConfig.PortBindings // {} | length == 0'
           for attempt in {1..90}; do

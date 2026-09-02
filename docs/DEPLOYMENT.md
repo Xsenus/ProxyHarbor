@@ -5,7 +5,7 @@
 1. Установите Docker Engine 26+ и Docker Compose 2.24.4+.
 2. Направьте DNS A/AAAA для выбранного имени на сервер. Если IPv6 фактически не маршрутизируется, не создавайте AAAA-запись.
 3. Разрешите входящие TCP 80/443 и UDP 443. PostgreSQL, API и порт frontend наружу не публикуются.
-4. Скопируйте `.env.example` в `.env`, замените все обязательные ключи и задайте `PUBLIC_HOST` без схемы/пути и `ACME_EMAIL`. Production overlay принудительно включает backup и использует Telegram как безопасный bootstrap-канал, поэтому пустые `BACKUP_ENCRYPTION_KEY`, `TELEGRAM_BOT_TOKEN` или `TELEGRAM_CHAT_ID` fail-closed остановят первый запуск. После сохранения runtime-настроек в `/admin/backups` основным каналом может быть S3, а Telegram — отключён. Compose смонтирует чувствительные значения как read-only secrets; в environment контейнеров они не передаются.
+4. Скопируйте `.env.example` в `.env`, замените все обязательные ключи и задайте `PUBLIC_HOST` без схемы/пути и `ACME_EMAIL`. Production overlay принудительно включает backup и использует Telegram как безопасный bootstrap-канал, поэтому пустые `BACKUP_ENCRYPTION_KEY`, `TELEGRAM_BOT_TOKEN` или `TELEGRAM_CHAT_ID` fail-closed остановят первый запуск. Для monitoring profile также задайте независимый случайный `ALERTMANAGER_WEBHOOK_TOKEN` длиной не менее 32 символов. После сохранения runtime-настроек в `/admin/backups` основным каналом может быть S3, а Telegram — отключён. Compose смонтирует чувствительные значения как read-only secrets; в environment контейнеров они не передаются.
 5. До публичного запуска проверьте условия использования всех источников и ограничьте admin routes дополнительным firewall/WAF, если панель не должна быть общедоступной.
 
 ## Запуск и проверка
