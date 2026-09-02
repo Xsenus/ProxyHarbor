@@ -43,8 +43,10 @@ public sealed class AdminAccessController(ProxyHarborDbContext db, ProxyAccessMo
                 });
             // DefaultIfEmpty keeps the administrative rule count correct even when the
             // 30-day traffic window is empty, without adding a third database reader.
+            // The primary-key order makes the single anchor row deterministic and avoids
+            // EF's row-limiting-without-order warning in production logs.
             var summaryRow = await db.AccessBlockRules.AsNoTracking()
-                .Select(_ => 1).Take(1).DefaultIfEmpty()
+                .OrderBy(rule => rule.Id).Select(_ => 1).Take(1).DefaultIfEmpty()
                 .Select(_ => new
                 {
                     requests = buckets.Sum(x => (long?)x.Requests) ?? 0,
