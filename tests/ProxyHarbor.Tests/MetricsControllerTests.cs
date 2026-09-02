@@ -90,9 +90,11 @@ public sealed class MetricsControllerTests
         Assert.DoesNotContain("proxyharbor_vpn_endpoints_total", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_vpn_validation_due 0", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_vpn_published 0", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_backup_configuration_read_success 1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_backup_enabled 0", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_backup_interval_seconds 86400", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_backup_telegram_configured 0", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_backup_object_storage_configured 0", metrics, StringComparison.Ordinal);
         Assert.Contains("# TYPE proxyharbor_advisory_lock_cleanup_failures_total counter", metrics,
             StringComparison.Ordinal);
         Assert.Contains("proxyharbor_http_requests_total{route=\"proxies\",status=\"5xx\"} 1", metrics,
@@ -278,11 +280,74 @@ public sealed class MetricsControllerTests
         Assert.Contains("proxyharbor_last_backup_timestamp_seconds 1700000040", metrics, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task MetricsUseEffectiveRuntimeBackupConfiguration()
+    {
+        var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+            .UseInMemoryDatabase($"metrics-runtime-backup-{Guid.NewGuid():N}").Options;
+        var runtimeOptions = new BackupOptions
+        {
+            Enabled = true,
+            IntervalHours = 6,
+            TelegramRecipientId = Guid.NewGuid()
+        };
+        var controller = new MetricsController(
+            new TestDbFactory(options),
+            Options.Create(new CollectorOptions()),
+            Options.Create(new BackupOptions { Enabled = false, IntervalHours = 24 }),
+            new ProbeControlHealth(),
+            backupConfigurationStore: new TestBackupConfigurationStore(runtimeOptions));
+
+        var result = Assert.IsType<ContentResult>(await controller.Get(CancellationToken.None));
+        var metrics = result.Content!;
+        Assert.Contains("proxyharbor_backup_configuration_read_success 1", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_backup_enabled 1", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_backup_interval_seconds 21600", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_backup_telegram_configured 1", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_backup_object_storage_configured 0", metrics, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task MetricsExposeRuntimeBackupConfigurationReadFailureAndUseSafeFallback()
+    {
+        var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+            .UseInMemoryDatabase($"metrics-runtime-backup-failure-{Guid.NewGuid():N}").Options;
+        var controller = new MetricsController(
+            new TestDbFactory(options),
+            Options.Create(new CollectorOptions()),
+            Options.Create(new BackupOptions { Enabled = false, IntervalHours = 12 }),
+            new ProbeControlHealth(),
+            backupConfigurationStore: new FailingBackupConfigurationStore());
+
+        var result = Assert.IsType<ContentResult>(await controller.Get(CancellationToken.None));
+        var metrics = result.Content!;
+        Assert.Contains("proxyharbor_backup_configuration_read_success 0", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_backup_enabled 0", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_backup_interval_seconds 43200", metrics, StringComparison.Ordinal);
+    }
+
     private sealed class TestDbFactory(DbContextOptions<ProxyHarborDbContext> options)
         : IDbContextFactory<ProxyHarborDbContext>
     {
         public ProxyHarborDbContext CreateDbContext() => new(options);
         public Task<ProxyHarborDbContext> CreateDbContextAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult(CreateDbContext());
+    }
+
+    private sealed class TestBackupConfigurationStore(BackupOptions options) : IBackupConfigurationStore
+    {
+        public Task<BackupOptions> GetAsync(CancellationToken token = default) => Task.FromResult(options);
+
+        public Task SaveAsync(BackupOptions optionsToSave, CancellationToken token = default) =>
+            Task.CompletedTask;
+    }
+
+    private sealed class FailingBackupConfigurationStore : IBackupConfigurationStore
+    {
+        public Task<BackupOptions> GetAsync(CancellationToken token = default) =>
+            Task.FromException<BackupOptions>(new InvalidOperationException("Invalid runtime backup configuration."));
+
+        public Task SaveAsync(BackupOptions options, CancellationToken token = default) =>
+            Task.CompletedTask;
     }
 }

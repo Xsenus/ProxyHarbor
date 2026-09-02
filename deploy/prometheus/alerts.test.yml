@@ -104,6 +104,34 @@ tests:
         alertname: ProxyHarborTelegramDeliveryFailed
         exp_alerts: []
 
+  - name: Runtime backup configuration read failure respects the grace period
+    interval: 1m
+    input_series:
+      - series: proxyharbor_backup_configuration_read_success
+        values: '0x7'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: ProxyHarborBackupConfigurationUnreadable
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: ProxyHarborBackupConfigurationUnreadable
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Runtime-настройки backup недоступны
+              description: API не может прочитать эффективные настройки backup из PostgreSQL и публикует только безопасные значения deploy-конфигурации.
+
+  - name: Runtime backup configuration recovery clears the alert
+    interval: 1m
+    input_series:
+      - series: proxyharbor_backup_configuration_read_success
+        values: '0x6 1x2'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: ProxyHarborBackupConfigurationUnreadable
+        exp_alerts: []
+
   - name: Enabled backup reports missing snapshot and Telegram delivery
     interval: 1m
     input_series:
