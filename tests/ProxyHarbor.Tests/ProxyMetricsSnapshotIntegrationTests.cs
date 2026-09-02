@@ -41,17 +41,24 @@ public sealed class ProxyMetricsSnapshotIntegrationTests
             var now = new DateTimeOffset(2026, 8, 31, 7, 0, 0, TimeSpan.Zero);
             var retentionCutoff = now.AddDays(-2);
             var freshAfter = now.AddMinutes(-15);
+            var leased = Endpoint("10.0.0.3", ProxyStatus.Dead, ProxyProtocol.Https,
+                now.AddDays(-10), now.AddMinutes(-1), now.AddMinutes(-3), countryCode: "DE");
             db.Proxies.AddRange(
                 Endpoint("10.0.0.1", ProxyStatus.Alive, ProxyProtocol.Http,
                     now, now.AddMinutes(-1), now.AddMinutes(-2), countryCode: "US"),
                 Endpoint("10.0.0.2", ProxyStatus.Pending, ProxyProtocol.Socks5,
                     now.AddDays(-10), null, null, countryCode: "US"),
-                Endpoint("10.0.0.3", ProxyStatus.Dead, ProxyProtocol.Https,
-                    now.AddDays(-10), now.AddMinutes(-1), now.AddMinutes(-3), now.AddMinutes(5), countryCode: "DE"),
+                leased,
                 Endpoint("10.0.0.4", ProxyStatus.Alive, ProxyProtocol.Socks5,
                     now, now.AddMinutes(1), now.AddMinutes(-30), lastCheckedAt: now.AddHours(-1)),
                 Endpoint("10.0.0.5", ProxyStatus.Alive, ProxyProtocol.Http,
                     now, now.AddMinutes(5), now.AddMinutes(-4), lastCheckedAt: now.AddMinutes(-5), countryCode: "DE"));
+            db.ProxyValidationLeases.Add(new ProxyValidationLease
+            {
+                ProxyId = leased.Id,
+                LeaseId = Guid.NewGuid(),
+                LeaseUntil = now.AddMinutes(1)
+            });
             await db.SaveChangesAsync();
 
             var snapshot = await ProxyMetricsSnapshotReader.ReadAsync(
@@ -96,7 +103,6 @@ public sealed class ProxyMetricsSnapshotIntegrationTests
         DateTimeOffset lastSeenAt,
         DateTimeOffset? nextCheckAt,
         DateTimeOffset? lastAttemptAt,
-        DateTimeOffset? leaseUntil = null,
         DateTimeOffset? lastCheckedAt = null,
         string? countryCode = null) => new()
         {
@@ -116,9 +122,7 @@ public sealed class ProxyMetricsSnapshotIntegrationTests
             LastSeenAt = lastSeenAt,
             LastCheckedAt = lastCheckedAt ?? lastAttemptAt,
             NextCheckAt = nextCheckAt,
-            LastValidationAttemptAt = lastAttemptAt,
-            CheckLeaseUntil = leaseUntil,
-            CheckLeaseId = leaseUntil.HasValue ? Guid.NewGuid() : null
+            LastValidationAttemptAt = lastAttemptAt
         };
 
     private static void AddParameters(

@@ -50,7 +50,9 @@ public sealed class DistributedProxyValidationService(
                 return;
             }
 
-            if (node.CurrentLeaseId.HasValue && node.CurrentLeaseUntil >= now)
+            if (node.CurrentLeaseId.HasValue && node.CurrentLeaseUntil >= now &&
+                await db.ProxyValidationLeases.AsNoTracking().AnyAsync(
+                    lease => lease.LeaseId == node.CurrentLeaseId, token))
             {
                 node.LastHeartbeatAt = now;
                 await db.SaveChangesAsync(token);
@@ -77,8 +79,8 @@ public sealed class DistributedProxyValidationService(
                 .ToArray();
             if (expiredLeaseIds.Length > 0)
             {
-                // Все Claim-транзакции сначала блокируют proxy rows, затем старые audit rows.
-                // Стабильная сортировка Id исключает обратный порядок блокировок между узлами.
+                // И claim, и completion блокируют узкие lease-строки раньше audit rows.
+                // Стабильный порядок исключает взаимную блокировку разных партий.
                 await db.Database.ExecuteSqlInterpolatedAsync($"""
                     WITH locked AS MATERIALIZED (
                         SELECT "Id"
@@ -135,32 +137,51 @@ public sealed class DistributedProxyValidationService(
     {
         var now = DateTimeOffset.UtcNow;
         var until = now.Add(ValidationLeasePolicy.Duration(options.Value.ProbeTimeoutSeconds));
-        await using var db = await dbFactory.CreateDbContextAsync(token);
-        var nodeUpdated = await db.CheckerNodes
-            .Where(x => x.Id == nodeId && x.Enabled && x.CurrentLeaseId == leaseId && x.CurrentLeaseUntil >= now)
-            .ExecuteUpdateAsync(setters => setters
-                .SetProperty(x => x.LastHeartbeatAt, now)
-                .SetProperty(x => x.CurrentLeaseUntil, until)
-                .SetProperty(x => x.AgentVersion, Bounded(heartbeat.Version, 80))
-                .SetProperty(x => x.LastError, Bounded(heartbeat.Error, 1000)), token);
-        if (nodeUpdated != 1) return false;
-        // Heartbeat и completion могут прийти почти одновременно от одного агента.
-        // Оба пути блокируют строки партии по Id, поэтому продление не образует
-        // обратный порядок с массовым сохранением результатов.
-        var proxiesUpdated = await db.Database.ExecuteSqlInterpolatedAsync($"""
-            WITH locked AS MATERIALIZED (
-                SELECT p."Id"
-                FROM "Proxies" p
-                WHERE p."CheckLeaseId" = {leaseId}
-                ORDER BY p."Id"
-                FOR UPDATE OF p
-            )
-            UPDATE "Proxies" p
-            SET "CheckLeaseUntil" = {until}
-            FROM locked
-            WHERE p."Id" = locked."Id"
-            """, token);
-        return proxiesUpdated > 0;
+        await using var strategyDb = await dbFactory.CreateDbContextAsync(token);
+        var renewed = false;
+        await strategyDb.Database.CreateExecutionStrategy().ExecuteAsync(async () =>
+        {
+            await using var db = await dbFactory.CreateDbContextAsync(token);
+            await using var transaction = await db.Database.BeginTransactionAsync(token);
+            var node = await db.CheckerNodes.FromSqlInterpolated($"""
+                SELECT * FROM "CheckerNodes" WHERE "Id" = {nodeId} FOR UPDATE
+                """).SingleOrDefaultAsync(token);
+            if (node is null || !node.Enabled || node.CurrentLeaseId != leaseId ||
+                node.CurrentLeaseUntil is null || node.CurrentLeaseUntil < now)
+            {
+                await transaction.RollbackAsync(token);
+                return;
+            }
+
+            var leasesUpdated = await db.Database.ExecuteSqlInterpolatedAsync($"""
+                WITH locked AS MATERIALIZED (
+                    SELECT "ProxyId"
+                    FROM "ProxyValidationLeases"
+                    WHERE "LeaseId" = {leaseId} AND "LeaseUntil" >= {now}
+                    ORDER BY "ProxyId"
+                    FOR UPDATE
+                )
+                UPDATE "ProxyValidationLeases" AS lease
+                SET "LeaseUntil" = {until}
+                FROM locked
+                WHERE lease."ProxyId" = locked."ProxyId"
+                  AND lease."LeaseId" = {leaseId}
+                """, token);
+            if (leasesUpdated == 0)
+            {
+                await transaction.RollbackAsync(token);
+                return;
+            }
+
+            node.LastHeartbeatAt = now;
+            node.CurrentLeaseUntil = until;
+            node.AgentVersion = Bounded(heartbeat.Version, 80);
+            node.LastError = Bounded(heartbeat.Error, 1000);
+            await db.SaveChangesAsync(token);
+            await transaction.CommitAsync(token);
+            renewed = true;
+        });
+        return renewed;
     }
 
     /// <summary>Проверяет полноту и ownership партии, затем атомарно применяет её результаты.</summary>
@@ -189,8 +210,12 @@ public sealed class DistributedProxyValidationService(
         if (node.CurrentLeaseId != leaseId || node.CurrentLeaseUntil < now)
             throw new InvalidOperationException("Аренда истекла или больше не принадлежит checker-узлу.");
 
-        var leasedIds = await db.Proxies.AsNoTracking().Where(x => x.CheckLeaseId == leaseId)
-            .Select(x => new { x.Id, x.ConsecutiveFailedChecks }).ToListAsync(token);
+        var leasedIds = await (
+                from lease in db.ProxyValidationLeases.AsNoTracking()
+                join proxy in db.Proxies.AsNoTracking() on lease.ProxyId equals proxy.Id
+                where lease.LeaseId == leaseId && lease.LeaseUntil >= now
+                select new { proxy.Id, proxy.ConsecutiveFailedChecks })
+            .ToListAsync(token);
         var distinctResults = request.Results.GroupBy(x => x.ProxyId).ToArray();
         if (leasedIds.Count == 0 || distinctResults.Length != leasedIds.Count ||
             distinctResults.Any(group => group.Count() != 1) ||

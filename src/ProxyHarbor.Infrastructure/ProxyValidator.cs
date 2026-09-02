@@ -137,7 +137,8 @@ public sealed class ProxyValidator(
         // Running-аудит восстанавливается только после истечения связанной proxy lease:
         // активную партию другой реплики этот запрос никогда не пометит failed.
         await db.ValidationRuns.Where(run => run.Status == "running" && run.StartedAt < staleBefore &&
-                !db.Proxies.Any(proxy => proxy.CheckLeaseId == run.LeaseId && proxy.CheckLeaseUntil >= now))
+                !db.ProxyValidationLeases.Any(lease =>
+                    lease.LeaseId == run.LeaseId && lease.LeaseUntil >= now))
             .ExecuteUpdateAsync(setters => setters
                 .SetProperty(run => run.FinishedAt, now)
                 .SetProperty(run => run.Status, "failed")
@@ -218,16 +219,17 @@ public sealed class ProxyValidator(
         await using var db = await dbFactory.CreateDbContextAsync(token);
         return await db.Database.ExecuteSqlInterpolatedAsync($"""
             WITH locked AS MATERIALIZED (
-                SELECT proxy."Id"
-                FROM "Proxies" AS proxy
-                WHERE proxy."CheckLeaseId" = {leaseId}
-                ORDER BY proxy."Id"
-                FOR UPDATE OF proxy
+                SELECT "ProxyId"
+                FROM "ProxyValidationLeases"
+                WHERE "LeaseId" = {leaseId}
+                ORDER BY "ProxyId"
+                FOR UPDATE
             )
-            UPDATE "Proxies" AS proxy
-            SET "CheckLeaseUntil" = {leaseUntil}
+            UPDATE "ProxyValidationLeases" AS lease
+            SET "LeaseUntil" = {leaseUntil}
             FROM locked
-            WHERE proxy."Id" = locked."Id"
+            WHERE lease."ProxyId" = locked."ProxyId"
+              AND lease."LeaseId" = {leaseId}
             """, token);
     }
 
@@ -235,19 +237,21 @@ public sealed class ProxyValidator(
     internal async Task<int> ReleaseLeaseAsync(Guid leaseId, CancellationToken token)
     {
         await using var db = await dbFactory.CreateDbContextAsync(token);
+        // Cancellation может пересечься с heartbeat или completion той же партии.
+        // Сначала берём все lease rows в том же порядке ProxyId, что и остальные
+        // mutation-пути, и только затем удаляем их одним statement.
         return await db.Database.ExecuteSqlInterpolatedAsync($"""
             WITH locked AS MATERIALIZED (
-                SELECT proxy."Id"
-                FROM "Proxies" AS proxy
-                WHERE proxy."CheckLeaseId" = {leaseId}
-                ORDER BY proxy."Id"
-                FOR UPDATE OF proxy
+                SELECT "ProxyId"
+                FROM "ProxyValidationLeases"
+                WHERE "LeaseId" = {leaseId}
+                ORDER BY "ProxyId"
+                FOR UPDATE
             )
-            UPDATE "Proxies" AS proxy
-            SET "CheckLeaseUntil" = NULL,
-                "CheckLeaseId" = NULL
-            FROM locked
-            WHERE proxy."Id" = locked."Id"
+            DELETE FROM "ProxyValidationLeases" AS lease
+            USING locked
+            WHERE lease."ProxyId" = locked."ProxyId"
+              AND lease."LeaseId" = {leaseId}
             """, token);
     }
 
@@ -324,10 +328,10 @@ public sealed class ProxyValidator(
             await connection.OpenAsync(token);
             await using var transaction = await connection.BeginTransactionAsync(token);
             var persisted = await PersistResultsCoreAsync(updates, connection, transaction, token);
-            await transaction.CommitAsync(token);
             // Локальная validation сохраняет объективные результаты строк, ownership
             // которых ещё принадлежит партии, но не выдаёт частичный batch за успешный.
             EnsureCompletePersistence(updates.Length, persisted);
+            await transaction.CommitAsync(token);
             return persisted;
         });
     }
@@ -395,21 +399,25 @@ public sealed class ProxyValidator(
         }
 
         await using var merge = new NpgsqlCommand("""
-                WITH locked AS MATERIALIZED (
+                WITH locked_leases AS MATERIALIZED (
+                    SELECT lease."ProxyId"
+                    FROM "ProxyValidationLeases" AS lease
+                    JOIN proxy_check_update AS incoming
+                      ON lease."ProxyId" = incoming.id AND lease."LeaseId" = incoming.lease_id
+                    ORDER BY lease."ProxyId"
+                    FOR UPDATE OF lease
+                ), locked_proxies AS MATERIALIZED (
                     SELECT proxy."Id"
                     FROM "Proxies" AS proxy
-                    JOIN proxy_check_update AS incoming
-                      ON proxy."Id" = incoming.id AND proxy."CheckLeaseId" = incoming.lease_id
+                    JOIN locked_leases AS lease ON lease."ProxyId" = proxy."Id"
                     ORDER BY proxy."Id"
                     FOR UPDATE OF proxy
-                )
+                ), updated AS (
                 UPDATE "Proxies" AS proxy SET
                     "LastCheckedAt" = CASE WHEN incoming.outcome = 2 THEN proxy."LastCheckedAt" ELSE incoming.checked_at END,
                     "LastValidationAttemptAt" = incoming.checked_at,
                     "LastValidationDeferred" = incoming.outcome = 2,
                     "NextCheckAt" = incoming.next_check_at,
-                    "CheckLeaseUntil" = NULL,
-                    "CheckLeaseId" = NULL,
                     "FirstAliveAt" = CASE
                         WHEN incoming.outcome = 1 THEN COALESCE(proxy."FirstAliveAt", GREATEST(proxy."FirstSeenAt", incoming.checked_at))
                         ELSE proxy."FirstAliveAt"
@@ -437,11 +445,20 @@ public sealed class ProxyValidator(
                     "SuccessfulChecks" = proxy."SuccessfulChecks" + CASE WHEN incoming.outcome = 1 THEN 1 ELSE 0 END,
                     "FailedChecks" = proxy."FailedChecks" + CASE WHEN incoming.outcome = 0 THEN 1 ELSE 0 END,
                     "ConsecutiveFailedChecks" = incoming.failure_streak
-                FROM proxy_check_update AS incoming, locked
-                WHERE proxy."Id" = locked."Id"
-                  AND incoming.id = locked."Id"
-                  AND proxy."CheckLeaseId" = incoming.lease_id
-                RETURNING incoming.outcome
+                FROM proxy_check_update AS incoming, locked_proxies
+                WHERE proxy."Id" = locked_proxies."Id"
+                  AND incoming.id = locked_proxies."Id"
+                RETURNING proxy."Id", incoming.lease_id, incoming.outcome
+                ), released AS (
+                    DELETE FROM "ProxyValidationLeases" AS lease
+                    USING updated
+                    WHERE lease."ProxyId" = updated."Id"
+                      AND lease."LeaseId" = updated.lease_id
+                    RETURNING lease."ProxyId"
+                )
+                SELECT updated.outcome
+                FROM updated
+                JOIN released ON released."ProxyId" = updated."Id"
                 """, connection, transaction);
         var checkedCount = 0;
         var aliveCount = 0;

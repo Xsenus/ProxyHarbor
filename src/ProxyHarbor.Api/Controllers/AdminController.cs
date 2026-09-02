@@ -277,25 +277,33 @@ public sealed class AdminController(
         ProxyHarborDbContext db,
         DateTimeOffset now,
         DateTimeOffset unseenRetentionCutoff,
-        CancellationToken token) =>
-        await db.Proxies.AsNoTracking().GroupBy(_ => 1).Select(group => new ValidationQueueAggregate(
+        CancellationToken token)
+    {
+        var query =
+            from proxy in db.Proxies.AsNoTracking()
+            join lease in db.ProxyValidationLeases.AsNoTracking()
+                on proxy.Id equals lease.ProxyId into proxyLeases
+            from lease in proxyLeases.DefaultIfEmpty()
+            select new { Proxy = proxy, Lease = lease };
+        return await query.GroupBy(_ => 1).Select(group => new ValidationQueueAggregate(
             group.Count(),
-            group.Count(proxy => proxy.FirstAliveAt != null || proxy.SuccessfulChecks > 0),
-            group.Count(proxy => proxy.Status == ProxyStatus.Dead &&
-                (proxy.FirstAliveAt != null || proxy.SuccessfulChecks > 0)),
-            group.Count(proxy => proxy.CheckLeaseUntil >= now),
-            group.Count(proxy => proxy.LastCheckedAt == null),
-            group.Count(proxy => proxy.LastValidationAttemptAt == null),
-            group.Count(proxy => (proxy.NextCheckAt == null || proxy.NextCheckAt <= now) &&
-                (proxy.CheckLeaseUntil == null || proxy.CheckLeaseUntil < now)),
-            group.Count(proxy => proxy.NextCheckAt > now),
-            group.Count(proxy => proxy.ConsecutiveFailedChecks >= 3),
-            group.Count(proxy =>
-                (proxy.Status == ProxyStatus.Pending || proxy.Status == ProxyStatus.Dead) &&
-                proxy.LastSeenAt < unseenRetentionCutoff &&
-                (proxy.CheckLeaseUntil == null || proxy.CheckLeaseUntil < now)),
-            group.Max(proxy => proxy.LastValidationAttemptAt)))
+            group.Count(item => item.Proxy.FirstAliveAt != null || item.Proxy.SuccessfulChecks > 0),
+            group.Count(item => item.Proxy.Status == ProxyStatus.Dead &&
+                (item.Proxy.FirstAliveAt != null || item.Proxy.SuccessfulChecks > 0)),
+            group.Count(item => item.Lease != null && item.Lease.LeaseUntil >= now),
+            group.Count(item => item.Proxy.LastCheckedAt == null),
+            group.Count(item => item.Proxy.LastValidationAttemptAt == null),
+            group.Count(item => (item.Proxy.NextCheckAt == null || item.Proxy.NextCheckAt <= now) &&
+                (item.Lease == null || item.Lease.LeaseUntil < now)),
+            group.Count(item => item.Proxy.NextCheckAt > now),
+            group.Count(item => item.Proxy.ConsecutiveFailedChecks >= 3),
+            group.Count(item =>
+                (item.Proxy.Status == ProxyStatus.Pending || item.Proxy.Status == ProxyStatus.Dead) &&
+                item.Proxy.LastSeenAt < unseenRetentionCutoff &&
+                (item.Lease == null || item.Lease.LeaseUntil < now)),
+            group.Max(item => item.Proxy.LastValidationAttemptAt)))
         .SingleOrDefaultAsync(token);
+    }
 
     private sealed record ValidationQueueAggregate(
         int Total,

@@ -12,10 +12,12 @@ Manifest v7 содержит согласованный repeatable-read snapshot
 - счета со способом оплаты, подписки, одноразовые уведомления, аудит ручных продлений, агрегаты выдачи по IP и правила блокировки;
 - конфигурацию commerce-бота, Telegram CRM, очередь доставки и обработанные update;
 - управляемые публичные реквизиты, публикацию разделов, cookie-тексты и идентификаторы аналитики;
-- внешние checker-узлы, их несекретные SSH-реквизиты, fingerprint, состояние lease и счётчики;
+- внешние checker-узлы, их несекретные SSH-реквизиты, fingerprint, состояние текущей партии и счётчики;
 - UTC-время, версии manifest/settings schema и `secretsIncluded=false`.
 
 В архив никогда не входят PostgreSQL connection string/password, admin password, admin API key, credentials Telegram/S3-доставки backup, data-protection keys или encryption key. Token commerce-бота сохраняется только как Data Protection ciphertext. Без независимо сохранённого volume ключей он после переноса не расшифруется, поэтому ключи и исходный token необходимо хранить во внешнем secret manager.
+
+`ProxyValidationLeases` — эфемерное operational ownership и в архив не входит. Legacy-архив может содержать прежние `CheckLeaseId/CheckLeaseUntil` внутри `Proxies`; restore проверяет целостность пары, но намеренно очищает её перед импортом. После запуска незавершённые проверки безопасно возвращаются в общую очередь, а durable `ValidationRuns` сохраняют историю и будут закрыты штатным recovery.
 
 ## Создание и доставка
 
@@ -85,7 +87,7 @@ dotnet run --project src/ProxyHarbor.Restore -- `
   --replace-existing-data
 ```
 
-После restore проверьте readiness, количество строк, несколько известных source/proxy/audit записей и создание нового backup новым экземпляром.
+После restore проверьте readiness, количество строк, несколько известных source/proxy/audit записей, отсутствие эфемерных proxy lease и создание нового backup новым экземпляром.
 
 ## Аварийная замена production-БД
 

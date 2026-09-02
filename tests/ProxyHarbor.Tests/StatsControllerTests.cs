@@ -28,13 +28,17 @@ public sealed class StatsControllerTests
             var leased = Endpoint(
                 "8.8.8.8", ProxyProtocol.Https, ProxyStatus.Alive,
                 now.AddHours(-1), now.AddMinutes(-1), 900);
-            leased.CheckLeaseId = Guid.NewGuid();
-            leased.CheckLeaseUntil = now.AddMinutes(1);
             seed.Proxies.AddRange(
                 Endpoint("1.1.1.1", ProxyProtocol.Http, ProxyStatus.Alive, now.AddMinutes(-1), now.AddMinutes(5), 100),
                 leased,
                 Endpoint("9.9.9.9", ProxyProtocol.Http, ProxyStatus.Pending, null, null, null),
                 Endpoint("4.4.4.4", ProxyProtocol.Socks5, ProxyStatus.Dead, now, now.AddMinutes(5), null));
+            seed.ProxyValidationLeases.Add(new ProxyValidationLease
+            {
+                ProxyId = leased.Id,
+                LeaseId = Guid.NewGuid(),
+                LeaseUntil = now.AddMinutes(1)
+            });
             seed.Sources.Add(new ProxySource
             {
                 Name = "source",

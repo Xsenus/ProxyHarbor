@@ -46,6 +46,19 @@ public sealed class RestoreEntityValidatorTests
         });
     }
 
+    [Fact]
+    public void ValidLegacyLeaseIsDiscardedBecauseOperationalOwnershipIsNotRestorable()
+    {
+        var proxy = ValidProxy();
+        proxy.CheckLeaseId = Guid.NewGuid();
+        proxy.CheckLeaseUntil = DateTimeOffset.UtcNow.AddMinutes(5);
+
+        RestoreEntityValidator.ValidateProxy(proxy);
+
+        Assert.Null(proxy.CheckLeaseId);
+        Assert.Null(proxy.CheckLeaseUntil);
+    }
+
     [Theory]
     [InlineData("127.0.0.1", 8080, 0, 0)]
     [InlineData("8.8.8.8", 0, 0, 0)]

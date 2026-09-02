@@ -11,6 +11,8 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
 {
     /// <summary>Все собранные и дедуплицированные proxy endpoints.</summary>
     public DbSet<ProxyEndpoint> Proxies => Set<ProxyEndpoint>();
+    /// <summary>Узкие краткоживущие ownership-записи validation-очереди.</summary>
+    public DbSet<ProxyValidationLease> ProxyValidationLeases => Set<ProxyValidationLease>();
     /// <summary>Встроенные и пользовательские proxy feed'ы.</summary>
     public DbSet<ProxySource> Sources => Set<ProxySource>();
     /// <summary>Найденные VPN endpoint и опубликованные ссылки подключения.</summary>
@@ -367,10 +369,8 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
             .HasFilter("\"Status\" = 1")
             .IsCreatedConcurrently();
         proxy.HasIndex(x => new { x.Status, x.LastSeenAt });
-        proxy.HasIndex(x => new { x.NextCheckAt, x.CheckLeaseUntil });
         // Точный expression-index для CASE priority + due order создаётся raw migration,
         // поскольку EF-модель не представляет CASE key. Он остаётся вне snapshot намеренно.
-        proxy.HasIndex(x => x.CheckLeaseId);
         proxy.Ignore(x => x.Key);
         proxy.Ignore(x => x.SuccessRate);
         proxy.Property(x => x.Host).HasMaxLength(255);
@@ -390,6 +390,16 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
             table.HasCheckConstraint("CK_Proxies_Lease", "(\"CheckLeaseUntil\" IS NULL) = (\"CheckLeaseId\" IS NULL)");
             table.HasCheckConstraint("CK_Proxies_DeferredAttempt", "NOT \"LastValidationDeferred\" OR \"LastValidationAttemptAt\" IS NOT NULL");
         });
+
+        var proxyValidationLease = builder.Entity<ProxyValidationLease>();
+        proxyValidationLease.HasKey(x => x.ProxyId);
+        proxyValidationLease.HasIndex(x => x.LeaseId);
+        proxyValidationLease.HasIndex(x => x.LeaseUntil);
+        proxyValidationLease.HasOne<ProxyEndpoint>().WithMany().HasForeignKey(x => x.ProxyId)
+            .OnDelete(DeleteBehavior.Cascade);
+        // Crash очищает только эфемерные ownership-записи: все задания немедленно
+        // возвращаются в очередь, а основной каталог и история остаются durable.
+        proxyValidationLease.IsUnlogged();
 
         var source = builder.Entity<ProxySource>();
         source.HasIndex(x => x.Url).IsUnique();

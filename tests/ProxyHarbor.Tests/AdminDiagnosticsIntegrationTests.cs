@@ -45,6 +45,11 @@ public sealed class AdminDiagnosticsIntegrationTests
             {
                 await seed.Database.MigrateAsync();
                 var now = DateTimeOffset.UtcNow;
+                var leasedProxy = new ProxyEndpoint
+                {
+                    Host = "8.8.8.8",
+                    Port = 8080
+                };
                 seed.Proxies.AddRange(
                     new ProxyEndpoint
                     {
@@ -53,19 +58,19 @@ public sealed class AdminDiagnosticsIntegrationTests
                         FirstSeenAt = now.AddDays(-5),
                         LastSeenAt = now.AddDays(-4)
                     },
-                    new ProxyEndpoint
-                    {
-                        Host = "8.8.8.8",
-                        Port = 8080,
-                        CheckLeaseId = Guid.NewGuid(),
-                        CheckLeaseUntil = now.AddMinutes(1)
-                    },
+                    leasedProxy,
                     new ProxyEndpoint
                     {
                         Host = "9.9.9.9",
                         Port = 8080,
                         NextCheckAt = now.AddMinutes(1)
                     });
+                seed.ProxyValidationLeases.Add(new ProxyValidationLease
+                {
+                    ProxyId = leasedProxy.Id,
+                    LeaseId = Guid.NewGuid(),
+                    LeaseUntil = now.AddMinutes(1)
+                });
                 seed.ValidationRuns.Add(new ValidationRun
                 {
                     LeaseId = Guid.NewGuid(),

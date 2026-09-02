@@ -133,11 +133,15 @@ public sealed class MetricsControllerTests
             {
                 Host = "4.4.4.4",
                 Port = 8083,
-                LastValidationAttemptAt = sourceAuditedAt.AddMinutes(-3),
-                CheckLeaseId = Guid.NewGuid(),
-                CheckLeaseUntil = sourceAuditedAt.AddMinutes(1)
+                LastValidationAttemptAt = sourceAuditedAt.AddMinutes(-3)
             };
             seed.Proxies.Add(leasedProxy);
+            seed.ProxyValidationLeases.Add(new ProxyValidationLease
+            {
+                ProxyId = leasedProxy.Id,
+                LeaseId = Guid.NewGuid(),
+                LeaseUntil = sourceAuditedAt.AddMinutes(1)
+            });
             seed.ValidationRuns.AddRange(
                 new ValidationRun
                 {

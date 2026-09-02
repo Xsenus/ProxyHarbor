@@ -82,12 +82,14 @@ Hostname-прокси, private/loopback/link-local/documentation/benchmark/speci
 
 ### Распределённая очередь
 
-PostgreSQL claim query использует `FOR UPDATE SKIP LOCKED`, status priority и `NextCheckAt`. Каждая строка получает `CheckLeaseId` и `CheckLeaseUntil`. Несколько API-реплик арендуют непересекающиеся партии; heartbeat продлевает lease. Результат применяется только при совпадении exact lease token.
+PostgreSQL claim использует точный порядок `status priority → NextCheckAt NULLS FIRST → LastCheckedAt NULLS FIRST`. Короткая transaction-level advisory lock сериализует только выбор партии между API-репликами; сетевые проверки и завершение разных партий остаются параллельными. Ownership хранится отдельно от широкого каталога — по одной строке на endpoint в узкой UNLOGGED-таблице `ProxyValidationLeases`. Claim и heartbeat поэтому не переписывают `Proxies` и связанные с каталогом индексы. Просроченная строка заменяется условным UPSERT под `FOR UPDATE SKIP LOCKED`, а результат применяется и lease удаляется атомарно только при совпадении exact token.
+
+UNLOGGED-таблица намеренно является эфемерной. После аварийного восстановления PostgreSQL она может оказаться пустой; durable-состояние прокси и аудит при этом сохраняются, а dispatcher распознаёт отсутствие ownership, помечает незавершённый run ошибкой и немедленно выдаёт работу заново. Все heartbeat, completion и failover блокируют lease-строки в стабильном порядке `ProxyId`, затем строки прокси и аудита, исключая обратный порядок блокировок.
 
 Порядок:
 
-1. новые `Pending`;
-2. due `Alive`;
+1. due `Alive`;
+2. новые и due `Pending`;
 3. due `Dead` с adaptive exponential retry.
 
 ### Control health

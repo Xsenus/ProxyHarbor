@@ -41,14 +41,18 @@ public sealed class DistributedProxyValidationIntegrationTests
             var pendingDue = Endpoint("198.51.100.4", ProxyStatus.Pending, now.AddMinutes(-5));
             var deadDue = Endpoint("198.51.100.5", ProxyStatus.Dead, now.AddHours(-1));
             var leasedDead = Endpoint("198.51.100.6", ProxyStatus.Dead, now.AddHours(-2));
-            leasedDead.CheckLeaseId = Guid.NewGuid();
-            leasedDead.CheckLeaseUntil = now.AddMinutes(2);
 
             await using (var migrate = new ProxyHarborDbContext(dbOptions))
             {
                 await migrate.Database.MigrateAsync();
                 migrate.Proxies.AddRange(
                     aliveNeverChecked, aliveDue, aliveFuture, pendingDue, deadDue, leasedDead);
+                migrate.ProxyValidationLeases.Add(new ProxyValidationLease
+                {
+                    ProxyId = leasedDead.Id,
+                    LeaseId = Guid.NewGuid(),
+                    LeaseUntil = now.AddMinutes(2)
+                });
                 await migrate.SaveChangesAsync();
             }
 
@@ -66,13 +70,17 @@ public sealed class DistributedProxyValidationIntegrationTests
             Assert.DoesNotContain(claimed, proxy => proxy.Id == deadDue.Id);
             Assert.DoesNotContain(claimed, proxy => proxy.Id == leasedDead.Id);
             Assert.All(claimed, proxy => Assert.Null(proxy.PreviousLeaseId));
-            Assert.Equal(3, await claimDb.Proxies.CountAsync(proxy =>
-                proxy.CheckLeaseId == leaseId && proxy.CheckLeaseUntil == leaseUntil));
+            Assert.Equal(3, await claimDb.ProxyValidationLeases.CountAsync(lease =>
+                lease.LeaseId == leaseId && lease.LeaseUntil == leaseUntil));
             Assert.NotEmpty(claimShape.Commands);
+            Assert.Contains(claimShape.Commands, command => command.Contains(
+                "ORDER BY proxy.\"NextCheckAt\" NULLS FIRST, proxy.\"LastCheckedAt\" NULLS FIRST",
+                StringComparison.Ordinal));
             Assert.All(claimShape.Commands, command =>
             {
-                Assert.Contains("UPDATE \"Proxies\"", command, StringComparison.Ordinal);
-                Assert.Contains("RETURNING proxy.\"Id\", proxy.\"Host\", proxy.\"Port\"", command,
+                Assert.Contains("INSERT INTO \"ProxyValidationLeases\"", command, StringComparison.Ordinal);
+                Assert.DoesNotContain("UPDATE \"Proxies\"", command, StringComparison.Ordinal);
+                Assert.Contains("candidate.\"Id\", candidate.\"Host\", candidate.\"Port\"", command,
                     StringComparison.Ordinal);
                 Assert.DoesNotContain("SELECT *", command, StringComparison.OrdinalIgnoreCase);
             });
@@ -170,8 +178,8 @@ public sealed class DistributedProxyValidationIntegrationTests
                 var past = DateTimeOffset.UtcNow.AddSeconds(-1);
                 await expire.CheckerNodes.Where(x => x.Id == firstNode.Id).ExecuteUpdateAsync(setters => setters
                     .SetProperty(x => x.CurrentLeaseUntil, past));
-                await expire.Proxies.Where(x => x.CheckLeaseId == claims[0]!.LeaseId).ExecuteUpdateAsync(setters => setters
-                    .SetProperty(x => x.CheckLeaseUntil, past));
+                await expire.ProxyValidationLeases.Where(x => x.LeaseId == claims[0]!.LeaseId)
+                    .ExecuteUpdateAsync(setters => setters.SetProperty(x => x.LeaseUntil, past));
             }
 
             var reclaimed = await dispatcher.ClaimAsync(secondNode.Id, CancellationToken.None);
@@ -247,7 +255,8 @@ public sealed class DistributedProxyValidationIntegrationTests
             var savedNode = await verify.CheckerNodes.AsNoTracking().SingleAsync(x => x.Id == node.Id);
             Assert.Equal(ProxyStatus.Pending, savedProxy.Status);
             Assert.Equal(0, savedProxy.SuccessfulChecks);
-            Assert.Equal(claim.LeaseId, savedProxy.CheckLeaseId);
+            Assert.True(await verify.ProxyValidationLeases.AnyAsync(lease =>
+                lease.ProxyId == savedProxy.Id && lease.LeaseId == claim.LeaseId));
             Assert.Null(savedProxy.LastValidationAttemptAt);
             Assert.Equal("running", savedRun.Status);
             Assert.Null(savedRun.FinishedAt);
@@ -331,6 +340,71 @@ public sealed class DistributedProxyValidationIntegrationTests
         }
     }
 
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
+    public async Task MissingUnloggedLeaseAfterDatabaseRecoveryDoesNotStrandNodeOrWork()
+    {
+        var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
+        if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
+
+        var schema = $"proxyharbor_unlogged_recovery_{Guid.NewGuid():N}";
+        var connection = new NpgsqlConnectionStringBuilder(baseConnectionString) { SearchPath = schema };
+        await using var admin = new NpgsqlConnection(baseConnectionString);
+        await admin.OpenAsync();
+        await using (var create = new NpgsqlCommand($"CREATE SCHEMA {schema}", admin))
+            await create.ExecuteNonQueryAsync();
+
+        try
+        {
+            var dbOptions = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+                .UseNpgsql(connection.ConnectionString, postgres => postgres.EnableRetryOnFailure()).Options;
+            var factory = new TestDbFactory(dbOptions);
+            await using (var migrationDb = await factory.CreateDbContextAsync())
+                await migrationDb.Database.MigrateAsync();
+
+            var orphanedLeaseId = Guid.NewGuid();
+            var node = Node("recovered", batchSize: 1);
+            node.CurrentLeaseId = orphanedLeaseId;
+            node.CurrentLeaseUntil = DateTimeOffset.UtcNow.AddMinutes(5);
+            var proxy = Endpoint("198.51.100.230", ProxyStatus.Pending, DateTimeOffset.UtcNow.AddMinutes(-1));
+            var orphanedRun = new ValidationRun
+            {
+                LeaseId = orphanedLeaseId,
+                CheckerNodeId = node.Id,
+                StartedAt = DateTimeOffset.UtcNow.AddMinutes(-1),
+                Claimed = 1
+            };
+            await using (var seed = await factory.CreateDbContextAsync())
+            {
+                seed.AddRange(node, proxy, orphanedRun);
+                await seed.SaveChangesAsync();
+            }
+
+            var dispatcher = new DistributedProxyValidationService(
+                factory,
+                Options.Create(new CollectorOptions { ProbeTimeoutSeconds = 5 }),
+                new ValidationClaimIdleGate());
+
+            var recovered = Assert.IsType<CheckerLeaseResponse>(
+                await dispatcher.ClaimAsync(node.Id, CancellationToken.None));
+
+            Assert.NotEqual(orphanedLeaseId, recovered.LeaseId);
+            Assert.Equal(proxy.Id, Assert.Single(recovered.Items).Id);
+            await using var verify = await factory.CreateDbContextAsync();
+            Assert.Equal("failed", await verify.ValidationRuns.Where(run => run.Id == orphanedRun.Id)
+                .Select(run => run.Status).SingleAsync());
+            Assert.Equal(recovered.LeaseId, await verify.CheckerNodes.Where(item => item.Id == node.Id)
+                .Select(item => item.CurrentLeaseId).SingleAsync());
+            Assert.True(await verify.ProxyValidationLeases.AnyAsync(lease =>
+                lease.ProxyId == proxy.Id && lease.LeaseId == recovered.LeaseId));
+        }
+        finally
+        {
+            await using var drop = new NpgsqlCommand($"DROP SCHEMA IF EXISTS {schema} CASCADE", admin);
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
+
     private static ProxyEndpoint Endpoint(
         string host,
         ProxyStatus status,
@@ -378,7 +452,7 @@ public sealed class DistributedProxyValidationIntegrationTests
 
     [Fact]
     [Trait("Category", "PostgresIntegration")]
-    public async Task ExpiredLeaseLocksProxyBeforeWaitingForValidationAudit()
+    public async Task ExpiredClaimLocksOnlyNarrowLeaseBeforeWaitingForValidationAudit()
     {
         var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
         if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
@@ -413,9 +487,7 @@ public sealed class DistributedProxyValidationIntegrationTests
                 Host = "198.51.100.200",
                 Port = 8200,
                 Protocol = ProxyProtocol.Http,
-                NextCheckAt = DateTimeOffset.UtcNow.AddMinutes(-2),
-                CheckLeaseId = expiredLeaseId,
-                CheckLeaseUntil = DateTimeOffset.UtcNow.AddMinutes(-1)
+                NextCheckAt = DateTimeOffset.UtcNow.AddMinutes(-2)
             };
             var run = new ValidationRun
             {
@@ -426,6 +498,12 @@ public sealed class DistributedProxyValidationIntegrationTests
             await using (var seed = await factory.CreateDbContextAsync())
             {
                 seed.AddRange(node, proxy, run);
+                seed.ProxyValidationLeases.Add(new ProxyValidationLease
+                {
+                    ProxyId = proxy.Id,
+                    LeaseId = expiredLeaseId,
+                    LeaseUntil = DateTimeOffset.UtcNow.AddMinutes(-1)
+                });
                 await seed.SaveChangesAsync();
             }
 
@@ -476,13 +554,19 @@ public sealed class DistributedProxyValidationIntegrationTests
                 "SELECT \"Id\" FROM \"Proxies\" WHERE \"Id\" = @id FOR UPDATE SKIP LOCKED", probe, probeTransaction);
             probeProxy.Parameters.AddWithValue("id", proxy.Id);
             var unlockedProxyId = await probeProxy.ExecuteScalarAsync();
+            await using var probeLease = new NpgsqlCommand(
+                "SELECT \"ProxyId\" FROM \"ProxyValidationLeases\" WHERE \"ProxyId\" = @id FOR UPDATE SKIP LOCKED",
+                probe, probeTransaction);
+            probeLease.Parameters.AddWithValue("id", proxy.Id);
+            var lockedLeaseId = await probeLease.ExecuteScalarAsync();
             await probeTransaction.RollbackAsync();
 
             await blockerTransaction.CommitAsync();
             var claim = await claimTask.WaitAsync(TimeSpan.FromSeconds(10));
 
             Assert.True(waitingForAuditLock);
-            Assert.Null(unlockedProxyId);
+            Assert.Equal(proxy.Id, unlockedProxyId);
+            Assert.Null(lockedLeaseId);
             Assert.NotNull(claim);
             Assert.Single(claim!.Items);
             await using var verify = await factory.CreateDbContextAsync();

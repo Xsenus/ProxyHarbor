@@ -553,9 +553,7 @@ public sealed class ProxyCollectorIntegrationTests
                         FirstSeenAt = oldFirstSeenAt,
                         LastSeenAt = oldLastSeenAt,
                         LastCheckedAt = oldLastSeenAt,
-                        FailedChecks = 1,
-                        CheckLeaseId = Guid.NewGuid(),
-                        CheckLeaseUntil = DateTimeOffset.UtcNow.AddHours(1)
+                        FailedChecks = 1
                     },
                     new ProxyEndpoint
                     {
@@ -566,9 +564,7 @@ public sealed class ProxyCollectorIntegrationTests
                         FirstSeenAt = oldFirstSeenAt,
                         LastSeenAt = oldLastSeenAt,
                         LastCheckedAt = oldLastSeenAt,
-                        FailedChecks = 1,
-                        CheckLeaseId = Guid.NewGuid(),
-                        CheckLeaseUntil = DateTimeOffset.UtcNow.AddHours(-1)
+                        FailedChecks = 1
                     },
                     new ProxyEndpoint
                     {
@@ -590,6 +586,19 @@ public sealed class ProxyCollectorIntegrationTests
                         LastCheckedAt = oldLastSeenAt,
                         LatencyMs = 250,
                         SuccessfulChecks = 1
+                    });
+                seed.ProxyValidationLeases.AddRange(
+                    new ProxyValidationLease
+                    {
+                        ProxyId = activelyLeasedDeadProxyId,
+                        LeaseId = Guid.NewGuid(),
+                        LeaseUntil = DateTimeOffset.UtcNow.AddHours(1)
+                    },
+                    new ProxyValidationLease
+                    {
+                        ProxyId = expiredLeaseDeadProxyId,
+                        LeaseId = Guid.NewGuid(),
+                        LeaseUntil = DateTimeOffset.UtcNow.AddHours(-1)
                     });
                 await seed.SaveChangesAsync();
             }
@@ -619,7 +628,7 @@ public sealed class ProxyCollectorIntegrationTests
             await using (var retention = await factory.CreateDbContextAsync())
             {
                 Assert.False(await retention.Proxies.AnyAsync(proxy => proxy.Id == stalePendingProxyId));
-                Assert.False(await retention.Proxies.AnyAsync(proxy => proxy.Id == expiredLeaseDeadProxyId));
+                Assert.True(await retention.Proxies.AnyAsync(proxy => proxy.Id == expiredLeaseDeadProxyId));
                 Assert.True(await retention.Proxies.AnyAsync(proxy => proxy.Id == staleAliveProxyId));
                 Assert.True(await retention.Proxies.AnyAsync(proxy => proxy.Id == activelyLeasedDeadProxyId));
             }
