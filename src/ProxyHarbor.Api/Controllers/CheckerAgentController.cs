@@ -1,8 +1,6 @@
-using System.Security.Cryptography;
-using System.Text;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
+using ProxyHarbor.Api;
 using ProxyHarbor.Domain;
 using ProxyHarbor.Infrastructure;
 
@@ -11,7 +9,7 @@ namespace ProxyHarbor.Api.Controllers;
 /// <summary>Закрытый pull-протокол между центральным сервисом и внешними checker-agent.</summary>
 [ApiController, AllowAnonymous, Route("api/v1/checker-agent")]
 public sealed class CheckerAgentController(
-    ProxyHarborDbContext db,
+    CheckerNodeCredentialCache credentials,
     DistributedProxyValidationService validation,
     ILogger<CheckerAgentController> logger) : ControllerBase
 {
@@ -76,17 +74,15 @@ public sealed class CheckerAgentController(
     private async Task<Guid?> AuthenticateAsync(CancellationToken token)
     {
         if (!Request.Headers.TryGetValue("X-Checker-Node", out var nodeHeader) ||
-            !Guid.TryParse(nodeHeader.ToString(), out var nodeId) ||
+            nodeHeader.Count != 1 ||
+            !Guid.TryParse(nodeHeader[0], out var nodeId) ||
             !Request.Headers.TryGetValue("Authorization", out var authorization) ||
-            !authorization.ToString().StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+            authorization.Count != 1 ||
+            authorization[0] is not { } authorizationValue ||
+            !authorizationValue.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
             return null;
-        var raw = authorization.ToString()[7..].Trim();
+        var raw = authorizationValue[7..].Trim();
         if (raw.Length is < 32 or > 256) return null;
-        var expected = await db.CheckerNodes.AsNoTracking()
-            .Where(x => x.Id == nodeId && x.Enabled)
-            .Select(x => x.TokenHash).SingleOrDefaultAsync(token);
-        if (expected is not { Length: 32 }) return null;
-        var actual = SHA256.HashData(Encoding.UTF8.GetBytes(raw));
-        return CryptographicOperations.FixedTimeEquals(expected, actual) ? nodeId : null;
+        return await credentials.AuthenticateAsync(nodeId, raw, token) ? nodeId : null;
     }
 }

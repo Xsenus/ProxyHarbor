@@ -201,6 +201,7 @@ builder.Services.AddOpenApi(options =>
 builder.Services.AddProblemDetails();
 builder.Services.AddSingleton<HttpRequestTelemetry>();
 builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddSingleton<CheckerNodeCredentialCache>();
 builder.Services.AddSingleton<ProxyMetricsSnapshotCache>();
 builder.Services.AddHostedService<ProxyMetricsSnapshotRefreshWorker>();
 builder.Services.AddSingleton<VpnMetricsSnapshotCache>();
