@@ -310,11 +310,12 @@ public sealed class AdminVpnController(
             return Problem("Неизвестный порядок сортировки.", statusCode: 400);
 
         var now = DateTimeOffset.UtcNow;
+        var cachedMetrics = vpnSnapshotCache is null
+            ? null
+            : await vpnSnapshotCache.GetAsync(token);
         await using var db = await dbFactory.CreateDbContextAsync(token);
         var all = db.VpnEndpoints.AsNoTracking();
-        var metrics = vpnSnapshotCache is null
-            ? await VpnMetricsSnapshotReader.ReadAsync(db, now, token)
-            : await vpnSnapshotCache.GetAsync(token);
+        var metrics = cachedMetrics ?? await VpnMetricsSnapshotReader.ReadAsync(db, now, token);
 
         var filtered = all;
         if (protocol.HasValue) filtered = filtered.Where(item => item.Protocol == protocol.Value);

@@ -16,13 +16,17 @@ namespace ProxyHarbor.Api;
 /// </summary>
 internal sealed record ProxyMetricsSnapshot(
     IReadOnlyList<ProxyMetricsRow> Groups,
+    IReadOnlyList<ProxyCountryMetrics> Countries,
     long Due,
     long Leased,
     long NeverAttempted,
     long StaleUnseen,
     long Published,
     DateTimeOffset? LastAttemptAt,
+    DateTimeOffset? OldestActiveAt,
     DateTimeOffset CapturedAt);
+
+internal sealed record ProxyCountryMetrics(string Code, long Count);
 
 /// <summary>Одна компактная status/protocol-строка PostgreSQL partial aggregate.</summary>
 internal sealed record ProxyMetricsRow(
@@ -42,7 +46,30 @@ internal sealed record ProxyMetricsRow(
     long Scheduled,
     long FreshLatencyTotal,
     long FreshLatencySamples,
-    DateTimeOffset? LastAttemptAt);
+    DateTimeOffset? LastAttemptAt,
+    DateTimeOffset? OldestActiveAt);
+
+/// <summary>Одна физическая country/status/protocol строка PostgreSQL aggregate.</summary>
+internal sealed record ProxyMetricsRawRow(
+    string? CountryCode,
+    ProxyStatus Status,
+    ProxyProtocol Protocol,
+    long Count,
+    long EverAlive,
+    long HistoricalDead,
+    long Due,
+    long Leased,
+    long NeverChecked,
+    long NeverAttempted,
+    long RepeatedlyFailing,
+    long StaleUnseen,
+    long Published,
+    long StaleAlive,
+    long Scheduled,
+    long FreshLatencyTotal,
+    long FreshLatencySamples,
+    DateTimeOffset? LastAttemptAt,
+    DateTimeOffset? OldestActiveAt);
 
 /// <summary>
 /// Читает все proxy-derived Prometheus gauges одним параллельным проходом таблицы.
@@ -52,7 +79,8 @@ internal sealed record ProxyMetricsRow(
 internal static class ProxyMetricsSnapshotReader
 {
     internal const string PostgresSql = """
-        SELECT "Status",
+        SELECT "CountryCode",
+               "Status",
                "Protocol",
                count(*)::bigint AS "Count",
                count(*) FILTER (WHERE
@@ -83,10 +111,12 @@ internal static class ProxyMetricsSnapshotReader
                count(*) FILTER (WHERE
                    "Status" = @alive_status AND "LastCheckedAt" >= @fresh_after AND
                    "LatencyMs" IS NOT NULL)::bigint AS "FreshLatencySamples",
-               max("LastValidationAttemptAt") AS "LastAttemptAt"
+               max("LastValidationAttemptAt") AS "LastAttemptAt",
+               min("CurrentAliveSince") FILTER (WHERE
+                   "Status" = @alive_status AND "CurrentAliveSince" IS NOT NULL) AS "OldestActiveAt"
         FROM "Proxies"
-        GROUP BY "Status", "Protocol"
-        ORDER BY "Status", "Protocol"
+        GROUP BY "CountryCode", "Status", "Protocol"
+        ORDER BY "CountryCode" NULLS FIRST, "Status", "Protocol"
         """;
 
     internal static async Task<ProxyMetricsSnapshot> ReadAsync(
@@ -123,14 +153,14 @@ internal static class ProxyMetricsSnapshotReader
         command.Parameters.AddWithValue("dead_status", NpgsqlDbType.Integer, (int)ProxyStatus.Dead);
         command.Parameters.AddWithValue("alive_status", NpgsqlDbType.Integer, (int)ProxyStatus.Alive);
 
-        var rows = new List<ProxyMetricsRow>(12);
+        var rows = new List<ProxyMetricsRawRow>(1_024);
         await using var reader = await command.ExecuteReaderAsync(CommandBehavior.SequentialAccess, token);
         while (await reader.ReadAsync(token))
         {
-            rows.Add(new ProxyMetricsRow(
-                (ProxyStatus)reader.GetInt32(0),
-                (ProxyProtocol)reader.GetInt32(1),
-                reader.GetInt64(2),
+            rows.Add(new ProxyMetricsRawRow(
+                reader.IsDBNull(0) ? null : reader.GetString(0),
+                (ProxyStatus)reader.GetInt32(1),
+                (ProxyProtocol)reader.GetInt32(2),
                 reader.GetInt64(3),
                 reader.GetInt64(4),
                 reader.GetInt64(5),
@@ -144,7 +174,9 @@ internal static class ProxyMetricsSnapshotReader
                 reader.GetInt64(13),
                 reader.GetInt64(14),
                 reader.GetInt64(15),
-                reader.IsDBNull(16) ? null : reader.GetFieldValue<DateTimeOffset>(16)));
+                reader.GetInt64(16),
+                reader.IsDBNull(17) ? null : reader.GetFieldValue<DateTimeOffset>(17),
+                reader.IsDBNull(18) ? null : reader.GetFieldValue<DateTimeOffset>(18)));
         }
 
         return Aggregate(rows, now);
@@ -162,8 +194,9 @@ internal static class ProxyMetricsSnapshotReader
         CancellationToken token)
     {
         var rows = await db.Proxies.AsNoTracking()
-            .GroupBy(proxy => new { proxy.Status, proxy.Protocol })
-            .Select(group => new ProxyMetricsRow(
+            .GroupBy(proxy => new { proxy.CountryCode, proxy.Status, proxy.Protocol })
+            .Select(group => new ProxyMetricsRawRow(
+                group.Key.CountryCode,
                 group.Key.Status,
                 group.Key.Protocol,
                 group.LongCount(),
@@ -191,20 +224,54 @@ internal static class ProxyMetricsSnapshotReader
                     .Sum(proxy => (long?)proxy.LatencyMs) ?? 0,
                 group.LongCount(proxy => proxy.Status == ProxyStatus.Alive &&
                     proxy.LastCheckedAt >= freshAfter && proxy.LatencyMs != null),
-                group.Max(proxy => proxy.LastValidationAttemptAt)))
+                group.Max(proxy => proxy.LastValidationAttemptAt),
+                group.Where(proxy => proxy.Status == ProxyStatus.Alive && proxy.CurrentAliveSince != null)
+                    .Min(proxy => (DateTimeOffset?)proxy.CurrentAliveSince)))
             .ToArrayAsync(token);
         return Aggregate(rows, now);
     }
 
-    private static ProxyMetricsSnapshot Aggregate(IReadOnlyList<ProxyMetricsRow> rows, DateTimeOffset capturedAt)
+    private static ProxyMetricsSnapshot Aggregate(IReadOnlyList<ProxyMetricsRawRow> rows, DateTimeOffset capturedAt)
     {
+        var groups = rows
+            .GroupBy(row => (row.Status, row.Protocol))
+            .Select(group => new ProxyMetricsRow(
+                group.Key.Status,
+                group.Key.Protocol,
+                group.Sum(row => row.Count),
+                group.Sum(row => row.EverAlive),
+                group.Sum(row => row.HistoricalDead),
+                group.Sum(row => row.Due),
+                group.Sum(row => row.Leased),
+                group.Sum(row => row.NeverChecked),
+                group.Sum(row => row.NeverAttempted),
+                group.Sum(row => row.RepeatedlyFailing),
+                group.Sum(row => row.StaleUnseen),
+                group.Sum(row => row.Published),
+                group.Sum(row => row.StaleAlive),
+                group.Sum(row => row.Scheduled),
+                group.Sum(row => row.FreshLatencyTotal),
+                group.Sum(row => row.FreshLatencySamples),
+                group.Max(row => row.LastAttemptAt),
+                group.Min(row => row.OldestActiveAt)))
+            .OrderBy(row => row.Status)
+            .ThenBy(row => row.Protocol)
+            .ToArray();
+        var countries = rows
+            .Where(row => !string.IsNullOrEmpty(row.CountryCode))
+            .GroupBy(row => row.CountryCode!, StringComparer.Ordinal)
+            .Select(group => new ProxyCountryMetrics(group.Key, group.Sum(row => row.Count)))
+            .OrderByDescending(country => country.Count)
+            .ThenBy(country => country.Code, StringComparer.Ordinal)
+            .ToArray();
         long due = 0;
         long leased = 0;
         long neverAttempted = 0;
         long staleUnseen = 0;
         long published = 0;
         DateTimeOffset? lastAttemptAt = null;
-        foreach (var row in rows)
+        DateTimeOffset? oldestActiveAt = null;
+        foreach (var row in groups)
         {
             due += row.Due;
             leased += row.Leased;
@@ -214,10 +281,14 @@ internal static class ProxyMetricsSnapshotReader
             if (row.LastAttemptAt is { } candidate &&
                 (lastAttemptAt is null || candidate > lastAttemptAt.Value))
                 lastAttemptAt = candidate;
+            if (row.OldestActiveAt is { } oldestCandidate &&
+                (oldestActiveAt is null || oldestCandidate < oldestActiveAt.Value))
+                oldestActiveAt = oldestCandidate;
         }
 
         return new ProxyMetricsSnapshot(
-            rows, due, leased, neverAttempted, staleUnseen, published, lastAttemptAt, capturedAt);
+            groups, countries, due, leased, neverAttempted, staleUnseen, published,
+            lastAttemptAt, oldestActiveAt, capturedAt);
     }
 }
 

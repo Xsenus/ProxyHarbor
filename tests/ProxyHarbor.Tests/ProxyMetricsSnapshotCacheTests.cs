@@ -17,15 +17,28 @@ public sealed class ProxyMetricsSnapshotCacheTests
             .UseInMemoryDatabase($"proxy-metrics-cache-{Guid.NewGuid():N}").Options;
         await using (var seed = new ProxyHarborDbContext(options))
         {
-            seed.Proxies.Add(new ProxyEndpoint
-            {
-                Host = "203.0.113.10",
-                Port = 8080,
-                Status = ProxyStatus.Alive,
-                Protocol = ProxyProtocol.Https,
-                LastCheckedAt = new DateTimeOffset(2026, 9, 2, 0, 0, 0, TimeSpan.Zero),
-                LatencyMs = 42
-            });
+            var checkedAt = new DateTimeOffset(2026, 9, 2, 0, 0, 0, TimeSpan.Zero);
+            seed.Proxies.AddRange(
+                new ProxyEndpoint
+                {
+                    Host = "203.0.113.10",
+                    Port = 8080,
+                    Status = ProxyStatus.Alive,
+                    Protocol = ProxyProtocol.Https,
+                    CountryCode = "US",
+                    LastCheckedAt = checkedAt,
+                    LatencyMs = 42
+                },
+                new ProxyEndpoint
+                {
+                    Host = "203.0.113.11",
+                    Port = 8080,
+                    Status = ProxyStatus.Alive,
+                    Protocol = ProxyProtocol.Https,
+                    CountryCode = "DE",
+                    LastCheckedAt = checkedAt,
+                    LatencyMs = 58
+                });
             await seed.SaveChangesAsync();
         }
 
@@ -37,8 +50,11 @@ public sealed class ProxyMetricsSnapshotCacheTests
 
         Assert.Equal(1, factory.Created);
         Assert.All(snapshots, snapshot => Assert.Same(snapshots[0], snapshot));
-        Assert.Equal(1, snapshots[0].Published);
-        Assert.Equal(42, Assert.Single(snapshots[0].Groups).FreshLatencyTotal);
+        Assert.Equal(2, snapshots[0].Published);
+        var group = Assert.Single(snapshots[0].Groups);
+        Assert.Equal(2, group.Count);
+        Assert.Equal(100, group.FreshLatencyTotal);
+        Assert.Equal(["DE", "US"], snapshots[0].Countries.Select(country => country.Code));
     }
 
     [Fact]

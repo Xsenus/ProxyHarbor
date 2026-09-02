@@ -28,13 +28,19 @@ public sealed class MetricsController(
     [OutputCache(PolicyName = PublicOutputCachePolicies.Metrics)]
     public async Task<IActionResult> Get(CancellationToken requestToken)
     {
+        var cachedProxySnapshot = proxySnapshotCache is null
+            ? null
+            : await proxySnapshotCache.GetAsync(requestToken);
         await using var db = await dbFactory.CreateDbContextAsync(requestToken);
         return await BufferedReadSnapshot.ExecuteAsync(
-            db, token => GetSnapshotAsync(db, token), requestToken);
+            db, token => GetSnapshotAsync(db, cachedProxySnapshot, token), requestToken);
     }
 
     /// <summary>Строит весь database-derived exposition внутри уже открытого read snapshot.</summary>
-    private async Task<IActionResult> GetSnapshotAsync(ProxyHarborDbContext db, CancellationToken token)
+    private async Task<IActionResult> GetSnapshotAsync(
+        ProxyHarborDbContext db,
+        ProxyMetricsSnapshot? cachedProxySnapshot,
+        CancellationToken token)
     {
         var now = DateTimeOffset.UtcNow;
         var freshAfter = now.AddMinutes(-collectorOptions.Value.PublicFreshnessMinutes);
@@ -42,10 +48,8 @@ public sealed class MetricsController(
         var validationWindowStart = now.AddMinutes(-5);
         var sourceFreshAfter = now.Subtract(
             SourceCatalogHealth.FreshnessWindow(collectorOptions.Value.CollectionIntervalMinutes));
-        var proxySnapshot = proxySnapshotCache is null
-            ? await ProxyMetricsSnapshotReader.ReadAsync(
-                db, now, unseenRetentionCutoff, freshAfter, token)
-            : await proxySnapshotCache.GetAsync(token);
+        var proxySnapshot = cachedProxySnapshot ?? await ProxyMetricsSnapshotReader.ReadAsync(
+            db, now, unseenRetentionCutoff, freshAfter, token);
         var validationRuns = await db.ValidationRuns.AsNoTracking()
             .Where(run => run.FinishedAt >= validationWindowStart || run.Status == "running")
             .ToListAsync(token);
