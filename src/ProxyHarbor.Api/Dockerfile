@@ -27,6 +27,9 @@ WORKDIR /app
 COPY --from=build --chown=proxyharbor:proxyharbor /app .
 USER proxyharbor
 EXPOSE 8080
-ENV ASPNETCORE_URLS=http://+:8080 DOTNET_EnableDiagnostics=0 DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=false
+# The .NET 10 ASP.NET runtime image already defines ASPNETCORE_HTTP_PORTS=8080.
+# Setting ASPNETCORE_URLS as well makes the host override HTTP_PORTS and emits a
+# misleading warning on every clean start, hiding actionable startup warnings.
+ENV DOTNET_EnableDiagnostics=0 DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=false
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD wget -q --spider http://127.0.0.1:8080/health/ready || exit 1
 ENTRYPOINT ["dotnet", "ProxyHarbor.Api.dll"]

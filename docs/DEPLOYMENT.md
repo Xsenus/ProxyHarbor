@@ -11,6 +11,7 @@
 ## Запуск и проверка
 
 ```bash
+export PROXYHARBOR_SOURCE_REVISION="$(git rev-parse --verify HEAD)"
 docker compose -f docker-compose.yml -f docker-compose.production.yml config
 docker compose -f docker-compose.yml -f docker-compose.production.yml up -d --build
 docker compose -f docker-compose.yml -f docker-compose.production.yml ps
@@ -74,7 +75,18 @@ curl --fail https://proxy.example.com/health/ready
 
 ## Обновление и откат
 
-Перед обновлением создайте и проверьте backup. Затем получите новую версию и повторите production-команду `up -d --build`; постоянные volumes не заменяются. Для диагностики используйте:
+Перед обновлением создайте и проверьте backup. Затем получите новую версию,
+обновите `PROXYHARBOR_SOURCE_REVISION` из фактического Git HEAD и повторите
+production-команду `up -d --build`; постоянные volumes не заменяются. Не храните
+статическую ревизию в `.env`: переменная процесса имеет приоритет и исключает
+ложную версию бинарника после следующего `git pull`.
+
+```bash
+export PROXYHARBOR_SOURCE_REVISION="$(git rev-parse --verify HEAD)"
+docker compose -f docker-compose.yml -f docker-compose.production.yml up -d --build
+```
+
+Для диагностики используйте:
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.production.yml logs --tail 200 api caddy
