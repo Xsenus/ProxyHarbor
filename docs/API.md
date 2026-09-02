@@ -442,7 +442,7 @@ Host должен быть публичным IP. Пароль не сохран
 
 ### Agent API
 
-Маршруты `/api/v1/checker-agent/heartbeat`, `/lease`, `/lease/{leaseId}/renew` и `/lease/{leaseId}/results` предназначены только для checker-агента. Аутентификация требует одновременно UUID в `X-Checker-Node` и Bearer token. Lease выдаётся атомарно, продлевается heartbeat и принимается только с полным набором результатов. Эти маршруты не являются пользовательским API.
+Маршруты `/api/v1/checker-agent/heartbeat`, `/lease`, `/lease/{leaseId}/renew` и `/lease/{leaseId}/results` предназначены только для checker-агента. Аутентификация требует одновременно UUID в `X-Checker-Node` и Bearer token. Lease выдаётся атомарно, продлевается heartbeat и принимается только с полным набором результатов. Bulk-результаты, завершение audit run и освобождение узла фиксируются одним PostgreSQL commit; при ошибке любой части весь completion откатывается. Эти маршруты не являются пользовательским API.
 
 ## POST `/api/v1/admin/backup`
 
