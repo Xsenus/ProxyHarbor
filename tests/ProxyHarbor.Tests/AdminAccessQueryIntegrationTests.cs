@@ -105,6 +105,8 @@ public sealed class AdminAccessQueryIntegrationTests
             var reads = new RelationReadCounter();
             var measuredOptions = new DbContextOptionsBuilder<ProxyHarborDbContext>()
                 .UseNpgsql(builder.ConnectionString)
+                .ConfigureWarnings(warnings => warnings.Throw(
+                    CoreEventId.RowLimitingOperationWithoutOrderByWarning))
                 .AddInterceptors(reads)
                 .Options;
             var factory = new TestDbFactory(measuredOptions);
