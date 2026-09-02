@@ -14,10 +14,10 @@ public sealed class PublicSourcesControllerTests
             Assert.IsType<OkObjectResult>(new SourcesController().Get().Result).Value);
 
         Assert.Equal(BuiltInSourceCatalog.LastAuditedOn, response.LastAuditedOn);
-        Assert.Equal(320, response.FeedCount);
+        Assert.Equal(255, response.FeedCount);
         Assert.Equal(85, response.ProviderCount);
         Assert.Equal(85, response.Providers.Count);
-        Assert.Equal(320, response.Providers.Sum(provider => provider.Feeds.Count));
+        Assert.Equal(255, response.Providers.Sum(provider => provider.Feeds.Count));
         Assert.Equal(Enumerable.Range(1, 85), response.Providers.Select(provider => provider.Rank));
         Assert.Equal(85, response.Providers.Select(provider => provider.Name)
             .Distinct(StringComparer.Ordinal).Count());

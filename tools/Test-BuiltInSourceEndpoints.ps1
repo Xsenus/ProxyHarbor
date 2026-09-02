@@ -3,7 +3,7 @@ param(
     [ValidateRange(1, 300)][int]$TimeoutSeconds = 25,
     [ValidateRange(1024, 1048576)][int]$MaxBodyBytes = 262144,
     [ValidateRange(1, 64)][int]$ThrottleLimit = 12,
-    [ValidateRange(1, 10000)][int]$ExpectedFeeds = 320,
+    [ValidateRange(1, 10000)][int]$ExpectedFeeds = 255,
     [ValidateRange(1, 10000)][int]$ExpectedProviders = 85,
     [switch]$CatalogOnly,
     [string]$ReportPath
@@ -12,12 +12,15 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-# Каталог остаётся единственным source of truth. Regex намеренно фиксирует точную
-# форму Feed(...), поэтому неожиданное изменение C# definition ломает аудит явно.
+# Каталог остаётся единственным source of truth. Runtime присваивает непрерывные
+# ранги по порядку definition после исключения устаревших feed, поэтому аудит
+# воспроизводит тот же порядок, а не доверяет историческому числу в Feed(...).
 $catalogPath = Join-Path $PSScriptRoot '../src/ProxyHarbor.Infrastructure/BuiltInSourceCatalog.cs'
 $catalogText = Get-Content -LiteralPath $catalogPath -Raw
 $feedPattern = 'Feed\((?<rank>\d+),\s*"[^"]+",\s*"(?<provider>[^"]+)",\s*"(?<url>https://[^"]+)",\s*ProxyProtocol\.(?<protocol>\w+)\)'
+$nextRank = 0
 $feeds = @([regex]::Matches($catalogText, $feedPattern) | ForEach-Object {
+    $nextRank++
     $url = $_.Groups['url'].Value
     $uri = [Uri]::new($url, [UriKind]::Absolute)
     $providerIdentity = if ($uri.IdnHost.Equals('raw.githubusercontent.com', [StringComparison]::OrdinalIgnoreCase)) {
@@ -28,7 +31,7 @@ $feeds = @([regex]::Matches($catalogText, $feedPattern) | ForEach-Object {
         "host:$($uri.IdnHost.ToLowerInvariant())"
     }
     [pscustomobject]@{
-        Rank = [int]$_.Groups['rank'].Value
+        Rank = $nextRank
         Provider = $_.Groups['provider'].Value
         ProviderIdentity = $providerIdentity
         Url = $url

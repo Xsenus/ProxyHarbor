@@ -26,14 +26,6 @@ public static class DatabaseSeeder
                 "https://raw.githubusercontent.com/databay-labs/free-proxy-list/master/socks4.txt",
             ["https://raw.githubusercontent.com/databay-labs/free-proxy-list/refs/heads/master/socks5.txt"] =
                 "https://raw.githubusercontent.com/databay-labs/free-proxy-list/master/socks5.txt",
-            ["https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/bt/data.txt"] =
-                "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/lv/data.txt",
-            ["https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/lt/data.txt"] =
-                "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/lu/data.txt",
-            ["https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/gq/data.txt"] =
-                "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/th/data.txt",
-            ["https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/dk/data.txt"] =
-                "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/tr/data.txt",
             ["https://raw.githubusercontent.com/proxygenerator1/ProxyGenerator/main/MostStable/socks4.txt"] =
                 "https://raw.githubusercontent.com/proxygenerator1/ProxyGenerator/main/ForSites/cloudflare.com/socks4.txt",
             ["https://raw.githubusercontent.com/fyvri/fresh-proxy-list/archive/storage/classic/http.txt"] =
@@ -219,9 +211,13 @@ public static class DatabaseSeeder
             replaced.LastError = null;
         }
 
-        // Удаляем только явно перечисленные бывшие встроенные URL: заменённые каноническими
-        // feed'ами либо подтверждённо недоступные. Пользовательские источники не затрагиваются.
-        var legacySources = existingSources.Where(source => legacyUrls.Contains(source.Url)).ToArray();
+        // Country-файлы XYZS996 создаются и удаляются генератором вместе с наличием
+        // адресов в конкретной стране. Они не являются стабильными endpoint'ами и
+        // полностью дублируют три агрегированных feed этого же origin-владельца.
+        // Удаляем ранее встроенные записи семейства при обновлении; остальные
+        // пользовательские источники по-прежнему не затрагиваются.
+        var legacySources = existingSources.Where(source =>
+            legacyUrls.Contains(source.Url) || IsRetiredXyzs996CountryFeed(source.Url)).ToArray();
         db.Sources.RemoveRange(legacySources);
         var existing = existingSources
             .Except(legacySources)
@@ -298,6 +294,12 @@ public static class DatabaseSeeder
 
         await db.SaveChangesAsync(cancellationToken);
     }
+
+    private static bool IsRetiredXyzs996CountryFeed(string url) =>
+        url.StartsWith(
+            "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/",
+            StringComparison.Ordinal) &&
+        url.EndsWith("/data.txt", StringComparison.Ordinal);
 
     private static async Task SetMigrationLockAsync(
         NpgsqlConnection connection,

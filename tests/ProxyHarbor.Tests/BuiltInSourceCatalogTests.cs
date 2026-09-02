@@ -8,14 +8,28 @@ namespace ProxyHarbor.Tests;
 public sealed class BuiltInSourceCatalogTests
 {
     [Fact]
-    public void CatalogContainsThreeHundredTwentyUniqueFeedsFromEightyFiveProviders()
+    public void CatalogContainsTwoHundredFiftyFiveUniqueFeedsFromEightyFiveProviders()
     {
-        Assert.Equal(320, BuiltInSourceCatalog.Sources.Count);
-        Assert.Equal(320, BuiltInSourceCatalog.Sources.Select(x => x.Url).Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        Assert.Equal(255, BuiltInSourceCatalog.Sources.Count);
+        Assert.Equal(255, BuiltInSourceCatalog.Sources.Select(x => x.Url).Distinct(StringComparer.OrdinalIgnoreCase).Count());
         Assert.Equal(85, BuiltInSourceCatalog.Sources.Select(x => x.Provider).Distinct(StringComparer.OrdinalIgnoreCase).Count());
         Assert.Equal(85, BuiltInSourceCatalog.Sources.Select(x => x.ProviderIdentity).Distinct(StringComparer.Ordinal).Count());
         Assert.Equal(85, BuiltInSourceCatalog.ProviderCount);
-        Assert.Equal(Enumerable.Range(1, 320), BuiltInSourceCatalog.Sources.Select(x => x.Rank));
+        Assert.Equal(Enumerable.Range(1, 255), BuiltInSourceCatalog.Sources.Select(x => x.Rank));
+    }
+
+    [Fact]
+    public void DynamicXyzs996CountryFeedsAreExcludedInFavorOfStableAggregates()
+    {
+        var feeds = BuiltInSourceCatalog.Sources
+            .Where(source => source.Provider == "XYZS996")
+            .ToArray();
+
+        Assert.Equal(3, feeds.Length);
+        Assert.DoesNotContain(feeds, source => source.Url.Contains("/proxies/countries/", StringComparison.Ordinal));
+        Assert.Contains(feeds, source => source.Url.EndsWith("/all.txt", StringComparison.Ordinal));
+        Assert.Contains(feeds, source => source.Url.EndsWith("/http.txt", StringComparison.Ordinal));
+        Assert.Contains(feeds, source => source.Url.EndsWith("/https.txt", StringComparison.Ordinal));
     }
 
     [Fact]

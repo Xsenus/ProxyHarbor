@@ -6,7 +6,7 @@
 
 | Область | Реализовано |
 |---|---|
-| Источники | 320 встроенных proxy-feed от 85 providers и 174 VPN-feed от 32 providers, seed/synchronization и admin CRUD пользовательских feed |
+| Источники | 255 стабильных встроенных proxy-feed от 85 providers и 174 VPN-feed от 32 providers, seed/synchronization и admin CRUD пользовательских feed |
 | Сбор | Bounded parallel downloads, retry/backoff, conditional HTTP, лимиты размера/полноты, parser и глобальная дедупликация |
 | Хранение | PostgreSQL, EF Core migrations, constraints, индексы, COPY-ingestion и audit runs |
 | Проверка | HTTP CONNECT, SOCKS4a и SOCKS5 tunnel, TLS validation, exit IP, latency, success rate и Alive/Dead/Deferred evidence |
@@ -21,10 +21,10 @@
 
 ## Текущие проверенные свидетельства
 
-- Каталог release: 320 proxy-feed/85 providers и 174 VPN-feed/32 providers; все endpoint проверены live 02.09.2026, полный сетевой CI-аудит обязателен перед production.
+- Каталог release: 255 proxy-feed/85 providers и 174 VPN-feed/32 providers; все endpoint проверены live 02.09.2026, полный сетевой CI-аудит обязателен перед production.
 - Collection audit: 888 116 разобранных строк и 290 217 уникальных кандидатов за 4,965 секунды.
 - Validation sample: 1 600/1 600 объективных результатов без `Deferred`; Alive-множество совпало во всех export formats.
-- Backend: 1172 tests; обязательные unit- и PostgreSQL coverage-gates выполняются в CI и release workflow.
+- Backend: 1169 tests; обязательные unit- и PostgreSQL coverage-gates выполняются в CI и release workflow.
 - Frontend: 66 tests, ESLint, TypeScript/Vite production build и axe-core accessibility checks.
 - Release build: warnings-as-errors, XML documentation и OpenAPI contracts.
 - Полная Git history проверялась Gitleaks; CI повторяет scan с закреплённым scanner archive hash.
