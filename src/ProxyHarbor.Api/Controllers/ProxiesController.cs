@@ -96,9 +96,10 @@ public sealed class ProxiesController(
         var freshAfter = DateTimeOffset.UtcNow.AddMinutes(-collectorOptions.Value.PublicFreshnessMinutes);
         var result = await BufferedReadSnapshot.ExecuteAsync(db, async token =>
         {
-            var query = ApplyFilters(db.Proxies.AsNoTracking().Where(x =>
-                x.Status == ProxyStatus.Alive && x.LastCheckedAt >= freshAfter),
-                protocol, maxLatencyMs, minSuccessRate, countries);
+            var query = DeduplicateCanonicalTransportUrls(ApplyFilters(
+                db.Proxies.AsNoTracking().Where(x =>
+                    x.Status == ProxyStatus.Alive && x.LastCheckedAt >= freshAfter),
+                protocol, maxLatencyMs, minSuccessRate, countries));
             var total = await query.CountAsync(token);
             var paid = await freeExportAccess.HasPaidAccessAsync(
                 ControllerContext.HttpContext?.User ?? new System.Security.Claims.ClaimsPrincipal(), token);
@@ -191,9 +192,10 @@ public sealed class ProxiesController(
 
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
         var freshAfter = DateTimeOffset.UtcNow.AddMinutes(-collectorOptions.Value.PublicFreshnessMinutes);
-        var query = ApplyFilters(db.Proxies.AsNoTracking().Where(x =>
-            x.Status == ProxyStatus.Alive && x.LastCheckedAt >= freshAfter && x.LatencyMs != null),
-            protocol, maxLatencyMs, minSuccessRate, countries);
+        var query = DeduplicateCanonicalTransportUrls(ApplyFilters(
+            db.Proxies.AsNoTracking().Where(x =>
+                x.Status == ProxyStatus.Alive && x.LastCheckedAt >= freshAfter && x.LatencyMs != null),
+            protocol, maxLatencyMs, minSuccessRate, countries));
         if (position.HasValue) query = ApplyAfter(query, position.Value);
         var entities = await OrderForPublication(query).Take(pageSize + 1).ToListAsync(cancellationToken);
         var hasMore = entities.Count > pageSize;
@@ -222,9 +224,9 @@ public sealed class ProxiesController(
     {
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
         var freshAfter = DateTimeOffset.UtcNow.AddMinutes(-collectorOptions.Value.PublicFreshnessMinutes);
-        var countryRows = await db.Proxies.AsNoTracking()
-            .Where(proxy => proxy.Status == ProxyStatus.Alive && proxy.LastCheckedAt >= freshAfter &&
-                proxy.CountryCode != null)
+        var published = DeduplicateCanonicalTransportUrls(db.Proxies.AsNoTracking()
+            .Where(proxy => proxy.Status == ProxyStatus.Alive && proxy.LastCheckedAt >= freshAfter));
+        var countryRows = await published.Where(proxy => proxy.CountryCode != null)
             .GroupBy(proxy => proxy.CountryCode!)
             .Select(group => new ProxyCountryDto(group.Key, group.Count()))
             .ToListAsync(cancellationToken);
@@ -385,8 +387,10 @@ public sealed class ProxiesController(
                 ? await db.Database.BeginTransactionAsync(IsolationLevel.RepeatableRead, exportToken)
                 : null;
             var freshAfter = DateTimeOffset.UtcNow.AddMinutes(-collectorOptions.Value.PublicFreshnessMinutes);
-            var query = ApplyFilters(db.Proxies.AsNoTracking().Where(x =>
-                x.Status == ProxyStatus.Alive && x.LastCheckedAt >= freshAfter), protocol, maxLatencyMs, minSuccessRate, countries);
+            var query = DeduplicateCanonicalTransportUrls(ApplyFilters(
+                db.Proxies.AsNoTracking().Where(x =>
+                    x.Status == ProxyStatus.Alive && x.LastCheckedAt >= freshAfter),
+                protocol, maxLatencyMs, minSuccessRate, countries));
             if (seekMode && access.IsPaid)
             {
                 query = query.Where(x => x.LatencyMs != null);
@@ -619,6 +623,21 @@ public sealed class ProxiesController(
         }
         return query;
     }
+
+    /// <summary>
+    /// HTTP и HTTPS feed-категории используют один HTTP CONNECT transport URI.
+    /// Если обе свежие строки проходят текущий фильтр, публикуется HTTP-вариант,
+    /// чтобы JSON/XML/TXT/CSV и страницы каталога не повторяли одинаковый URL.
+    /// Явный protocol=Https сохраняет HTTPS-строку, поскольку HTTP-кандидат уже
+    /// отсутствует в отфильтрованном запросе.
+    /// </summary>
+    internal static IQueryable<ProxyEndpoint> DeduplicateCanonicalTransportUrls(
+        IQueryable<ProxyEndpoint> query) =>
+        query.Where(proxy => proxy.Protocol != ProxyProtocol.Https ||
+            !query.Any(candidate =>
+                candidate.Protocol == ProxyProtocol.Http &&
+                candidate.Host == proxy.Host &&
+                candidate.Port == proxy.Port));
 
     /// <summary>Принимает повторяющиеся и comma-separated ISO-коды, возвращая стабильный набор.</summary>
     internal static bool TryNormalizeCountries(string[]? values, out string[] countries)

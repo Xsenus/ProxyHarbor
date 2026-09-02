@@ -174,6 +174,9 @@ Operational automation может передать `X-Admin-Key` со значе
 ```
 
 TXT, CSV и XML сохраняют прежнюю машинно-читаемую структуру без рекламных строк.
+Когда один адрес одновременно присутствует в HTTP- и HTTPS-категориях, общий
+каталог публикует его один раз как канонический HTTP CONNECT URL. Явный
+`protocol=Https` сохраняет выбор именно HTTPS-категории.
 Во всех free-форматах сервер добавляет `X-Access-Tier: free`,
 `X-Free-Cooldown: 600` и `Link: </account>; rel="upgrade"`. Повтор до истечения
 интервала возвращает `429`, `Retry-After` и `ProblemDetails` с `nextAllowedAt`,
