@@ -180,6 +180,9 @@ public sealed class VpnControllerTests
         var endpointPage = AdminEndpointPage(await controller.Endpoints(page: 1, pageSize: 10,
             protocol: VpnProtocol.Trojan, status: VpnEndpointStatus.Reachable, transport: "tcp",
             country: "us", query: "1.1", sort: "quality", order: "desc", token: CancellationToken.None));
+        var facetPage = AdminEndpointPage(await controller.Endpoints(page: 1, pageSize: 10,
+            protocol: VpnProtocol.Trojan, status: VpnEndpointStatus.Reachable, transport: "tcp",
+            country: "us", sort: "lastChecked", order: "desc", token: CancellationToken.None));
 
         Assert.Single(sourcePage.Items);
         Assert.False(sourcePage.Items[0].IsBuiltIn);
@@ -188,6 +191,8 @@ public sealed class VpnControllerTests
         Assert.Equal(1, endpointPage.Summary.Reachable);
         Assert.Equal(2, endpointPage.Countries.Count);
         Assert.Equal("US", endpointPage.Items[0].CountryCode);
+        Assert.Equal(1, facetPage.Total);
+        Assert.Single(facetPage.Items);
         Assert.Equal(400, Assert.IsType<ObjectResult>((await controller.Endpoints(transport: "icmp", token: CancellationToken.None)).Result).StatusCode);
         Assert.Equal(400, Assert.IsType<ObjectResult>((await controller.Endpoints(country: "USA", token: CancellationToken.None)).Result).StatusCode);
         Assert.Equal(400, Assert.IsType<ObjectResult>((await controller.Endpoints(query: new string('x', 129), token: CancellationToken.None)).Result).StatusCode);
