@@ -109,6 +109,22 @@ docker compose -f docker-compose.yml -f docker-compose.production.yml logs --tai
 ./tools/Prune-PredeployBackups.sh --directory /opt/proxyharbor --keep-count 7 --apply
 ```
 
+На постоянном production-хосте установите поставляемый timer. Он запускается
+ежедневно с рандомизированной задержкой, низким CPU/I/O-приоритетом и sandbox,
+которому разрешена запись только в `/opt/proxyharbor`:
+
+```bash
+install -m 0644 deploy/systemd/proxyharbor-predeploy-retention.service /etc/systemd/system/
+install -m 0644 deploy/systemd/proxyharbor-predeploy-retention.timer /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now proxyharbor-predeploy-retention.timer
+systemctl list-timers proxyharbor-predeploy-retention.timer
+```
+
+Ошибочный архив завершает oneshot с ошибкой до удаления. Проверяйте результат
+через `systemctl status proxyharbor-predeploy-retention.service` и журнал
+`journalctl -u proxyharbor-predeploy-retention.service`.
+
 Откат выполняйте на предыдущий проверенный Git commit той же командой. Не откатывайте код через уже применённые необратимые миграции без заранее проверенного плана восстановления БД.
 
 Для версионированного GHCR-релиза добавьте `docker-compose.release.yml` между base и production-файлами и задайте `PROXYHARBOR_IMAGE_PREFIX`/`PROXYHARBOR_IMAGE_TAG`. Такой запуск использует опубликованные multi-architecture manifests и не содержит локальных build-секций. Точные digest находятся в приложенном `proxyharbor-release.json`; полный порядок выпуска и attestation-проверки приведён в [RELEASING.md](RELEASING.md).

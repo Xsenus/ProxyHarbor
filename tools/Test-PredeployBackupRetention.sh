@@ -2,6 +2,9 @@
 set -eu
 
 tool=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)/Prune-PredeployBackups.sh
+repository_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
+service_unit="$repository_root/deploy/systemd/proxyharbor-predeploy-retention.service"
+timer_unit="$repository_root/deploy/systemd/proxyharbor-predeploy-retention.timer"
 fixture=$(mktemp -d "${TMPDIR:-/tmp}/proxyharbor-retention-test.XXXXXX")
 cleanup() {
   resolved_fixture=$(CDPATH= cd -- "$fixture" 2>/dev/null && pwd -P || true)
@@ -86,5 +89,16 @@ if $tool --directory "$fixture" --keep-count 0 >/dev/null 2>&1; then
   echo 'Zero keep count was accepted.' >&2
   exit 1
 fi
+
+grep -Fx 'ExecStart=/opt/proxyharbor/tools/Prune-PredeployBackups.sh --directory /opt/proxyharbor --keep-count 7 --apply' "$service_unit" >/dev/null
+grep -Fx 'ConditionFileIsExecutable=/opt/proxyharbor/tools/Prune-PredeployBackups.sh' "$service_unit" >/dev/null
+grep -Fx 'IOSchedulingClass=idle' "$service_unit" >/dev/null
+grep -Fx 'NoNewPrivileges=true' "$service_unit" >/dev/null
+grep -Fx 'ProtectSystem=strict' "$service_unit" >/dev/null
+grep -Fx 'ReadWritePaths=/opt/proxyharbor' "$service_unit" >/dev/null
+grep -Fx 'CapabilityBoundingSet=' "$service_unit" >/dev/null
+grep -Fx 'OnCalendar=*-*-* 04:17:00' "$timer_unit" >/dev/null
+grep -Fx 'RandomizedDelaySec=30m' "$timer_unit" >/dev/null
+grep -Fx 'Persistent=true' "$timer_unit" >/dev/null
 
 echo 'Predeploy backup retention contracts passed.'
