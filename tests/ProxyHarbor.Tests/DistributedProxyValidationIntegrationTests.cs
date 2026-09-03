@@ -62,11 +62,13 @@ public sealed class DistributedProxyValidationIntegrationTests
             var leaseUntil = now.AddMinutes(2);
             var serializedIdleGate = new ValidationClaimIdleGate();
             serializedIdleGate.MarkEmpty();
+            var coalescedLeaseId = Guid.NewGuid();
             var coalesced = await ValidationQueueClaim.ClaimAndLeaseAsync(
-                claimDb, 3, now, leaseUntil, Guid.NewGuid(), serializedIdleGate, CancellationToken.None);
+                claimDb, 3, now, leaseUntil, coalescedLeaseId, serializedIdleGate, CancellationToken.None);
             Assert.Empty(coalesced);
             Assert.Equal(1, serializedIdleGate.CoalescedClaims);
-            Assert.Empty(await claimDb.ProxyValidationLeases.ToArrayAsync());
+            Assert.False(await claimDb.ProxyValidationLeases.AnyAsync(x => x.LeaseId == coalescedLeaseId));
+            Assert.Single(await claimDb.ProxyValidationLeases.ToArrayAsync());
             serializedIdleGate.MarkWorkAvailable();
 
             var claimed = await ValidationQueueClaim.ClaimAndLeaseAsync(
