@@ -151,7 +151,7 @@ public sealed class MetricsController(
         Gauge(output, "proxyharbor_validation_leased", "Proxy records currently leased by validators.", proxySnapshot.Leased);
         Gauge(output, "proxyharbor_validation_never_attempted", "Proxy records that have never completed a validation attempt.",
             proxySnapshot.NeverAttempted);
-        Gauge(output, "proxyharbor_proxies_stale_unseen", "Unleased Pending or Dead proxies past source-membership retention and awaiting cleanup.",
+        Gauge(output, "proxyharbor_proxies_stale_unseen", "Unleased never-alive Pending or Dead proxies past source-membership retention and awaiting cleanup.",
             proxySnapshot.StaleUnseen);
         Gauge(output, "proxyharbor_validation_attempts_last_5m", "Validation attempts completed during the last five minutes.",
             validationTelemetry.Attempts);

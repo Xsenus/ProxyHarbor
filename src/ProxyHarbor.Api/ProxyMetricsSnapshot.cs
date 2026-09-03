@@ -109,6 +109,8 @@ internal static class ProxyMetricsSnapshotReader
                count(*) FILTER (WHERE proxy."ConsecutiveFailedChecks" >= 3)::bigint AS "RepeatedlyFailing",
                count(*) FILTER (WHERE
                    proxy."Status" IN (@pending_status, @dead_status) AND
+                   proxy."FirstAliveAt" IS NULL AND
+                   proxy."SuccessfulChecks" = 0 AND
                    proxy."LastSeenAt" < @retention_cutoff AND
                    (lease."LeaseUntil" IS NULL OR lease."LeaseUntil" < @now))::bigint AS "StaleUnseen",
                count(*) FILTER (WHERE
@@ -235,6 +237,7 @@ internal static class ProxyMetricsSnapshotReader
                 group.LongCount(item => item.Proxy.ConsecutiveFailedChecks >= 3),
                 group.LongCount(item =>
                     (item.Proxy.Status == ProxyStatus.Pending || item.Proxy.Status == ProxyStatus.Dead) &&
+                    item.Proxy.FirstAliveAt == null && item.Proxy.SuccessfulChecks == 0 &&
                     item.Proxy.LastSeenAt < retentionCutoff &&
                     (item.Lease == null || item.Lease.LeaseUntil < now)),
                 group.LongCount(item => item.Proxy.Status == ProxyStatus.Alive &&
