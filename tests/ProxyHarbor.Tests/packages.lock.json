@@ -383,6 +383,13 @@
           "SSH.NET": "[2026.0.0, )"
         }
       },
+      "proxyharbor.checkeragent": {
+        "type": "Project",
+        "dependencies": {
+          "ProxyHarbor.Domain": "[1.0.0, )",
+          "ProxyHarbor.Infrastructure": "[1.0.0, )"
+        }
+      },
       "proxyharbor.domain": {
         "type": "Project"
       },

@@ -24,6 +24,7 @@ builder.Services.AddHttpClient("origin", client => client.Timeout = TimeSpan.Fro
         PooledConnectionLifetime = TimeSpan.FromMinutes(5),
         MaxConnectionsPerServer = 8
     });
+builder.Services.AddSingleton<CheckerAgentProbeRuntime>();
 builder.Services.AddSingleton<CheckerAgentWorker>();
 builder.Services.AddHostedService(services => services.GetRequiredService<CheckerAgentWorker>());
 await builder.Build().RunAsync();
