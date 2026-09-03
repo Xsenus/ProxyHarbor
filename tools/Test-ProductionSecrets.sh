@@ -51,19 +51,26 @@ chmod 440 "$fixture/telegram_bot_token" "$fixture/telegram_chat_id"
 $tool --directory "$fixture" --expected-owner "$(id -u)" >/dev/null
 chmod 444 "$fixture/telegram_bot_token" "$fixture/telegram_chat_id"
 
+chmod 600 "$fixture/admin_api_key"
 printf '\n' >> "$fixture/admin_api_key"
+chmod 444 "$fixture/admin_api_key"
 $tool --directory "$fixture" --expected-owner "$(id -u)" >/dev/null
+chmod 600 "$fixture/admin_api_key"
 printf '\n' >> "$fixture/admin_api_key"
+chmod 444 "$fixture/admin_api_key"
 if $tool --directory "$fixture" --expected-owner "$(id -u)" >/dev/null 2>&1; then
   echo 'Secret with multiple trailing newlines was accepted.' >&2
   exit 1
 fi
+chmod 600 "$fixture/admin_api_key"
 printf 'admin-api-key-at-least-24-characters' > "$fixture/admin_api_key"
 chmod 444 "$fixture/admin_api_key"
 
+chmod 600 "$fixture/backup_encryption_key"
 printf 'backup-encryption-key-at-least-32-characters\r\n' > "$fixture/backup_encryption_key"
 chmod 444 "$fixture/backup_encryption_key"
 $tool --directory "$fixture" --expected-owner "$(id -u)" >/dev/null
+chmod 600 "$fixture/backup_encryption_key"
 printf 'backup-encryption-key-at-least-32-characters' > "$fixture/backup_encryption_key"
 chmod 444 "$fixture/backup_encryption_key"
 
@@ -84,12 +91,14 @@ if $tool --directory "$fixture" --expected-owner "$(id -u)" >/dev/null 2>&1; the
 fi
 chmod 700 "$fixture"
 
+chmod 600 "$fixture/alertmanager_webhook_token"
 printf 'alertmanager webhook token with spaces invalid' > "$fixture/alertmanager_webhook_token"
 chmod 444 "$fixture/alertmanager_webhook_token"
 if $tool --directory "$fixture" --expected-owner "$(id -u)" >/dev/null 2>&1; then
   echo 'Alertmanager token containing spaces was accepted.' >&2
   exit 1
 fi
+chmod 600 "$fixture/alertmanager_webhook_token"
 printf 'alertmanager-webhook-token-at-least-32-characters' > "$fixture/alertmanager_webhook_token"
 chmod 444 "$fixture/alertmanager_webhook_token"
 
