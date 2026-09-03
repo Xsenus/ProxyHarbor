@@ -79,6 +79,7 @@ public sealed class VpnCatalogIntegrationTests
             Assert.Equal(2, result.Succeeded);
             Assert.Equal(2, result.Candidates);
             Assert.Equal(1, result.Added);
+            Assert.Equal(1, clients.CreateCalls);
             await using var verify = await factory.CreateDbContextAsync();
             var endpoint = await verify.VpnEndpoints.AsNoTracking().SingleAsync();
             Assert.Equal(preferredSourceId, endpoint.FirstSourceId);
@@ -570,7 +571,13 @@ public sealed class VpnCatalogIntegrationTests
     private sealed class TestHttpClientFactory(HttpMessageHandler handler) : IHttpClientFactory, IDisposable
     {
         private readonly HttpClient client = new(handler) { Timeout = Timeout.InfiniteTimeSpan };
-        public HttpClient CreateClient(string name) => client;
+        private int createCalls;
+        internal int CreateCalls => Volatile.Read(ref createCalls);
+        public HttpClient CreateClient(string name)
+        {
+            Interlocked.Increment(ref createCalls);
+            return client;
+        }
         public void Dispose() => client.Dispose();
     }
 
