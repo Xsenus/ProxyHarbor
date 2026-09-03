@@ -265,18 +265,28 @@ public sealed class VpnMetricsSnapshotCache(
     IDbContextFactory<ProxyHarborDbContext> dbFactory,
     ILogger<VpnMetricsSnapshotCache> logger,
     TimeProvider timeProvider,
-    IOptions<CollectorOptions> collectorOptions) : IDisposable
+    IOptions<CollectorOptions> collectorOptions,
+    IMetricsSnapshotStore? snapshotStore = null) : IDisposable
 {
     private static readonly Action<ILogger, DateTimeOffset, Exception?> RefreshFailed = LoggerMessage.Define<DateTimeOffset>(
         LogLevel.Warning,
         new EventId(1510, "VpnMetricsSnapshotRefreshFailed"),
         "Не удалось обновить VPN metrics snapshot; используется снимок {CapturedAt}.");
+    private static readonly Action<ILogger, Exception?> RestoreFailed = LoggerMessage.Define(
+        LogLevel.Warning,
+        new EventId(1512, "VpnMetricsSnapshotRestoreFailed"),
+        "Не удалось восстановить сохранённый VPN metrics snapshot; будет выполнен полный расчёт.");
+    private static readonly Action<ILogger, Exception?> PersistenceFailed = LoggerMessage.Define(
+        LogLevel.Warning,
+        new EventId(1513, "VpnMetricsSnapshotPersistenceFailed"),
+        "Новый VPN metrics snapshot рассчитан, но не сохранён для следующего restart.");
 
     // Admin lists remain minute-fresh. Public monitoring receives the same exact
     // snapshot with a five-minute passive TTL, avoiding needless full-table scans.
     internal static readonly TimeSpan MaximumAge = TimeSpan.FromMinutes(1);
     internal static readonly TimeSpan PassiveMaximumAge = TimeSpan.FromMinutes(5);
     internal static readonly TimeSpan MaximumStaleAge = TimeSpan.FromMinutes(15);
+    internal static readonly TimeSpan MaximumRestorableAge = TimeSpan.FromHours(24);
     private readonly SemaphoreSlim _refreshGate = new(1, 1);
     private readonly Channel<byte> _refreshRequests = Channel.CreateBounded<byte>(new BoundedChannelOptions(1)
     {
@@ -312,6 +322,30 @@ public sealed class VpnMetricsSnapshotCache(
         GetOrRefreshAsync(force: true, token);
     internal Task<VpnMetricsSnapshot> WarmAsync(CancellationToken token) =>
         GetOrRefreshAsync(force: false, token);
+    internal async Task<bool> RestoreAsync(CancellationToken token)
+    {
+        if (snapshotStore is null || Volatile.Read(ref _current) is not null) return false;
+        try
+        {
+            var payload = await snapshotStore.LoadAsync(MetricsSnapshotStore.VpnKey, token);
+            var snapshot = payload is null ? null : MetricsSnapshotStore.DeserializeVpn(payload);
+            var now = timeProvider.GetUtcNow();
+            if (snapshot is null || snapshot.CapturedAt == default || snapshot.CapturedAt > now ||
+                now - snapshot.CapturedAt > MaximumRestorableAge)
+                return false;
+            Volatile.Write(ref _current, new CacheEntry(snapshot, now));
+            return true;
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            RestoreFailed(logger, exception);
+            return false;
+        }
+    }
     internal ValueTask<bool> WaitForRefreshRequestAsync(CancellationToken token) =>
         _refreshRequests.Reader.WaitToReadAsync(token);
     internal void DrainRefreshRequests()
@@ -343,6 +377,7 @@ public sealed class VpnMetricsSnapshotCache(
                     db, innerToken => VpnMetricsSnapshotReader.ReadAsync(
                         db, now, collectorOptions.Value.VpnPublicFreshnessMinutes, innerToken), token);
                 Volatile.Write(ref _current, new CacheEntry(snapshot, timeProvider.GetUtcNow()));
+                await PersistAsync(snapshot, token);
                 return snapshot;
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested)
@@ -358,6 +393,27 @@ public sealed class VpnMetricsSnapshotCache(
         finally
         {
             _refreshGate.Release();
+        }
+    }
+
+    private async Task PersistAsync(VpnMetricsSnapshot snapshot, CancellationToken token)
+    {
+        if (snapshotStore is null) return;
+        try
+        {
+            await snapshotStore.SaveAsync(
+                MetricsSnapshotStore.VpnKey,
+                MetricsSnapshotStore.SerializeVpn(snapshot),
+                snapshot.CapturedAt,
+                token);
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            // Точный in-memory snapshot уже доступен; persistence остаётся best effort.
+        }
+        catch (Exception exception)
+        {
+            PersistenceFailed(logger, exception);
         }
     }
 
@@ -383,12 +439,18 @@ internal sealed class VpnMetricsSnapshotRefreshWorker(
         new EventId(1511, "VpnMetricsSnapshotBackgroundRefreshFailed"),
         "Фоновое обновление VPN metrics snapshot не удалось.");
 
+    public override async Task StartAsync(CancellationToken cancellationToken)
+    {
+        await cache.RestoreAsync(cancellationToken);
+        await base.StartAsync(cancellationToken);
+    }
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         try
         {
             cache.DrainRefreshRequests();
-            await cache.WarmAsync(stoppingToken);
+            await cache.RefreshAsync(stoppingToken);
             cache.DrainRefreshRequests();
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)

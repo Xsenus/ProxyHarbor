@@ -445,6 +445,22 @@ public sealed class SiteConfiguration
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 
+/// <summary>
+/// Последний успешно рассчитанный компактный operational snapshot. Запись переживает
+/// пересоздание API-контейнера и позволяет не блокировать первый запрос полным scan.
+/// </summary>
+public sealed class MetricsSnapshotState
+{
+    /// <summary>Стабильный тип снимка: proxy либо vpn.</summary>
+    public string Key { get; set; } = string.Empty;
+    /// <summary>Несекретный JSON с уже агрегированными счётчиками.</summary>
+    public string PayloadJson { get; set; } = string.Empty;
+    /// <summary>Момент согласованного чтения исходных таблиц.</summary>
+    public DateTimeOffset CapturedAt { get; set; }
+    /// <summary>Момент последней успешной записи снимка.</summary>
+    public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
 /// <summary>Singleton-конфигурация торгового Telegram-бота с зашифрованным token.</summary>
 public sealed class TelegramBotConfiguration
 {

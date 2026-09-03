@@ -93,6 +93,27 @@ public sealed class VpnMetricsSnapshotCacheTests
         Assert.Equal(1, cache.DatabaseReads);
     }
 
+    [Fact]
+    public async Task RestoredSnapshotServesColdRequestWithoutDatabaseScan()
+    {
+        var options = Options();
+        await SeedAsync(options);
+        var clock = new ManualTimeProvider();
+        var store = new InMemorySnapshotStore();
+        using (var original = CreateCache(new CountingFactory(options), clock, store))
+            Assert.Equal(1, (await original.GetAsync(CancellationToken.None)).Total);
+
+        var restoredFactory = new CountingFactory(options);
+        using var restored = CreateCache(restoredFactory, clock, store);
+        Assert.True(await restored.RestoreAsync(CancellationToken.None));
+
+        var snapshot = await restored.GetAsync(CancellationToken.None);
+
+        Assert.Equal(1, snapshot.Total);
+        Assert.Equal(0, restoredFactory.Created);
+        Assert.Equal(0, restored.DatabaseReads);
+    }
+
     private static DbContextOptions<ProxyHarborDbContext> Options() =>
         new DbContextOptionsBuilder<ProxyHarborDbContext>()
             .UseInMemoryDatabase($"vpn-metrics-cache-{Guid.NewGuid():N}").Options;
@@ -126,11 +147,31 @@ public sealed class VpnMetricsSnapshotCacheTests
 
     private static VpnMetricsSnapshotCache CreateCache(
         IDbContextFactory<ProxyHarborDbContext> factory,
-        TimeProvider timeProvider) => new(
+        TimeProvider timeProvider,
+        IMetricsSnapshotStore? snapshotStore = null) => new(
             factory,
             NullLogger<VpnMetricsSnapshotCache>.Instance,
             timeProvider,
-            Microsoft.Extensions.Options.Options.Create(new CollectorOptions()));
+            Microsoft.Extensions.Options.Options.Create(new CollectorOptions()),
+            snapshotStore);
+
+    private sealed class InMemorySnapshotStore : IMetricsSnapshotStore
+    {
+        private readonly Dictionary<string, string> _payloads = new(StringComparer.Ordinal);
+
+        public Task<string?> LoadAsync(string key, CancellationToken token) =>
+            Task.FromResult(_payloads.GetValueOrDefault(key));
+
+        public Task SaveAsync(
+            string key,
+            string payload,
+            DateTimeOffset capturedAt,
+            CancellationToken token)
+        {
+            _payloads[key] = payload;
+            return Task.CompletedTask;
+        }
+    }
 
     private sealed class CountingFactory(DbContextOptions<ProxyHarborDbContext> options)
         : IDbContextFactory<ProxyHarborDbContext>

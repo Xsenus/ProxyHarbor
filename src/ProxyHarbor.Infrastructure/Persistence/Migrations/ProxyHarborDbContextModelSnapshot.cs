@@ -1064,6 +1064,30 @@ namespace ProxyHarbor.Infrastructure.Persistence.Migrations
                         });
                 });
 
+            modelBuilder.Entity("ProxyHarbor.Infrastructure.MetricsSnapshotState", b =>
+                {
+                    b.Property<string>("Key")
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<DateTimeOffset>("CapturedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("PayloadJson")
+                        .IsRequired()
+                        .HasColumnType("jsonb");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Key");
+
+                    b.ToTable("MetricsSnapshotStates", t =>
+                        {
+                            t.HasCheckConstraint("CK_MetricsSnapshotStates_Key", "\"Key\" IN ('proxy', 'vpn')");
+                        });
+                });
+
             modelBuilder.Entity("ProxyHarbor.Infrastructure.PaymentConfiguration", b =>
                 {
                     b.Property<int>("Id")

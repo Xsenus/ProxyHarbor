@@ -154,6 +154,62 @@ public sealed class ProxyMetricsSnapshotCacheTests
     }
 
     [Fact]
+    public async Task RestoredSnapshotServesColdRequestWithoutDatabaseScan()
+    {
+        var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+            .UseInMemoryDatabase($"proxy-metrics-restore-{Guid.NewGuid():N}").Options;
+        await using (var seed = new ProxyHarborDbContext(options))
+        {
+            seed.Proxies.Add(new ProxyEndpoint
+            {
+                Host = "198.51.100.41",
+                Port = 8080,
+                Status = ProxyStatus.Pending
+            });
+            await seed.SaveChangesAsync();
+        }
+
+        var clock = new ManualTimeProvider();
+        var store = new InMemorySnapshotStore();
+        using (var original = CreateCache(new CountingFactory(options), clock, store))
+            Assert.Equal(1, (await original.GetAsync(CancellationToken.None)).Groups.Sum(row => row.Count));
+
+        var restoredFactory = new CountingFactory(options);
+        using var restored = CreateCache(restoredFactory, clock, store);
+        Assert.True(await restored.RestoreAsync(CancellationToken.None));
+
+        var snapshot = await restored.GetAsync(CancellationToken.None);
+
+        Assert.Equal(1, snapshot.Groups.Sum(row => row.Count));
+        Assert.Equal(0, restoredFactory.Created);
+        Assert.Equal(0, restored.DatabaseReads);
+    }
+
+    [Fact]
+    public async Task SnapshotOlderThanRestoreWindowIsIgnored()
+    {
+        var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+            .UseInMemoryDatabase($"proxy-metrics-expired-restore-{Guid.NewGuid():N}").Options;
+        await using (var seed = new ProxyHarborDbContext(options))
+        {
+            seed.Proxies.Add(new ProxyEndpoint { Host = "198.51.100.42", Port = 3128 });
+            await seed.SaveChangesAsync();
+        }
+
+        var clock = new ManualTimeProvider();
+        var store = new InMemorySnapshotStore();
+        using (var original = CreateCache(new CountingFactory(options), clock, store))
+            await original.GetAsync(CancellationToken.None);
+        clock.Advance(ProxyMetricsSnapshotCache.MaximumRestorableAge + TimeSpan.FromSeconds(1));
+
+        var coldFactory = new CountingFactory(options);
+        using var cold = CreateCache(coldFactory, clock, store);
+        Assert.False(await cold.RestoreAsync(CancellationToken.None));
+        await cold.GetAsync(CancellationToken.None);
+        Assert.Equal(1, coldFactory.Created);
+    }
+
+    [Fact]
     public async Task ExcessivelyStaleSnapshotRefreshesSynchronously()
     {
         var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
@@ -222,11 +278,31 @@ public sealed class ProxyMetricsSnapshotCacheTests
 
     private static ProxyMetricsSnapshotCache CreateCache(
         IDbContextFactory<ProxyHarborDbContext> factory,
-        TimeProvider timeProvider) =>
+        TimeProvider timeProvider,
+        IMetricsSnapshotStore? snapshotStore = null) =>
         new(factory,
             Options.Create(new CollectorOptions { PublicFreshnessMinutes = 15, DeadRetentionDays = 7 }),
             NullLogger<ProxyMetricsSnapshotCache>.Instance,
-            timeProvider);
+            timeProvider,
+            snapshotStore);
+
+    private sealed class InMemorySnapshotStore : IMetricsSnapshotStore
+    {
+        private readonly Dictionary<string, string> _payloads = new(StringComparer.Ordinal);
+
+        public Task<string?> LoadAsync(string key, CancellationToken token) =>
+            Task.FromResult(_payloads.GetValueOrDefault(key));
+
+        public Task SaveAsync(
+            string key,
+            string payload,
+            DateTimeOffset capturedAt,
+            CancellationToken token)
+        {
+            _payloads[key] = payload;
+            return Task.CompletedTask;
+        }
+    }
 
     private sealed class CountingFactory(DbContextOptions<ProxyHarborDbContext> options)
         : IDbContextFactory<ProxyHarborDbContext>
