@@ -23,4 +23,24 @@ public sealed class ProxyCollectorPlanningTests
         Assert.Throws<ArgumentOutOfRangeException>(() =>
             ProxyCollector.PreferIndexedLastSeenRefresh(-1));
     }
+
+    [Theory]
+    [InlineData(0, false)]
+    [InlineData(1, false)]
+    [InlineData(100_000, false)]
+    [InlineData(100_001, true)]
+    [InlineData(1_000_000, true)]
+    public void HashAntiJoinPlanIsUsedOnlyForLargeImports(
+        int candidateCount,
+        bool expected)
+    {
+        Assert.Equal(expected, ProxyCollector.PreferHashImport(candidateCount));
+    }
+
+    [Fact]
+    public void HashAntiJoinPlanRejectsInvalidCandidateCount()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            ProxyCollector.PreferHashImport(-1));
+    }
 }
