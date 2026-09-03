@@ -305,7 +305,7 @@ jobs:
             -Version "$VERSION" -OutputSectionFile release-notes.md
           release_args=(--verify-tag --title "ProxyHarbor $VERSION")
           if [[ "$IS_PRERELEASE" == 'true' ]]; then release_args+=(--prerelease); fi
-          assets=(proxyharbor-release.json CHANGELOG.md docker-compose.yml docker-compose.release.yml docker-compose.production.yml .env.example
+          assets=(proxyharbor-release.json CHANGELOG.md docker-compose.yml docker-compose.release.yml docker-compose.production.yml docker-compose.nginx.yml .env.example
             release-assets/proxyharbor-checker-agent.tar.gz
             release-assets/proxyharbor-checker-agent.tar.gz.sha256)
           if gh release view "$TAG" >/dev/null 2>&1; then

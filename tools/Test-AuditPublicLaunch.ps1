@@ -20,7 +20,7 @@ function Start-LaunchMock([int]$Port, [ValidateSet('success', 'failure')][string
         $listener.Start()
         $handled = 0
         try {
-            while ($handled -lt 35) {
+            while ($handled -lt 36) {
                 $context = $listener.GetContext()
                 if ($context.Request.Url.AbsolutePath -eq '/mock-ready') {
                     $body = '{}'
@@ -60,7 +60,7 @@ function Start-LaunchMock([int]$Port, [ValidateSet('success', 'failure')][string
                         $expiry = if ($Mode -eq 'success') { [DateTimeOffset]::UtcNow.AddDays(365) } else { [DateTimeOffset]::UtcNow.AddDays(-1) }
                         $body = "Contact: mailto:security@example.test`nExpires: $($expiry.ToString('O'))`nPreferred-Languages: ru, en`nCanonical: $base/.well-known/security.txt`n"
                         $context.Response.ContentType = 'text/plain'
-                    } elseif ($path -in @('/.env', '/.git/config', '/docker-compose.yml', '/docker-compose.server.yml',
+                    } elseif ($path -in @('/.env', '/.git/config', '/docker-compose.yml', '/docker-compose.server.yml', '/docker-compose.nginx.yml',
                         '/appsettings.json', '/swagger/index.html', '/metrics', '/server-status')) {
                         $context.Response.StatusCode = if ($Mode -eq 'failure' -and $path -eq '/.env') { 200 } else { 404 }
                         $body = if ($context.Response.StatusCode -eq 200) { 'SECRET=leaked' } else { 'not found' }
@@ -116,7 +116,7 @@ function Invoke-LaunchCase([string]$Mode, [bool]$ShouldSucceed) {
         if (-not $completed) { throw "Launch mock $Mode не завершил ожидаемые запросы." }
         Receive-Job $job -ErrorAction Stop | Out-Null
         $report = Get-Content $reportPath -Raw | ConvertFrom-Json
-        if ($ShouldSucceed -and ($rejected -or -not $report.success -or $report.summary.failed -ne 0 -or $report.summary.total -lt 42)) {
+        if ($ShouldSucceed -and ($rejected -or -not $report.success -or $report.summary.failed -ne 0 -or $report.summary.total -lt 43)) {
             $failedNames = @($report.checks | Where-Object { -not $_.success } | ForEach-Object name)
             throw "Положительный launch-аудит contract нарушен: rejected=$rejected; total=$($report.summary.total); failed=$($report.summary.failed); checks=$($failedNames -join ', ')."
         }

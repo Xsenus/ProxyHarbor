@@ -56,6 +56,7 @@
 
 ### Fixed
 
+- Shared-host deployment с системным Nginx получил отдельный проверяемый Compose-оверлей: frontend/API всегда публикуются только на loopback 18080/18081 после production reset, а точный порядок файлов и запуск без Caddy закреплены в runbook и CI.
 - Штатная отмена активного proxy collection при остановке API теперь сохраняется как отдельный `cancelled`-аудит, а не как операционный сбой; плановые перезапуски больше не загрязняют журнал ошибок и показатели отказов.
 - `proxyharbor_proxies_stale_unseen` теперь точно повторяет retention-политику и не считает исторические Dead-адреса, которые когда-либо успешно работали; ложный `ProxyHarborStaleProxyRetention` больше не маскирует реальные кандидаты на очистку.
 - Порядок VPN validation index приведён к фактическому `ORDER BY NextCheckAt, LastCheckedAt, Id`: удалён конфликт `NULLS FIRST` с PostgreSQL ASC `NULLS LAST`, который заставлял планировщик выполнять incremental sort для каждой партии. На production-снимке выбор 400 due-строк ускорился примерно с 86,7 до 2,5 мс.

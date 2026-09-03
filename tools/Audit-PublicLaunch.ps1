@@ -188,7 +188,7 @@ try {
     }
 
     $sensitivePaths = @(
-        '/.env', '/.git/config', '/docker-compose.yml', '/docker-compose.server.yml',
+        '/.env', '/.git/config', '/docker-compose.yml', '/docker-compose.server.yml', '/docker-compose.nginx.yml',
         '/appsettings.json', '/swagger/index.html', '/metrics', '/server-status'
     )
     foreach ($path in $sensitivePaths) {

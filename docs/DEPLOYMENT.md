@@ -152,7 +152,27 @@ systemctl list-timers proxyharbor-predeploy-retention.timer
 per-IP connection/request limits с отдельными зонами только для ProxyHarbor.
 Перед заменой обязательно сохраните текущий vhost, выполните `nginx -t` и только
 после успешной проверки сделайте reload; не применяйте этот файл к другому домену
-без замены hostname и путей сертификата.
+без замены hostname и путей сертификата. Compose-оверлей `docker-compose.nginx.yml`
+обязательно указывайте последним: production-оверлей намеренно удаляет frontend-port
+для собственного Caddy, а последний оверлей безопасно возвращает только loopback
+18080/18081. Запускайте явный список сервисов, чтобы Caddy не пытался занять уже
+используемые 80/443:
+
+```bash
+export PROXYHARBOR_SOURCE_REVISION="$(git rev-parse --verify HEAD)"
+docker compose \
+  -f docker-compose.yml \
+  -f docker-compose.production.yml \
+  -f docker-compose.server.yml \
+  -f docker-compose.nginx.yml \
+  up -d --build postgres api web
+curl --fail http://127.0.0.1:18080/
+curl --fail http://127.0.0.1:18081/health/ready
+curl --fail https://proxy.example.com/health/ready
+```
+
+При обычном обновлении уже работающей БД используйте тот же порядок и
+`up -d --build --no-deps api web`; это не пересоздаёт PostgreSQL.
 
 ## Встроенный мониторинг
 

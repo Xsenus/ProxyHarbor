@@ -232,6 +232,18 @@ jobs:
             (.services.api.secrets | length) == 18 and
             (.services.restore.secrets | length) == 2 and
             (.services.alertmanager.secrets | length) == 1'
+          shared_nginx_config=$(docker compose \
+            -f docker-compose.yml -f docker-compose.production.yml -f docker-compose.nginx.yml \
+            config --format json)
+          echo "$shared_nginx_config" | jq --exit-status '
+            (.services.api.ports | length) == 1 and
+            .services.api.ports[0].host_ip == "127.0.0.1" and
+            (.services.api.ports[0].published | tostring) == "18081" and
+            .services.api.ports[0].target == 8080 and
+            (.services.web.ports | length) == 1 and
+            .services.web.ports[0].host_ip == "127.0.0.1" and
+            (.services.web.ports[0].published | tostring) == "18080" and
+            .services.web.ports[0].target == 8080'
           for secret_value in ci-password 'Ci-admin-password-at-least-24-chars!' ci-admin-key ci-encryption-key-at-least-32-chars 9000000000000000000:CI_ONLY_PLACEHOLDER_NOT_A_REAL_TOKEN -1009000000001234 ci-alertmanager-webhook-token-at-least-32-chars; do
             if echo "$production_config" | grep --fixed-strings -- "$secret_value"; then
               echo "Secret value leaked into rendered Compose configuration."
