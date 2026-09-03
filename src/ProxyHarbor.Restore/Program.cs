@@ -604,6 +604,7 @@ internal sealed record RestoreExecutionHooks(
 internal static class RestoreEntityValidator
 {
     private static readonly HashSet<string> RunStatuses = ["running", "completed", "failed"];
+    private static readonly HashSet<string> CollectionRunStatuses = [.. RunStatuses, "cancelled"];
 
     internal static void ValidateProxy(ProxyEndpoint entity)
     {
@@ -727,7 +728,7 @@ internal static class RestoreEntityValidator
     internal static void ValidateCollectionRun(CollectionRun entity)
     {
         RequireId(entity.Id, "collectionRun.id");
-        RequireRunState(entity.Status, entity.StartedAt, entity.FinishedAt, "collectionRun");
+        RequireRunState(entity.Status, entity.StartedAt, entity.FinishedAt, "collectionRun", CollectionRunStatuses);
         RequireNonNegative(entity.SourcesProcessed, "collectionRun.sourcesProcessed");
         RequireNonNegative(entity.SourcesSucceeded, "collectionRun.sourcesSucceeded");
         RequireNonNegative(entity.SourcesFailed, "collectionRun.sourcesFailed");
@@ -780,9 +781,11 @@ internal static class RestoreEntityValidator
         string status,
         DateTimeOffset startedAt,
         DateTimeOffset? finishedAt,
-        string field)
+        string field,
+        IReadOnlySet<string>? allowedStatuses = null)
     {
-        if (!RunStatuses.Contains(status)) Invalid($"{field}.status содержит неизвестное значение.");
+        if (!(allowedStatuses ?? RunStatuses).Contains(status))
+            Invalid($"{field}.status содержит неизвестное значение.");
         if ((status == "running") != (finishedAt is null))
             Invalid($"{field}.finishedAt не согласован со status.");
         if (startedAt == default || finishedAt < startedAt)

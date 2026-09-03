@@ -23,6 +23,12 @@ public sealed class RestoreEntityValidatorTests
             CandidatesFound = 10,
             NewProxies = 3
         });
+        RestoreEntityValidator.ValidateCollectionRun(new CollectionRun
+        {
+            FinishedAt = DateTimeOffset.UtcNow,
+            Status = "cancelled",
+            Error = "System.OperationCanceledException: host stopping"
+        });
         RestoreEntityValidator.ValidateValidationRun(new ValidationRun
         {
             LeaseId = Guid.NewGuid(),
@@ -127,6 +133,32 @@ public sealed class RestoreEntityValidatorTests
         };
 
         Assert.Throws<InvalidDataException>(() => RestoreEntityValidator.ValidateCollectionRun(run));
+    }
+
+    [Fact]
+    public void CancellationStatusIsExclusiveToCollectionRuns()
+    {
+        var finishedAt = DateTimeOffset.UtcNow;
+        RestoreEntityValidator.ValidateCollectionRun(new CollectionRun
+        {
+            StartedAt = finishedAt.AddSeconds(-1),
+            FinishedAt = finishedAt,
+            Status = "cancelled"
+        });
+
+        Assert.Throws<InvalidDataException>(() => RestoreEntityValidator.ValidateValidationRun(new ValidationRun
+        {
+            LeaseId = Guid.NewGuid(),
+            StartedAt = finishedAt.AddSeconds(-1),
+            FinishedAt = finishedAt,
+            Status = "cancelled"
+        }));
+        Assert.Throws<InvalidDataException>(() => RestoreEntityValidator.ValidateBackupRun(new BackupRun
+        {
+            StartedAt = finishedAt.AddSeconds(-1),
+            FinishedAt = finishedAt,
+            Status = "cancelled"
+        }));
     }
 
     [Fact]

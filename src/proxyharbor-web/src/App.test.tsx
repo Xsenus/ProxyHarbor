@@ -373,7 +373,14 @@ describe('ProxyHarbor UI', () => {
       if (url.includes('/api/v1/admin/sources')) return jsonResponse({ items: [], page: 1, pageSize: 10, total: 0 })
       if (url.includes('/api/v1/admin/diagnostics')) return jsonResponse({
         serverTime: new Date().toISOString(), databaseBytes: 0,
-        vpnEndpoints: 20243, validationQueue: { total: 0, due: 0 }, recentRuns: [], recentValidationRuns: [], recentBackups: [],
+        vpnEndpoints: 20243, validationQueue: { total: 0, due: 0 },
+        recentRuns: [{
+          id: 'collection-cancelled', startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(),
+          status: 'cancelled', sourcesProcessed: 0, sourcesSucceeded: 0, sourcesFailed: 0,
+          sourcesSkipped: 0, sourcesTruncated: 0, candidatesFound: 0, candidateLimitReached: false,
+          newProxies: 0, aliveProxies: 0,
+        }],
+        recentValidationRuns: [], recentBackups: [],
       })
       return jsonResponse({ title: 'Unexpected request' }, 500)
     })
@@ -384,6 +391,7 @@ describe('ProxyHarbor UI', () => {
     expect(screen.getByRole('link', { name: 'Операции' })).toHaveAttribute('href', '/admin/operations')
     expect(screen.getByRole('link', { name: /Источники/ })).toHaveAttribute('href', '/admin/sources')
     expect(screen.getByRole('link', { name: 'Резервные копии' })).toHaveAttribute('href', '/admin/backups')
+    expect(screen.getByText('остановлен')).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Лучшие прямо сейчас' })).not.toBeInTheDocument()
     expect(screen.queryByLabelText('Пароль')).not.toBeInTheDocument()
     const adminCalls = vi.mocked(fetch).mock.calls.filter(([input]) => String(input).includes('/api/v1/admin/'))
