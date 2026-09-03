@@ -89,7 +89,10 @@ public sealed class AdminProxiesController(
             "lastSeen" => filtered.OrderByDescending(item => item.LastSeenAt).ThenBy(item => item.Id),
             _ => filtered.OrderBy(item => item.LastCheckedAt == null).ThenByDescending(item => item.LastCheckedAt).ThenBy(item => item.Id)
         };
-        var entities = await ordered.Skip((page - 1) * pageSize).Take(pageSize).ToArrayAsync(token);
+        var skip = (page - 1) * pageSize;
+        var entities = skip == 0
+            ? await ordered.Take(pageSize).ToArrayAsync(token)
+            : await ReadDeepPageAsync(db, all, ordered, skip, pageSize, token);
 
         var groups = proxySnapshot.Groups;
         var latencySamples = groups.Sum(row => row.FreshLatencySamples);
@@ -118,6 +121,32 @@ public sealed class AdminProxiesController(
     }
 
     private static int ToInt(long value) => (int)Math.Min(int.MaxValue, Math.Max(0, value));
+
+    /// <summary>
+    /// Глубокий OFFSET сначала проходит только узкий индекс идентификаторов, а полные
+    /// строки читает исключительно для итоговой страницы. На большом реестре это не
+    /// заставляет PostgreSQL извлекать из heap десятки тысяч широких строк, которые
+    /// затем всё равно будут отброшены. Обе операции выполняются в одном snapshot,
+    /// поэтому параллельная очистка каталога не может разорвать страницу.
+    /// </summary>
+    private static Task<ProxyEndpoint[]> ReadDeepPageAsync(
+        ProxyHarborDbContext db,
+        IQueryable<ProxyEndpoint> all,
+        IOrderedQueryable<ProxyEndpoint> ordered,
+        int skip,
+        int pageSize,
+        CancellationToken token) =>
+        BufferedReadSnapshot.ExecuteAsync(db, async readToken =>
+        {
+            var ids = await ordered.Select(item => item.Id)
+                .Skip(skip).Take(pageSize).ToArrayAsync(readToken);
+            if (ids.Length == 0) return [];
+
+            var entitiesById = await all.Where(item => ids.Contains(item.Id))
+                .ToDictionaryAsync(item => item.Id, readToken);
+            return ids.Where(entitiesById.ContainsKey)
+                .Select(id => entitiesById[id]).ToArray();
+        }, token);
 }
 
 /// <summary>Серверная страница защищённого реестра.</summary>

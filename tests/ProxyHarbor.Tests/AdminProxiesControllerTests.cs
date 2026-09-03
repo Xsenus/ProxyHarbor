@@ -62,6 +62,33 @@ public sealed class AdminProxiesControllerTests
         Assert.Equal(1, snapshotCache.DatabaseReads);
     }
 
+    [Fact]
+    public async Task RegistryPreservesExactOrderOnSubsequentPages()
+    {
+        var now = DateTimeOffset.UtcNow;
+        await using var fixture = new Fixture();
+        var proxies = Enumerable.Range(0, 21)
+            .Select(index => Proxy($"203.0.113.{index + 1}", ProxyStatus.Dead, "US",
+                null, null, 1, 1, now.AddDays(-1)))
+            .ToArray();
+        for (var index = 0; index < proxies.Length; index++)
+            proxies[index].LastCheckedAt = now.AddMinutes(-index);
+        fixture.Db.Proxies.AddRange(proxies);
+        await fixture.Db.SaveChangesAsync();
+
+        var controller = new AdminProxiesController(fixture.Factory,
+            Options.Create(new CollectorOptions { PublicFreshnessMinutes = 15 }));
+        var result = await controller.Get(page: 2, pageSize: 10,
+            status: ProxyStatus.Dead, sort: "lastChecked");
+
+        var page = Assert.IsType<AdminProxyPage>(
+            Assert.IsType<OkObjectResult>(result.Result).Value);
+        Assert.Equal(21, page.Total);
+        Assert.Equal(
+            Enumerable.Range(11, 10).Select(index => $"203.0.113.{index}"),
+            page.Items.Select(item => item.Host));
+    }
+
     [Theory]
     [InlineData("RUS", "lastChecked")]
     [InlineData("DE", "unknown")]

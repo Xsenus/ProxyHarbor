@@ -201,6 +201,31 @@ public sealed class VpnControllerTests
     }
 
     [Fact]
+    public async Task AdminVpnRegistryPreservesExactOrderOnSubsequentPages()
+    {
+        var options = Options();
+        var source = Source("Deep page", "https://8.8.8.8/deep-page.txt");
+        var now = DateTimeOffset.UtcNow;
+        var endpoints = Enumerable.Range(0, 21)
+            .Select(index => Endpoint(source, $"198.51.100.{index + 1}", VpnProtocol.Vless,
+                VpnEndpointStatus.Unreachable, null, "US"))
+            .ToArray();
+        for (var index = 0; index < endpoints.Length; index++)
+            endpoints[index].LastCheckedAt = now.AddMinutes(-index);
+        await SeedAsync(options, source, endpoints);
+
+        var result = await Admin(options).Endpoints(page: 2, pageSize: 10,
+            status: VpnEndpointStatus.Unreachable, sort: "lastChecked", order: "desc",
+            token: CancellationToken.None);
+
+        var page = AdminEndpointPage(result);
+        Assert.Equal(21, page.Total);
+        Assert.Equal(
+            Enumerable.Range(11, 10).Select(index => $"198.51.100.{index}"),
+            page.Items.Select(item => item.Host));
+    }
+
+    [Fact]
     public async Task AdminCreatesUpdatesDeletesCustomSourceAndRejectsDuplicate()
     {
         var options = Options();
