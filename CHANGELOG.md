@@ -56,6 +56,7 @@
 
 ### Fixed
 
+- `proxyharbor_proxies_stale_unseen` теперь точно повторяет retention-политику и не считает исторические Dead-адреса, которые когда-либо успешно работали; ложный `ProxyHarborStaleProxyRetention` больше не маскирует реальные кандидаты на очистку.
 - Порядок VPN validation index приведён к фактическому `ORDER BY NextCheckAt, LastCheckedAt, Id`: удалён конфликт `NULLS FIRST` с PostgreSQL ASC `NULLS LAST`, который заставлял планировщик выполнять incremental sort для каждой партии. На production-снимке выбор 400 due-строк ускорился примерно с 86,7 до 2,5 мс.
 - Due-очередь proxy validation теперь явно использует `NextCheckAt NULLS FIRST`; прежний запрос из-за PostgreSQL default `NULLS LAST` сортировал сотни тысяч готовых строк вместо чтения первых элементов точного индекса.
 - Неполное владение proxy-партией теперь проверяется до commit: при исчезновении или замене хотя бы одной lease-строки результаты, освобождение остальных lease, аудит и состояние checker-узла откатываются общей транзакцией.

@@ -43,6 +43,11 @@ public sealed class ProxyMetricsSnapshotIntegrationTests
             var freshAfter = now.AddMinutes(-15);
             var leased = Endpoint("10.0.0.3", ProxyStatus.Dead, ProxyProtocol.Https,
                 now.AddDays(-10), now.AddMinutes(-1), now.AddMinutes(-3), countryCode: "DE");
+            var historicalDead = Endpoint("10.0.0.6", ProxyStatus.Dead, ProxyProtocol.Https,
+                now.AddDays(-10), now.AddMinutes(-1), now.AddMinutes(-3), countryCode: "DE");
+            historicalDead.SuccessfulChecks = 3;
+            historicalDead.FirstAliveAt = now.AddDays(-11);
+            historicalDead.LastAliveAt = now.AddDays(-10);
             db.Proxies.AddRange(
                 Endpoint("10.0.0.1", ProxyStatus.Alive, ProxyProtocol.Http,
                     now, now.AddMinutes(-1), now.AddMinutes(-2), countryCode: "US"),
@@ -52,7 +57,8 @@ public sealed class ProxyMetricsSnapshotIntegrationTests
                 Endpoint("10.0.0.4", ProxyStatus.Alive, ProxyProtocol.Socks5,
                     now, now.AddMinutes(1), now.AddMinutes(-30), lastCheckedAt: now.AddHours(-1)),
                 Endpoint("10.0.0.5", ProxyStatus.Alive, ProxyProtocol.Http,
-                    now, now.AddMinutes(5), now.AddMinutes(-4), lastCheckedAt: now.AddMinutes(-5), countryCode: "DE"));
+                    now, now.AddMinutes(5), now.AddMinutes(-4), lastCheckedAt: now.AddMinutes(-5), countryCode: "DE"),
+                historicalDead);
             db.ProxyValidationLeases.Add(new ProxyValidationLease
             {
                 ProxyId = leased.Id,
@@ -65,26 +71,32 @@ public sealed class ProxyMetricsSnapshotIntegrationTests
                 db, now, retentionCutoff, freshAfter, CancellationToken.None);
 
             Assert.Equal(4, snapshot.Groups.Count);
-            Assert.Equal(2, snapshot.Due);
+            Assert.Equal(3, snapshot.Due);
             Assert.Equal(1, snapshot.Leased);
             Assert.Equal(1, snapshot.NeverAttempted);
             Assert.Equal(1, snapshot.StaleUnseen);
             Assert.Equal(2, snapshot.Published);
             Assert.Equal(now.AddMinutes(-2), snapshot.LastAttemptAt);
             Assert.Equal(now.AddHours(-2), snapshot.OldestActiveAt);
-            Assert.Equal(5, snapshot.Groups.Sum(row => row.Count));
-            Assert.Equal(5, snapshot.Facets.Sum(row => row.Count));
-            Assert.Equal(2, snapshot.Facets
+            Assert.Equal(6, snapshot.Groups.Sum(row => row.Count));
+            Assert.Equal(6, snapshot.Facets.Sum(row => row.Count));
+            Assert.Equal(3, snapshot.Facets
                 .Where(row => row.CountryCode == "DE")
                 .Sum(row => row.Count));
             Assert.Equal(2, snapshot.Facets
                 .Where(row => row.Status == ProxyStatus.Alive && row.Protocol == ProxyProtocol.Http)
                 .Sum(row => row.Count));
             Assert.Collection(snapshot.Countries,
-                country => { Assert.Equal("DE", country.Code); Assert.Equal(2, country.Count); },
+                country => { Assert.Equal("DE", country.Code); Assert.Equal(3, country.Count); },
                 country => { Assert.Equal("US", country.Code); Assert.Equal(2, country.Count); });
             Assert.Equal(2, Assert.Single(snapshot.Groups,
                 row => row.Status == ProxyStatus.Alive && row.Protocol == ProxyProtocol.Http).Count);
+            var deadHttps = Assert.Single(snapshot.Groups,
+                row => row.Status == ProxyStatus.Dead && row.Protocol == ProxyProtocol.Https);
+            Assert.Equal(2, deadHttps.Count);
+            Assert.Equal(1, deadHttps.EverAlive);
+            Assert.Equal(1, deadHttps.HistoricalDead);
+            Assert.Equal(0, deadHttps.StaleUnseen);
 
             await using (var indexCommand = new NpgsqlCommand(
                 """

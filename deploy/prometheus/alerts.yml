@@ -242,7 +242,7 @@ groups:
           severity: warning
         annotations:
           summary: Retention устаревших прокси не завершается
-          description: Неарендованные Pending или Dead строки старше retention остаются после нескольких циклов collection.
+          description: Неарендованные, ни разу не работавшие Pending или Dead строки старше retention остаются после нескольких циклов collection.
 
   - name: proxyharbor.maintenance
     rules:
