@@ -444,13 +444,16 @@ var runtimeLeaseLost = LoggerMessage.Define(
     LogLevel.Critical,
     new EventId(1401, "RuntimeLeaseLost"),
     "Потеряна PostgreSQL lifetime-lock session; API выполняет controlled shutdown.");
+// RunAsync disposes the host service provider before it returns. Resolve and retain
+// the lifetime service now so graceful shutdown never queries an already disposed app.
+var applicationLifetime = app.Lifetime;
 var runtimeLeaseMonitor = RuntimeLeaseMonitor.RunAsync(
-    runtimeLease, app.Lifetime, app.Logger, runtimeLeaseLost);
+    runtimeLease, applicationLifetime, app.Logger, runtimeLeaseLost);
 try { await app.RunAsync(); }
 finally
 {
     // Гарантирует завершение timer и heartbeat перед освобождением самой lease.
-    app.Lifetime.StopApplication();
+    applicationLifetime.StopApplication();
     await runtimeLeaseMonitor;
 }
 
