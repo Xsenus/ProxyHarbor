@@ -10,6 +10,20 @@
 
 ## Запуск и проверка
 
+Если production использует локальный `docker-compose.server.yml` с file-backed
+secrets, каталог должен принадлежать `root`, иметь режим `0700`, а каждый
+активно используемый контейнером файл — `0444` (отключённые Telegram bootstrap-файлы
+могут оставаться `0440`). Это не делает значения общедоступными на хосте:
+закрытый каталог не позволяет другим пользователям пройти к файлам, но read-only
+bind mount остаётся читаемым для непривилегированных UID API и Alertmanager.
+Перед `docker compose up` обязательный read-only preflight проверяет владельца,
+права, отсутствие symlink/hardlink, размеры, обязательные значения и никогда не
+печатает содержимое:
+
+```bash
+./tools/Check-ProductionSecrets.sh --directory /opt/proxyharbor/.secrets --expected-owner 0
+```
+
 ```bash
 export PROXYHARBOR_SOURCE_REVISION="$(git rev-parse --verify HEAD)"
 docker compose -f docker-compose.yml -f docker-compose.production.yml config
@@ -82,6 +96,7 @@ production-команду `up -d --build`; постоянные volumes не з�
 ложную версию бинарника после следующего `git pull`.
 
 ```bash
+./tools/Check-ProductionSecrets.sh --directory /opt/proxyharbor/.secrets --expected-owner 0
 export PROXYHARBOR_SOURCE_REVISION="$(git rev-parse --verify HEAD)"
 docker compose -f docker-compose.yml -f docker-compose.production.yml up -d --build
 ```
