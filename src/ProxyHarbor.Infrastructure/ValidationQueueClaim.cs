@@ -107,6 +107,7 @@ internal static class ValidationQueueClaim
         DateTimeOffset now,
         DateTimeOffset leaseUntil,
         Guid leaseId,
+        ValidationClaimIdleGate? idleGate,
         CancellationToken token)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(batchSize, 1);
@@ -123,6 +124,11 @@ internal static class ValidationQueueClaim
             connection, transaction, PostgresAdvisoryLock.ProxyValidationClaimKey, token);
 
         var claimed = new List<ValidationClaimCandidate>(batchSize);
+        // Внешняя process-local проверка могла быть пройдена одновременно несколькими
+        // VPS. После cluster-wide lock первый запрос уже успевает подтвердить пустую
+        // очередь; остальные завершаются без повторных index seek по 900k+ строк.
+        if (idleGate?.TryCoalesceSerializedProbe() == true) return claimed;
+
         var hasExpiredLeases = await db.ProxyValidationLeases.AsNoTracking()
             .AnyAsync(lease => lease.LeaseUntil < now, token);
         for (var priority = 0; priority <= 2 && claimed.Count < batchSize; priority++)
@@ -145,8 +151,21 @@ internal static class ValidationQueueClaim
                 db, DueClaimSql, priority, remaining, now, leaseUntil, leaseId, token));
         }
 
+        if (claimed.Count == 0)
+            idleGate?.MarkEmpty();
+        else
+            idleGate?.MarkWorkAvailable();
         return claimed;
     }
+
+    internal static Task<List<ValidationClaimCandidate>> ClaimAndLeaseAsync(
+        ProxyHarborDbContext db,
+        int batchSize,
+        DateTimeOffset now,
+        DateTimeOffset leaseUntil,
+        Guid leaseId,
+        CancellationToken token) =>
+        ClaimAndLeaseAsync(db, batchSize, now, leaseUntil, leaseId, idleGate: null, token);
 
     private static Task<List<ValidationClaimCandidate>> ClaimRangeAsync(
         ProxyHarborDbContext db,

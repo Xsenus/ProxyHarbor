@@ -6,6 +6,23 @@ namespace ProxyHarbor.Tests;
 public sealed class ValidationClaimIdleGateTests
 {
     [Fact]
+    public void SerializedProbeCoalescesOnlyInsideConfirmedCooldown()
+    {
+        long timestamp = 1_000;
+        var gate = CreateGate(() => timestamp);
+
+        Assert.False(gate.TryCoalesceSerializedProbe());
+        gate.MarkEmpty();
+        Assert.True(gate.TryCoalesceSerializedProbe());
+        Assert.Equal(1, gate.CoalescedClaims);
+        Assert.Equal(1, gate.SerializedCoalescedClaims);
+
+        timestamp += 2_000;
+        Assert.False(gate.TryCoalesceSerializedProbe());
+        Assert.Equal(1, gate.SerializedCoalescedClaims);
+    }
+
+    [Fact]
     public void EmptyCooldownCoalescesPollsAndExpiresOnMonotonicClock()
     {
         long timestamp = 1_000;

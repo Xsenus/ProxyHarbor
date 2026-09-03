@@ -102,6 +102,7 @@ public sealed class MetricsControllerTests
             () => idleTimestamp, 1_000, TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(30));
         idleGate.MarkEmpty();
         Assert.True(idleGate.TryCoalesce(Guid.NewGuid()).Coalesced);
+        Assert.True(idleGate.TryCoalesceSerializedProbe());
         using var checkerCredentials = new CheckerNodeCredentialCache(
             new TestDbFactory(options), TimeProvider.System);
         checkerCredentials.Invalidate();
@@ -126,7 +127,9 @@ public sealed class MetricsControllerTests
         Assert.Contains("proxyharbor_background_workers_enabled 1", metrics, StringComparison.Ordinal);
         Assert.Contains("# TYPE proxyharbor_validation_empty_claims_coalesced_total counter", metrics,
             StringComparison.Ordinal);
-        Assert.Contains("proxyharbor_validation_empty_claims_coalesced_total 1", metrics,
+        Assert.Contains("proxyharbor_validation_empty_claims_coalesced_total 2", metrics,
+            StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_validation_empty_claims_serialized_total 1", metrics,
             StringComparison.Ordinal);
         Assert.Contains("proxyharbor_validation_empty_claim_cooldown_active 1", metrics,
             StringComparison.Ordinal);

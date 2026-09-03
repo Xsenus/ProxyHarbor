@@ -60,8 +60,19 @@ public sealed class DistributedProxyValidationIntegrationTests
             await using var transaction = await claimDb.Database.BeginTransactionAsync();
             var leaseId = Guid.NewGuid();
             var leaseUntil = now.AddMinutes(2);
+            var serializedIdleGate = new ValidationClaimIdleGate();
+            serializedIdleGate.MarkEmpty();
+            var coalescedLeaseId = Guid.NewGuid();
+            var coalesced = await ValidationQueueClaim.ClaimAndLeaseAsync(
+                claimDb, 3, now, leaseUntil, coalescedLeaseId, serializedIdleGate, CancellationToken.None);
+            Assert.Empty(coalesced);
+            Assert.Equal(1, serializedIdleGate.CoalescedClaims);
+            Assert.False(await claimDb.ProxyValidationLeases.AnyAsync(x => x.LeaseId == coalescedLeaseId));
+            Assert.Single(await claimDb.ProxyValidationLeases.ToArrayAsync());
+            serializedIdleGate.MarkWorkAvailable();
+
             var claimed = await ValidationQueueClaim.ClaimAndLeaseAsync(
-                claimDb, 3, now, leaseUntil, leaseId, CancellationToken.None);
+                claimDb, 3, now, leaseUntil, leaseId, serializedIdleGate, CancellationToken.None);
 
             Assert.Equal(
                 [aliveNeverChecked.Id, aliveDue.Id, pendingDue.Id],
@@ -70,6 +81,7 @@ public sealed class DistributedProxyValidationIntegrationTests
             Assert.DoesNotContain(claimed, proxy => proxy.Id == deadDue.Id);
             Assert.DoesNotContain(claimed, proxy => proxy.Id == leasedDead.Id);
             Assert.All(claimed, proxy => Assert.Null(proxy.PreviousLeaseId));
+            Assert.False(serializedIdleGate.CooldownActive);
             Assert.Equal(3, await claimDb.ProxyValidationLeases.CountAsync(lease =>
                 lease.LeaseId == leaseId && lease.LeaseUntil == leaseUntil));
             Assert.NotEmpty(claimShape.Commands);
