@@ -1,7 +1,5 @@
 # Changelog
 
-- Collector skips PostgreSQL import work for fully unchanged conditional-fetch cycles and uses bounded index lookups for small `LastSeenAt` refresh batches, avoiding a production-observed full scan of the 901k-row proxy registry.
-
 Все заметные изменения ProxyHarbor документируются в этом файле. Формат основан на
 [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/), версии следуют Semantic Versioning.
 
@@ -24,6 +22,8 @@
 - Добавлен проверенный runbook российского размещения и публикации: выбор 152-ФЗ-инфраструктуры, разделение публичного и приватного контуров, DDoS/WAF, безопасная миграция и регистрация sitemap в кабинетах вебмастеров без преждевременного рекламного запуска.
 
 ### Changed
+- Ускорена глубокая пагинация административных реестров прокси и VPN: PostgreSQL сначала читает из сортировочного индекса только идентификаторы нужной страницы, а полные широкие записи загружает уже после OFFSET в согласованном snapshot.
+- Collector skips PostgreSQL import work for fully unchanged conditional-fetch cycles and uses bounded index lookups for small `LastSeenAt` refresh batches, avoiding a production-observed full scan of the 901k-row proxy registry.
 - Публичный VPN-каталог получил компактный partial index по окну свежести: точный `total` больше не выполняет production-наблюдавшийся полный scan 110 тыс. endpoint (около 634 мс), а protocol/country-фильтры обслуживаются покрывающими полями того же индекса.
 - Production API теперь использует единственный контракт `ASPNETCORE_HTTP_PORTS=8080` из закреплённого .NET runtime image, поэтому чистый запуск больше не создаёт ложное предупреждение о переопределении порта. Runbook развёртывания получает source revision из фактического Git HEAD вместо устаревающей метки `.env`, а CI отклоняет повторное появление конфликта портов.
 - XYZS996 представлен тремя стабильными агрегированными feed вместо 65 динамических country-дубликатов, которые исчезали при временно пустой стране. Охват всех 85 независимых владельцев и данные провайдера сохранены, а каждый цикл выполняет на 65 HTTPS-запросов меньше; startup удаляет ранее встроенные country-записи, не затрагивая прочие пользовательские источники.

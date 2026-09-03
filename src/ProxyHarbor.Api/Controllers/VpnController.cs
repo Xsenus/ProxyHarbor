@@ -384,7 +384,10 @@ public sealed class AdminVpnController(
             (_, true) => filtered.OrderBy(item => item.LastCheckedAt == null).ThenBy(item => item.LastCheckedAt).ThenBy(item => item.Id),
             _ => filtered.OrderBy(item => item.LastCheckedAt == null).ThenByDescending(item => item.LastCheckedAt).ThenBy(item => item.Id)
         };
-        var entities = await ordered.Skip((page - 1) * pageSize).Take(pageSize).ToArrayAsync(token);
+        var skip = (page - 1) * pageSize;
+        var entities = skip == 0
+            ? await ordered.Take(pageSize).ToArrayAsync(token)
+            : await ReadDeepEndpointPageAsync(db, all, ordered, skip, pageSize, token);
         var averageLatency = metrics.ReachableLatencySamples == 0
             ? null
             : (int?)Math.Round(metrics.ReachableLatencyTotal / (double)metrics.ReachableLatencySamples);
@@ -424,6 +427,32 @@ public sealed class AdminVpnController(
         x.ConsecutiveFailures, x.LastError, builtIn);
 
     private static int ToInt(long value) => value >= int.MaxValue ? int.MaxValue : (int)Math.Max(0, value);
+
+    /// <summary>
+    /// Для глубокой страницы сначала читает из сортировочного индекса только Id,
+    /// затем загружает полные VPN-конфигурации ровно для найденной страницы. Это
+    /// особенно важно для VPN: ConnectionUri может быть большим, но не должен
+    /// читаться для всех строк, отброшенных OFFSET. Snapshot сохраняет согласованность
+    /// двух запросов при параллельном сборе и очистке каталога.
+    /// </summary>
+    private static Task<VpnEndpoint[]> ReadDeepEndpointPageAsync(
+        ProxyHarborDbContext db,
+        IQueryable<VpnEndpoint> all,
+        IOrderedQueryable<VpnEndpoint> ordered,
+        int skip,
+        int pageSize,
+        CancellationToken token) =>
+        BufferedReadSnapshot.ExecuteAsync(db, async readToken =>
+        {
+            var ids = await ordered.Select(item => item.Id)
+                .Skip(skip).Take(pageSize).ToArrayAsync(readToken);
+            if (ids.Length == 0) return [];
+
+            var entitiesById = await all.Where(item => ids.Contains(item.Id))
+                .ToDictionaryAsync(item => item.Id, readToken);
+            return ids.Where(entitiesById.ContainsKey)
+                .Select(id => entitiesById[id]).ToArray();
+        }, token);
 
     private async Task<ActionResult?> ValidateRequestAsync(SaveVpnSourceRequest request, CancellationToken token)
     {
