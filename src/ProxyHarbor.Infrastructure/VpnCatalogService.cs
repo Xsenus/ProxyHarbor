@@ -448,6 +448,9 @@ public sealed class VpnCatalogService(
         CancellationToken token)
     {
         var results = new System.Collections.Concurrent.ConcurrentBag<FetchResult>();
+        // HttpClient потокобезопасен, а factory уже управляет сроком жизни handler'а.
+        // Один экземпляр на цикл исключает сотни короткоживущих wrapper-объектов.
+        var client = httpClientFactory.CreateClient("sources");
         await Parallel.ForEachAsync(sources, new ParallelOptions { MaxDegreeOfParallelism = options.Value.SourceConcurrency, CancellationToken = token },
             async (source, cancellationToken) =>
             {
@@ -460,7 +463,7 @@ public sealed class VpnCatalogService(
                         collectionStartedAt,
                         options.Value.DeadRetentionDays);
                     var fetched = await SourceHttpFetcher.FetchAsync(
-                        httpClientFactory.CreateClient("sources"),
+                        client,
                         source.Url,
                         useValidators ? source.HttpETag : null,
                         useValidators ? source.HttpLastModifiedAt : null,

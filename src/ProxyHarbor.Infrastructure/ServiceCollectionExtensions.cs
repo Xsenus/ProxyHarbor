@@ -104,13 +104,20 @@ public static class ServiceCollectionExtensions
         {
             client.DefaultRequestHeaders.UserAgent.ParseAdd("ProxyHarbor/1.0");
             client.Timeout = Timeout.InfiniteTimeSpan;
-        }).ConfigurePrimaryHttpMessageHandler(() => PublicNetworkConnector.Harden(new SocketsHttpHandler
+        }).ConfigurePrimaryHttpMessageHandler(serviceProvider =>
         {
-            AutomaticDecompression = DecompressionMethods.All,
-            ConnectTimeout = TimeSpan.FromSeconds(10),
-            MaxConnectionsPerServer = 4,
-            PooledConnectionLifetime = TimeSpan.FromMinutes(5)
-        }));
+            var sourceConcurrency = serviceProvider.GetRequiredService<
+                Microsoft.Extensions.Options.IOptions<CollectorOptions>>().Value.SourceConcurrency;
+            return PublicNetworkConnector.Harden(new SocketsHttpHandler
+            {
+                AutomaticDecompression = DecompressionMethods.All,
+                ConnectTimeout = TimeSpan.FromSeconds(10),
+                // Большинство встроенных feed размещено на одном CDN-host. Transport не
+                // должен незаметно снижать настроенную параллельность collector'а вдвое.
+                MaxConnectionsPerServer = SourceConnectionsPerServer(sourceConcurrency),
+                PooledConnectionLifetime = TimeSpan.FromMinutes(5)
+            });
+        });
         services.AddHttpClient("telegram", client => client.Timeout = TimeSpan.FromMinutes(5))
             .ConfigurePrimaryHttpMessageHandler(() => PublicNetworkConnector.Harden(new SocketsHttpHandler
             {
@@ -158,4 +165,7 @@ public static class ServiceCollectionExtensions
         services.AddHostedService<ProxyCountryWorker>();
         return services;
     }
+
+    internal static int SourceConnectionsPerServer(int sourceConcurrency) =>
+        Math.Clamp(sourceConcurrency, 1, 32);
 }
