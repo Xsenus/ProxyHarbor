@@ -205,26 +205,11 @@ public sealed class ProxyCollector(
                 // мог бы затереть параллельный administrative/restore результат.
                 await db.SaveChangesAsync(cancellationToken);
 
-                // Retention является частью collection pipeline, поэтому выполняется до
-                // completed-аудита. Ошибка DELETE/cancellation тогда оставляет честный failed,
-                // а не возвращает клиенту исключение при сохранённом ложном успехе.
-                // Любая validation lease исключает строку из retention. Просроченную
-                // аренду сначала забирает claim; это сохраняет единый lease -> proxy
-                // порядок блокировок с heartbeat и completion.
-                // Помимо Dead удаляем так и не проверенные Pending: при длительной проблеме
-                // control endpoint они иначе навсегда накапливаются после исчезновения из feed'ов.
-                // Подтверждённые Alive сохраняются до очередной объективной проверки.
-                await OperationalRetention.PruneProxyMembershipAsync(
-                    db, now, options.Value.DeadRetentionDays, cancellationToken);
-                // Долгая активная validation-партия другой реплики не должна потерять
-                // ownership своей audit row из-за retention collection-цикла.
-                await OperationalRetention.PruneRunHistoryAsync(
-                    db, now, options.Value.RunRetentionDays,
-                    options.Value.ValidationRunRetentionHours, cancellationToken);
-
-                // now выше является единым timestamp данных каталога и retention cutoff.
+                // now выше является единым timestamp данных каталога.
                 // FinishedAt должен отражать конец всей работы цикла, включая импорт,
-                // source health и очистку, иначе duration скрывает ожидание PostgreSQL.
+                // source health и aggregate, иначе duration скрывает ожидание PostgreSQL.
+                // Retention намеренно выполняет отдельный cluster-wide maintenance worker:
+                // полный поиск устаревших строк не должен тормозить каждый 5-минутный сбор.
                 var finishedAt = DateTimeOffset.UtcNow;
                 var updated = await db.Runs
                     .Where(item => item.Id == run.Id && item.Status == "running")
