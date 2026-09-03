@@ -6,7 +6,6 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Options;
 using ProxyHarbor.Domain;
-using ProxyHarbor.Infrastructure;
 
 namespace ProxyHarbor.CheckerAgent;
 
@@ -28,6 +27,7 @@ public sealed class CheckerAgentOptions
 /// <summary>Pull-agent: берёт одну аренду, полностью исполняет её и подтверждает результат.</summary>
 public sealed class CheckerAgentWorker(
     IHttpClientFactory clients,
+    CheckerAgentProbeRuntime probeRuntime,
     IOptions<CheckerAgentOptions> configured,
     ILogger<CheckerAgentWorker> logger) : BackgroundService
 {
@@ -96,20 +96,12 @@ public sealed class CheckerAgentWorker(
         using var heartbeatStop = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
         var heartbeat = MaintainLeaseAsync(lease.LeaseId, lease.Items.Count, heartbeatStop.Token);
         var results = new ConcurrentBag<CheckerProxyResult>();
-        var collector = new CollectorOptions
-        {
-            ProbeHost = lease.ProbeHost,
-            ProbePort = lease.ProbePort,
-            ProbePath = lease.ProbePath,
-            ProbeFallbackUrls = CollectorOptions.CreateDefaultProbeFallbackUrls(),
-            ProbeTimeoutSeconds = lease.ProbeTimeoutSeconds
-        };
-        var collectorOptions = Options.Create(collector);
-        var health = new ProbeControlHealth();
-        using var origin = new OriginIpProvider(clients, collectorOptions, health);
-        var probe = new ProxyProbeService(collectorOptions, origin);
         try
         {
+            // Runtime сохраняет согласованный origin snapshot между партиями. Раньше новый
+            // OriginIpProvider создавался для каждого lease и фактически обнулял собственный
+            // 60-секундный cache, добавляя внешний HTTPS-запрос перед каждой партией.
+            var probe = probeRuntime.Get(lease);
             await Parallel.ForEachAsync(lease.Items, new ParallelOptions
             {
                 MaxDegreeOfParallelism = Math.Clamp(lease.Concurrency, 1, 1_000),
