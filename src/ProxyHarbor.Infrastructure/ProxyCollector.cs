@@ -369,6 +369,25 @@ public sealed class ProxyCollector(
         }
         var copyMs = (long)Stopwatch.GetElapsedTime(phaseStarted).TotalMilliseconds;
 
+        // Binary COPY intentionally bypasses PostgreSQL statistics collection. On a
+        // large temporary relation the default estimate is therefore far below the
+        // real row count and the anti-join below can degrade into one index probe per
+        // candidate. Production profiling on a 906k-row registry measured 500k
+        // duplicate candidates at 13.08 s with that nested-loop plan versus 3.47 s
+        // with one bounded in-memory hash of the registry. Collection is protected by
+        // a cluster-wide lock, so this transaction is the only large importer and a
+        // 64 MiB work_mem budget cannot multiply across concurrent collection runs.
+        if (PreferHashImport(candidateCount))
+        {
+            await using var planner = new NpgsqlCommand("""
+                ANALYZE proxy_import;
+                SET LOCAL work_mem = '64MB';
+                SET LOCAL enable_nestloop = off;
+                SET LOCAL enable_mergejoin = off
+                """, connection, transaction);
+            await planner.ExecuteNonQueryAsync(token);
+        }
+
         // Отдельный INSERT возвращает точное число новых строк и не заставляет PostgreSQL
         // выполнять бесполезный UPDATE каждого существующего proxy на каждом 15-минутном цикле.
         phaseStarted = Stopwatch.GetTimestamp();
@@ -432,6 +451,16 @@ public sealed class ProxyCollector(
     {
         ArgumentOutOfRangeException.ThrowIfNegative(candidateCount);
         return candidateCount is > 0 and <= IndexedRefreshCandidateLimit;
+    }
+
+    /// <summary>
+    /// Крупный staging-набор дешевле сопоставить одним hash anti-join, чем выполнять
+    /// отдельный поиск по широкому уникальному индексу для каждого кандидата.
+    /// </summary>
+    internal static bool PreferHashImport(int candidateCount)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(candidateCount);
+        return candidateCount > IndexedRefreshCandidateLimit;
     }
 
     private sealed record SourceCollectionResult(
