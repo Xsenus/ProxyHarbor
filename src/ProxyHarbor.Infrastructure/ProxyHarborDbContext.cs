@@ -446,7 +446,6 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
 
         var vpnEndpoint = builder.Entity<VpnEndpoint>();
         vpnEndpoint.HasIndex(x => new { x.Host, x.Port, x.Protocol, x.Transport }).IsUnique();
-        vpnEndpoint.HasIndex(x => new { x.Status, x.NextCheckAt });
         vpnEndpoint.HasIndex(x => x.LastSeenAt);
         vpnEndpoint.Property(x => x.Host).HasMaxLength(255);
         vpnEndpoint.Property(x => x.Transport).HasMaxLength(8);
