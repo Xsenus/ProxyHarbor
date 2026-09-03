@@ -15,9 +15,11 @@ public sealed class ValidationClaimIdleGateTests
         gate.MarkEmpty();
         Assert.True(gate.TryCoalesceSerializedProbe());
         Assert.Equal(1, gate.CoalescedClaims);
+        Assert.Equal(1, gate.SerializedCoalescedClaims);
 
         timestamp += 2_000;
         Assert.False(gate.TryCoalesceSerializedProbe());
+        Assert.Equal(1, gate.SerializedCoalescedClaims);
     }
 
     [Fact]

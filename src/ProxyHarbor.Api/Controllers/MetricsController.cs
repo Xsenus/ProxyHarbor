@@ -168,6 +168,9 @@ public sealed class MetricsController(
         Counter(output, "proxyharbor_validation_empty_claims_coalesced_total",
             "Empty checker lease polls served without a full validation queue claim on this API replica.",
             validationIdleGate?.CoalescedClaims ?? 0);
+        Counter(output, "proxyharbor_validation_empty_claims_serialized_total",
+            "Concurrent empty checker polls skipped after waiting for the cluster-wide claim lock.",
+            validationIdleGate?.SerializedCoalescedClaims ?? 0);
         Gauge(output, "proxyharbor_validation_empty_claim_cooldown_active",
             "Whether the short process-local empty validation queue cooldown is currently active.",
             validationIdleGate?.CooldownActive == true ? 1 : 0);
