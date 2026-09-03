@@ -8,7 +8,7 @@ using ProxyHarbor.Domain;
 
 namespace ProxyHarbor.Infrastructure;
 
-/// <summary>Единые bounded retention-запросы для pipeline и независимого maintenance worker.</summary>
+/// <summary>Единые bounded retention-запросы для независимого maintenance worker.</summary>
 internal static class OperationalRetention
 {
     // Validation leases создаются тысячами в час. Ограниченный DELETE не держит
@@ -242,6 +242,7 @@ public sealed class OperationalMaintenanceWorker(
 {
     private static readonly TimeSpan InitialDelay = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan Interval = TimeSpan.FromHours(1);
+    private static readonly TimeSpan FailureRetryInterval = TimeSpan.FromMinutes(5);
     private static readonly Action<ILogger, long, long, Exception?> MaintenanceCompleted =
         LoggerMessage.Define<long, long>(LogLevel.Information, new EventId(1401, "MaintenanceCompleted"),
             "Operational maintenance завершён: восстановлено {RecoveredRows}, удалено {DeletedRows} строк.");
@@ -255,6 +256,7 @@ public sealed class OperationalMaintenanceWorker(
         await Task.Delay(InitialDelay, stoppingToken);
         while (!stoppingToken.IsCancellationRequested)
         {
+            var failed = false;
             try
             {
                 var result = await maintenance.RunOnceAsync(stoppingToken);
@@ -264,9 +266,13 @@ public sealed class OperationalMaintenanceWorker(
             }
             catch (Exception exception) when (!stoppingToken.IsCancellationRequested)
             {
+                failed = true;
                 OperationalLogBoundary.Write(() => MaintenanceFailed(logger, exception));
             }
-            await Task.Delay(Interval, stoppingToken);
+            await Task.Delay(NextDelay(failed), stoppingToken);
         }
     }
+
+    internal static TimeSpan NextDelay(bool previousRunFailed) =>
+        previousRunFailed ? FailureRetryInterval : Interval;
 }

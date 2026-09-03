@@ -477,12 +477,12 @@ public sealed class ProxyCollectorIntegrationTests
 
     [Fact]
     [Trait("Category", "PostgresIntegration")]
-    public async Task RetentionFailureCannotLeaveFalseCompletedCollectionAudit()
+    public async Task CollectionCompletionDoesNotDependOnMaintenanceRetention()
     {
         var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
         if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
 
-        var schema = $"proxyharbor_retention_failure_{Guid.NewGuid():N}";
+        var schema = $"proxyharbor_retention_decoupling_{Guid.NewGuid():N}";
         var builder = new NpgsqlConnectionStringBuilder(baseConnectionString) { SearchPath = schema };
         await using var admin = new NpgsqlConnection(baseConnectionString);
         await admin.OpenAsync();
@@ -533,15 +533,15 @@ public sealed class ProxyCollectorIntegrationTests
                 Options.Create(new CollectorOptions { SourceRetryCount = 0 }),
                 NullLogger<ProxyCollector>.Instance);
 
-            var exception = await Assert.ThrowsAsync<PostgresException>(
-                () => collector.CollectAsync(CancellationToken.None, forceAllSources: true));
+            var run = await collector.CollectAsync(CancellationToken.None, forceAllSources: true);
 
-            Assert.Contains("retention failure canary", exception.Message, StringComparison.Ordinal);
+            Assert.Equal("completed", run.Status);
             await using var verify = await factory.CreateDbContextAsync();
             var audit = await verify.Runs.AsNoTracking().SingleAsync();
-            Assert.Equal("failed", audit.Status);
+            Assert.Equal("completed", audit.Status);
             Assert.NotNull(audit.FinishedAt);
-            Assert.Contains("retention failure canary", audit.Error, StringComparison.Ordinal);
+            Assert.Null(audit.Error);
+            Assert.True(await verify.Proxies.AnyAsync(proxy => proxy.Host == "4.2.2.5"));
         }
         finally
         {
@@ -698,7 +698,7 @@ public sealed class ProxyCollectorIntegrationTests
             }
             await using (var retention = await factory.CreateDbContextAsync())
             {
-                Assert.False(await retention.Proxies.AnyAsync(proxy => proxy.Id == stalePendingProxyId));
+                Assert.True(await retention.Proxies.AnyAsync(proxy => proxy.Id == stalePendingProxyId));
                 Assert.True(await retention.Proxies.AnyAsync(proxy => proxy.Id == expiredLeaseDeadProxyId));
                 Assert.True(await retention.Proxies.AnyAsync(proxy => proxy.Id == staleAliveProxyId));
                 Assert.True(await retention.Proxies.AnyAsync(proxy => proxy.Id == activelyLeasedDeadProxyId));
@@ -748,7 +748,7 @@ public sealed class ProxyCollectorIntegrationTests
                 await ageContent.Sources.Where(source => source.Id == sourceId)
                     .ExecuteUpdateAsync(setters => setters
                         .SetProperty(source => source.LastContentFetchedAt, staleContentFetchedAt));
-                // Имитируем обычный proxy, уже удалённый retention во время серии 304;
+                // Имитируем обычный proxy, уже удалённый maintenance во время серии 304;
                 // отдельно арендованная строка остаётся живым canary retention-защиты.
                 await ageContent.Proxies
                     .Where(proxy => proxy.Id != activelyLeasedDeadProxyId)
@@ -792,7 +792,7 @@ public sealed class ProxyCollectorIntegrationTests
             Assert.Equal("Сбор остановлен по сигналу отмены вызывающего процесса.", cancelledAudit.Error);
             Assert.Single(runs, run => run.Status == "failed");
             Assert.DoesNotContain(runs, run => run.Status == "running" || run.FinishedAt == null);
-            Assert.False(await verify.ValidationRuns.AnyAsync(run => run.Id == expiredValidationRunId));
+            Assert.True(await verify.ValidationRuns.AnyAsync(run => run.Id == expiredValidationRunId));
             Assert.True(await verify.ValidationRuns.AnyAsync(run => run.Id == activeValidationRunId && run.Status == "running"));
             Assert.True(await verify.Proxies.AnyAsync(proxy => proxy.Id == activelyLeasedDeadProxyId));
             Assert.False(await verify.Proxies.AnyAsync(proxy => proxy.Id == expiredLeaseDeadProxyId));
