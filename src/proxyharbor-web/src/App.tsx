@@ -1663,7 +1663,7 @@ function formatActiveDuration(value?: number) {
 }
 function statusClass(status?: string) { return status === 'completed' ? 'status-ok' : status === 'failed' ? 'status-failed' : 'status-running' }
 function catalogStatusClass(catalog?: SourceCatalogSnapshot) { return !catalog ? '' : catalog.isHealthy ? 'status-ok' : catalog.isComplete ? 'status-running' : 'status-failed' }
-function statusLabel(status?: string) { return status === 'completed' ? 'успешно' : status === 'failed' ? 'ошибка' : status === 'running' ? 'выполняется' : 'нет данных' }
+function statusLabel(status?: string) { return status === 'completed' ? 'успешно' : status === 'failed' ? 'ошибка' : status === 'cancelled' ? 'остановлен' : status === 'running' ? 'выполняется' : 'нет данных' }
 function backupDelivery(run: BackupRun) {const delivered=[];if(run.sentToObjectStorage)delivered.push('S3');if(run.sentToTelegram)delivered.push('Telegram');if(delivered.length)return `доставлен: ${delivered.join(' + ')}`;if(run.objectStorageConfigured||run.telegramConfigured)return 'внешняя доставка не подтверждена';return 'только локально'}
 function planLabel(plan?: string) { return plan === 'unlimited' ? 'Unlimited' : plan === 'pro' ? 'Pro' : 'Free' }
 function money(minor:number,currency:string){return new Intl.NumberFormat(currentLocale(),{style:'currency',currency}).format(minor/100)}

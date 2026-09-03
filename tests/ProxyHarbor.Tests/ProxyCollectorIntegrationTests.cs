@@ -716,9 +716,10 @@ public sealed class ProxyCollectorIntegrationTests
             Assert.NotNull(abandoned.FinishedAt);
             Assert.Contains("прерван", abandoned.Error, StringComparison.OrdinalIgnoreCase);
             Assert.Equal(4, runs.Count(run => run.Status == "completed" && run.FinishedAt != null));
-            var failed = Assert.Single(runs, run => run.Id != abandonedId && run.Status == "failed");
-            Assert.NotNull(failed.FinishedAt);
-            Assert.Contains("CanceledException", failed.Error, StringComparison.Ordinal);
+            var cancelledAudit = Assert.Single(runs, run => run.Status == "cancelled");
+            Assert.NotNull(cancelledAudit.FinishedAt);
+            Assert.Equal("Сбор остановлен по сигналу отмены вызывающего процесса.", cancelledAudit.Error);
+            Assert.Single(runs, run => run.Status == "failed");
             Assert.DoesNotContain(runs, run => run.Status == "running" || run.FinishedAt == null);
             Assert.False(await verify.ValidationRuns.AnyAsync(run => run.Id == expiredValidationRunId));
             Assert.True(await verify.ValidationRuns.AnyAsync(run => run.Id == activeValidationRunId && run.Status == "running"));

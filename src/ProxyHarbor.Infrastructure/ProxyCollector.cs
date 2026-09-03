@@ -260,7 +260,13 @@ public sealed class ProxyCollector(
             }
             catch (Exception ex)
             {
-                await FailRunAuditAsync(run.Id, ex);
+                var status = ex is OperationCanceledException && cancellationToken.IsCancellationRequested
+                    ? "cancelled"
+                    : "failed";
+                await FinishUnsuccessfulRunAuditAsync(
+                    run.Id,
+                    ex,
+                    status);
                 throw;
             }
         }
@@ -270,21 +276,25 @@ public sealed class ProxyCollector(
     /// <summary>Освобождает синхронизатор запуска при остановке контейнера DI.</summary>
     public void Dispose() => _runGate.Dispose();
 
-    private async Task FailRunAuditAsync(Guid id, Exception exception)
+    private async Task FinishUnsuccessfulRunAuditAsync(Guid id, Exception exception, string status)
     {
+        if (status is not ("cancelled" or "failed"))
+            throw new ArgumentOutOfRangeException(nameof(status));
         try
         {
             // Ошибка могла оставить основной DbContext/connection в непригодном состоянии.
             // Отдельный контекст и bounded token не скрывают исходный сбой и не тормозят shutdown.
             using var timeout = new CancellationTokenSource(AuditWriteTimeout);
             await using var auditDb = await dbFactory.CreateDbContextAsync(timeout.Token);
-            var error = exception.ToString();
+            var error = status == "cancelled"
+                ? "Сбор остановлен по сигналу отмены вызывающего процесса."
+                : exception.ToString();
             // Исключение не даёт права перезаписывать уже завершённую другим владельцем строку.
             await auditDb.Runs
                 .Where(item => item.Id == id && item.Status == "running")
                 .ExecuteUpdateAsync(setters => setters
                 .SetProperty(item => item.FinishedAt, DateTimeOffset.UtcNow)
-                .SetProperty(item => item.Status, "failed")
+                .SetProperty(item => item.Status, status)
                 .SetProperty(item => item.Error, error[..Math.Min(2000, error.Length)]), timeout.Token);
         }
         catch (Exception auditException)
