@@ -201,7 +201,7 @@ public sealed class VpnControllerTests
     }
 
     [Fact]
-    public async Task AdminVpnRegistryPreservesExactOrderOnSubsequentPages()
+    public async Task AdminVpnRegistryPreservesExactOrderOnEveryPage()
     {
         var options = Options();
         var source = Source("Deep page", "https://8.8.8.8/deep-page.txt");
@@ -214,15 +214,23 @@ public sealed class VpnControllerTests
             endpoints[index].LastCheckedAt = now.AddMinutes(-index);
         await SeedAsync(options, source, endpoints);
 
-        var result = await Admin(options).Endpoints(page: 2, pageSize: 10,
+        var firstResult = await Admin(options).Endpoints(page: 1, pageSize: 10,
+            status: VpnEndpointStatus.Unreachable, sort: "lastChecked", order: "desc",
+            token: CancellationToken.None);
+        var secondResult = await Admin(options).Endpoints(page: 2, pageSize: 10,
             status: VpnEndpointStatus.Unreachable, sort: "lastChecked", order: "desc",
             token: CancellationToken.None);
 
-        var page = AdminEndpointPage(result);
-        Assert.Equal(21, page.Total);
+        var firstPage = AdminEndpointPage(firstResult);
+        var secondPage = AdminEndpointPage(secondResult);
+        Assert.Equal(21, firstPage.Total);
+        Assert.Equal(21, secondPage.Total);
+        Assert.Equal(
+            Enumerable.Range(1, 10).Select(index => $"198.51.100.{index}"),
+            firstPage.Items.Select(item => item.Host));
         Assert.Equal(
             Enumerable.Range(11, 10).Select(index => $"198.51.100.{index}"),
-            page.Items.Select(item => item.Host));
+            secondPage.Items.Select(item => item.Host));
     }
 
     [Fact]
