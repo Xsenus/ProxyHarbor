@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Activity, ArrowDownToLine, ArrowRight, Ban, Bot, CalendarClock, Check, ChevronDown, Clock3, Copy, CreditCard, Database, Gauge, Globe2, HardDriveDownload, HelpCircle, LayoutDashboard, LockKeyhole, LogOut, MessageCircle, MousePointerClick, Network, Pencil, Play, Plus, Radio, Receipt, RefreshCw, Search, Server, Settings2, ShieldCheck, ShieldOff, Star, Trash2, User, Users, Wifi, Workflow, X } from 'lucide-react'
-import { currentLocale, LanguageSwitcher, type Language, useI18n } from './i18n'
+import { currentLocale, LanguageSwitcher, useI18n } from './i18n'
 import { StyledSelect } from './components/StyledSelect'
 import { Toggle } from './components/Toggle'
 import { ToastSignal } from './components/Toasts'
@@ -45,6 +45,8 @@ const loadAdminVpnPage = () => import('./AdminVpnPage')
 const AdminVpnPage = lazy(loadAdminVpnPage)
 const loadAdminTelegramPage = () => import('./AdminTelegramPage')
 const AdminTelegramPage = lazy(loadAdminTelegramPage)
+const loadAdminUsersPage = () => import('./AdminUsersPage')
+const AdminUsersPage = lazy(loadAdminUsersPage)
 const protocols: Protocol[] = ['Http', 'Https', 'Socks4', 'Socks5']
 type AdminSection = 'overview' | 'operations' | 'checkers' | 'proxies' | 'vpn' | 'sources' | 'backups' | 'users' | 'payments' | 'telegram' | 'subscriptions' | 'access' | 'site'
 type CheckerNode = {id:string;name:string;host:string;sshPort:number;sshUsername:string;enabled:boolean;concurrency:number;batchSize:number;createdAt:string;updatedAt:string;lastHeartbeatAt?:string;lastLeaseAt?:string;lastCompletedAt?:string;currentLeaseId?:string;currentLeaseUntil?:string;agentVersion?:string;remoteAddress?:string;deploymentStatus:string;lastError?:string;completedChecks:number;aliveChecks:number;hostKeyFingerprint?:string;online:boolean;busy:boolean}
@@ -52,12 +54,6 @@ type CheckerNodeList = {image:string;nativeAssetBaseUrl:string;items:CheckerNode
 type AdminProxyStatus = 'Pending' | 'Alive' | 'Dead'
 type AdminProxy = { id:string;host:string;port:number;protocol:Protocol;status:AdminProxyStatus;latencyMs?:number;exitIp?:string;countryCode?:string;isAnonymous:boolean;firstSeenAt:string;lastSeenAt:string;lastCheckedAt?:string;firstAliveAt?:string;lastAliveAt?:string;currentAliveSince?:string;activeForSeconds?:number;lastValidationAttemptAt?:string;lastValidationDeferred:boolean;nextCheckAt?:string;successfulChecks:number;failedChecks:number;consecutiveFailedChecks:number;successRate:number;lastError?:string }
 type AdminProxyPage = PagedResult<AdminProxy> & { summary:{total:number;alive:number;freshAlive:number;staleAlive:number;pending:number;dead:number;everAlive:number;averageAliveLatencyMs?:number;countries:number;longestActiveSeconds?:number};countries:ProxyCountry[] }
-type AccountApiToken = { id:string;name:string;displaySuffix:string;scopes:string[];createdAt:string;lastUsedAt?:string;revokedAt?:string;active:boolean }
-type ReferralReward = { id:string;kind:'signup'|'purchase';daysGranted:number;createdAt:string;productCode?:string;durationDays?:number }
-type ReferralSummary = { code:string;link:string;telegramLink?:string;invited:number;remaining:number;maximum:number;rewardDays:number }
-type AdminReferralItem = { id:string;createdAt:string;referrer:{referrerUserId:string;userName:string;email:string;displayName?:string};referred:{referredUserId:string;userName:string;email:string;displayName?:string};rewardDays:number;rewards:ReferralReward[] }
-type AdminReferralPage = PagedResult<AdminReferralItem> & {summary:{referrals:number;rewardDays:number;purchaseRewards:number}}
-type AccountProfile = { id: string; userName: string; email: string; displayName?: string; preferredLanguage: Language; createdAt: string; lastLoginAt?: string; referralCode:string; referral:ReferralSummary; roles: string[]; subscription?: { plan: string; status: string; startedAt: string; expiresAt?: string }; entitlements:{unlimitedProxyAccess:boolean;apiTokens:boolean};apiTokens:AccountApiToken[] }
 type PaymentProduct = { code: string; name: string; plan: string; durationDays: number; amountMinor: number; discountPercent:number; fullDailyPriceMinor:number; savingsMinor:number; currency: string; description: string }
 type PaymentOrder = { id: string; productCode: string; plan: string; provider: string; paymentMethod:string; paymentInstrument?:string; amountMinor: number; currency: string; status: string; createdAt: string; paidAt?: string }
 type AdminPaymentProduct = PaymentProduct & { enabled: boolean }
@@ -77,8 +73,6 @@ type SiteVisitor = {ipAddress:string;userId?:string;userName?:string;email?:stri
 type SiteVisitorPage = PagedResult<SiteVisitor> & {summary:{pageViews:number;uniqueVisitors:number;authenticatedVisitors:number;active24Hours:number};retentionDays:number}
 type SiteVisit = {id:number;ipAddress:string;userId?:string;userName?:string;email?:string;displayName?:string;page:string;visitedAt:string}
 type SiteVisitPage = PagedResult<SiteVisit> & {retentionDays:number}
-type AdminUser = AccountProfile & { isActive: boolean }
-type UserAccessDraft = { isActive: boolean; administrator: boolean; subscriber: boolean; plan: string; status: string; expiresAt: string }
 type SourceDraft = { name: string; url: string; protocol: Protocol; priority: number; enabled: boolean }
 type VpnProtocol = 'OpenVpn'|'WireGuard'|'Vless'|'Vmess'|'Trojan'|'Shadowsocks'|'Hysteria2'|'Tuic'
 type VpnStatus = 'Pending'|'Reachable'|'Unreachable'|'UnsupportedTransport'
@@ -725,7 +719,7 @@ export default function App() {
           <a className={adminSection === 'vpn' ? 'active' : ''} aria-current={adminSection === 'vpn' ? 'page' : undefined} href="/admin/vpn" onMouseEnter={()=>void loadAdminVpnPage()} onFocus={()=>void loadAdminVpnPage()}><Radio/>VPN <b>{formatNumber(diagnostics?.vpnEndpoints)}</b></a>
           <a className={adminSection === 'sources' ? 'active' : ''} aria-current={adminSection === 'sources' ? 'page' : undefined} href="/admin/sources"><Server/>{t('sources')} <b>{sourceTotal || '—'}</b></a>
           <a className={adminSection === 'backups' ? 'active' : ''} aria-current={adminSection === 'backups' ? 'page' : undefined} href="/admin/backups"><HardDriveDownload/>{t('backups')}</a>
-          <a className={adminSection === 'users' ? 'active' : ''} aria-current={adminSection === 'users' ? 'page' : undefined} href="/admin/users"><Users/>{t('users')}</a>
+          <a className={adminSection === 'users' ? 'active' : ''} aria-current={adminSection === 'users' ? 'page' : undefined} href="/admin/users" onMouseEnter={()=>void loadAdminUsersPage()} onFocus={()=>void loadAdminUsersPage()}><Users/>{t('users')}</a>
           <a className={adminSection === 'payments' ? 'active' : ''} aria-current={adminSection === 'payments' ? 'page' : undefined} href="/admin/payments"><CreditCard/>{t('payments')}</a>
           <a className={adminSection === 'telegram' ? 'active' : ''} aria-current={adminSection === 'telegram' ? 'page' : undefined} href="/admin/telegram" onMouseEnter={()=>void loadAdminTelegramPage()} onFocus={()=>void loadAdminTelegramPage()}><Bot/>{t('telegramBot')}</a>
           <a className={adminSection === 'subscriptions' ? 'active' : ''} aria-current={adminSection === 'subscriptions' ? 'page' : undefined} href="/admin/subscriptions"><CalendarClock/>{t('subscriptions')}</a>
@@ -782,7 +776,7 @@ export default function App() {
             <AdminBackupSettings onError={setAdminError}/>
             <section className="admin-card backup-registry"><div className="card-heading"><div><span className="kicker">ИСТОРИЯ</span><h2>Резервные копии <em>{backupTotal}</em></h2></div><button className="icon-button" aria-label="Обновить резервные копии" onClick={() => void loadBackups()} disabled={!!backupBusy}><RefreshCw/></button></div><div className="backup-list">{backups.length === 0 ? <p className="empty-state">Резервные копии ещё не создавались.</p> : backups.map(run => <article key={run.id}><i className={statusClass(run.status)}/><div><div className="backup-file-heading"><b>{run.fileName ?? 'Резервная копия'}</b><time dateTime={run.startedAt}>{formatDateTime(run.startedAt)}</time></div><small>{formatBytes(run.sizeBytes)} · {backupDelivery(run)}{run.fileName && !run.available ? ' · локальный архив удалён по настроенному сроку хранения; запись аудита сохранена' : ''}</small></div><time className="backup-relative-time" dateTime={run.startedAt}>{timeAgo(run.startedAt)}</time><div className="backup-actions">{run.available ? <a className="backup-action-icon" data-tooltip="Скачать зашифрованный архив" aria-label={`Скачать ${run.fileName ?? 'резервную копию'}`} href={`${API}/api/v1/admin/backups/${run.id}/download`} download={run.fileName}><ArrowDownToLine/></a> : <button className="backup-action-icon" data-tooltip="Архив уже удалён по политике хранения" aria-label="Архив недоступен для скачивания" disabled><ArrowDownToLine/></button>}<button className="backup-action-icon danger" data-tooltip="Удалить архив с сервера и запись истории" aria-label={`Удалить ${run.fileName ?? 'резервную копию'}`} disabled={run.status === 'running' || !!backupBusy} onClick={() => setBackupDeleteTarget(run)}><Trash2/></button></div></article>)}</div>{backupTotal > 0 && <ProxyPagination page={backupPage} pageSize={backupPageSize} total={backupTotal} totalPages={backupTotalPages} onPageChange={next => { setBackupPage(next); document.getElementById('admin-backups-title')?.scrollIntoView?.({behavior:'smooth'}) }} onPageSizeChange={size => { setBackupPageSize(size); setBackupPage(1) }}/>}</section>
           </section>}
-          {adminSection === 'users' && <AdminUsersPage/>}
+          {adminSection === 'users' && <Suspense fallback={<div className="admin-initial-loading"><RefreshCw className="spin"/><span>Загружаем пользователей…</span></div>}><AdminUsersPage/></Suspense>}
           {adminSection === 'checkers' && <AdminCheckerNodesPage/>}
           {adminSection === 'proxies' && <AdminProxiesPage/>}
           {adminSection === 'vpn' && <Suspense fallback={<div className="admin-initial-loading"><RefreshCw className="spin"/><span>Загружаем VPN-каталог…</span></div>}><AdminVpnPage/></Suspense>}
@@ -979,126 +973,7 @@ function AdminProxiesPage() {
   </section>
 }
 
-/** Серверный реестр остаётся быстрым при сотнях тысяч аккаунтов. */
-function AdminUsersPage() {
-  const [data, setData] = useState<PagedResult<AdminUser> | null>(null)
-  const [page, setPage] = useState(1)
-  const [pageSize, setPageSize] = useState(10)
-  const [searchDraft, setSearchDraft] = useState('')
-  const [search, setSearch] = useState('')
-  const [activityFilter, setActivityFilter] = useState('')
-  const [planFilter, setPlanFilter] = useState('')
-  const [editing, setEditing] = useState<AdminUser | null>(null)
-  const [draft, setDraft] = useState<UserAccessDraft | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [referralData,setReferralData] = useState<AdminReferralPage|null>(null)
-  const [referralPage,setReferralPage] = useState(1)
 
-  const loadUsers = useCallback(async (signal?: AbortSignal) => {
-    setLoading(true)
-    const query = new URLSearchParams({ page: String(page), pageSize: String(pageSize) })
-    if (search) query.set('search', search)
-    if (activityFilter) query.set('activity', activityFilter)
-    if (planFilter) query.set('plan', planFilter)
-    try {
-      const response = await fetch(`${API}/api/v1/admin/users?${query}`, { credentials: 'include', signal })
-      if (!response.ok) { setError(await responseMessage(response, 'Пользователи недоступны')); return }
-      setData(await response.json() as PagedResult<AdminUser>)
-      setError('')
-    } catch (reason) {
-      if (!isAbortError(reason)) setError(reason instanceof Error ? reason.message : 'Пользователи недоступны')
-    } finally {
-      if (!signal?.aborted) setLoading(false)
-    }
-  }, [activityFilter, page, pageSize, planFilter, search])
-
-  useEffect(() => {
-    const controller = new AbortController()
-    const timer = window.setTimeout(() => void loadUsers(controller.signal), 0)
-    return () => { window.clearTimeout(timer); controller.abort() }
-  }, [loadUsers])
-
-  const loadReferrals = useCallback(async()=>{
-    const response=await fetch(`${API}/api/v1/admin/referrals?page=${referralPage}&pageSize=10`,{credentials:'include'})
-    if(!response.ok){setError(await responseMessage(response,'Реферальный журнал недоступен'));return}
-    setReferralData(await response.json() as AdminReferralPage)
-  },[referralPage])
-  useEffect(()=>{const timer=window.setTimeout(()=>void loadReferrals(),0);return()=>window.clearTimeout(timer)},[loadReferrals])
-
-  const openEditor = (user: AdminUser) => {
-    setEditing(user)
-    setDraft({
-      isActive: user.isActive,
-      administrator: user.roles.includes('Administrator'),
-      subscriber: user.roles.includes('Subscriber'),
-      plan: user.subscription?.plan ?? 'free',
-      status: user.subscription?.status ?? 'active',
-      expiresAt: user.subscription?.expiresAt?.slice(0, 10) ?? '',
-    })
-  }
-
-  const save = async () => {
-    if (!editing || !draft) return
-    setBusy(true)
-    setError('')
-    const roles = ['User', ...(draft.subscriber ? ['Subscriber'] : []), ...(draft.administrator ? ['Administrator'] : [])]
-    const response = await fetch(`${API}/api/v1/admin/users/${editing.id}`, {
-      method: 'PUT', credentials: 'include', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        isActive: draft.isActive, roles, plan: draft.plan, status: draft.status,
-        expiresAt: draft.expiresAt ? new Date(`${draft.expiresAt}T23:59:59Z`).toISOString() : null,
-      }),
-    })
-    if (!response.ok) setError(await responseMessage(response, 'Не удалось обновить права'))
-    else { setEditing(null); setDraft(null); await loadUsers() }
-    setBusy(false)
-  }
-
-  const totalPages = Math.max(1, Math.ceil((data?.total ?? 0) / pageSize))
-  return <section className="admin-section users-admin-section" aria-labelledby="admin-users-title">
-    <AdminPageHeader id="admin-users-title" title="Пользователи"/>
-    <ToastSignal kind="error" message={error}/>
-    <section className="admin-card users-registry">
-      <div className="user-toolbar">
-        <form onSubmit={event => { event.preventDefault(); setSearch(searchDraft.trim()); setPage(1) }}>
-          <Search/><input aria-label="Поиск пользователей" value={searchDraft} onChange={event => setSearchDraft(event.target.value)} placeholder="Имя, логин или почта…"/>
-          {searchDraft && <button type="button" aria-label="Очистить поиск пользователей" onClick={() => { setSearchDraft(''); setSearch(''); setPage(1) }}><X/></button>}
-          <button type="submit">Найти</button>
-        </form>
-        <label><span>Активность</span><StyledSelect ariaLabel="Фильтр активности" value={activityFilter} onChange={value => { setActivityFilter(value); setPage(1) }} options={[["","Все"],["active","Активные"],["disabled","Отключённые"]]} /></label>
-        <label><span>Тариф</span><StyledSelect ariaLabel="Фильтр тарифа" value={planFilter} onChange={value => { setPlanFilter(value); setPage(1) }} options={[["","Все"],["free","Free"],["pro","Pro"],["unlimited","Unlimited"]]} /></label>
-      </div>
-      <div className="admin-data-table users-table">
-        <div className="admin-data-head"><span>Пользователь</span><span>Доступ</span><span>Подписка</span><span>Последний вход</span><span/></div>
-        {loading && !data ? <div className="empty-state"><RefreshCw className="spin"/>Загружаем пользователей…</div>
-          : data?.items.length === 0 ? <div className="empty-state"><Users/>По заданным условиям пользователи не найдены.</div>
-            : data?.items.map(user => <article key={user.id}>
-              <span className="user-identity"><i><User/></i><span><b>{user.displayName || user.userName}</b><small>{user.email}</small><small>@{user.userName} · создан {new Date(user.createdAt).toLocaleDateString('ru-RU')}</small></span></span>
-              <span className="user-role-cell"><em className={`state-pill ${user.isActive ? 'active' : ''}`}>{user.isActive ? 'Активен' : 'Отключён'}</em><small>{user.roles.includes('Administrator') ? 'Администратор' : user.roles.includes('Subscriber') ? 'Подписчик' : 'Пользователь'}</small></span>
-              <span><b>{planLabel(user.subscription?.plan)}</b><small>{subscriptionStatusLabel(user.subscription?.status ?? 'active')}{user.subscription?.expiresAt ? ` · до ${new Date(user.subscription.expiresAt).toLocaleDateString('ru-RU')}` : ' · бессрочно'}</small></span>
-              <time>{user.lastLoginAt ? timeAgo(user.lastLoginAt) : 'Ещё не входил'}</time>
-              <button className="table-action" onClick={() => openEditor(user)}><Pencil/>Управлять</button>
-            </article>)}
-      </div>
-      {data && data.total > 0 && <ProxyPagination
-        page={page} pageSize={pageSize} total={data.total} totalPages={totalPages}
-        onPageChange={setPage}
-        onPageSizeChange={size => { setPageSize(size); setPage(1) }}
-      />}
-    </section>
-    <section className="admin-card users-registry admin-referral-registry"><div className="card-heading"><div><span className="kicker">REFERRAL AUDIT</span><h2>Реферальная программа</h2><p>Кто кого пригласил и сколько дней подписки было начислено.</p></div><Workflow/></div><div className="referral-summary"><article><small>Регистраций</small><strong>{referralData?.summary.referrals??'—'}</strong></article><article><small>Начислено дней</small><strong>{referralData?.summary.rewardDays??'—'}</strong></article><article><small>Бонусов за покупки</small><strong>{referralData?.summary.purchaseRewards??'—'}</strong></article></div><div className="admin-data-table admin-referral-table"><div className="admin-data-head"><span>Пригласил</span><span>Новый пользователь</span><span>Дата</span><span>Начислено</span></div>{referralData?.items.length===0&&<div className="empty-state"><Workflow/>Реферальных регистраций пока нет.</div>}{referralData?.items.map(item=><article key={item.id}><span><b>{item.referrer.displayName||item.referrer.userName}</b><small>{item.referrer.email}</small></span><span><b>{item.referred.displayName||item.referred.userName}</b><small>{item.referred.email}</small></span><time>{formatDateTime(item.createdAt)}</time><span><b>+{item.rewardDays} дн.</b>{item.rewards.map(reward=><small key={reward.id}>{reward.kind==='signup'?'Регистрация':`Оплата тарифа на ${reward.durationDays??'—'} дней`}: +{reward.daysGranted} дн. · {formatDateTime(reward.createdAt)}</small>)}</span></article>)}</div>{referralData&&referralData.total>0&&<ProxyPagination page={referralPage} pageSize={10} total={referralData.total} totalPages={Math.max(1,Math.ceil(referralData.total/10))} onPageChange={setReferralPage} onPageSizeChange={()=>{}}/>}</section>
-    {editing && draft && <div className="source-editor-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget && !busy) { setEditing(null); setDraft(null) } }}>
-      <section className="source-editor-modal user-editor-modal" role="dialog" aria-modal="true" aria-label={`Управление пользователем ${editing.displayName || editing.userName}`}>
-        <div className="source-editor-heading"><div><span className="kicker">USER ACCESS</span><h2>{editing.displayName || editing.userName}</h2><p>{editing.email}. Изменение ролей завершит активные сессии пользователя.</p></div><button className="icon-button" aria-label="Закрыть управление пользователем" disabled={busy} onClick={() => { setEditing(null); setDraft(null) }}><X/></button></div>
-        <div className="user-editor-switches"><Toggle checked={draft.isActive} onChange={isActive => setDraft({...draft,isActive})} label="Аккаунт активен"/><Toggle checked={draft.subscriber} onChange={subscriber => setDraft({...draft,subscriber})} label="Роль подписчика"/><Toggle checked={draft.administrator} onChange={administrator => setDraft({...draft,administrator})} label="Права администратора"/></div>
-        <div className="source-editor-grid"><label>Тариф<StyledSelect ariaLabel="Тариф пользователя" value={draft.plan} onChange={plan => setDraft({...draft,plan})} options={[["free","Free"],["pro","Pro"],["unlimited","Unlimited"]]}/></label><label>Статус подписки<StyledSelect ariaLabel="Статус подписки пользователя" value={draft.status} onChange={status => setDraft({...draft,status})} options={[["active","Активна"],["trialing","Пробная"],["past_due","Просрочена"],["canceled","Отменена"],["expired","Истекла"],["suspended","Приостановлена"]]}/></label><label>Действует до<input type="date" value={draft.expiresAt} onChange={event => setDraft({...draft,expiresAt:event.target.value})}/></label></div>
-        <div className="source-editor-actions"><span/><button className="secondary-admin-button" disabled={busy} onClick={() => { setEditing(null); setDraft(null) }}>Отмена</button><button className="primary-admin-button" disabled={busy} onClick={() => void save()}><ShieldCheck/>{busy ? 'Сохраняем…' : 'Сохранить доступ'}</button></div>
-      </section>
-    </div>}
-  </section>
-}
 
 
 /** Runtime-настройка тарифов и шлюзов; сохранённые секреты никогда не загружаются в браузер. */
