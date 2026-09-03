@@ -391,7 +391,9 @@ describe('ProxyHarbor UI', () => {
     expect(screen.getByRole('link', { name: 'Операции' })).toHaveAttribute('href', '/admin/operations')
     expect(screen.getByRole('link', { name: /Источники/ })).toHaveAttribute('href', '/admin/sources')
     expect(screen.getByRole('link', { name: 'Резервные копии' })).toHaveAttribute('href', '/admin/backups')
-    expect(screen.getByText('остановлен')).toBeInTheDocument()
+    // Heading renders before the diagnostics request has populated recent runs.
+    // Await the asynchronous status instead of racing the effect on slower CI hosts.
+    expect(await screen.findByText('остановлен')).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Лучшие прямо сейчас' })).not.toBeInTheDocument()
     expect(screen.queryByLabelText('Пароль')).not.toBeInTheDocument()
     const adminCalls = vi.mocked(fetch).mock.calls.filter(([input]) => String(input).includes('/api/v1/admin/'))
