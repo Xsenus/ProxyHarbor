@@ -237,12 +237,15 @@ groups:
         expr: |
           proxyharbor_proxies_stale_unseen > 0
           and on() proxyharbor_background_workers_enabled == 1
-        for: 30m
+        # Maintenance runs hourly. Validation can make old never-working rows
+        # eligible again immediately after a successful pass, so a shorter
+        # window creates a false alarm between two healthy cleanup cycles.
+        for: 75m
         labels:
           severity: warning
         annotations:
           summary: Retention устаревших прокси не завершается
-          description: Неарендованные, ни разу не работавшие Pending или Dead строки старше retention остаются после нескольких циклов collection.
+          description: Неарендованные, ни разу не работавшие Pending или Dead строки старше retention остаются дольше полного ежечасного цикла maintenance.
 
   - name: proxyharbor.maintenance
     rules:
