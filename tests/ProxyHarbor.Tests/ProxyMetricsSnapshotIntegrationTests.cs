@@ -11,7 +11,7 @@ namespace ProxyHarbor.Tests;
 
 /// <summary>
 /// Фиксирует production-контракт агрегирования proxy-метрик настоящим PostgreSQL:
-/// точные счётчики и ровно один физический доступ к большой таблице.
+/// точные счётчики, один полный проход и отдельные PK lookup только для активных lease.
 /// </summary>
 [Collection(PostgresIntegrationGroup.Name)]
 public sealed class ProxyMetricsSnapshotIntegrationTests
@@ -124,7 +124,15 @@ public sealed class ProxyMetricsSnapshotIntegrationTests
             var planJson = Convert.ToString(rawPlan, CultureInfo.InvariantCulture);
             Assert.False(string.IsNullOrWhiteSpace(planJson));
             using var plan = JsonDocument.Parse(planJson!);
-            Assert.Equal(1, CountRelationScans(plan.RootElement, "Proxies"));
+            Assert.InRange(CountRelationScans(plan.RootElement, "Proxies"), 1, 2);
+            Assert.DoesNotContain(
+                "LEFT JOIN \"ProxyValidationLeases\"",
+                ProxyMetricsSnapshotReader.PostgresSql,
+                StringComparison.Ordinal);
+            Assert.Contains(
+                "WHERE lease.\"LeaseUntil\" >= @now",
+                ProxyMetricsSnapshotReader.PostgresSql,
+                StringComparison.Ordinal);
         }
         finally
         {

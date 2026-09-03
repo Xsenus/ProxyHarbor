@@ -91,6 +91,7 @@ internal sealed record ProxyMetricsRawRow(
 internal static class ProxyMetricsSnapshotReader
 {
     internal const string PostgresSql = """
+        WITH proxy_metrics AS MATERIALIZED (
         SELECT proxy."CountryCode",
                proxy."Status",
                proxy."Protocol",
@@ -101,9 +102,7 @@ internal static class ProxyMetricsSnapshotReader
                    proxy."Status" = @dead_status AND
                    (proxy."FirstAliveAt" IS NOT NULL OR proxy."SuccessfulChecks" > 0))::bigint AS "HistoricalDead",
                count(*) FILTER (WHERE
-                   (proxy."NextCheckAt" IS NULL OR proxy."NextCheckAt" <= @now) AND
-                   (lease."LeaseUntil" IS NULL OR lease."LeaseUntil" < @now))::bigint AS "Due",
-               count(*) FILTER (WHERE lease."LeaseUntil" >= @now)::bigint AS "Leased",
+                   proxy."NextCheckAt" IS NULL OR proxy."NextCheckAt" <= @now)::bigint AS "Due",
                count(*) FILTER (WHERE proxy."LastCheckedAt" IS NULL)::bigint AS "NeverChecked",
                count(*) FILTER (WHERE proxy."LastValidationAttemptAt" IS NULL)::bigint AS "NeverAttempted",
                count(*) FILTER (WHERE proxy."ConsecutiveFailedChecks" >= 3)::bigint AS "RepeatedlyFailing",
@@ -111,8 +110,7 @@ internal static class ProxyMetricsSnapshotReader
                    proxy."Status" IN (@pending_status, @dead_status) AND
                    proxy."FirstAliveAt" IS NULL AND
                    proxy."SuccessfulChecks" = 0 AND
-                   proxy."LastSeenAt" < @retention_cutoff AND
-                   (lease."LeaseUntil" IS NULL OR lease."LeaseUntil" < @now))::bigint AS "StaleUnseen",
+                   proxy."LastSeenAt" < @retention_cutoff)::bigint AS "StaleUnseen",
                count(*) FILTER (WHERE
                    proxy."Status" = @alive_status AND proxy."LastCheckedAt" >= @fresh_after)::bigint AS "Published",
                count(*) FILTER (WHERE proxy."Status" = @alive_status AND
@@ -128,9 +126,50 @@ internal static class ProxyMetricsSnapshotReader
                min(proxy."CurrentAliveSince") FILTER (WHERE
                    proxy."Status" = @alive_status AND proxy."CurrentAliveSince" IS NOT NULL) AS "OldestActiveAt"
         FROM "Proxies" AS proxy
-        LEFT JOIN "ProxyValidationLeases" AS lease ON lease."ProxyId" = proxy."Id"
         GROUP BY proxy."CountryCode", proxy."Status", proxy."Protocol"
-        ORDER BY proxy."CountryCode" NULLS FIRST, proxy."Status", proxy."Protocol"
+        ), active_lease_metrics AS MATERIALIZED (
+        SELECT proxy."CountryCode",
+               proxy."Status",
+               proxy."Protocol",
+               count(*)::bigint AS "Leased",
+               count(*) FILTER (WHERE
+                   proxy."NextCheckAt" IS NULL OR proxy."NextCheckAt" <= @now)::bigint AS "BlockedDue",
+               count(*) FILTER (WHERE
+                   proxy."Status" IN (@pending_status, @dead_status) AND
+                   proxy."FirstAliveAt" IS NULL AND
+                   proxy."SuccessfulChecks" = 0 AND
+                   proxy."LastSeenAt" < @retention_cutoff)::bigint AS "BlockedStaleUnseen"
+        FROM "ProxyValidationLeases" AS lease
+        INNER JOIN "Proxies" AS proxy ON proxy."Id" = lease."ProxyId"
+        WHERE lease."LeaseUntil" >= @now
+        GROUP BY proxy."CountryCode", proxy."Status", proxy."Protocol"
+        )
+        SELECT metrics."CountryCode",
+               metrics."Status",
+               metrics."Protocol",
+               metrics."Count",
+               metrics."EverAlive",
+               metrics."HistoricalDead",
+               greatest(0::bigint, metrics."Due" - coalesce(leases."BlockedDue", 0)) AS "Due",
+               coalesce(leases."Leased", 0)::bigint AS "Leased",
+               metrics."NeverChecked",
+               metrics."NeverAttempted",
+               metrics."RepeatedlyFailing",
+               greatest(0::bigint,
+                   metrics."StaleUnseen" - coalesce(leases."BlockedStaleUnseen", 0)) AS "StaleUnseen",
+               metrics."Published",
+               metrics."StaleAlive",
+               metrics."Scheduled",
+               metrics."FreshLatencyTotal",
+               metrics."FreshLatencySamples",
+               metrics."LastAttemptAt",
+               metrics."OldestActiveAt"
+        FROM proxy_metrics AS metrics
+        LEFT JOIN active_lease_metrics AS leases ON
+            leases."CountryCode" IS NOT DISTINCT FROM metrics."CountryCode" AND
+            leases."Status" = metrics."Status" AND
+            leases."Protocol" = metrics."Protocol"
+        ORDER BY metrics."CountryCode" NULLS FIRST, metrics."Status", metrics."Protocol"
         """;
 
     internal static async Task<ProxyMetricsSnapshot> ReadAsync(
@@ -331,13 +370,22 @@ public sealed class ProxyMetricsSnapshotCache(
     IDbContextFactory<ProxyHarborDbContext> dbFactory,
     IOptions<CollectorOptions> collectorOptions,
     ILogger<ProxyMetricsSnapshotCache> logger,
-    TimeProvider timeProvider) : IDisposable
+    TimeProvider timeProvider,
+    IMetricsSnapshotStore? snapshotStore = null) : IDisposable
 {
     private static readonly Action<ILogger, DateTimeOffset, Exception?> RefreshFailed =
         LoggerMessage.Define<DateTimeOffset>(
             LogLevel.Warning,
             new EventId(1501, "ProxyMetricsSnapshotRefreshFailed"),
             "Не удалось обновить proxy metrics snapshot; используется снимок {CapturedAt}.");
+    private static readonly Action<ILogger, Exception?> RestoreFailed = LoggerMessage.Define(
+        LogLevel.Warning,
+        new EventId(1503, "ProxyMetricsSnapshotRestoreFailed"),
+        "Не удалось восстановить сохранённый proxy metrics snapshot; будет выполнен полный расчёт.");
+    private static readonly Action<ILogger, Exception?> PersistenceFailed = LoggerMessage.Define(
+        LogLevel.Warning,
+        new EventId(1504, "ProxyMetricsSnapshotPersistenceFailed"),
+        "Новый proxy metrics snapshot рассчитан, но не сохранён для следующего restart.");
     // Exact aggregation currently reads the entire large proxy table. Admin views
     // keep a one-minute soft TTL, while passive public/Prometheus consumers use a
     // five-minute TTL so monitoring alone cannot force a large heap scan every
@@ -345,6 +393,7 @@ public sealed class ProxyMetricsSnapshotCache(
     internal static readonly TimeSpan MaximumAge = TimeSpan.FromMinutes(1);
     internal static readonly TimeSpan PassiveMaximumAge = TimeSpan.FromMinutes(5);
     internal static readonly TimeSpan MaximumStaleAge = TimeSpan.FromMinutes(15);
+    internal static readonly TimeSpan MaximumRestorableAge = TimeSpan.FromHours(24);
     private readonly SemaphoreSlim _refreshGate = new(1, 1);
     private readonly Channel<byte> _refreshRequests = Channel.CreateBounded<byte>(new BoundedChannelOptions(1)
     {
@@ -392,6 +441,35 @@ public sealed class ProxyMetricsSnapshotCache(
     internal Task<ProxyMetricsSnapshot> WarmAsync(CancellationToken token) =>
         GetOrRefreshAsync(force: false, token);
 
+    /// <summary>
+    /// До запуска listener восстанавливает последний точный небольшой snapshot.
+    /// Его возраст остаётся видимым через CapturedAt, а worker сразу считает свежую версию.
+    /// </summary>
+    internal async Task<bool> RestoreAsync(CancellationToken token)
+    {
+        if (snapshotStore is null || Volatile.Read(ref _current) is not null) return false;
+        try
+        {
+            var payload = await snapshotStore.LoadAsync(MetricsSnapshotStore.ProxyKey, token);
+            var snapshot = payload is null ? null : MetricsSnapshotStore.DeserializeProxy(payload);
+            var now = timeProvider.GetUtcNow();
+            if (snapshot is null || snapshot.CapturedAt == default || snapshot.CapturedAt > now ||
+                now - snapshot.CapturedAt > MaximumRestorableAge)
+                return false;
+            Volatile.Write(ref _current, new CacheEntry(snapshot, now));
+            return true;
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            RestoreFailed(logger, exception);
+            return false;
+        }
+    }
+
     internal ValueTask<bool> WaitForRefreshRequestAsync(CancellationToken token) =>
         _refreshRequests.Reader.WaitToReadAsync(token);
 
@@ -432,6 +510,7 @@ public sealed class ProxyMetricsSnapshotCache(
                         innerToken),
                     token);
                 Volatile.Write(ref _current, new CacheEntry(snapshot, timeProvider.GetUtcNow()));
+                await PersistAsync(snapshot, token);
                 return snapshot;
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested)
@@ -447,6 +526,27 @@ public sealed class ProxyMetricsSnapshotCache(
         finally
         {
             _refreshGate.Release();
+        }
+    }
+
+    private async Task PersistAsync(ProxyMetricsSnapshot snapshot, CancellationToken token)
+    {
+        if (snapshotStore is null) return;
+        try
+        {
+            await snapshotStore.SaveAsync(
+                MetricsSnapshotStore.ProxyKey,
+                MetricsSnapshotStore.SerializeProxy(snapshot),
+                snapshot.CapturedAt,
+                token);
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            // Точный in-memory snapshot уже доступен; persistence остаётся best effort.
+        }
+        catch (Exception exception)
+        {
+            PersistenceFailed(logger, exception);
         }
     }
 
@@ -476,12 +576,18 @@ internal sealed class ProxyMetricsSnapshotRefreshWorker(
         new EventId(1502, "ProxyMetricsSnapshotBackgroundRefreshFailed"),
         "Фоновое обновление proxy metrics snapshot не удалось.");
 
+    public override async Task StartAsync(CancellationToken cancellationToken)
+    {
+        await cache.RestoreAsync(cancellationToken);
+        await base.StartAsync(cancellationToken);
+    }
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         try
         {
             cache.DrainRefreshRequests();
-            await cache.WarmAsync(stoppingToken);
+            await cache.RefreshAsync(stoppingToken);
             cache.DrainRefreshRequests();
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)

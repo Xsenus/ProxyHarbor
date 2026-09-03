@@ -47,6 +47,8 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
     public DbSet<PaymentConfiguration> PaymentConfigurations => Set<PaymentConfiguration>();
     /// <summary>Singleton runtime-настройка публичного сайта и документов.</summary>
     public DbSet<SiteConfiguration> SiteConfigurations => Set<SiteConfiguration>();
+    /// <summary>Переживающие restart компактные proxy/VPN metrics snapshots.</summary>
+    public DbSet<MetricsSnapshotState> MetricsSnapshotStates => Set<MetricsSnapshotState>();
     /// <summary>Аудит ручных изменений подписок.</summary>
     public DbSet<SubscriptionAdminAction> SubscriptionAdminActions => Set<SubscriptionAdminAction>();
     /// <summary>Агрегированная статистика выдачи адресов и посещений сайта.</summary>
@@ -220,6 +222,13 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
         siteConfiguration.Property(x => x.SettingsJson).HasColumnType("jsonb");
         siteConfiguration.ToTable(table => table.HasCheckConstraint(
             "CK_SiteConfigurations_Singleton", "\"Id\" = 1"));
+
+        var metricsSnapshot = builder.Entity<MetricsSnapshotState>();
+        metricsSnapshot.HasKey(x => x.Key);
+        metricsSnapshot.Property(x => x.Key).HasMaxLength(16);
+        metricsSnapshot.Property(x => x.PayloadJson).HasColumnType("jsonb");
+        metricsSnapshot.ToTable(table => table.HasCheckConstraint(
+            "CK_MetricsSnapshotStates_Key", "\"Key\" IN ('proxy', 'vpn')"));
 
         var subscriptionAction = builder.Entity<SubscriptionAdminAction>();
         subscriptionAction.HasIndex(x => new { x.SubscriptionId, x.CreatedAt });

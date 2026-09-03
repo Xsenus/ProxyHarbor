@@ -41,6 +41,7 @@ public sealed class DatabaseInvariantIntegrationTests
         "CK_AspNetUsers_PreferredLanguage",
         "CK_BackupConfigurations_Singleton",
         "CK_FreeProxyExportGrants_Timeline",
+        "CK_MetricsSnapshotStates_Key",
         "CK_PaymentConfigurations_Singleton",
         "CK_PaymentOrders_Amount",
         "CK_PaymentOrders_Currency",
