@@ -18,7 +18,7 @@ public sealed class ProxyCollector(
     ValidationWakeSignal? validationWakeSignal = null) : IDisposable
 {
     private const int MaxSourceBytes = 10_000_000;
-    internal const int IndexedRefreshCandidateLimit = 100_000;
+    internal const int IndexedRefreshCandidateLimit = 10_000;
     internal const int HashImportCandidateThreshold = 10_000;
     private static readonly TimeSpan AuditWriteTimeout = TimeSpan.FromSeconds(15);
     private static readonly Action<ILogger, string, Exception?> SourceFailed =
@@ -381,8 +381,9 @@ public sealed class ProxyCollector(
         // INSERT и LastSeen refresh имеют отдельные crossover: production-партия
         // 20k прочитала около 30k buffers hash-планом вместо 80k при index probes
         // и завершилась за 2,62 вместо 8,26 секунды; на 10k планы сравнялись.
-        // Поэтому hash crossover начинается сразу после 10k, тогда как refresh до
-        // 100k всё ещё дешевле выполняется через индекс.
+        // Поэтому hash crossover начинается сразу после 10k. Тот же production-
+        // crossover применяется к refresh: более крупный staging-набор дешевле
+        // сопоставить одним последовательным hash join.
         if (PreferHashImport(candidateCount))
         {
             await using var planner = new NpgsqlCommand("""
@@ -415,7 +416,9 @@ public sealed class ProxyCollector(
         // ждать validator locks и образовывать с ними обратный порядок блокировок.
         // Для небольшого импорта PostgreSQL без статистики временной таблицы склонен
         // строить hash join с полным чтением реестра. На production это означало чтение
-        // около 1 ГБ ради 53 тысяч кандидатов. Ограничение действует только на последний
+        // около 1 ГБ ради 53 тысяч кандидатов. После удаления write-amplifying
+        // LastSeenAt-index production-срез 20k/50k/97k подтвердил hash crossover
+        // сразу после 10k. Ограничение действует только на последний
         // statement текущей транзакции; крупные импорты сохраняют свободу выбрать
         // последовательный план, когда он действительно дешевле.
         if (PreferIndexedLastSeenRefresh(candidateCount))

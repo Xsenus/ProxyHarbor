@@ -7,8 +7,10 @@ public sealed class ProxyCollectorPlanningTests
     [Theory]
     [InlineData(0, false)]
     [InlineData(1, true)]
-    [InlineData(100_000, true)]
-    [InlineData(100_001, false)]
+    [InlineData(9_999, true)]
+    [InlineData(10_000, true)]
+    [InlineData(10_001, false)]
+    [InlineData(100_000, false)]
     [InlineData(1_000_000, false)]
     public void IndexedRefreshPlanIsUsedOnlyForSmallNonEmptyImports(
         int candidateCount,
