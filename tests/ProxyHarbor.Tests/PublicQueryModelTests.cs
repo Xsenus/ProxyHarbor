@@ -37,6 +37,11 @@ public sealed class PublicQueryModelTests
 
         Assert.DoesNotContain("IX_Proxies_Status_LatencyMs_LastCheckedAt", indexes.Keys);
         Assert.DoesNotContain("IX_Proxies_Status_Protocol_LatencyMs_LastCheckedAt", indexes.Keys);
+        Assert.DoesNotContain("IX_Proxies_Status_LastSeenAt", indexes.Keys);
+
+        var status = indexes["IX_Proxies_Status"];
+        Assert.Equal(["Status"], status.Properties.Select(property => property.Name));
+        Assert.True(status.IsCreatedConcurrently());
     }
 
     private static void AssertIndex(IReadOnlyIndex index, string[] properties, bool[] descending)

@@ -171,6 +171,28 @@ public sealed class DatabaseInvariantIntegrationTests
     }
 
     [Fact]
+    public void ProxyLastSeenIndexIsReplacedWithoutBlockingWrites()
+    {
+        var migration = new OptimizeProxyLastSeenWriteAmplification();
+        var up = migration.UpOperations.OfType<SqlOperation>().ToArray();
+        var down = migration.DownOperations.OfType<SqlOperation>().ToArray();
+
+        Assert.Equal(2, up.Length);
+        Assert.All(up, operation => Assert.True(operation.SuppressTransaction));
+        Assert.Contains("CREATE INDEX CONCURRENTLY IF NOT EXISTS \"IX_Proxies_Status\"",
+            up[0].Sql, StringComparison.Ordinal);
+        Assert.Contains("DROP INDEX CONCURRENTLY IF EXISTS \"IX_Proxies_Status_LastSeenAt\"",
+            up[1].Sql, StringComparison.Ordinal);
+
+        Assert.Equal(2, down.Length);
+        Assert.All(down, operation => Assert.True(operation.SuppressTransaction));
+        Assert.Contains("CREATE INDEX CONCURRENTLY IF NOT EXISTS \"IX_Proxies_Status_LastSeenAt\"",
+            down[0].Sql, StringComparison.Ordinal);
+        Assert.Contains("DROP INDEX CONCURRENTLY IF EXISTS \"IX_Proxies_Status\"",
+            down[1].Sql, StringComparison.Ordinal);
+    }
+
+    [Fact]
     [Trait("Category", "PostgresIntegration")]
     public async Task StatusEvidenceMigrationRepairsLegacyRowsBeforeValidation()
     {

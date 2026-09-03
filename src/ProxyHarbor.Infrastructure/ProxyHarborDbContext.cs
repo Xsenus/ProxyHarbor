@@ -377,7 +377,13 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
             .HasDatabaseName("IX_Proxies_Alive_Protocol_LastCheckedAt")
             .HasFilter("\"Status\" = 1")
             .IsCreatedConcurrently();
-        proxy.HasIndex(x => new { x.Status, x.LastSeenAt });
+        // LastSeenAt обновляется массово после каждого полного сбора. Его присутствие
+        // в btree запрещало HOT update и заставляло PostgreSQL переписывать все
+        // индексы Proxy для каждой повторно найденной строки. Компактный Status-index
+        // сохраняет быстрый доступ к редким Pending/Alive группам без write amplification.
+        proxy.HasIndex(x => x.Status)
+            .HasDatabaseName("IX_Proxies_Status")
+            .IsCreatedConcurrently();
         // Точный expression-index для CASE priority + due order создаётся raw migration,
         // поскольку EF-модель не представляет CASE key. Он остаётся вне snapshot намеренно.
         proxy.Ignore(x => x.Key);
