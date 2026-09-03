@@ -222,10 +222,14 @@ public sealed class ProxyCollector(
                     db, now, options.Value.RunRetentionDays,
                     options.Value.ValidationRunRetentionHours, cancellationToken);
 
+                // now выше является единым timestamp данных каталога и retention cutoff.
+                // FinishedAt должен отражать конец всей работы цикла, включая импорт,
+                // source health и очистку, иначе duration скрывает ожидание PostgreSQL.
+                var finishedAt = DateTimeOffset.UtcNow;
                 var updated = await db.Runs
                     .Where(item => item.Id == run.Id && item.Status == "running")
                     .ExecuteUpdateAsync(setters => setters
-                        .SetProperty(item => item.FinishedAt, now)
+                        .SetProperty(item => item.FinishedAt, finishedAt)
                         .SetProperty(item => item.SourcesProcessed, sourcesProcessed)
                         .SetProperty(item => item.SourcesSucceeded, sourcesSucceeded)
                         .SetProperty(item => item.SourcesFailed, sourcesFailed)
@@ -243,7 +247,7 @@ public sealed class ProxyCollector(
 
                 // Возвращаемый объект отслеживался до ExecuteUpdate, поэтому синхронизируем
                 // его явно без дополнительного UPDATE и второй точки отказа.
-                run.FinishedAt = now;
+                run.FinishedAt = finishedAt;
                 run.SourcesProcessed = sourcesProcessed;
                 run.SourcesSucceeded = sourcesSucceeded;
                 run.SourcesFailed = sourcesFailed;
