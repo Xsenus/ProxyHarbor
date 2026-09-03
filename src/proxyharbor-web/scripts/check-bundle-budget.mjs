@@ -14,7 +14,7 @@ const initialAssetUrls = new Set(
 );
 
 const emittedAssets = await readdir(resolve(outputDirectory, "assets"));
-const requiredLazyChunks = ["AdminVpnPage-"];
+const requiredLazyChunks = ["AccountPage-", "AdminVpnPage-"];
 for (const prefix of requiredLazyChunks) {
   const chunk = emittedAssets.find((asset) => asset.startsWith(prefix) && asset.endsWith(".js"));
   if (!chunk) {
