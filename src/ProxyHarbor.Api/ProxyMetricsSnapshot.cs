@@ -335,12 +335,13 @@ public sealed class ProxyMetricsSnapshotCache(
             LogLevel.Warning,
             new EventId(1501, "ProxyMetricsSnapshotRefreshFailed"),
             "Не удалось обновить proxy metrics snapshot; используется снимок {CapturedAt}.");
-    // Exact aggregation currently reads the entire large proxy table. A one-minute
-    // soft TTL keeps dashboards current without spending database CPU when nobody
-    // consumes the snapshot. Five minutes is the fail-safe maximum: a missing
-    // background consumer then makes the request refresh synchronously.
+    // Exact aggregation currently reads the entire large proxy table. Admin views
+    // keep a one-minute soft TTL, while passive public/Prometheus consumers use a
+    // five-minute TTL so monitoring alone cannot force a large heap scan every
+    // minute. Fifteen minutes is the fail-safe hard expiry for both access modes.
     internal static readonly TimeSpan MaximumAge = TimeSpan.FromMinutes(1);
-    internal static readonly TimeSpan MaximumStaleAge = TimeSpan.FromMinutes(5);
+    internal static readonly TimeSpan PassiveMaximumAge = TimeSpan.FromMinutes(5);
+    internal static readonly TimeSpan MaximumStaleAge = TimeSpan.FromMinutes(15);
     private readonly SemaphoreSlim _refreshGate = new(1, 1);
     private readonly Channel<byte> _refreshRequests = Channel.CreateBounded<byte>(new BoundedChannelOptions(1)
     {
@@ -354,13 +355,23 @@ public sealed class ProxyMetricsSnapshotCache(
     private long _refreshRequestsQueued;
     private long _refreshRequestsCoalesced;
 
-    internal Task<ProxyMetricsSnapshot> GetAsync(CancellationToken token)
+    internal Task<ProxyMetricsSnapshot> GetAsync(CancellationToken token) =>
+        GetAsync(MaximumAge, token);
+
+    /// <summary>
+    /// Снимок для постоянно опрашивающих потребителей: публичной сводки и Prometheus.
+    /// Они получают тот же согласованный результат, но не создают лишний database scan.
+    /// </summary>
+    internal Task<ProxyMetricsSnapshot> GetPassiveAsync(CancellationToken token) =>
+        GetAsync(PassiveMaximumAge, token);
+
+    private Task<ProxyMetricsSnapshot> GetAsync(TimeSpan maximumAge, CancellationToken token)
     {
         var observed = Volatile.Read(ref _current);
         var now = timeProvider.GetUtcNow();
         if (observed is null || now - observed.StoredAt >= MaximumStaleAge)
             return GetOrRefreshAsync(force: false, token);
-        if (IsFresh(observed, now)) return Task.FromResult(observed.Snapshot);
+        if (IsFresh(observed, now, maximumAge)) return Task.FromResult(observed.Snapshot);
 
         // Serve the last internally consistent snapshot immediately. The bounded
         // signal means any number of simultaneous /stats and /metrics consumers
@@ -393,13 +404,13 @@ public sealed class ProxyMetricsSnapshotCache(
     private async Task<ProxyMetricsSnapshot> GetOrRefreshAsync(bool force, CancellationToken token)
     {
         var observed = Volatile.Read(ref _current);
-        if (!force && IsFresh(observed, timeProvider.GetUtcNow())) return observed!.Snapshot;
+        if (!force && IsFresh(observed, timeProvider.GetUtcNow(), MaximumAge)) return observed!.Snapshot;
 
         await _refreshGate.WaitAsync(token);
         try
         {
             var latest = Volatile.Read(ref _current);
-            if (IsFresh(latest, timeProvider.GetUtcNow()) &&
+            if (IsFresh(latest, timeProvider.GetUtcNow(), MaximumAge) &&
                 (!force || !ReferenceEquals(latest, observed)))
                 return latest!.Snapshot;
 
@@ -436,8 +447,8 @@ public sealed class ProxyMetricsSnapshotCache(
         }
     }
 
-    private static bool IsFresh(CacheEntry? entry, DateTimeOffset now) =>
-        entry is not null && now - entry.StoredAt < MaximumAge;
+    private static bool IsFresh(CacheEntry? entry, DateTimeOffset now, TimeSpan maximumAge) =>
+        entry is not null && now - entry.StoredAt < maximumAge;
 
     /// <summary>Завершает ожидающий demand-worker и освобождает gate singleton-кэша.</summary>
     public void Dispose()

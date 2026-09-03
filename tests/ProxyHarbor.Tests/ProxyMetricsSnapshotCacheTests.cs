@@ -126,6 +126,34 @@ public sealed class ProxyMetricsSnapshotCacheTests
     }
 
     [Fact]
+    public async Task PassiveDemandRefreshesAtFiveMinutesInsteadOfOne()
+    {
+        var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+            .UseInMemoryDatabase($"proxy-metrics-passive-{Guid.NewGuid():N}").Options;
+        await using (var seed = new ProxyHarborDbContext(options))
+        {
+            seed.Proxies.Add(new ProxyEndpoint { Host = "192.0.2.40", Port = 8080 });
+            await seed.SaveChangesAsync();
+        }
+
+        var factory = new CountingFactory(options);
+        var clock = new ManualTimeProvider();
+        using var cache = CreateCache(factory, clock);
+        var initial = await cache.GetPassiveAsync(CancellationToken.None);
+
+        clock.Advance(ProxyMetricsSnapshotCache.MaximumAge + TimeSpan.FromSeconds(1));
+        Assert.Same(initial, await cache.GetPassiveAsync(CancellationToken.None));
+        Assert.Equal(0, cache.RefreshRequestsQueued);
+        Assert.Equal(1, cache.DatabaseReads);
+
+        clock.Advance(ProxyMetricsSnapshotCache.PassiveMaximumAge -
+            ProxyMetricsSnapshotCache.MaximumAge);
+        Assert.Same(initial, await cache.GetPassiveAsync(CancellationToken.None));
+        Assert.Equal(1, cache.RefreshRequestsQueued);
+        Assert.Equal(1, cache.DatabaseReads);
+    }
+
+    [Fact]
     public async Task ExcessivelyStaleSnapshotRefreshesSynchronously()
     {
         var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
