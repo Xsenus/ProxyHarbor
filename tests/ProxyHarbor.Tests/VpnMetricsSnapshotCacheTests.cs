@@ -71,6 +71,28 @@ public sealed class VpnMetricsSnapshotCacheTests
         }
     }
 
+    [Fact]
+    public async Task PassiveDemandRefreshesAtFiveMinutesInsteadOfOne()
+    {
+        var options = Options();
+        await SeedAsync(options);
+        var factory = new CountingFactory(options);
+        var clock = new ManualTimeProvider();
+        using var cache = CreateCache(factory, clock);
+        var initial = await cache.GetPassiveAsync(CancellationToken.None);
+
+        clock.Advance(VpnMetricsSnapshotCache.MaximumAge + TimeSpan.FromSeconds(1));
+        Assert.Same(initial, await cache.GetPassiveAsync(CancellationToken.None));
+        Assert.Equal(0, cache.RefreshRequestsQueued);
+        Assert.Equal(1, cache.DatabaseReads);
+
+        clock.Advance(VpnMetricsSnapshotCache.PassiveMaximumAge -
+            VpnMetricsSnapshotCache.MaximumAge);
+        Assert.Same(initial, await cache.GetPassiveAsync(CancellationToken.None));
+        Assert.Equal(1, cache.RefreshRequestsQueued);
+        Assert.Equal(1, cache.DatabaseReads);
+    }
+
     private static DbContextOptions<ProxyHarborDbContext> Options() =>
         new DbContextOptionsBuilder<ProxyHarborDbContext>()
             .UseInMemoryDatabase($"vpn-metrics-cache-{Guid.NewGuid():N}").Options;

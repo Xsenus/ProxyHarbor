@@ -41,10 +41,10 @@ public sealed class MetricsController(
             await ResolveBackupOptionsAsync(requestToken);
         var cachedProxySnapshot = proxySnapshotCache is null
             ? null
-            : await proxySnapshotCache.GetAsync(requestToken);
+            : await proxySnapshotCache.GetPassiveAsync(requestToken);
         var cachedVpnSnapshot = vpnSnapshotCache is null
             ? null
-            : await vpnSnapshotCache.GetAsync(requestToken);
+            : await vpnSnapshotCache.GetPassiveAsync(requestToken);
         await using var db = await dbFactory.CreateDbContextAsync(requestToken);
         return await BufferedReadSnapshot.ExecuteAsync(
             db, token => GetSnapshotAsync(

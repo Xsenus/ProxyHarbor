@@ -272,8 +272,11 @@ public sealed class VpnMetricsSnapshotCache(
         new EventId(1510, "VpnMetricsSnapshotRefreshFailed"),
         "Не удалось обновить VPN metrics snapshot; используется снимок {CapturedAt}.");
 
+    // Admin lists remain minute-fresh. Public monitoring receives the same exact
+    // snapshot with a five-minute passive TTL, avoiding needless full-table scans.
     internal static readonly TimeSpan MaximumAge = TimeSpan.FromMinutes(1);
-    internal static readonly TimeSpan MaximumStaleAge = TimeSpan.FromMinutes(5);
+    internal static readonly TimeSpan PassiveMaximumAge = TimeSpan.FromMinutes(5);
+    internal static readonly TimeSpan MaximumStaleAge = TimeSpan.FromMinutes(15);
     private readonly SemaphoreSlim _refreshGate = new(1, 1);
     private readonly Channel<byte> _refreshRequests = Channel.CreateBounded<byte>(new BoundedChannelOptions(1)
     {
@@ -287,13 +290,19 @@ public sealed class VpnMetricsSnapshotCache(
     private long _refreshRequestsQueued;
     private long _refreshRequestsCoalesced;
 
-    internal Task<VpnMetricsSnapshot> GetAsync(CancellationToken token)
+    internal Task<VpnMetricsSnapshot> GetAsync(CancellationToken token) =>
+        GetAsync(MaximumAge, token);
+
+    internal Task<VpnMetricsSnapshot> GetPassiveAsync(CancellationToken token) =>
+        GetAsync(PassiveMaximumAge, token);
+
+    private Task<VpnMetricsSnapshot> GetAsync(TimeSpan maximumAge, CancellationToken token)
     {
         var observed = Volatile.Read(ref _current);
         var now = timeProvider.GetUtcNow();
         if (observed is null || now - observed.StoredAt >= MaximumStaleAge)
             return GetOrRefreshAsync(force: false, token);
-        if (IsFresh(observed, now)) return Task.FromResult(observed.Snapshot);
+        if (IsFresh(observed, now, maximumAge)) return Task.FromResult(observed.Snapshot);
         if (_refreshRequests.Writer.TryWrite(0)) Interlocked.Increment(ref _refreshRequestsQueued);
         else Interlocked.Increment(ref _refreshRequestsCoalesced);
         return Task.FromResult(observed.Snapshot);
@@ -317,12 +326,12 @@ public sealed class VpnMetricsSnapshotCache(
     private async Task<VpnMetricsSnapshot> GetOrRefreshAsync(bool force, CancellationToken token)
     {
         var observed = Volatile.Read(ref _current);
-        if (!force && IsFresh(observed, timeProvider.GetUtcNow())) return observed!.Snapshot;
+        if (!force && IsFresh(observed, timeProvider.GetUtcNow(), MaximumAge)) return observed!.Snapshot;
         await _refreshGate.WaitAsync(token);
         try
         {
             var latest = Volatile.Read(ref _current);
-            if (IsFresh(latest, timeProvider.GetUtcNow()) &&
+            if (IsFresh(latest, timeProvider.GetUtcNow(), MaximumAge) &&
                 (!force || !ReferenceEquals(latest, observed)))
                 return latest!.Snapshot;
             try
@@ -352,8 +361,8 @@ public sealed class VpnMetricsSnapshotCache(
         }
     }
 
-    private static bool IsFresh(CacheEntry? entry, DateTimeOffset now) =>
-        entry is not null && now - entry.StoredAt < MaximumAge;
+    private static bool IsFresh(CacheEntry? entry, DateTimeOffset now, TimeSpan maximumAge) =>
+        entry is not null && now - entry.StoredAt < maximumAge;
 
     /// <summary>Завершает ожидающий demand-worker и освобождает gate singleton-кэша.</summary>
     public void Dispose()

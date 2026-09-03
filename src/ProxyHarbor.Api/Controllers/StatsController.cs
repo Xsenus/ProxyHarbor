@@ -23,7 +23,7 @@ public sealed class StatsController(
     {
         var cachedProxySnapshot = proxySnapshotCache is null
             ? null
-            : await proxySnapshotCache.GetAsync(cancellationToken);
+            : await proxySnapshotCache.GetPassiveAsync(cancellationToken);
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
         var now = DateTimeOffset.UtcNow;
         var response = await BufferedReadSnapshot.ExecuteAsync(db, async token =>
