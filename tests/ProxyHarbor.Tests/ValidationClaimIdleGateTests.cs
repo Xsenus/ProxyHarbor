@@ -84,6 +84,26 @@ public sealed class ValidationClaimIdleGateTests
         Assert.True(gate.TryCoalesce(node).PersistHeartbeat);
     }
 
+    [Fact]
+    public void UnderfilledClaimStartsCooldownWhileFullClaimKeepsDraining()
+    {
+        long timestamp = 12_000;
+        var gate = CreateGate(() => timestamp);
+        var node = Guid.NewGuid();
+
+        gate.MarkClaimResult(claimedCount: 35, requestedCount: 160);
+        Assert.True(gate.CooldownActive);
+        Assert.True(gate.TryCoalesce(node).Coalesced);
+
+        gate.MarkClaimResult(claimedCount: 160, requestedCount: 160);
+        Assert.False(gate.CooldownActive);
+        Assert.False(gate.TryCoalesce(node).Coalesced);
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => gate.MarkClaimResult(-1, 160));
+        Assert.Throws<ArgumentOutOfRangeException>(() => gate.MarkClaimResult(161, 160));
+        Assert.Throws<ArgumentOutOfRangeException>(() => gate.MarkClaimResult(0, 0));
+    }
+
     private static ValidationClaimIdleGate CreateGate(Func<long> timestamp) =>
         new(timestamp, 1_000, TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(30));
 }

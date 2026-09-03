@@ -97,6 +97,21 @@ public sealed class DistributedProxyValidationIntegrationTests
                 Assert.DoesNotContain("SELECT *", command, StringComparison.OrdinalIgnoreCase);
             });
             await transaction.RollbackAsync();
+
+            await using var underfilledDb = new ProxyHarborDbContext(dbOptions);
+            await using var underfilledTransaction = await underfilledDb.Database.BeginTransactionAsync();
+            var underfilledGate = new ValidationClaimIdleGate();
+            var underfilled = await ValidationQueueClaim.ClaimAndLeaseAsync(
+                underfilledDb, 10, now, leaseUntil, Guid.NewGuid(), underfilledGate, CancellationToken.None);
+            Assert.Equal(4, underfilled.Count);
+            Assert.True(underfilledGate.CooldownActive);
+
+            var commandsAfterDrain = claimShape.CommandCount;
+            var repeated = await ValidationQueueClaim.ClaimAndLeaseAsync(
+                underfilledDb, 10, now, leaseUntil, Guid.NewGuid(), underfilledGate, CancellationToken.None);
+            Assert.Empty(repeated);
+            Assert.Equal(commandsAfterDrain, claimShape.CommandCount);
+            await underfilledTransaction.RollbackAsync();
         }
         finally
         {
@@ -449,6 +464,7 @@ public sealed class DistributedProxyValidationIntegrationTests
         private readonly System.Collections.Concurrent.ConcurrentQueue<string> _commands = new();
 
         internal IReadOnlyCollection<string> Commands => _commands.ToArray();
+        internal int CommandCount => _commands.Count;
 
         public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
             DbCommand command,
