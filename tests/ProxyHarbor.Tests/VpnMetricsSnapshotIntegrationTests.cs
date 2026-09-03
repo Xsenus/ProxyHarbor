@@ -108,6 +108,63 @@ public sealed class VpnMetricsSnapshotIntegrationTests
                     indexDefinition, StringComparison.Ordinal);
             }
 
+            await using (var freshnessIndexCommand = new NpgsqlCommand(
+                """
+                SELECT indexdef
+                FROM pg_indexes
+                WHERE schemaname = current_schema()
+                  AND indexname = 'IX_VpnEndpoints_PublicFreshness'
+                """,
+                (NpgsqlConnection)db.Database.GetDbConnection()))
+            {
+                var indexDefinition = Convert.ToString(
+                    await freshnessIndexCommand.ExecuteScalarAsync(), CultureInfo.InvariantCulture);
+                Assert.False(string.IsNullOrWhiteSpace(indexDefinition));
+                Assert.Contains("(\"LastCheckedAt\")", indexDefinition, StringComparison.Ordinal);
+                Assert.Contains("INCLUDE (\"Protocol\", \"CountryCode\")", indexDefinition,
+                    StringComparison.Ordinal);
+                Assert.Contains("\"Status\" = 1", indexDefinition, StringComparison.Ordinal);
+                Assert.Contains("\"ConnectionUri\" IS NOT NULL", indexDefinition,
+                    StringComparison.Ordinal);
+                Assert.Contains("\"CountryCode\" IS NOT NULL", indexDefinition,
+                    StringComparison.Ordinal);
+            }
+
+            // Маленькая fixture-таблица естественно предпочитает seq scan. Запрещаем его
+            // только в этой сессии, чтобы доказать совпадение предиката production COUNT
+            // с partial index; фактический выбор планировщика проверяется на production.
+            await using (var disableSeqScan = new NpgsqlCommand(
+                "SET enable_seqscan = off",
+                (NpgsqlConnection)db.Database.GetDbConnection()))
+                await disableSeqScan.ExecuteNonQueryAsync();
+            try
+            {
+                await using var freshnessExplain = new NpgsqlCommand(
+                    """
+                    EXPLAIN (FORMAT JSON, COSTS OFF)
+                    SELECT count(*)
+                    FROM "VpnEndpoints"
+                    WHERE "ConnectionUri" IS NOT NULL
+                      AND "CountryCode" IS NOT NULL
+                      AND "Status" = 1
+                      AND "LastCheckedAt" >= @fresh_after
+                    """,
+                    (NpgsqlConnection)db.Database.GetDbConnection());
+                freshnessExplain.Parameters.AddWithValue(
+                    "fresh_after", NpgsqlDbType.TimestampTz, now.AddMinutes(-15));
+                var freshnessPlan = Convert.ToString(
+                    await freshnessExplain.ExecuteScalarAsync(), CultureInfo.InvariantCulture);
+                Assert.Contains("IX_VpnEndpoints_PublicFreshness", freshnessPlan,
+                    StringComparison.Ordinal);
+            }
+            finally
+            {
+                await using var restoreSeqScan = new NpgsqlCommand(
+                    "RESET enable_seqscan",
+                    (NpgsqlConnection)db.Database.GetDbConnection());
+                await restoreSeqScan.ExecuteNonQueryAsync();
+            }
+
             await using var explain = new NpgsqlCommand(
                 $"EXPLAIN (FORMAT JSON, COSTS OFF) {VpnMetricsSnapshotReader.PostgresSql}",
                 (NpgsqlConnection)db.Database.GetDbConnection());

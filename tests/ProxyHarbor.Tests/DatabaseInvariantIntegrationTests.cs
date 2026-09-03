@@ -130,6 +130,28 @@ public sealed class DatabaseInvariantIntegrationTests
     }
 
     [Fact]
+    public void VpnPublicFreshnessIndexMatchesThePublishedCountPredicate()
+    {
+        var operations = new OptimizeVpnPublicFreshness().UpOperations
+            .OfType<SqlOperation>().ToArray();
+
+        Assert.Equal(2, operations.Length);
+        Assert.All(operations, operation => Assert.True(operation.SuppressTransaction));
+        Assert.Contains("DROP INDEX CONCURRENTLY IF EXISTS", operations[0].Sql,
+            StringComparison.Ordinal);
+        Assert.Contains("CREATE INDEX CONCURRENTLY", operations[1].Sql,
+            StringComparison.Ordinal);
+        Assert.Contains("\"LastCheckedAt\"", operations[1].Sql, StringComparison.Ordinal);
+        Assert.Contains("INCLUDE (\"Protocol\", \"CountryCode\")", operations[1].Sql,
+            StringComparison.Ordinal);
+        Assert.Contains("\"Status\" = 1", operations[1].Sql, StringComparison.Ordinal);
+        Assert.Contains("\"ConnectionUri\" IS NOT NULL", operations[1].Sql,
+            StringComparison.Ordinal);
+        Assert.Contains("\"CountryCode\" IS NOT NULL", operations[1].Sql,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     [Trait("Category", "PostgresIntegration")]
     public async Task StatusEvidenceMigrationRepairsLegacyRowsBeforeValidation()
     {
