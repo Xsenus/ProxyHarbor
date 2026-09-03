@@ -1,5 +1,7 @@
 # Changelog
 
+- Collector skips PostgreSQL import work for fully unchanged conditional-fetch cycles and uses bounded index lookups for small `LastSeenAt` refresh batches, avoiding a production-observed full scan of the 901k-row proxy registry.
+
 Все заметные изменения ProxyHarbor документируются в этом файле. Формат основан на
 [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/), версии следуют Semantic Versioning.
 

@@ -17,6 +17,7 @@ public sealed class ProxyCollector(
     ValidationWakeSignal? validationWakeSignal = null) : IDisposable
 {
     private const int MaxSourceBytes = 10_000_000;
+    internal const int IndexedRefreshCandidateLimit = 100_000;
     private static readonly TimeSpan AuditWriteTimeout = TimeSpan.FromSeconds(15);
     private static readonly Action<ILogger, string, Exception?> SourceFailed =
         LoggerMessage.Define<string>(LogLevel.Warning, new EventId(1001, "SourceFailed"), "Не удалось получить источник {Source}");
@@ -185,7 +186,8 @@ public sealed class ProxyCollector(
 
                 var now = DateTimeOffset.UtcNow;
                 var added = await BulkUpsertAsync(
-                    db, candidates.Items, now, options.Value.LastSeenRefreshMinutes, cancellationToken);
+                    db, candidates.Items, candidates.Count, now,
+                    options.Value.LastSeenRefreshMinutes, cancellationToken);
                 // Bounded signal не накапливает по событию на каждый feed/endpoint:
                 // одного wake достаточно, чтобы validator немедленно начал draining due-очереди.
                 if (candidates.Count > 0) validationWakeSignal?.Pulse();
@@ -325,10 +327,17 @@ public sealed class ProxyCollector(
     private static async Task<int> BulkUpsertAsync(
         ProxyHarborDbContext db,
         IEnumerable<(string Host, int Port, ProxyProtocol Protocol)> candidates,
+        int candidateCount,
         DateTimeOffset now,
         int lastSeenRefreshMinutes,
         CancellationToken token)
     {
+        ArgumentOutOfRangeException.ThrowIfNegative(candidateCount);
+        // Conditional HTTP feeds commonly produce an entirely unchanged cycle. Without
+        // this guard PostgreSQL still plans the empty temporary table as non-empty and
+        // may scan the complete proxy registry while refreshing zero rows.
+        if (candidateCount == 0) return 0;
+
         var connection = (NpgsqlConnection)db.Database.GetDbConnection();
         if (connection.State != System.Data.ConnectionState.Open) await connection.OpenAsync(token);
         await using var transaction = await connection.BeginTransactionAsync(token);
@@ -367,6 +376,19 @@ public sealed class ProxyCollector(
         // LastSeenAt не является срочной мутацией: строки, занятые проверкой, безопасно
         // пропускаются и обновятся на следующем collection-цикле. Это не даёт collector'у
         // ждать validator locks и образовывать с ними обратный порядок блокировок.
+        // Для небольшого импорта PostgreSQL без статистики временной таблицы склонен
+        // строить hash join с полным чтением реестра. На production это означало чтение
+        // около 1 ГБ ради 53 тысяч кандидатов. Ограничение действует только на последний
+        // statement текущей транзакции; крупные импорты сохраняют свободу выбрать
+        // последовательный план, когда он действительно дешевле.
+        if (PreferIndexedLastSeenRefresh(candidateCount))
+        {
+            await using var planner = new NpgsqlCommand(
+                "SET LOCAL enable_hashjoin = off; SET LOCAL enable_mergejoin = off",
+                connection,
+                transaction);
+            await planner.ExecuteNonQueryAsync(token);
+        }
         await using var refresh = new NpgsqlCommand("""
             WITH locked AS MATERIALIZED (
                 SELECT p."Id", i.seen_at
@@ -387,6 +409,12 @@ public sealed class ProxyCollector(
         await refresh.ExecuteNonQueryAsync(token);
         await transaction.CommitAsync(token);
         return added;
+    }
+
+    internal static bool PreferIndexedLastSeenRefresh(int candidateCount)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(candidateCount);
+        return candidateCount is > 0 and <= IndexedRefreshCandidateLimit;
     }
 
     private sealed record SourceCollectionResult(
