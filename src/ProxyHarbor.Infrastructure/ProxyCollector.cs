@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -24,6 +25,10 @@ public sealed class ProxyCollector(
     private static readonly Action<ILogger, Exception?> CollectionAuditFailed =
         LoggerMessage.Define(LogLevel.Error, new EventId(1002, "CollectionAuditFailed"),
             "Не удалось сохранить итоговый аудит цикла сбора.");
+    private static readonly Action<ILogger, int, long, long, long, int, int, Exception?> BulkUpsertCompleted =
+        LoggerMessage.Define<int, long, long, long, int, int>(LogLevel.Information,
+            new EventId(1003, "BulkUpsertCompleted"),
+            "Proxy import: {Candidates} кандидатов; COPY {CopyMs} мс, INSERT {InsertMs} мс, refresh {RefreshMs} мс; добавлено {Added}, обновлено {Refreshed}.");
     private readonly SemaphoreSlim _runGate = new(1, 1);
 
     /// <summary>Запускает один полный цикл сбора и возвращает его аудит.</summary>
@@ -323,7 +328,7 @@ public sealed class ProxyCollector(
             SourceFeedParser.EnsureSupportedMediaType,
             delayAsync);
 
-    private static async Task<int> BulkUpsertAsync(
+    private async Task<int> BulkUpsertAsync(
         ProxyHarborDbContext db,
         IEnumerable<(string Host, int Port, ProxyProtocol Protocol)> candidates,
         int candidateCount,
@@ -341,36 +346,44 @@ public sealed class ProxyCollector(
         if (connection.State != System.Data.ConnectionState.Open) await connection.OpenAsync(token);
         await using var transaction = await connection.BeginTransactionAsync(token);
         await using (var create = new NpgsqlCommand(
-            "CREATE TEMP TABLE proxy_import (host text NOT NULL, port integer NOT NULL, protocol integer NOT NULL, seen_at timestamptz NOT NULL) ON COMMIT DROP",
+            "CREATE TEMP TABLE proxy_import (host text NOT NULL, port integer NOT NULL, protocol integer NOT NULL) ON COMMIT DROP",
             connection, transaction))
             await create.ExecuteNonQueryAsync(token);
 
+        var phaseStarted = Stopwatch.GetTimestamp();
         await using (var writer = await connection.BeginBinaryImportAsync(
-            "COPY proxy_import (host, port, protocol, seen_at) FROM STDIN (FORMAT BINARY)", token))
+            "COPY proxy_import (host, port, protocol) FROM STDIN (FORMAT BINARY)", token))
         {
+            // WriteRowAsync отдаёт Npgsql целую строку за один async-вызов.
+            // На сотнях тысяч endpoint'ов это убирает миллионы мелких
+            // await-переходов; одинаковый seen_at передаётся ниже SQL-параметром.
+            var row = new object[3];
             foreach (var candidate in candidates)
             {
-                await writer.StartRowAsync(token);
-                await writer.WriteAsync(candidate.Host, NpgsqlDbType.Text, token);
-                await writer.WriteAsync(candidate.Port, NpgsqlDbType.Integer, token);
-                await writer.WriteAsync((int)candidate.Protocol, NpgsqlDbType.Integer, token);
-                await writer.WriteAsync(now, NpgsqlDbType.TimestampTz, token);
+                row[0] = candidate.Host;
+                row[1] = candidate.Port;
+                row[2] = (int)candidate.Protocol;
+                await writer.WriteRowAsync(token, row);
             }
             await writer.CompleteAsync(token);
         }
+        var copyMs = (long)Stopwatch.GetElapsedTime(phaseStarted).TotalMilliseconds;
 
         // Отдельный INSERT возвращает точное число новых строк и не заставляет PostgreSQL
         // выполнять бесполезный UPDATE каждого существующего proxy на каждом 15-минутном цикле.
+        phaseStarted = Stopwatch.GetTimestamp();
         await using var insert = new NpgsqlCommand("""
             INSERT INTO "Proxies" ("Id", "Host", "Port", "Protocol", "Status", "IsAnonymous", "FirstSeenAt", "LastSeenAt", "SuccessfulChecks", "FailedChecks")
-            SELECT gen_random_uuid(), i.host, i.port, i.protocol, 0, false, i.seen_at, i.seen_at, 0, 0
+            SELECT gen_random_uuid(), i.host, i.port, i.protocol, 0, false, @seen_at, @seen_at, 0, 0
             FROM proxy_import i
             WHERE NOT EXISTS (
                 SELECT 1 FROM "Proxies" p
                 WHERE p."Host" = i.host AND p."Port" = i.port AND p."Protocol" = i.protocol)
             ON CONFLICT ("Host", "Port", "Protocol") DO NOTHING
             """, connection, transaction);
+        insert.Parameters.AddWithValue("seen_at", NpgsqlDbType.TimestampTz, now);
         var added = await insert.ExecuteNonQueryAsync(token);
+        var insertMs = (long)Stopwatch.GetElapsedTime(phaseStarted).TotalMilliseconds;
 
         // LastSeenAt не является срочной мутацией: строки, занятые проверкой, безопасно
         // пропускаются и обновятся на следующем collection-цикле. Это не даёт collector'у
@@ -388,9 +401,10 @@ public sealed class ProxyCollector(
                 transaction);
             await planner.ExecuteNonQueryAsync(token);
         }
+        phaseStarted = Stopwatch.GetTimestamp();
         await using var refresh = new NpgsqlCommand("""
             WITH locked AS MATERIALIZED (
-                SELECT p."Id", i.seen_at
+                SELECT p."Id"
                 FROM "Proxies" p
                 JOIN proxy_import i
                   ON p."Host" = i.host AND p."Port" = i.port AND p."Protocol" = i.protocol
@@ -399,14 +413,18 @@ public sealed class ProxyCollector(
                 FOR UPDATE OF p SKIP LOCKED
             )
             UPDATE "Proxies" p
-            SET "LastSeenAt" = locked.seen_at
+            SET "LastSeenAt" = @seen_at
             FROM locked
             WHERE p."Id" = locked."Id"
             """, connection, transaction);
         refresh.Parameters.AddWithValue("refresh_before", NpgsqlDbType.TimestampTz,
             now.AddMinutes(-Math.Max(1, lastSeenRefreshMinutes)));
-        await refresh.ExecuteNonQueryAsync(token);
+        refresh.Parameters.AddWithValue("seen_at", NpgsqlDbType.TimestampTz, now);
+        var refreshed = await refresh.ExecuteNonQueryAsync(token);
+        var refreshMs = (long)Stopwatch.GetElapsedTime(phaseStarted).TotalMilliseconds;
         await transaction.CommitAsync(token);
+        OperationalLogBoundary.Write(() => BulkUpsertCompleted(
+            logger, candidateCount, copyMs, insertMs, refreshMs, added, refreshed, null));
         return added;
     }
 
