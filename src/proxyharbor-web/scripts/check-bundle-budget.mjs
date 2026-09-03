@@ -1,4 +1,4 @@
-import { readFile, stat } from "node:fs/promises";
+import { readFile, readdir, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 
 const maximumInitialJavaScriptBytes = 480 * 1024;
@@ -12,6 +12,18 @@ const initialAssetUrls = new Set(
     (match) => match[1],
   ),
 );
+
+const emittedAssets = await readdir(resolve(outputDirectory, "assets"));
+const requiredLazyChunks = ["AdminVpnPage-"];
+for (const prefix of requiredLazyChunks) {
+  const chunk = emittedAssets.find((asset) => asset.startsWith(prefix) && asset.endsWith(".js"));
+  if (!chunk) {
+    throw new Error(`Bundle budget: required lazy route chunk ${prefix}*.js was not emitted.`);
+  }
+  if ([...initialAssetUrls].some((assetUrl) => assetUrl.endsWith(`/${chunk}`))) {
+    throw new Error(`Bundle budget: lazy route chunk ${chunk} was added to the initial page.`);
+  }
+}
 
 if (initialAssetUrls.size === 0) {
   throw new Error("Bundle budget: index.html does not reference an initial JavaScript asset.");
