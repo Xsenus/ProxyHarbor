@@ -76,6 +76,22 @@ public sealed class ValidationClaimIdleGate
 
     internal void MarkWorkAvailable() => Interlocked.Exchange(ref emptyUntilTimestamp, 0);
 
+    /// <summary>
+    /// Полная партия означает, что за её границей могла остаться готовая работа.
+    /// Недозаполненная партия уже просмотрела все приоритеты и тем самым так же
+    /// подтверждает временно исчерпанную очередь, как и полностью пустой результат.
+    /// </summary>
+    internal void MarkClaimResult(int claimedCount, int requestedCount)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(requestedCount, 1);
+        ArgumentOutOfRangeException.ThrowIfNegative(claimedCount);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(claimedCount, requestedCount);
+        if (claimedCount < requestedCount)
+            MarkEmpty();
+        else
+            MarkWorkAvailable();
+    }
+
     internal void MarkHeartbeat(Guid nodeId) => lastHeartbeatTimestamps[nodeId] = getTimestamp();
 
     private bool ReserveHeartbeat(Guid nodeId, long now)

@@ -151,10 +151,11 @@ internal static class ValidationQueueClaim
                 db, DueClaimSql, priority, remaining, now, leaseUntil, leaseId, token));
         }
 
-        if (claimed.Count == 0)
-            idleGate?.MarkEmpty();
-        else
-            idleGate?.MarkWorkAvailable();
+        // Любая недозаполненная партия уже исчерпала все status/null/due ranges
+        // текущего snapshot. Не заставляем остальные VPS немедленно повторять те же
+        // пустые seek: новый due/import всё равно будет замечен максимум через
+        // существующий двухсекундный bounded cooldown.
+        idleGate?.MarkClaimResult(claimed.Count, batchSize);
         return claimed;
     }
 
