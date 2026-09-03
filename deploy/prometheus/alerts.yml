@@ -237,15 +237,19 @@ groups:
         expr: |
           proxyharbor_proxies_stale_unseen > 0
           and on() proxyharbor_background_workers_enabled == 1
-        # Maintenance runs hourly. Validation can make old never-working rows
-        # eligible again immediately after a successful pass, so a shorter
-        # window creates a false alarm between two healthy cleanup cycles.
-        for: 75m
+          and on() (
+            proxyharbor_maintenance_last_success_timestamp_seconds == 0
+            or
+            time() - proxyharbor_maintenance_last_success_timestamp_seconds > 4500
+          )
+        # The 75-minute age guard covers the hourly cadence and normal runtime;
+        # this confirmation window avoids alerting on one delayed scrape.
+        for: 15m
         labels:
           severity: warning
         annotations:
           summary: Retention устаревших прокси не завершается
-          description: Неарендованные, ни разу не работавшие Pending или Dead строки старше retention остаются дольше полного ежечасного цикла maintenance.
+          description: Устаревшие, ни разу не работавшие Pending или Dead строки остаются, а успешный maintenance не подтверждался дольше штатного интервала.
 
   - name: proxyharbor.maintenance
     rules:
