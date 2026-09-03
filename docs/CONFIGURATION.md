@@ -255,6 +255,10 @@ dotnet run --project src/ProxyHarbor.Api
 ```powershell
 docker compose config --quiet
 docker compose -f docker-compose.yml -f docker-compose.production.yml config --quiet
+docker compose -f docker-compose.yml -f docker-compose.production.yml -f docker-compose.nginx.yml config --quiet
 ```
 
 Не публикуйте вывод полной конфигурации, если Docker подставил в него значения `.env`.
+На сервере с системным Nginx всегда оставляйте `docker-compose.nginx.yml` последним
+и запускайте явный набор сервисов без Caddy; loopback-порты должны разрешаться как
+`127.0.0.1:18080` для сайта и `127.0.0.1:18081` для API.

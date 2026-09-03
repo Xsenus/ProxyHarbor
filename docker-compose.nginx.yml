@@ -1,0 +1,10 @@
+services:
+  # Shared-host deployment: system Nginx terminates TLS and reaches only
+  # loopback listeners. Keep this overlay last so it intentionally overrides
+  # the production overlay that removes direct frontend publication for Caddy.
+  api:
+    ports: !override
+      - "127.0.0.1:${PROXYHARBOR_API_PORT:-18081}:8080"
+  web:
+    ports: !override
+      - "127.0.0.1:${PROXYHARBOR_WEB_PORT:-18080}:8080"
