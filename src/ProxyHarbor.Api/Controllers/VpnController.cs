@@ -372,10 +372,10 @@ public sealed class AdminVpnController(
             ("latency", true) => filtered.OrderBy(item => item.LatencyMs == null).ThenBy(item => item.LatencyMs).ThenBy(item => item.Id),
             ("latency", false) => filtered.OrderBy(item => item.LatencyMs == null).ThenByDescending(item => item.LatencyMs).ThenBy(item => item.Id),
             ("quality", true) => filtered.OrderBy(item => item.SuccessfulChecks + item.FailedChecks == 0
-                    ? -1.0 : item.SuccessfulChecks * 1.0 / (item.SuccessfulChecks + item.FailedChecks))
+                    ? -1.0 : item.SuccessfulChecks / (double)(item.SuccessfulChecks + item.FailedChecks))
                 .ThenBy(item => item.Id),
             ("quality", false) => filtered.OrderByDescending(item => item.SuccessfulChecks + item.FailedChecks == 0
-                    ? -1.0 : item.SuccessfulChecks * 1.0 / (item.SuccessfulChecks + item.FailedChecks))
+                    ? -1.0 : item.SuccessfulChecks / (double)(item.SuccessfulChecks + item.FailedChecks))
                 .ThenBy(item => item.Id),
             ("firstSeen", true) => filtered.OrderBy(item => item.FirstSeenAt).ThenBy(item => item.Id),
             ("firstSeen", false) => filtered.OrderByDescending(item => item.FirstSeenAt).ThenBy(item => item.Id),
@@ -385,9 +385,7 @@ public sealed class AdminVpnController(
             _ => filtered.OrderBy(item => item.LastCheckedAt == null).ThenByDescending(item => item.LastCheckedAt).ThenBy(item => item.Id)
         };
         var skip = (page - 1) * pageSize;
-        var entities = skip == 0
-            ? await ordered.Take(pageSize).ToArrayAsync(token)
-            : await ReadDeepEndpointPageAsync(db, all, ordered, skip, pageSize, token);
+        var entities = await ReadEndpointPageAsync(db, all, ordered, skip, pageSize, token);
         var averageLatency = metrics.ReachableLatencySamples == 0
             ? null
             : (int?)Math.Round(metrics.ReachableLatencyTotal / (double)metrics.ReachableLatencySamples);
@@ -429,13 +427,13 @@ public sealed class AdminVpnController(
     private static int ToInt(long value) => value >= int.MaxValue ? int.MaxValue : (int)Math.Max(0, value);
 
     /// <summary>
-    /// Для глубокой страницы сначала читает из сортировочного индекса только Id,
-    /// затем загружает полные VPN-конфигурации ровно для найденной страницы. Это
-    /// особенно важно для VPN: ConnectionUri может быть большим, но не должен
-    /// читаться для всех строк, отброшенных OFFSET. Snapshot сохраняет согласованность
+    /// Для любой страницы сначала читает только Id и поля сортировки, затем загружает
+    /// полные VPN-конфигурации ровно для найденных строк. Это особенно важно для
+    /// неиндексированных сортировок: ConnectionUri может быть большим, но не должен
+    /// проходить через top-N sort всего каталога. Snapshot сохраняет согласованность
     /// двух запросов при параллельном сборе и очистке каталога.
     /// </summary>
-    private static Task<VpnEndpoint[]> ReadDeepEndpointPageAsync(
+    private static Task<VpnEndpoint[]> ReadEndpointPageAsync(
         ProxyHarborDbContext db,
         IQueryable<VpnEndpoint> all,
         IOrderedQueryable<VpnEndpoint> ordered,
