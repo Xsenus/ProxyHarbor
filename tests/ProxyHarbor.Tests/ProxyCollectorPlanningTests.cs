@@ -27,8 +27,9 @@ public sealed class ProxyCollectorPlanningTests
     [Theory]
     [InlineData(0, false)]
     [InlineData(1, false)]
-    [InlineData(100_000, false)]
-    [InlineData(100_001, true)]
+    [InlineData(50_000, false)]
+    [InlineData(50_001, true)]
+    [InlineData(100_000, true)]
     [InlineData(1_000_000, true)]
     public void HashAntiJoinPlanIsUsedOnlyForLargeImports(
         int candidateCount,

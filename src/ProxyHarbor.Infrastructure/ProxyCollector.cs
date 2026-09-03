@@ -19,6 +19,7 @@ public sealed class ProxyCollector(
 {
     private const int MaxSourceBytes = 10_000_000;
     internal const int IndexedRefreshCandidateLimit = 100_000;
+    internal const int HashImportCandidateThreshold = 50_000;
     private static readonly TimeSpan AuditWriteTimeout = TimeSpan.FromSeconds(15);
     private static readonly Action<ILogger, string, Exception?> SourceFailed =
         LoggerMessage.Define<string>(LogLevel.Warning, new EventId(1001, "SourceFailed"), "Не удалось получить источник {Source}");
@@ -377,6 +378,9 @@ public sealed class ProxyCollector(
         // with one bounded in-memory hash of the registry. Collection is protected by
         // a cluster-wide lock, so this transaction is the only large importer and a
         // 64 MiB work_mem budget cannot multiply across concurrent collection runs.
+        // INSERT и LastSeen refresh имеют отдельные crossover: production-партия
+        // 62k прочитала 30k buffers hash-планом вместо 240k при index probes, тогда
+        // как refresh до 100k всё ещё дешевле выполняется через индекс.
         if (PreferHashImport(candidateCount))
         {
             await using var planner = new NpgsqlCommand("""
@@ -454,13 +458,13 @@ public sealed class ProxyCollector(
     }
 
     /// <summary>
-    /// Крупный staging-набор дешевле сопоставить одним hash anti-join, чем выполнять
+    /// Средний и крупный staging-набор дешевле сопоставить одним hash anti-join, чем выполнять
     /// отдельный поиск по широкому уникальному индексу для каждого кандидата.
     /// </summary>
     internal static bool PreferHashImport(int candidateCount)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(candidateCount);
-        return candidateCount > IndexedRefreshCandidateLimit;
+        return candidateCount > HashImportCandidateThreshold;
     }
 
     private sealed record SourceCollectionResult(
