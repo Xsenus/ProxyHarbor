@@ -53,6 +53,19 @@ public sealed class ValidationClaimIdleGate
         return new IdleClaimDecision(true, ReserveHeartbeat(nodeId, now));
     }
 
+    /// <summary>
+    /// Повторно проверяет cooldown после cluster-wide сериализации claim. Несколько
+    /// узлов могут одновременно пройти быструю внешнюю проверку до того, как первый
+    /// из них подтвердит пустую очередь; последующие запросы не должны повторять
+    /// одинаковые PostgreSQL seek после ожидания advisory-lock.
+    /// </summary>
+    internal bool TryCoalesceSerializedProbe()
+    {
+        if (Volatile.Read(ref emptyUntilTimestamp) <= getTimestamp()) return false;
+        Interlocked.Increment(ref coalescedClaims);
+        return true;
+    }
+
     internal void MarkEmpty() =>
         Interlocked.Exchange(ref emptyUntilTimestamp, checked(getTimestamp() + cooldownTicks));
 

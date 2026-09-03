@@ -33,7 +33,6 @@ public sealed class DistributedProxyValidationService(
         var leaseId = Guid.NewGuid();
         var claimed = new List<ValidationClaimCandidate>();
         CheckerNode? nodeSnapshot = null;
-        var queueWasProbed = false;
 
         await using var strategyDb = await dbFactory.CreateDbContextAsync(token);
         await strategyDb.Database.CreateExecutionStrategy().ExecuteAsync(async () =>
@@ -65,9 +64,8 @@ public sealed class DistributedProxyValidationService(
             node.CurrentLeaseId = null;
             node.CurrentLeaseUntil = null;
             var batchSize = Math.Clamp(node.BatchSize, 1, 10_000);
-            queueWasProbed = true;
             claimed.AddRange(await ValidationQueueClaim.ClaimAndLeaseAsync(
-                db, batchSize, now, leaseUntil, leaseId, token));
+                db, batchSize, now, leaseUntil, leaseId, idleGate, token));
 
             var expiredLeaseIds = claimed
                 .Where(x => x.PreviousLeaseId.HasValue)
@@ -121,10 +119,6 @@ public sealed class DistributedProxyValidationService(
 
         if (nodeSnapshot is not null)
             idleGate.MarkHeartbeat(nodeId);
-        if (claimed.Count > 0)
-            idleGate.MarkWorkAvailable();
-        else if (queueWasProbed)
-            idleGate.MarkEmpty();
         if (nodeSnapshot is null || claimed.Count == 0) return null;
         return new CheckerLeaseResponse(
             leaseId, leaseUntil, Math.Clamp(nodeSnapshot.Concurrency, 1, 1_000),
