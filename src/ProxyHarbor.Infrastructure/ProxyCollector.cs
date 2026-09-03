@@ -19,7 +19,7 @@ public sealed class ProxyCollector(
 {
     private const int MaxSourceBytes = 10_000_000;
     internal const int IndexedRefreshCandidateLimit = 100_000;
-    internal const int HashImportCandidateThreshold = 50_000;
+    internal const int HashImportCandidateThreshold = 10_000;
     private static readonly TimeSpan AuditWriteTimeout = TimeSpan.FromSeconds(15);
     private static readonly Action<ILogger, string, Exception?> SourceFailed =
         LoggerMessage.Define<string>(LogLevel.Warning, new EventId(1001, "SourceFailed"), "Не удалось получить источник {Source}");
@@ -379,8 +379,10 @@ public sealed class ProxyCollector(
         // a cluster-wide lock, so this transaction is the only large importer and a
         // 64 MiB work_mem budget cannot multiply across concurrent collection runs.
         // INSERT и LastSeen refresh имеют отдельные crossover: production-партия
-        // 62k прочитала 30k buffers hash-планом вместо 240k при index probes, тогда
-        // как refresh до 100k всё ещё дешевле выполняется через индекс.
+        // 20k прочитала около 30k buffers hash-планом вместо 80k при index probes
+        // и завершилась за 2,62 вместо 8,26 секунды; на 10k планы сравнялись.
+        // Поэтому hash crossover начинается сразу после 10k, тогда как refresh до
+        // 100k всё ещё дешевле выполняется через индекс.
         if (PreferHashImport(candidateCount))
         {
             await using var planner = new NpgsqlCommand("""
