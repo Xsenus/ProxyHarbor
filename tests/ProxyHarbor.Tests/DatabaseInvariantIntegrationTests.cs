@@ -153,6 +153,24 @@ public sealed class DatabaseInvariantIntegrationTests
     }
 
     [Fact]
+    public void UnusedVpnStatusScheduleIndexIsDroppedWithoutBlockingWrites()
+    {
+        var migration = new DropUnusedVpnStatusScheduleIndex();
+        var up = migration.UpOperations.OfType<SqlOperation>().ToArray();
+        var down = migration.DownOperations.OfType<SqlOperation>().ToArray();
+
+        var drop = Assert.Single(up);
+        Assert.True(drop.SuppressTransaction);
+        Assert.Contains("DROP INDEX CONCURRENTLY IF EXISTS", drop.Sql, StringComparison.Ordinal);
+        Assert.Contains("IX_VpnEndpoints_Status_NextCheckAt", drop.Sql, StringComparison.Ordinal);
+
+        var restore = Assert.Single(down);
+        Assert.True(restore.SuppressTransaction);
+        Assert.Contains("CREATE INDEX CONCURRENTLY IF NOT EXISTS", restore.Sql, StringComparison.Ordinal);
+        Assert.Contains("\"Status\", \"NextCheckAt\"", restore.Sql, StringComparison.Ordinal);
+    }
+
+    [Fact]
     [Trait("Category", "PostgresIntegration")]
     public async Task StatusEvidenceMigrationRepairsLegacyRowsBeforeValidation()
     {

@@ -727,8 +727,6 @@ namespace ProxyHarbor.Infrastructure.Persistence.Migrations
 
                     b.HasIndex("LastSeenAt");
 
-                    b.HasIndex("Status", "NextCheckAt");
-
                     b.HasIndex("Host", "Port", "Protocol", "Transport")
                         .IsUnique();
 
