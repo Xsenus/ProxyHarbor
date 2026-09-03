@@ -346,25 +346,49 @@ tests:
         alertname: ProxyHarborVpnValidationBacklogAtRisk
         exp_alerts: []
 
-  - name: Stale proxy retention survives a complete hourly maintenance interval
+  - name: Stale proxy retention waits for overdue maintenance and confirmation window
     interval: 1m
     input_series:
       - series: proxyharbor_proxies_stale_unseen
-        values: '2x77'
+        values: '2x94'
       - series: proxyharbor_background_workers_enabled
-        values: '1x77'
+        values: '1x94'
+      - series: proxyharbor_maintenance_last_success_timestamp_seconds
+        values: '60x94'
     alert_rule_test:
-      - eval_time: 74m
+      - eval_time: 91m
         alertname: ProxyHarborStaleProxyRetention
         exp_alerts: []
-      - eval_time: 76m
+      - eval_time: 93m
         alertname: ProxyHarborStaleProxyRetention
         exp_alerts:
           - exp_labels:
               severity: warning
             exp_annotations:
               summary: Retention устаревших прокси не завершается
-              description: Неарендованные, ни разу не работавшие Pending или Dead строки старше retention остаются дольше полного ежечасного цикла maintenance.
+              description: Устаревшие, ни разу не работавшие Pending или Dead строки остаются, а успешный maintenance не подтверждался дольше штатного интервала.
+
+  - name: Stale proxy retention detects maintenance that never starts
+    interval: 1m
+    input_series:
+      - series: proxyharbor_proxies_stale_unseen
+        values: '2x17'
+      - series: proxyharbor_background_workers_enabled
+        values: '1x17'
+      - series: proxyharbor_maintenance_last_success_timestamp_seconds
+        values: '0x17'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: ProxyHarborStaleProxyRetention
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: ProxyHarborStaleProxyRetention
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Retention устаревших прокси не завершается
+              description: Устаревшие, ни разу не работавшие Pending или Dead строки остаются, а успешный maintenance не подтверждался дольше штатного интервала.
 
   - name: Stale proxy retention alert ignores intentionally disabled workers
     interval: 1m
@@ -372,9 +396,11 @@ tests:
       - series: proxyharbor_proxies_stale_unseen
         values: '2x77'
       - series: proxyharbor_background_workers_enabled
-        values: '0x77'
+        values: '0x17'
+      - series: proxyharbor_maintenance_last_success_timestamp_seconds
+        values: '0x17'
     alert_rule_test:
-      - eval_time: 76m
+      - eval_time: 16m
         alertname: ProxyHarborStaleProxyRetention
         exp_alerts: []
 
