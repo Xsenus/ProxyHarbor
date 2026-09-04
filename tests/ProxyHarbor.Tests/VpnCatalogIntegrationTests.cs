@@ -418,12 +418,74 @@ public sealed class VpnCatalogIntegrationTests
             Assert.DoesNotContain(selected, endpoint => endpoint.Id == thirdDue.Id);
             Assert.DoesNotContain(selected, endpoint => endpoint.Id == newestDue.Id);
             Assert.DoesNotContain(selected, endpoint => endpoint.Id == future.Id);
+
+            // When the repeat queue is empty, new rows must fill the WHOLE batch,
+            // not just its reserved half. Real PostgreSQL also verifies translation
+            // and deterministic ordering of the larger bounded candidate read.
+            await queueDb.VpnEndpoints.ExecuteDeleteAsync();
+            var newRows = Enumerable.Range(1, 6).Select(index =>
+            {
+                var endpoint = Endpoint($"198.51.100.{20 + index}", null);
+                endpoint.Id = Guid.Parse($"00000000-0000-0000-0000-{index:D12}");
+                return endpoint;
+            }).ToArray();
+            queueDb.VpnEndpoints.AddRange(newRows.Reverse());
+            await queueDb.SaveChangesAsync();
+            queueDb.ChangeTracker.Clear();
+            var fullNewBatch = await VpnValidationQueue.SelectAsync(queueDb, 4, now, CancellationToken.None);
+            Assert.Equal(newRows.Take(4).Select(endpoint => endpoint.Id), fullNewBatch.Select(endpoint => endpoint.Id));
+            Assert.Empty(queueDb.ChangeTracker.Entries());
         }
         finally
         {
             await using var drop = new NpgsqlCommand($"DROP SCHEMA IF EXISTS {schema} CASCADE", admin);
             await drop.ExecuteNonQueryAsync();
         }
+    }
+
+    [Theory]
+    [InlineData(4, 10, 0, 4, 0)]
+    [InlineData(4, 10, 1, 3, 1)]
+    [InlineData(4, 10, 2, 2, 2)]
+    [InlineData(4, 1, 10, 1, 3)]
+    [InlineData(4, 0, 10, 0, 4)]
+    [InlineData(4, 1, 1, 1, 1)]
+    [InlineData(4, 3, 0, 3, 0)]
+    [InlineData(4, 2, 1, 2, 1)]
+    [InlineData(5, 10, 1, 4, 1)]
+    [InlineData(5, 10, 10, 2, 3)]
+    [InlineData(1, 10, 0, 1, 0)]
+    [InlineData(4, 0, 0, 0, 0)]
+    [InlineData(1600, 1600, 0, 1600, 0)]
+    public async Task ValidationQueueUsesSpareCapacityWithoutSacrificingEitherQueue(
+        int batchSize, int neverCount, int dueCount, int expectedNever, int expectedDue)
+    {
+        var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+            .UseInMemoryDatabase($"vpn-capacity-{Guid.NewGuid():N}").Options;
+        await using var db = new ProxyHarborDbContext(options);
+        var now = DateTimeOffset.UtcNow;
+        var never = Enumerable.Range(0, neverCount).Select(i => Endpoint($"new-{i}.example", null)).ToArray();
+        var due = Enumerable.Range(0, dueCount)
+            .Select(i => Endpoint($"due-{i}.example", now.AddMinutes(-100 - i))).ToArray();
+        var future = Endpoint("future.example", now.AddHours(1));
+        db.VpnEndpoints.AddRange(never);
+        db.VpnEndpoints.AddRange(due);
+        db.VpnEndpoints.Add(future);
+        await db.SaveChangesAsync();
+        db.ChangeTracker.Clear();
+
+        var selected = await VpnValidationQueue.SelectAsync(db, batchSize, now, CancellationToken.None);
+
+        Assert.Equal(expectedNever + expectedDue, selected.Length);
+        Assert.Equal(Math.Min(batchSize, neverCount + dueCount), selected.Length);
+        Assert.Equal(selected.Length, selected.Select(item => item.Id).Distinct().Count());
+        Assert.Equal(due.OrderBy(item => item.NextCheckAt).ThenBy(item => item.LastCheckedAt)
+                .ThenBy(item => item.Id).Take(expectedDue).Select(item => item.Id)
+                .Concat(never.OrderBy(item => item.LastCheckedAt).ThenBy(item => item.Id)
+                    .Take(expectedNever).Select(item => item.Id)),
+            selected.Select(item => item.Id));
+        Assert.DoesNotContain(selected, item => item.Id == future.Id);
+        Assert.Empty(db.ChangeTracker.Entries());
     }
 
     [Theory]
