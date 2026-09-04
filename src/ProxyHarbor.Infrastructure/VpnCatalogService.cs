@@ -370,9 +370,17 @@ public sealed class VpnCatalogService(
     /// Передаёт bounded-партию через binary COPY и изменяет каталог одним UPDATE.
     /// Collection может параллельно обновлять LastSeenAt/URI: запрос намеренно касается
     /// только validation-полей и не перезаписывает свежие данные источников.
+    /// Возвращает число подтверждённых строк, включая уже записанные/устаревшие результаты.
+    /// Одинаковая или более старая попытка не создаёт новую версию строки и не меняет счётчики.
     /// </summary>
+    internal Task<int> PersistValidationResultsAsync(
+        VpnValidationUpdate[] updates,
+        CancellationToken token = default) => PersistValidationResultsAsync(updates, afterCommit: null, token);
+
+    /// <summary>Внутренний overload с fault-injection после настоящего COMMIT для lost-ack тестов.</summary>
     internal async Task<int> PersistValidationResultsAsync(
         VpnValidationUpdate[] updates,
+        Func<Task>? afterCommit,
         CancellationToken token = default)
     {
         if (updates.Length == 0) return 0;
@@ -447,9 +455,26 @@ public sealed class VpnCatalogService(
                         2147483647)::integer
                 FROM vpn_check_update result
                 WHERE endpoint."Id" = result.id
+                  AND (GREATEST(endpoint."LastValidationAttemptAt", endpoint."LastCheckedAt") IS NULL
+                    OR GREATEST(endpoint."LastValidationAttemptAt", endpoint."LastCheckedAt") < result.checked_at)
                 """, connection, transaction);
             var persisted = await updateCommand.ExecuteNonQueryAsync(token);
+            if (persisted != updates.Length)
+            {
+                // Обычная новая партия не требует дополнительного чтения каталога.
+                // При replay/устаревшей попытке подтверждаем и неизменённые строки.
+                await using var countCommand = new NpgsqlCommand("""
+                    SELECT count(*)::integer
+                    FROM "VpnEndpoints" endpoint
+                    JOIN vpn_check_update result ON endpoint."Id" = result.id
+                    """, connection, transaction);
+                persisted = (int)(await countCommand.ExecuteScalarAsync(token))!;
+            }
+            // Проверяем ДО COMMIT: отсутствие одного endpoint откатывает всю партию.
+            EnsureCompletePersistence(persisted, updates.Length);
             await transaction.CommitAsync(token);
+            // Test-only lost-ack hook: моделирует transient failure после реального COMMIT.
+            if (afterCommit is not null) await afterCommit();
             return persisted;
         });
     }
