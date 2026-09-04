@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Net;
 using System.Net.Sockets;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
@@ -278,9 +277,11 @@ public sealed class VpnCatalogService(
             now,
             token);
         var results = new VpnProbeResult[endpoints.Length];
+        var concurrency = Math.Clamp(options.Value.VpnValidationConcurrency, 1, 1_000);
+        using var tcpProbe = new VpnTcpProbe(concurrency);
         await Parallel.ForAsync(0, endpoints.Length, new ParallelOptions
         {
-            MaxDegreeOfParallelism = Math.Clamp(options.Value.VpnValidationConcurrency, 1, 1_000),
+            MaxDegreeOfParallelism = concurrency,
             CancellationToken = token
         }, async (index, cancellationToken) =>
         {
@@ -294,11 +295,10 @@ public sealed class VpnCatalogService(
                     "UDP требует протокольной проверки; credentials не используются");
                 return;
             }
-            var stopwatch = Stopwatch.StartNew();
             try
             {
-                await ConnectPublicAsync(endpoint.Host, endpoint.Port, options.Value.ProbeTimeoutSeconds, cancellationToken);
-                results[index] = new(endpoint.Id, true, (int)Math.Min(stopwatch.ElapsedMilliseconds, int.MaxValue), null);
+                var latency = await tcpProbe.ProbeAsync(endpoint.Host, endpoint.Port, options.Value.ProbeTimeoutSeconds, cancellationToken);
+                results[index] = new(endpoint.Id, true, latency, null);
             }
             catch (Exception exception) when (exception is SocketException or IOException or OperationCanceledException)
             {
@@ -508,23 +508,6 @@ public sealed class VpnCatalogService(
                 }
             });
         return results.ToArray();
-    }
-
-    private static async Task ConnectPublicAsync(string host, int port, int timeoutSeconds, CancellationToken token)
-    {
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
-        timeout.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
-        var addresses = IPAddress.TryParse(host, out var literal) ? [literal] : await Dns.GetHostAddressesAsync(host, timeout.Token);
-        if (addresses.Length is 0 or > 32 || addresses.Any(x => !NetworkSafety.IsPublicAddress(x)))
-            throw new IOException("VPN endpoint разрешён в локальный или служебный адрес");
-        Exception? last = null;
-        foreach (var address in addresses)
-        {
-            using var client = new TcpClient(address.AddressFamily) { NoDelay = true };
-            try { await client.ConnectAsync(address, port, timeout.Token); return; }
-            catch (Exception exception) when (exception is SocketException or OperationCanceledException) { last = exception; }
-        }
-        throw new IOException("VPN endpoint недоступен", last);
     }
 
     private sealed record FetchResult(

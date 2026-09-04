@@ -26,7 +26,7 @@ docker compose up -d --build
 | `BACKGROUND_WORKERS_ENABLED` | Запуск collector, validator, maintenance и backup workers в API-реплике |
 | `VALIDATION_CONCURRENCY` | Параллельные сетевые проверки, `1..1000` |
 | `VALIDATION_BATCH_SIZE` | Размер распределённой validation lease, `1..100000` |
-| `VPN_VALIDATION_CONCURRENCY` | Независимый параллелизм TCP-проверок VPN, `1..1000` |
+| `VPN_VALIDATION_CONCURRENCY` | Параллелизм VPN endpoint, `1..1000`; общий TCP socket budget партии — `max(32, concurrency)`, с атомарным резервом всех DNS-адресов endpoint |
 | `VPN_VALIDATION_BATCH_SIZE` | Размер локальной VPN validation-партии, `1..20000`, не меньше concurrency |
 | `VPN_REACHABLE_VALIDATION_INTERVAL_MINUTES` | Повторная проверка доступных VPN, `1..1440` |
 | `VPN_UNREACHABLE_RETRY_MINUTES` | Повторная проверка недоступных VPN, `1..10080` |
