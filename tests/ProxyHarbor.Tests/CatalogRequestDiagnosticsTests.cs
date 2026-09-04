@@ -1,8 +1,10 @@
 using System.Collections.Concurrent;
+using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using ProxyHarbor.Api;
 using ProxyHarbor.Api.Controllers;
@@ -166,6 +168,30 @@ public sealed class CatalogRequestDiagnosticsTests
         var logger = new RecordingLogger();
         new CatalogRequestDiagnostics(logger, new TestClock()).Complete(null);
         Assert.Empty(logger.Entries);
+    }
+
+    [Fact]
+    public async Task RealMiddlewareBindingResolvesDiagnosticsFromDependencyInjection()
+    {
+        var clock = new TestClock();
+        var logger = new RecordingLogger();
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton(new HttpRequestTelemetry());
+        services.AddSingleton(new CatalogRequestDiagnostics(logger, clock));
+        await using var provider = services.BuildServiceProvider();
+        var application = new ApplicationBuilder(provider);
+        application.UseMiddleware<HttpRequestTelemetryMiddleware>();
+        application.Run(context =>
+        {
+            Assert.NotNull(context.Features.Get<CatalogRequestTrace>());
+            clock.Advance(750);
+            return Task.CompletedTask;
+        });
+        var context = Context("/api/v1/proxies");
+        context.RequestServices = provider;
+        await application.Build()(context);
+        Assert.Equal(750d, Assert.Single(logger.Entries)["TotalMs"]);
     }
 
     [Theory]
