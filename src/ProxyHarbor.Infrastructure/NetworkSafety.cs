@@ -103,6 +103,7 @@ public static class NetworkSafety
 public static class PublicNetworkConnector
 {
     private const int MaxResolvedAddresses = 32;
+    private static readonly PublicAddressConnector Connections = new();
 
     /// <summary>
     /// Закрепляет handler за прямым соединением через проверяемый connect callback.
@@ -131,33 +132,22 @@ public static class PublicNetworkConnector
         DnsEndPoint endpoint,
         Func<string, CancellationToken, Task<IPAddress[]>> resolveAsync,
         Func<IPAddress, int, CancellationToken, ValueTask<Stream>> connectAsync,
-        CancellationToken token)
+        CancellationToken token,
+        PublicAddressConnector? connector = null)
     {
+        token.ThrowIfCancellationRequested();
         var addresses = await resolveAsync(endpoint.Host, token);
+        token.ThrowIfCancellationRequested();
         var publicAddresses = addresses.Where(NetworkSafety.IsPublicAddress).ToArray();
         if (publicAddresses.Length == 0 || publicAddresses.Length != addresses.Length ||
             publicAddresses.Length > MaxResolvedAddresses)
             throw new HttpRequestException(
                 $"DNS источника пуст, содержит локальный или служебный адрес либо превышает лимит {MaxResolvedAddresses}.");
 
-        Exception? lastError = null;
-        foreach (var address in publicAddresses)
-        {
-            try
-            {
-                return await connectAsync(address, endpoint.Port, token);
-            }
-            catch (Exception ex) when (ex is SocketException or OperationCanceledException)
-            {
-                if (ex is OperationCanceledException) throw;
-                lastError = ex;
-            }
-        }
-
-        throw new HttpRequestException("Не удалось соединиться ни с одним публичным адресом источника.", lastError);
+        return await (connector ?? Connections).ConnectAsync(publicAddresses, endpoint.Port, connectAsync, token);
     }
 
-    private static async ValueTask<Stream> OpenStreamAsync(
+    internal static async ValueTask<Stream> OpenStreamAsync(
         IPAddress address,
         int port,
         CancellationToken token)

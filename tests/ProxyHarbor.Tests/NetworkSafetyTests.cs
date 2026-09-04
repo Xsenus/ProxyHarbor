@@ -178,6 +178,33 @@ public sealed class NetworkSafetyTests
     }
 
     [Fact]
+    public async Task HangingFirstPublicAddressDoesNotHideAWorkingFallback()
+    {
+        using var cancellation = new CancellationTokenSource();
+        using var expected = new MemoryStream();
+        var first = IPAddress.Parse("8.8.8.8");
+        var operation = PublicNetworkConnector.ConnectCoreAsync(
+            new DnsEndPoint("fallback.example", 443),
+            (_, _) => Task.FromResult(new[] { first, IPAddress.Parse("1.1.1.1") }),
+            async (address, _, token) =>
+            {
+                if (address.Equals(first)) await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                return expected;
+            }, cancellation.Token).AsTask();
+        try
+        {
+            Assert.Same(expected, await operation.WaitAsync(TimeSpan.FromSeconds(2)));
+            Assert.True(expected.CanRead);
+        }
+        finally
+        {
+            await cancellation.CancelAsync();
+            try { await operation; }
+            catch (OperationCanceledException) { }
+        }
+    }
+
+    [Fact]
     public async Task FinalConnectionGateDoesNotFallbackAfterCallerCancellation()
     {
         using var cancellation = new CancellationTokenSource();
@@ -199,6 +226,6 @@ public sealed class NetworkSafetyTests
                 },
                 cancellation.Token).AsTask());
 
-        Assert.Equal(1, attempts);
+        Assert.Equal(0, attempts);
     }
 }
