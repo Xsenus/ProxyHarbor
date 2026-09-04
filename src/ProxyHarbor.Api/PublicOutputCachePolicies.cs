@@ -43,10 +43,15 @@ internal static class PublicOutputCachePolicies
     /// page/pageSize не входят в ключ: контроллер всё равно применяет фиксированный
     /// бесплатный лимит, а произвольные значения не должны вытеснять горячий ответ.
     /// Непервая либо неоднозначная page проходит в контроллер без общего cache.
+    /// pageSize не должен обходить integer model binding: неправильное значение
+    /// передаётся контроллеру для 400, даже если первая страница уже прогрета.
     /// </summary>
     internal static bool IsAnonymousFirstPage(HttpContext context)
     {
         if (!IsAnonymous(context)) return false;
+        if (context.Request.Query.TryGetValue("pageSize", out var sizes) &&
+            (sizes.Count != 1 || !int.TryParse(sizes[0], NumberStyles.Integer,
+                CultureInfo.InvariantCulture, out _))) return false;
         if (!context.Request.Query.TryGetValue("page", out var values)) return true;
         return values.Count == 1 && int.TryParse(values[0], NumberStyles.None,
             CultureInfo.InvariantCulture, out var page) && page == 1;
