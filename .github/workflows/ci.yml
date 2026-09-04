@@ -20,6 +20,11 @@ jobs:
         with: { dotnet-version: '10.0.302' }
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with: { node-version: '22', cache: npm, cache-dependency-path: src/proxyharbor-web/package-lock.json }
+      - name: Pin npm with bulk-only security audit
+        timeout-minutes: 3
+        run: |
+          npm install --global npm@11.19.1 --ignore-scripts --no-audit --no-fund --fetch-timeout=60000 --fetch-retries=1
+          test "$(npm --version)" = 11.19.1
       - run: dotnet restore ProxyHarbor.slnx --locked-mode
       - name: Audit NuGet dependency graph
         run: dotnet list ProxyHarbor.slnx package --vulnerable --include-transitive --no-restore
@@ -144,8 +149,8 @@ jobs:
       - run: npm ci --no-audit
         working-directory: src/proxyharbor-web
       # The official advisory API can return successfully after >90 seconds.
-      # Keep a bounded retry and an overall deadline without cutting that response short.
-      - run: npm audit --audit-level=moderate --fetch-timeout=120000 --fetch-retries=1 --fetch-retry-mintimeout=1000 --fetch-retry-maxtimeout=5000
+      # Allow one bounded bulk request; npm 11 never falls back to the legacy endpoint.
+      - run: npm audit --audit-level=moderate --fetch-timeout=240000 --fetch-retries=0
         timeout-minutes: 5
         working-directory: src/proxyharbor-web
       - run: npm run lint
