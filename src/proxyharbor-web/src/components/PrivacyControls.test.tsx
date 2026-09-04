@@ -2,14 +2,19 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PrivacyControls } from './PrivacyControls'
 import { analyticsAllowed, writeAnalyticsChoice } from '../privacyPreferences'
+import { publicInfoPaths } from '../publicInfoRoutes'
 
 describe('PrivacyControls', () => {
-  beforeEach(() => localStorage.clear())
+  beforeEach(() => {
+    localStorage.clear()
+    window.history.replaceState({}, '', '/')
+  })
   afterEach(() => {
     cleanup()
     vi.restoreAllMocks()
     writeAnalyticsChoice('rejected')
     localStorage.clear()
+    window.history.replaceState({}, '', '/')
   })
 
   it('keeps optional analytics disabled until a user explicitly accepts it', () => {
@@ -70,5 +75,70 @@ describe('PrivacyControls', () => {
     expect(screen.getByRole('dialog')).toHaveAttribute('aria-modal', 'true')
     expect(screen.queryByRole('button', {name:'Закрыть'})).not.toBeInTheDocument()
     expect(analyticsAllowed()).toBe(false)
+  })
+
+  it.each(Object.keys(publicInfoPaths))('allows reading %s without recording consent', (path) => {
+    window.history.replaceState({}, '', path)
+    render(<PrivacyControls/>)
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(localStorage.getItem('proxyharbor.analytics-consent.v1')).toBeNull()
+    expect(analyticsAllowed()).toBe(false)
+    fireEvent(window, new StorageEvent('storage', {key:null}))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('opens dismissible preferences while reading, without interpreting dismissal as consent', () => {
+    window.history.replaceState({}, '', '/cookies/?source=notice')
+    render(<PrivacyControls/>)
+    const trigger = screen.getByRole('button', {name:'Настройки cookies'})
+    trigger.focus()
+    fireEvent.click(trigger)
+    const dialog = screen.getByRole('dialog')
+    expect(dialog).toHaveAttribute('aria-modal', 'false')
+    expect(dialog).toHaveFocus()
+    fireEvent.keyDown(dialog, {key:'Escape'})
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(trigger).toHaveFocus()
+    expect(localStorage.getItem('proxyharbor.analytics-consent.v1')).toBeNull()
+    expect(analyticsAllowed()).toBe(false)
+  })
+
+  it.each(['/account', '/cookies/unrelated', '/privacy-extra'])('still requires a choice on %s', (path) => {
+    window.history.replaceState({}, '', path)
+    render(<PrivacyControls/>)
+    expect(screen.getByRole('dialog')).toHaveAttribute('aria-modal', 'true')
+  })
+
+  it('keeps keyboard navigation inside the required dialog and does not dismiss it with Escape', () => {
+    render(<PrivacyControls/>)
+    const dialog = screen.getByRole('dialog')
+    const first = screen.getByRole('link', {name:'Подробнее о cookies'})
+    const last = screen.getByRole('button', {name:'Разрешить статистику'})
+    expect(dialog).toHaveFocus()
+    fireEvent.keyDown(dialog, {key:'Tab', shiftKey:true})
+    expect(last).toHaveFocus()
+    fireEvent.keyDown(last, {key:'Tab'})
+    expect(first).toHaveFocus()
+    fireEvent.keyDown(first, {key:'Tab', shiftKey:true})
+    expect(last).toHaveFocus()
+    fireEvent.keyDown(last, {key:'Escape'})
+    expect(dialog).toBeVisible()
+    expect(analyticsAllowed()).toBe(false)
+  })
+
+  it('does not trap keyboard focus on a disabled analytics choice when DNT is enabled', () => {
+    const original = Object.getOwnPropertyDescriptor(navigator, 'doNotTrack')
+    Object.defineProperty(navigator, 'doNotTrack', {configurable:true, value:'1'})
+    try {
+      render(<PrivacyControls/>)
+      expect(screen.getByRole('button', {name:'Разрешить статистику'})).toBeDisabled()
+      const first = screen.getByRole('link', {name:'Подробнее о cookies'})
+      first.focus()
+      fireEvent.keyDown(first, {key:'Tab', shiftKey:true})
+      expect(screen.getByRole('button', {name:'Только необходимые'})).toHaveFocus()
+    } finally {
+      if (original) Object.defineProperty(navigator, 'doNotTrack', original)
+      else Reflect.deleteProperty(navigator, 'doNotTrack')
+    }
   })
 })
