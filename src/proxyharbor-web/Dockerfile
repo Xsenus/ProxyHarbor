@@ -1,7 +1,8 @@
 FROM node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32 AS build
 WORKDIR /app
 COPY src/proxyharbor-web/package*.json ./
-RUN npm ci
+# CI and release workflows audit this exact lockfile before publishing images.
+RUN npm ci --no-audit
 COPY src/proxyharbor-web/ .
 ARG VERSION=0.0.0-local
 ARG SOURCE_REVISION=unknown
