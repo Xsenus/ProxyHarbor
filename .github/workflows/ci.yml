@@ -138,9 +138,11 @@ jobs:
       - name: Lint GitHub Actions workflows
         shell: pwsh
         run: ./tools/Invoke-Actionlint.ps1
-      - run: npm ci
+      # Audit is an explicit required step below, not repeated during installation.
+      - run: npm ci --no-audit
         working-directory: src/proxyharbor-web
-      - run: npm audit --audit-level=moderate
+      - run: npm audit --audit-level=moderate --fetch-timeout=30000 --fetch-retries=1 --fetch-retry-mintimeout=1000 --fetch-retry-maxtimeout=5000
+        timeout-minutes: 5
         working-directory: src/proxyharbor-web
       - run: npm run lint
         working-directory: src/proxyharbor-web

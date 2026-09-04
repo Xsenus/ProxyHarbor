@@ -90,11 +90,16 @@ jobs:
           $report = Get-ChildItem ReleaseTestResults -Recurse -Filter coverage.cobertura.xml | Select-Object -First 1
           if (-not $report) { throw 'Release coverage report was not created.' }
           ./tools/Assert-Coverage.ps1 -ReportPath $report.FullName
-      - name: Build, test and audit frontend
+      - name: Install frontend dependencies
+        working-directory: src/proxyharbor-web
+        run: npm ci --no-audit
+      - name: Audit frontend dependencies
+        working-directory: src/proxyharbor-web
+        timeout-minutes: 5
+        run: npm audit --audit-level=moderate --fetch-timeout=30000 --fetch-retries=1 --fetch-retry-mintimeout=1000 --fetch-retry-maxtimeout=5000
+      - name: Build and test frontend
         working-directory: src/proxyharbor-web
         run: |
-          npm ci
-          npm audit --audit-level=moderate
           npm run lint
           npm test
           npm run build
