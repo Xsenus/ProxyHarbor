@@ -69,6 +69,57 @@ public sealed class CatalogRequestDiagnosticsTests
     }
 
     [Fact]
+    public void SlowRequestCapturesRuntimeDeltasWithoutAttributingGlobalCountersToTheRequest()
+    {
+        var clock = new TestClock();
+        var logger = new RecordingLogger();
+        var captures = 0;
+        var diagnostics = new CatalogRequestDiagnostics(logger, clock)
+        {
+            CaptureRuntime = () => ++captures == 1
+                ? new(TimeSpan.FromSeconds(2), 5, 10, 3)
+                : new(TimeSpan.FromMilliseconds(2075), 7, 12, 99)
+        };
+        var trace = diagnostics.Begin(Context("/api/v1/proxies"));
+        clock.Advance(800);
+        diagnostics.Complete(trace);
+        Assert.Equal(2, captures);
+        var entry = Assert.Single(logger.RuntimeEntries);
+        Assert.Equal("proxies", entry["Catalog"]);
+        Assert.Equal(75d, entry["GcPauseMs"]);
+        Assert.Equal(2, entry["Gen2Collections"]);
+        Assert.Equal(12, entry["ThreadPoolThreads"]);
+        Assert.Equal(3L, entry["PendingAtStart"]);
+        Assert.Equal(99L, entry["PendingAtEnd"]);
+        Assert.Equal(7, entry.Count);
+    }
+
+    [Fact]
+    public void FastAndRateLimitedRequestsDoNotCaptureEndRuntimeOrLogAdditionalEntries()
+    {
+        var clock = new TestClock();
+        var logger = new RecordingLogger();
+        var captures = 0;
+        var diagnostics = new CatalogRequestDiagnostics(logger, clock)
+        {
+            CaptureRuntime = () => { captures++; return default; }
+        };
+        var fast = diagnostics.Begin(Context("/api/v1/vpn"));
+        diagnostics.Complete(fast);
+        Assert.Equal(1, captures);
+        Assert.Empty(logger.RuntimeEntries);
+        var slow = diagnostics.Begin(Context("/api/v1/vpn"));
+        clock.Advance(500);
+        diagnostics.Complete(slow);
+        Assert.Equal(3, captures);
+        diagnostics.Complete(slow);
+        Assert.Equal(3, captures);
+        Assert.Single(logger.RuntimeEntries);
+        diagnostics.Begin(Context("/api/v1/admin/users"));
+        Assert.Equal(3, captures);
+    }
+
+    [Fact]
     public void FastRequestsDoNotConsumeTheSlowLogBudget()
     {
         var clock = new TestClock();
@@ -267,6 +318,7 @@ public sealed class CatalogRequestDiagnosticsTests
     private sealed class RecordingLogger : ILogger<CatalogRequestDiagnostics>
     {
         internal ConcurrentQueue<Dictionary<string, object?>> Entries { get; } = new();
+        internal ConcurrentQueue<Dictionary<string, object?>> RuntimeEntries { get; } = new();
         internal bool ThrowOnLog { get; init; }
         internal int Attempts;
         public bool IsEnabled(LogLevel logLevel) => true;
@@ -276,10 +328,10 @@ public sealed class CatalogRequestDiagnosticsTests
         {
             Interlocked.Increment(ref Attempts);
             if (ThrowOnLog) throw new InvalidOperationException("sink failure");
-            Assert.Equal(1801, eventId.Id);
+            Assert.True(eventId.Id is 1801 or 1802);
             Assert.Equal(LogLevel.Warning, logLevel);
             Assert.Null(exception);
-            Entries.Enqueue(Assert.IsAssignableFrom<IEnumerable<KeyValuePair<string, object?>>>(state)
+            (eventId.Id == 1801 ? Entries : RuntimeEntries).Enqueue(Assert.IsAssignableFrom<IEnumerable<KeyValuePair<string, object?>>>(state)
                 .ToDictionary(x => x.Key, x => x.Value));
         }
     }
