@@ -40,4 +40,35 @@ describe('PrivacyControls', () => {
     fireEvent.click(screen.getByRole('button', {name:'Разрешить статистику'}))
     expect(analyticsAllowed()).toBe(true)
   })
+
+  it('closes the initial dialog when another tab records a choice', () => {
+    render(<PrivacyControls/>)
+    expect(screen.getByRole('dialog')).toBeVisible()
+    localStorage.setItem('proxyharbor.analytics-consent.v1', 'rejected')
+    fireEvent(window, new StorageEvent('storage', {key:'proxyharbor.analytics-consent.v1', newValue:'rejected'}))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', {name:'Настройки cookies'})).toBeVisible()
+    expect(analyticsAllowed()).toBe(false)
+  })
+
+  it('updates an open settings dialog after another tab revokes consent', () => {
+    localStorage.setItem('proxyharbor.analytics-consent.v1', 'accepted')
+    render(<PrivacyControls/>)
+    fireEvent.click(screen.getByRole('button', {name:'Настройки cookies'}))
+    localStorage.setItem('proxyharbor.analytics-consent.v1', 'rejected')
+    fireEvent(window, new StorageEvent('storage', {key:'proxyharbor.analytics-consent.v1', newValue:'rejected'}))
+    expect(screen.getByRole('dialog')).toBeVisible()
+    expect(screen.getByText('Необязательная статистика отключена.')).toBeVisible()
+    expect(analyticsAllowed()).toBe(false)
+  })
+
+  it.each(['proxyharbor.analytics-consent.v1', null])('requires a new choice when another tab clears consent (%s)', (key) => {
+    localStorage.setItem('proxyharbor.analytics-consent.v1', 'accepted')
+    render(<PrivacyControls/>)
+    localStorage.clear()
+    fireEvent(window, new StorageEvent('storage', {key, newValue:null}))
+    expect(screen.getByRole('dialog')).toHaveAttribute('aria-modal', 'true')
+    expect(screen.queryByRole('button', {name:'Закрыть'})).not.toBeInTheDocument()
+    expect(analyticsAllowed()).toBe(false)
+  })
 })
