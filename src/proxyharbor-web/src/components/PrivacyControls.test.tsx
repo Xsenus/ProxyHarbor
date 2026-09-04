@@ -1,7 +1,15 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { PrivacyControls } from './PrivacyControls'
+import { PrivacyControls as PrivacyControlsView } from './PrivacyControls'
+import { SiteSettingsContext } from '../siteSettingsContext'
+import { defaultSiteSettings } from '../siteSettingsModel'
 import { analyticsAllowed, writeAnalyticsChoice } from '../privacyPreferences'
+
+function PrivacyControls() {
+  return <SiteSettingsContext.Provider value={{settings:defaultSiteSettings, loading:false, analyticsReady:true, refresh:async () => defaultSiteSettings}}>
+    <PrivacyControlsView/>
+  </SiteSettingsContext.Provider>
+}
 
 describe('PrivacyControls', () => {
   beforeEach(() => localStorage.clear())

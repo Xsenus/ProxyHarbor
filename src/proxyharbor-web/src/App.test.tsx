@@ -1,6 +1,9 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
+import { SiteSettingsProvider } from './siteSettings'
+import { defaultSiteSettings } from './siteSettingsModel'
+import { FirstPartyAnalytics } from './components/FirstPartyAnalytics'
 
 const stats = {
   alive: 77, staleAlive: 0, pending: 1, dead: 2, dueForCheck: 3,
@@ -31,6 +34,7 @@ describe('ProxyHarbor UI', () => {
     localStorage.clear()
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
+      if (url.includes('/api/v1/site-settings')) return jsonResponse(defaultSiteSettings)
       if (url.includes('/api/v1/stats')) return jsonResponse(stats)
       if (url.includes('/api/v1/vpn/countries')) return jsonResponse([{ code: 'DE', count: 1 }])
       if (url.includes('/api/v1/vpn')) return jsonResponse({ items: vpnEndpoints, page: 1, pageSize: 10, total: 1 })
@@ -55,18 +59,18 @@ describe('ProxyHarbor UI', () => {
   })
 
   it('does not send optional visit telemetry before consent', async () => {
-    const sendBeacon=vi.fn()
+    const sendBeacon=vi.fn(() => true)
     Object.defineProperty(navigator,'sendBeacon',{configurable:true,value:sendBeacon})
-    render(<App/>)
+    render(<SiteSettingsProvider><FirstPartyAnalytics/><App/></SiteSettingsProvider>)
     await screen.findByText('система активна')
     expect(sendBeacon).not.toHaveBeenCalled()
   })
 
   it('sends page telemetry after explicit analytics consent', async () => {
-    const sendBeacon=vi.fn()
+    const sendBeacon=vi.fn(() => true)
     Object.defineProperty(navigator,'sendBeacon',{configurable:true,value:sendBeacon})
     localStorage.setItem('proxyharbor.analytics-consent.v1','accepted')
-    render(<App/>)
+    render(<SiteSettingsProvider><FirstPartyAnalytics/><App/></SiteSettingsProvider>)
     await waitFor(()=>expect(sendBeacon).toHaveBeenCalledWith(expect.stringContaining('/api/v1/telemetry/visit'),expect.any(Blob)))
   })
 

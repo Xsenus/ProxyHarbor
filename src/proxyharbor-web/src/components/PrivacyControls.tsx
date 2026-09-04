@@ -10,7 +10,7 @@ import {
 import { useSiteSettings } from "../siteSettingsContext";
 
 export function PrivacyControls() {
-  const { settings, loading } = useSiteSettings();
+  const { settings, loading, analyticsReady } = useSiteSettings();
   const revision = settings.cookieConsentRevision;
   const [choice, setChoice] = useState(() => readAnalyticsChoice(revision));
   const [open, setOpen] = useState(choice === null);
@@ -114,7 +114,7 @@ export function PrivacyControls() {
               className="primary"
               type="button"
               onClick={() => choose("accepted")}
-              disabled={privacySignal || enabledAnalytics.length === 0}
+              disabled={!analyticsReady || privacySignal || enabledAnalytics.length === 0}
             >
               Разрешить статистику
             </button>

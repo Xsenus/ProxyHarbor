@@ -33,11 +33,11 @@ function installScript(id: string, source: string, onLoad: () => void) {
 }
 
 export function AnalyticsIntegrations() {
-  const { settings, loading } = useSiteSettings();
+  const { settings, loading, analyticsReady } = useSiteSettings();
   const revision = settings.cookieConsentRevision;
 
   useEffect(() => {
-    if (loading) return;
+    if (loading || !analyticsReady) return;
     const browser = window as AnalyticsWindow;
     const flags = window as unknown as Record<string, unknown>;
     const { yandex, google, vk } = settings.analytics;
@@ -156,7 +156,7 @@ export function AnalyticsIntegrations() {
       for (const stop of running.values()) stop();
       running.clear();
     };
-  }, [loading, revision, settings.analytics]);
+  }, [loading, analyticsReady, revision, settings.analytics]);
 
   return null;
 }

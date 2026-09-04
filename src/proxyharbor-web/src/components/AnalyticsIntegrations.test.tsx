@@ -18,7 +18,7 @@ function config(): SiteSettings {
   } }
 }
 function tree(settings = config()) {
-  return <SiteSettingsContext.Provider value={{settings, loading:false, refresh:async () => settings}}>
+  return <SiteSettingsContext.Provider value={{settings, loading:false, analyticsReady:true, refresh:async () => settings}}>
     <AnalyticsIntegrations/>
   </SiteSettingsContext.Provider>
 }

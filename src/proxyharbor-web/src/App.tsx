@@ -6,7 +6,6 @@ import { Toggle } from './components/Toggle'
 import { ToastSignal } from './components/Toasts'
 import { PublicPricingSection } from './PublicPricingSection'
 import { publicInfoPaths } from './publicInfoRoutes'
-import { analyticsAllowed, privacyPreferenceChanged } from './privacyPreferences'
 import { useSiteSettings } from './siteSettingsContext'
 import { sectionHref, siteSectionCodes, siteSectionLabels, type SiteSettings } from './siteSettingsModel'
 
@@ -171,26 +170,6 @@ export default function App() {
   const backupAbortRef = useRef<AbortController | null>(null)
   const adminSessionIdRef = useRef(0)
   const adminMutationAbortRefs = useRef(new Set<AbortController>())
-  const recordedVisitRef = useRef('')
-  const [analyticsConsentRevision,setAnalyticsConsentRevision] = useState(0)
-
-  useEffect(() => {
-    const refresh = () => setAnalyticsConsentRevision(value => value + 1)
-    window.addEventListener(privacyPreferenceChanged, refresh)
-    return () => window.removeEventListener(privacyPreferenceChanged, refresh)
-  }, [])
-
-  // Beacon не задерживает переход со страницы. Сервер принимает только pathname,
-  // сводит его к фиксированному коду и не сохраняет query/fragment или tracking cookies.
-  useEffect(() => {
-    if (!siteSettings.analytics.firstPartyEnabled ||
-      !analyticsAllowed(siteSettings.cookieConsentRevision) ||
-      recordedVisitRef.current === currentPath ||
-      typeof navigator.sendBeacon !== 'function') return
-    recordedVisitRef.current = currentPath
-    const payload = new Blob([JSON.stringify({ path: currentPath })], { type: 'application/json' })
-    navigator.sendBeacon(`${API}/api/v1/telemetry/visit`, payload)
-  }, [currentPath, analyticsConsentRevision, siteSettings.analytics.firstPartyEnabled, siteSettings.cookieConsentRevision])
 
   const cancelPublicRequests = useCallback(() => {
     publicRequestIdRef.current++

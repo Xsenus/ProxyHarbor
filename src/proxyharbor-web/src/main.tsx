@@ -8,6 +8,7 @@ import { PrivacyControls } from "./components/PrivacyControls";
 import { SeoHead } from "./SeoHead";
 import { SiteSettingsProvider } from "./siteSettings";
 import { AnalyticsIntegrations } from "./components/AnalyticsIntegrations";
+import { FirstPartyAnalytics } from "./components/FirstPartyAnalytics";
 
 // StrictMode помогает обнаруживать небезопасные побочные эффекты ещё при разработке.
 createRoot(document.getElementById("root")!).render(
@@ -17,6 +18,7 @@ createRoot(document.getElementById("root")!).render(
         <ToastProvider>
           <SeoHead />
           <AnalyticsIntegrations />
+          <FirstPartyAnalytics />
           <NotificationBridge apiBase={import.meta.env.VITE_API_URL ?? ""} />
           <App />
           <PrivacyControls />
