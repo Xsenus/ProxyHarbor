@@ -14,11 +14,15 @@ function Start-BackupAuditMock(
     [int]$ExpectedRequests) {
     Start-Job -ArgumentList $Port, $Mode, $ExpectedRequests -ScriptBlock {
         param($Port, $Mode, $ExpectedRequests)
+        # Start-Job не наследует preference variables вызывающего runspace.
+        # Ошибка bind/GetContext должна завершать mock с исходной причиной,
+        # а не продолжать обработку null context до ложного Completed.
+        $ErrorActionPreference = 'Stop'
         $listener = [Net.HttpListener]::new()
-        $listener.Prefixes.Add("http://127.0.0.1:$Port/")
-        $listener.Start()
         $handled = 0
         try {
+            $listener.Prefixes.Add("http://127.0.0.1:$Port/")
+            $listener.Start()
             while ($handled -lt $ExpectedRequests) {
                 $context = $listener.GetContext()
                 if ($context.Request.Url.AbsolutePath -eq '/ready') {
@@ -60,7 +64,7 @@ function Start-BackupAuditMock(
                 $context.Response.Close()
             }
         }
-        finally { $listener.Stop(); $listener.Close() }
+        finally { $listener.Close() }
     }
 }
 
@@ -73,6 +77,10 @@ function Wait-BackupAuditMock(
         if ($Job.State -in 'Failed', 'Stopped', 'Completed') {
             $reason = @($Job.ChildJobs | ForEach-Object { $_.JobStateInfo.Reason.Message } |
                 Where-Object { $_ }) -join '; '
+            if (-not $reason) {
+                $reason = @($Job.ChildJobs | ForEach-Object { $_.Error } |
+                    ForEach-Object { $_.Exception.Message } | Where-Object { $_ }) -join '; '
+            }
             if (-not $reason) { $reason = 'причина не сообщена' }
             throw "Backup-audit mock на порту $Port завершился до readiness " +
                 "(state=$($Job.State)): $reason."
@@ -129,6 +137,32 @@ function Invoke-BackupAuditCase(
 
 try {
     [IO.Directory]::CreateDirectory($fixtureRoot) | Out-Null
+    # Никаких HTTP retry при отказе listener: занятый порт должен немедленно
+    # дать Failed с причиной, а не ждать readiness timeout/скрывать bind error.
+    $occupied = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
+    $occupied.Start()
+    $occupiedPort = ([Net.IPEndPoint]$occupied.LocalEndpoint).Port
+    $failedJob = $null
+    try {
+        $failedJob = Start-BackupAuditMock -Port $occupiedPort -Mode 'telegram' -ExpectedRequests 2
+        if (-not (Wait-Job -Job $failedJob -Timeout 10)) {
+            throw 'Backup mock не завершился при занятом порте.'
+        }
+        $failureMessage = $null
+        try { Wait-BackupAuditMock -Port $occupiedPort -Job $failedJob }
+        catch { $failureMessage = $_.Exception.Message }
+        if ($failedJob.State -ne 'Failed' -or -not $failureMessage -or
+            $failureMessage -notmatch 'state=Failed' -or $failureMessage -match 'причина не сообщена') {
+            throw "Backup mock потерял причину отказа listener: $failureMessage"
+        }
+    }
+    finally {
+        $occupied.Stop()
+        if ($failedJob) {
+            if ($failedJob.State -eq 'Running') { Stop-Job -Job $failedJob }
+            Remove-Job -Job $failedJob -Force
+        }
+    }
     $telegram = Invoke-BackupAuditCase -Name telegram -Mode telegram -ShouldSucceed $true
     $objectStorage = Invoke-BackupAuditCase -Name object-storage -Mode object-storage -ShouldSucceed $true
     $local = Invoke-BackupAuditCase -Name local -Mode local -ShouldSucceed $true -AllowLocalOnly
