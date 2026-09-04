@@ -68,6 +68,8 @@ jobs:
           if ($failed) { throw 'Operational PowerShell scripts contain syntax errors.' }
       - name: Verify predeploy backup retention contracts
         run: bash ./tools/Test-PredeployBackupRetention.sh
+      - name: Verify private predeploy backup creation contracts
+        run: bash ./tools/Test-PredeployBackupCreation.sh
       - name: Verify production secret preflight contracts
         run: bash ./tools/Test-ProductionSecrets.sh
       - name: Verify source-audit evidence contracts
