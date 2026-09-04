@@ -11,7 +11,7 @@ import {
 import { useSiteSettings } from "../siteSettingsContext";
 
 export function PrivacyControls() {
-  const { settings, loading } = useSiteSettings();
+  const { settings, loading, analyticsReady } = useSiteSettings();
   const revision = settings.cookieConsentRevision;
   // Public descriptions and legal documents must be readable before consent.
   // Reading them is not a privacy choice and never enables analytics.
@@ -151,7 +151,7 @@ export function PrivacyControls() {
               className="primary"
               type="button"
               onClick={() => choose("accepted")}
-              disabled={privacySignal || enabledAnalytics.length === 0}
+              disabled={!analyticsReady || privacySignal || enabledAnalytics.length === 0}
             >
               Разрешить статистику
             </button>
