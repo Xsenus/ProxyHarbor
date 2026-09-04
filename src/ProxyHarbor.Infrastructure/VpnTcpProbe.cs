@@ -11,12 +11,14 @@ internal sealed class VpnTcpProbe : IDisposable
     private static readonly TimeSpan AttemptDelay = TimeSpan.FromMilliseconds(250);
     private readonly TimeProvider clock;
     private readonly ConcurrencyLimiter connections;
+    private readonly VpnDnsGate dnsGate;
 
-    internal VpnTcpProbe(int concurrency, TimeProvider? clock = null)
+    internal VpnTcpProbe(int concurrency, TimeProvider? clock = null, VpnDnsGate? dnsGate = null)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(concurrency, 1);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(concurrency, 1_000);
         this.clock = clock ?? TimeProvider.System;
+        this.dnsGate = dnsGate ?? VpnDnsGate.Shared;
         // Резервируем весь DNS fan-out атомарно ДО сетевого тайм-аута. Иначе 800
         // зависших первых IP займут все permits и заблокируют собственный fallback.
         connections = new(new ConcurrencyLimiterOptions
@@ -29,7 +31,9 @@ internal sealed class VpnTcpProbe : IDisposable
 
     internal Task<int> ProbeAsync(string host, int port, int timeoutSeconds, CancellationToken token) =>
         ProbeCoreAsync(host, port, TimeSpan.FromSeconds(timeoutSeconds),
-            static (name, cancellation) => Dns.GetHostAddressesAsync(name, cancellation),
+            // The task must describe the native operation's lifetime, not just
+            // the caller's cancelled wait. ProbeCoreAsync owns that wait deadline.
+            static (name, _) => Dns.GetHostAddressesAsync(name, CancellationToken.None),
             ConnectAsync, token);
 
     internal async Task<int> ProbeCoreAsync(
@@ -41,6 +45,11 @@ internal sealed class VpnTcpProbe : IDisposable
         if (port is < 1 or > 65_535) throw new IOException("VPN endpoint содержит недопустимый порт");
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(timeout, TimeSpan.Zero);
         token.ThrowIfCancellationRequested();
+        var isLiteral = IPAddress.TryParse(host, out var literal);
+        using var dnsReservation = isLiteral ? null : await ReserveDnsAsync(timeout, token);
+        token.ThrowIfCancellationRequested();
+        // Local admission waiting is not endpoint latency and does not consume
+        // its DNS/connect budget. Admission itself has a separate bounded deadline.
         var startedAt = clock.GetTimestamp();
         IPAddress[] addresses;
         using (var dnsDeadline = new CancellationTokenSource(timeout, clock))
@@ -48,8 +57,9 @@ internal sealed class VpnTcpProbe : IDisposable
         {
             try
             {
-                addresses = IPAddress.TryParse(host, out var literal)
-                    ? [literal] : await resolve(host, dnsCancellation.Token);
+                addresses = isLiteral ? [literal!]
+                    : await dnsReservation!.Start(() => resolve(host, dnsCancellation.Token))
+                        .WaitAsync(dnsCancellation.Token);
                 dnsCancellation.Token.ThrowIfCancellationRequested();
             }
             catch (OperationCanceledException exception) when (!token.IsCancellationRequested)
@@ -77,6 +87,20 @@ internal sealed class VpnTcpProbe : IDisposable
         await RaceAsync(addresses, port, connect, networkCancellation.Token, token);
         networkCancellation.Token.ThrowIfCancellationRequested();
         return (int)Math.Min((dnsElapsed + clock.GetElapsedTime(startedAt)).TotalMilliseconds, int.MaxValue);
+    }
+
+    private async Task<VpnDnsGate.Lease> ReserveDnsAsync(TimeSpan timeout, CancellationToken token)
+    {
+        using var deadline = new CancellationTokenSource(timeout, clock);
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, deadline.Token);
+        try
+        {
+            var reservation = await dnsGate.AcquireAsync(cancellation.Token);
+            try { cancellation.Token.ThrowIfCancellationRequested(); return reservation; }
+            catch { reservation.Dispose(); throw; }
+        }
+        catch (OperationCanceledException exception) when (!token.IsCancellationRequested)
+        { throw new VpnProbeDeferredException("Проверка отложена: очередь DNS занята.", exception); }
     }
 
     private async Task RaceAsync(IPAddress[] addresses, int port,
