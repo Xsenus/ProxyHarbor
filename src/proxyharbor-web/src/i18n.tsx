@@ -70,8 +70,10 @@ function normalize(value?: string | null): Language {
 }
 
 function initialLanguage(): Language {
-  const saved = localStorage.getItem(storageKey)
-  if (saved) return normalize(saved)
+  try {
+    const saved = localStorage.getItem(storageKey)
+    if (saved) return normalize(saved)
+  } catch { /* Storage restrictions must not prevent application startup. */ }
   return normalize(navigator.languages?.[0] ?? navigator.language)
 }
 
@@ -94,11 +96,17 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     activeLanguage = language
     document.documentElement.lang = language === 'zh' ? 'zh-CN' : language
-    document.cookie = `ProxyHarbor.Language=${language}; Path=/; Max-Age=31536000; SameSite=Lax${location.protocol === 'https:' ? '; Secure' : ''}`
+    try {
+      document.cookie = `ProxyHarbor.Language=${language}; Path=/; Max-Age=31536000; SameSite=Lax${location.protocol === 'https:' ? '; Secure' : ''}`
+    } catch { /* Language remains available for this page when cookies are denied. */ }
   }, [language])
   const value = useMemo<I18nContextValue>(() => ({
     language,
-    setLanguage: next => { activeLanguage = next; localStorage.setItem(storageKey, next); setLanguageState(next) },
+    setLanguage: next => {
+      activeLanguage = next
+      try { localStorage.setItem(storageKey, next) } catch { /* Use React state without persistence. */ }
+      setLanguageState(next)
+    },
     t: (key, variables = {}) => {
       const template = dictionaries[language][key] ?? ru[key] ?? key
       return Object.entries(variables).reduce((text, [name, replacement]) => text.replaceAll(`{${name}}`, String(replacement)), template)
