@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Activity, ArrowRight, Check, Network, Plus, RefreshCw, Server, Trash2, Workflow, X } from 'lucide-react'
 import { ToastSignal } from './components/Toasts'
 import { Toggle } from './components/Toggle'
@@ -12,13 +12,58 @@ type CheckerNodeList = {image:string;nativeAssetBaseUrl:string;items:CheckerNode
 /** Управление внешними VPS, которые забирают непересекающиеся партии проверок. */
 export default function AdminCheckerNodesPage(){
   const [data,setData]=useState<CheckerNodeList|null>(null);const [error,setError]=useState('');const [busy,setBusy]=useState('');const [dialog,setDialog]=useState<{mode:'add'|'deploy'|'delete';node?:CheckerNode}|null>(null)
-  const load=useCallback(async()=>{try{const response=await fetch(`${API}/api/v1/admin/checker-nodes`,{credentials:'include'});if(!response.ok)throw new Error(await responseMessage(response,'Узлы проверки недоступны'));setData(await response.json() as CheckerNodeList);setError('')}catch(reason){setError(reason instanceof Error?reason.message:'Узлы проверки недоступны')}},[])
-  useEffect(()=>{const timer=window.setTimeout(()=>void load(),0);const refresh=window.setInterval(()=>void load(),30000);return()=>{window.clearTimeout(timer);window.clearInterval(refresh)}},[load])
-  const update=async(node:CheckerNode,patch:Partial<CheckerNode>)=>{setBusy(node.id);try{const next={...node,...patch};const response=await fetch(`${API}/api/v1/admin/checker-nodes/${node.id}`,{method:'PUT',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:next.enabled,concurrency:next.concurrency,batchSize:next.batchSize})});if(!response.ok)throw new Error(await responseMessage(response,'Настройки узла не сохранены'));await load()}catch(reason){setError(reason instanceof Error?reason.message:'Настройки узла не сохранены')}finally{setBusy('')}}
-  const nodes=data?.items??[];const online=nodes.filter(node=>node.online).length;const active=nodes.filter(node=>node.busy).length;const checks=nodes.reduce((sum,node)=>sum+node.completedChecks,0)
+  const [drafts,setDrafts]=useState<Record<string,Partial<Pick<CheckerNode,'concurrency'|'batchSize'>>>>({})
+  const readRef=useRef<AbortController|null>(null)
+  const mutationRef=useRef(false)
+  const mountedRef=useRef(false)
+  const load=useCallback(async(force=false)=>{
+    if(!mountedRef.current||mutationRef.current&&!force)return false
+    readRef.current?.abort()
+    const controller=new AbortController()
+    readRef.current=controller
+    try{
+      const response=await fetch(`${API}/api/v1/admin/checker-nodes`,{credentials:'include',signal:controller.signal})
+      if(!response.ok)throw new Error(await responseMessage(response,'Узлы проверки недоступны'))
+      const snapshot=await response.json() as CheckerNodeList
+      if(controller.signal.aborted||!mountedRef.current)return false
+      setData(snapshot);setError('')
+      return true
+    }catch(reason){
+      if(!controller.signal.aborted&&mountedRef.current)setError(reason instanceof Error?reason.message:'Узлы проверки недоступны')
+      return false
+    }finally{if(readRef.current===controller)readRef.current=null}
+  },[])
+  useEffect(()=>{
+    mountedRef.current=true
+    const timer=window.setTimeout(()=>void load(),0)
+    const refresh=window.setInterval(()=>void load(),30000)
+    return()=>{mountedRef.current=false;window.clearTimeout(timer);window.clearInterval(refresh);readRef.current?.abort()}
+  },[load])
+  const edit=(id:string,patch:Partial<Pick<CheckerNode,'concurrency'|'batchSize'>>)=>setDrafts(current=>({...current,[id]:{...current[id],...patch}}))
+  const update=async(node:CheckerNode,patch:Partial<CheckerNode>)=>{
+    if(mutationRef.current)return
+    mutationRef.current=true
+    readRef.current?.abort()
+    const submittedDraft=drafts[node.id]
+    setBusy(node.id)
+    try{
+      const next={...node,...patch}
+      const response=await fetch(`${API}/api/v1/admin/checker-nodes/${node.id}`,{method:'PUT',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:next.enabled,concurrency:next.concurrency,batchSize:next.batchSize})})
+      if(!response.ok)throw new Error(await responseMessage(response,'Настройки узла не сохранены'))
+      if(await load(true)){
+        // A newer edit has a different object identity, even if its value matches the submitted value.
+        setDrafts(current=>{
+          if(current[node.id]!==submittedDraft)return current
+          const remaining={...current};delete remaining[node.id];return remaining
+        })
+      }
+    }catch(reason){if(mountedRef.current)setError(reason instanceof Error?reason.message:'Настройки узла не сохранены')}
+    finally{mutationRef.current=false;if(mountedRef.current)setBusy('')}
+  }
+  const nodes=(data?.items??[]).map(node=>({...node,...drafts[node.id]}));const online=nodes.filter(node=>node.online).length;const active=nodes.filter(node=>node.busy).length;const checks=nodes.reduce((sum,node)=>sum+node.completedChecks,0)
   return <section className="admin-section checker-admin-section" aria-labelledby="admin-checkers-title"><AdminPageHeader id="admin-checkers-title" title="Узлы проверки"><div className="checker-heading-actions"><button className="icon-button" aria-label="Обновить узлы" onClick={()=>void load()}><RefreshCw/></button><button className="primary-admin-button" onClick={()=>setDialog({mode:'add'})}><Plus/>Подключить VPS</button></div></AdminPageHeader><ToastSignal kind="error" message={error}/>
     <div className="admin-summary-grid compact-summary checker-summary"><article><span className="summary-icon"><Server/></span><div><small>Подключено</small><strong>{nodes.length}</strong><p>можно добавлять новые VPS</p></div></article><article><span className="summary-icon"><Activity/></span><div><small>На связи</small><strong>{online}</strong><p>heartbeat не старше 2 минут</p></div></article><article><span className="summary-icon"><Workflow/></span><div><small>В работе</small><strong>{active}</strong><p>исполняют партии</p></div></article><article><span className="summary-icon"><Check/></span><div><small>Проверено узлами</small><strong>{formatNumber(checks)}</strong><p>накопительный счётчик</p></div></article></div>
-    <section className="admin-card checker-registry"><div className="card-heading"><div><span className="kicker">DISTRIBUTED VALIDATION</span><h2>Внешние VPS</h2><p>SSH-пароль используется только при установке. Истёкшая аренда автоматически возвращается в очередь, а основной сервер остаётся резервным проверяющим.</p></div>{data&&<code className="checker-image">{data.image}</code>}</div><div className="checker-node-list">{data===null?<div className="empty-state"><RefreshCw className="spin"/>Загружаем узлы…</div>:nodes.length===0?<div className="empty-state"><Network/>Внешние узлы ещё не подключены.</div>:nodes.map(node=><article key={node.id} className={!node.enabled?'disabled':''}><div className="checker-node-identity"><span className={`checker-node-indicator ${node.online?'online':''}`}/><div><b>{node.name}</b><small>{node.host}:{node.sshPort} · {node.sshUsername}{node.agentVersion&&` · v${node.agentVersion}`}</small></div></div><div className="checker-node-health"><span className={`state-pill ${node.online?'active':''}`}>{node.online?node.busy?'Проверяет':'На связи':node.enabled?'Не на связи':'Отключён'}</span><small>{node.lastHeartbeatAt?`Heartbeat ${timeAgo(node.lastHeartbeatAt)}`:'Heartbeat ещё не получен'} · {node.deploymentStatus}</small>{node.lastError&&<em title={node.lastError}>{node.lastError}</em>}</div><label>Параллельно<input type="number" min="1" max="1000" value={node.concurrency} onChange={event=>setData(current=>current?{...current,items:current.items.map(item=>item.id===node.id?{...item,concurrency:Number(event.target.value)}:item)}:current)}/></label><label>Партия<input type="number" min="1" max="10000" value={node.batchSize} onChange={event=>setData(current=>current?{...current,items:current.items.map(item=>item.id===node.id?{...item,batchSize:Number(event.target.value)}:item)}:current)}/></label><div className="checker-node-stats"><b>{formatNumber(node.completedChecks)}</b><small>проверок · {formatNumber(node.aliveChecks)} рабочих</small></div><div className="checker-node-actions"><Toggle checked={node.enabled} onChange={enabled=>void update(node,{enabled})} label="Активен"/><button className="table-action" disabled={busy===node.id} onClick={()=>void update(node,{})}><Check/>Сохранить</button><button className="icon-button" data-tooltip="Переустановить агент и сменить токен" aria-label={`Переустановить агент ${node.name}`} onClick={()=>setDialog({mode:'deploy',node})}><RefreshCw/></button><button className="icon-button danger" data-tooltip="Удалить агент с VPS" aria-label={`Удалить узел ${node.name}`} onClick={()=>setDialog({mode:'delete',node})}><Trash2/></button></div></article>)}</div></section>
+    <section className="admin-card checker-registry"><div className="card-heading"><div><span className="kicker">DISTRIBUTED VALIDATION</span><h2>Внешние VPS</h2><p>SSH-пароль используется только при установке. Истёкшая аренда автоматически возвращается в очередь, а основной сервер остаётся резервным проверяющим.</p></div>{data&&<code className="checker-image">{data.image}</code>}</div><div className="checker-node-list">{data===null?<div className="empty-state"><RefreshCw className="spin"/>Загружаем узлы…</div>:nodes.length===0?<div className="empty-state"><Network/>Внешние узлы ещё не подключены.</div>:nodes.map(node=><article key={node.id} className={!node.enabled?'disabled':''}><div className="checker-node-identity"><span className={`checker-node-indicator ${node.online?'online':''}`}/><div><b>{node.name}</b><small>{node.host}:{node.sshPort} · {node.sshUsername}{node.agentVersion&&` · v${node.agentVersion}`}</small></div></div><div className="checker-node-health"><span className={`state-pill ${node.online?'active':''}`}>{node.online?node.busy?'Проверяет':'На связи':node.enabled?'Не на связи':'Отключён'}</span><small>{node.lastHeartbeatAt?`Heartbeat ${timeAgo(node.lastHeartbeatAt)}`:'Heartbeat ещё не получен'} · {node.deploymentStatus}</small>{node.lastError&&<em title={node.lastError}>{node.lastError}</em>}</div><label>Параллельно<input type="number" min="1" max="1000" value={node.concurrency} onChange={event=>edit(node.id,{concurrency:Number(event.target.value)})}/></label><label>Партия<input type="number" min="1" max="10000" value={node.batchSize} onChange={event=>edit(node.id,{batchSize:Number(event.target.value)})}/></label><div className="checker-node-stats"><b>{formatNumber(node.completedChecks)}</b><small>проверок · {formatNumber(node.aliveChecks)} рабочих</small></div><div className="checker-node-actions"><Toggle checked={node.enabled} disabled={!!busy} onChange={enabled=>void update(node,{enabled})} label="Активен"/><button className="table-action" disabled={!!busy} onClick={()=>void update(node,{})}><Check/>Сохранить</button><button className="icon-button" data-tooltip="Переустановить агент и сменить токен" aria-label={`Переустановить агент ${node.name}`} onClick={()=>setDialog({mode:'deploy',node})}><RefreshCw/></button><button className="icon-button danger" data-tooltip="Удалить агент с VPS" aria-label={`Удалить узел ${node.name}`} onClick={()=>setDialog({mode:'delete',node})}><Trash2/></button></div></article>)}</div></section>
     {dialog&&<CheckerNodeDialog value={dialog} busy={busy==='dialog'} onClose={()=>setDialog(null)} onComplete={async()=>{setDialog(null);await load()}} onBusy={value=>setBusy(value?'dialog':'')} onError={setError}/>}</section>
 }
 
