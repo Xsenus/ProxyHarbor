@@ -275,6 +275,12 @@ public sealed class DistributedProxyValidationIntegrationTests
 
             var next = Assert.IsType<CheckerLeaseResponse>(await dispatcher.ClaimAsync(node.Id, CancellationToken.None));
             Assert.NotEqual(lease.LeaseId, next.LeaseId);
+            // Compare stored snapshots: PostgreSQL timestamp precision is lower
+            // than DateTimeOffset, so the in-memory response may differ by ticks.
+            DateTimeOffset? nextLeaseUntil;
+            await using (var beforeReplay = await factory.CreateDbContextAsync())
+                nextLeaseUntil = await beforeReplay.CheckerNodes.Where(x => x.Id == node.Id)
+                    .Select(x => x.CurrentLeaseUntil).SingleAsync();
             Assert.Equal(replies[0], await dispatcher.CompleteAsync(node.Id, lease.LeaseId, request, CancellationToken.None));
             // A lease ID is an immutable completion key. A changed replay cannot
             // overwrite the first committed results or contribute more counters.
@@ -293,7 +299,7 @@ public sealed class DistributedProxyValidationIntegrationTests
             Assert.Equal(3, saved.CompletedChecks);
             Assert.Equal(1, saved.AliveChecks);
             Assert.Equal(next.LeaseId, saved.CurrentLeaseId);
-            Assert.Equal(next.LeaseUntil, saved.CurrentLeaseUntil);
+            Assert.Equal(nextLeaseUntil, saved.CurrentLeaseUntil);
             Assert.Equal(3, await verify.ProxyValidationLeases.CountAsync(x => x.LeaseId == next.LeaseId));
             Assert.False(await verify.ProxyValidationLeases.AnyAsync(x => x.LeaseId == lease.LeaseId));
             Assert.Equal(1, await verify.Proxies.SumAsync(x => x.SuccessfulChecks));
