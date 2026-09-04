@@ -300,6 +300,11 @@ public sealed class VpnCatalogService(
                 var latency = await tcpProbe.ProbeAsync(endpoint.Host, endpoint.Port, options.Value.ProbeTimeoutSeconds, cancellationToken);
                 results[index] = new(endpoint.Id, true, latency, null);
             }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+            catch (VpnProbeDeferredException exception)
+            {
+                results[index] = new(endpoint.Id, null, null, exception.Message, IsDeferred: true);
+            }
             catch (Exception exception) when (exception is SocketException or IOException or OperationCanceledException)
             {
                 results[index] = new(
@@ -321,9 +326,10 @@ public sealed class VpnCatalogService(
         var persisted = await PersistValidationResultsAsync(updates, token);
         EnsureCompletePersistence(persisted, updates.Length);
         return new(
-            persisted,
-            updates.Count(x => x.Status == VpnEndpointStatus.Reachable),
-            updates.Count(x => x.Status == VpnEndpointStatus.UnsupportedTransport));
+            persisted - updates.Count(x => x.IsDeferred),
+            updates.Count(x => !x.IsDeferred && x.Status == VpnEndpointStatus.Reachable),
+            updates.Count(x => !x.IsDeferred && x.Status == VpnEndpointStatus.UnsupportedTransport),
+            updates.Count(x => x.IsDeferred));
     }
 
     /// <summary>Нормализует probe outcome и единообразно назначает следующую проверку.</summary>
@@ -334,6 +340,9 @@ public sealed class VpnCatalogService(
         int unreachableRetryMinutes,
         int unsupportedRetryMinutes)
     {
+        if (result.IsDeferred)
+            return new(result.Id, VpnEndpointStatus.Pending, null, result.Error,
+                checkedAt, checkedAt.AddMinutes(1), IsDeferred: true);
         var status = result.Reachable switch
         {
             true => VpnEndpointStatus.Reachable,
@@ -390,14 +399,15 @@ public sealed class VpnCatalogService(
                     latency_ms integer NULL,
                     error text NULL,
                     checked_at timestamptz NOT NULL,
-                    next_check_at timestamptz NOT NULL
+                    next_check_at timestamptz NOT NULL,
+                    is_deferred boolean NOT NULL
                 ) ON COMMIT DROP
                 """, connection, transaction))
                 await create.ExecuteNonQueryAsync(token);
 
             await using (var writer = await connection.BeginBinaryImportAsync("""
                 COPY vpn_check_update
-                    (id, status, latency_ms, error, checked_at, next_check_at)
+                    (id, status, latency_ms, error, checked_at, next_check_at, is_deferred)
                 FROM STDIN (FORMAT BINARY)
                 """, token))
             {
@@ -415,23 +425,26 @@ public sealed class VpnCatalogService(
                         token);
                     await writer.WriteAsync(update.CheckedAt, NpgsqlDbType.TimestampTz, token);
                     await writer.WriteAsync(update.NextCheckAt, NpgsqlDbType.TimestampTz, token);
+                    await writer.WriteAsync(update.IsDeferred, NpgsqlDbType.Boolean, token);
                 }
                 await writer.CompleteAsync(token);
             }
 
             await using var updateCommand = new NpgsqlCommand("""
                 UPDATE "VpnEndpoints" endpoint
-                SET "Status" = result.status,
-                    "LatencyMs" = result.latency_ms,
+                SET "Status" = CASE WHEN result.is_deferred THEN endpoint."Status" ELSE result.status END,
+                    "LatencyMs" = CASE WHEN result.is_deferred THEN endpoint."LatencyMs" ELSE result.latency_ms END,
                     "LastError" = result.error,
-                    "LastCheckedAt" = result.checked_at,
+                    "LastCheckedAt" = CASE WHEN result.is_deferred THEN endpoint."LastCheckedAt" ELSE result.checked_at END,
+                    "LastValidationAttemptAt" = result.checked_at,
+                    "LastValidationDeferred" = result.is_deferred,
                     "NextCheckAt" = result.next_check_at,
                     "SuccessfulChecks" = LEAST(
-                        endpoint."SuccessfulChecks" + (result.status = 1)::integer,
-                        2147483647),
+                        endpoint."SuccessfulChecks"::bigint + (NOT result.is_deferred AND result.status = 1)::integer,
+                        2147483647)::integer,
                     "FailedChecks" = LEAST(
-                        endpoint."FailedChecks" + (result.status = 2)::integer,
-                        2147483647)
+                        endpoint."FailedChecks"::bigint + (NOT result.is_deferred AND result.status = 2)::integer,
+                        2147483647)::integer
                 FROM vpn_check_update result
                 WHERE endpoint."Id" = result.id
                 """, connection, transaction);
@@ -551,14 +564,16 @@ public sealed record VpnCollectionResult
 public sealed record VpnValidationResult
 {
     /// <summary>Создаёт сводку проверки.</summary>
-    public VpnValidationResult(int checkedCount, int reachable, int unsupportedTransport) =>
-        (Checked, Reachable, UnsupportedTransport) = (checkedCount, reachable, unsupportedTransport);
+    public VpnValidationResult(int checkedCount, int reachable, int unsupportedTransport, int deferred = 0) =>
+        (Checked, Reachable, UnsupportedTransport, Deferred) = (checkedCount, reachable, unsupportedTransport, deferred);
     /// <summary>Всего обработано.</summary>
     public int Checked { get; }
     /// <summary>Доступных TCP endpoint.</summary>
     public int Reachable { get; }
     /// <summary>UDP endpoint без небезопасной протокольной проверки.</summary>
     public int UnsupportedTransport { get; }
+    /// <summary>Нейтральные попытки, не изменившие последнюю оценку состояния endpoint.</summary>
+    public int Deferred { get; }
 }
 
 /// <summary>Нормализованный результат одной VPN-проверки для set-based persistence.</summary>
@@ -568,10 +583,11 @@ internal sealed record VpnValidationUpdate(
     int? LatencyMs,
     string? Error,
     DateTimeOffset CheckedAt,
-    DateTimeOffset NextCheckAt);
+    DateTimeOffset NextCheckAt,
+    bool IsDeferred = false);
 
 /// <summary>Результат сетевого probe до нормализации статуса и расписания.</summary>
-internal readonly record struct VpnProbeResult(Guid Id, bool? Reachable, int? Latency, string? Error);
+internal readonly record struct VpnProbeResult(Guid Id, bool? Reachable, int? Latency, string? Error, bool IsDeferred = false);
 
 /// <summary>Запускает сбор VPN feed независимо от более частой проверки endpoint.</summary>
 public sealed class VpnCollectorWorker(VpnCatalogService service, IOptions<CollectorOptions> options, ILogger<VpnCollectorWorker> logger) : BackgroundService
@@ -667,7 +683,7 @@ public sealed class VpnValidatorWorker(VpnCatalogService service, IOptions<Colle
             try
             {
                 var result = await service.ValidateAsync(stoppingToken);
-                delay = NextDelay(result.Checked);
+                delay = NextDelay(result.Checked + result.Deferred);
             }
             catch (OperationAlreadyRunningException)
             {

@@ -12,6 +12,25 @@ public sealed class VpnTcpProbeTests
         .Select(index => IPAddress.Parse($"8.8.8.{index}")).ToArray();
     private static TaskCompletionSource Signal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
 
+    [Theory]
+    [InlineData(SocketError.NetworkUnreachable)]
+    [InlineData(SocketError.NetworkDown)]
+    [InlineData(SocketError.AddressFamilyNotSupported)]
+    [InlineData(SocketError.AddressNotAvailable)]
+    [InlineData(SocketError.TooManyOpenSockets)]
+    [InlineData(SocketError.NoBufferSpaceAvailable)]
+    [InlineData(SocketError.ProtocolFamilyNotSupported)]
+    [InlineData(SocketError.SystemNotReady)]
+    [InlineData(SocketError.AccessDenied)]
+    public async Task LocalSocketFailureIsNotClassifiedAsRemoteEndpointFailure(SocketError error)
+    {
+        using var probe = new VpnTcpProbe(32);
+        await Assert.ThrowsAsync<VpnProbeDeferredException>(() => probe.ProbeCoreAsync(
+            "2606:4700:4700::1111", 443, TimeSpan.FromSeconds(8),
+            (_, _) => throw new InvalidOperationException("Unexpected DNS"),
+            (_, _, _) => Task.FromException(new SocketException((int)error)), CancellationToken.None));
+    }
+
     [Fact]
     public async Task HangingFirstAddressDoesNotPreventHealthyFallback()
     {
@@ -134,7 +153,7 @@ public sealed class VpnTcpProbeTests
             }, (_, _, _) => throw new InvalidOperationException("Unexpected connect"), CancellationToken.None);
         await dnsStarted.Task.WaitAsync(TestDeadline);
         clock.Advance(TimeSpan.FromSeconds(8));
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => operation.WaitAsync(TestDeadline));
+        await Assert.ThrowsAsync<VpnProbeDeferredException>(() => operation.WaitAsync(TestDeadline));
         Assert.Equal(0, clock.ActiveTimers);
     }
 
@@ -151,6 +170,73 @@ public sealed class VpnTcpProbeTests
         await started.Task.WaitAsync(TestDeadline);
         clock.Advance(TimeSpan.FromSeconds(2));
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => operation.WaitAsync(TestDeadline));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AnUncheckableAddressPreventsANegativeVerdictForTheWholeEndpoint(bool localFirst)
+    {
+        using var probe = new VpnTcpProbe(32);
+        var addresses = Addresses(2);
+        await Assert.ThrowsAsync<VpnProbeDeferredException>(() => probe.ProbeCoreAsync("mixed.example", 443,
+            TimeSpan.FromSeconds(8), (_, _) => Task.FromResult(addresses),
+            (ip, _, _) => Task.FromException(new SocketException((int)
+                (ip.Equals(addresses[localFirst ? 0 : 1]) ? SocketError.NetworkUnreachable : SocketError.ConnectionRefused))),
+            CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task HealthyFallbackWinsDespiteAnUnavailableAddressFamily()
+    {
+        using var probe = new VpnTcpProbe(32);
+        var addresses = Addresses(2);
+        await probe.ProbeCoreAsync("fallback.example", 443, TimeSpan.FromSeconds(8),
+            (_, _) => Task.FromResult(addresses),
+            (ip, _, _) => ip.Equals(addresses[0])
+                ? Task.FromException(new SocketException((int)SocketError.AddressFamilyNotSupported)) : Task.CompletedTask,
+            CancellationToken.None);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task MixedLocalFailureAndTimeoutDefersButCallerCancellationIsPreserved(bool cancelCaller)
+    {
+        using var clock = new ProbeClock();
+        using var probe = new VpnTcpProbe(32, clock);
+        using var caller = new CancellationTokenSource();
+        var addresses = Addresses(2);
+        var started = Signal();
+        var operation = probe.ProbeCoreAsync("mixed.example", 443, TimeSpan.FromSeconds(8),
+            (_, _) => Task.FromResult(addresses),
+            async (ip, _, token) =>
+            {
+                if (ip.Equals(addresses[0])) throw new SocketException((int)SocketError.NetworkUnreachable);
+                started.SetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, token);
+            }, caller.Token);
+        await started.Task.WaitAsync(TestDeadline);
+        if (cancelCaller)
+        {
+            await caller.CancelAsync();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => operation.WaitAsync(TestDeadline));
+        }
+        else
+        {
+            clock.Advance(TimeSpan.FromSeconds(8));
+            await Assert.ThrowsAsync<VpnProbeDeferredException>(() => operation.WaitAsync(TestDeadline));
+        }
+        Assert.Equal(0, clock.ActiveTimers);
+    }
+
+    [Fact]
+    public async Task TemporaryDnsFailureIsDeferredWithoutConnecting()
+    {
+        using var probe = new VpnTcpProbe(32);
+        await Assert.ThrowsAsync<VpnProbeDeferredException>(() => probe.ProbeCoreAsync("dns.example", 443,
+            TimeSpan.FromSeconds(8), (_, _) => Task.FromException<IPAddress[]>(new SocketException((int)SocketError.TryAgain)),
+            (_, _, _) => throw new InvalidOperationException("Unexpected connect"), CancellationToken.None));
     }
 
     [Fact]

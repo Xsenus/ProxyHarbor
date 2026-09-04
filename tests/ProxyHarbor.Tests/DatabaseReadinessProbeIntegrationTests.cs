@@ -33,6 +33,12 @@ public sealed class DatabaseReadinessProbeIntegrationTests
             var probe = new DatabaseReadinessProbe(factory);
 
             Assert.True(await probe.CheckAsync(CancellationToken.None));
+            await using (var damage = await factory.CreateDbContextAsync())
+                await damage.Database.ExecuteSqlRawAsync("""ALTER TABLE "VpnEndpoints" RENAME COLUMN "LastValidationDeferred" TO "MissingDeferredColumn";""");
+            Assert.False(await probe.CheckAsync(CancellationToken.None));
+            await using (var repair = await factory.CreateDbContextAsync())
+                await repair.Database.ExecuteSqlRawAsync("""ALTER TABLE "VpnEndpoints" RENAME COLUMN "MissingDeferredColumn" TO "LastValidationDeferred";""");
+            Assert.True(await probe.CheckAsync(CancellationToken.None));
             using (var cancellation = new CancellationTokenSource())
             {
                 await cancellation.CancelAsync();

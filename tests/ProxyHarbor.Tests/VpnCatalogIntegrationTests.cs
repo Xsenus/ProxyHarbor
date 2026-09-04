@@ -5,6 +5,7 @@ using Microsoft.Extensions.Options;
 using Npgsql;
 using ProxyHarbor.Domain;
 using ProxyHarbor.Infrastructure;
+using ProxyHarbor.Api.Controllers;
 
 namespace ProxyHarbor.Tests;
 
@@ -12,6 +13,100 @@ namespace ProxyHarbor.Tests;
 [Collection(PostgresIntegrationGroup.Name)]
 public sealed class VpnCatalogIntegrationTests
 {
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
+    public async Task DeferredAttemptsPreserveVerdictFreshnessAndCountersThenRecover()
+    {
+        var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
+        if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
+        var schema = $"proxyharbor_vpn_deferred_{Guid.NewGuid():N}";
+        var builder = new NpgsqlConnectionStringBuilder(baseConnectionString) { SearchPath = schema };
+        await using var admin = new NpgsqlConnection(baseConnectionString);
+        await admin.OpenAsync();
+        await using (var create = new NpgsqlCommand($"CREATE SCHEMA {schema}", admin))
+            await create.ExecuteNonQueryAsync();
+        try
+        {
+            var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+                .UseNpgsql(builder.ConnectionString, pg => pg.EnableRetryOnFailure()).Options;
+            var factory = new TestDbFactory(options);
+            var now = new DateTimeOffset(2026, 9, 4, 7, 0, 0, TimeSpan.Zero);
+            var original = new[] { VpnEndpointStatus.Pending, VpnEndpointStatus.Reachable, VpnEndpointStatus.Unreachable }
+                .Select((status, index) => new VpnEndpoint
+                {
+                    Host = $"8.8.8.{index + 1}", Port = 443, Protocol = VpnProtocol.Vless, Status = status,
+                    FirstSeenAt = now.AddDays(-1), LastSeenAt = now.AddMinutes(-1),
+                    LastCheckedAt = status == VpnEndpointStatus.Pending ? null : now.AddMinutes(-20),
+                    LatencyMs = status == VpnEndpointStatus.Reachable ? 42 : null,
+                    SuccessfulChecks = status == VpnEndpointStatus.Pending ? 0 : int.MaxValue,
+                    FailedChecks = status == VpnEndpointStatus.Pending ? 0 : int.MaxValue
+                }).ToArray();
+            await using (var seed = await factory.CreateDbContextAsync())
+            {
+                await seed.Database.MigrateAsync();
+                seed.VpnEndpoints.AddRange(original);
+                await seed.SaveChangesAsync();
+            }
+            using var clients = new TestHttpClientFactory(new DelegateHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)));
+            var service = new VpnCatalogService(factory, clients, Options.Create(new CollectorOptions()),
+                NullLogger<VpnCatalogService>.Instance);
+            var updates = original.Select(endpoint => VpnCatalogService.ToValidationUpdate(
+                new VpnProbeResult(endpoint.Id, null, null, "local IPv6 unavailable", IsDeferred: true),
+                now, 10, 30, 360)).ToArray();
+            Assert.Equal(3, await service.PersistValidationResultsAsync(updates));
+            await using (var verify = await factory.CreateDbContextAsync())
+            {
+                var rows = await verify.VpnEndpoints.AsNoTracking().ToDictionaryAsync(endpoint => endpoint.Id);
+                foreach (var before in original)
+                {
+                    var after = rows[before.Id];
+                    Assert.Equal(before.Status, after.Status);
+                    Assert.Equal(before.LastCheckedAt, after.LastCheckedAt);
+                    Assert.Equal(before.LatencyMs, after.LatencyMs);
+                    Assert.Equal(before.SuccessfulChecks, after.SuccessfulChecks);
+                    Assert.Equal(before.FailedChecks, after.FailedChecks);
+                    Assert.True(after.LastValidationDeferred);
+                    Assert.Equal(now, after.LastValidationAttemptAt);
+                    Assert.Equal(now.AddMinutes(1), after.NextCheckAt);
+                    Assert.Equal("local IPv6 unavailable", after.LastError);
+                    var dto = AdminVpnEndpointItem.From(after, now);
+                    Assert.True(dto.LastValidationDeferred);
+                    Assert.Equal(now, dto.LastValidationAttemptAt);
+                    Assert.Equal(before.Status == VpnEndpointStatus.Pending ? 0m : 50m, dto.SuccessRate);
+                }
+            }
+            var recoveredAt = now.AddMinutes(1);
+            Assert.Equal(3, await service.PersistValidationResultsAsync(original.Select(endpoint =>
+                new VpnValidationUpdate(endpoint.Id, VpnEndpointStatus.Reachable, 18, null,
+                    recoveredAt, recoveredAt.AddMinutes(10))).ToArray()));
+            await using (var verify = await factory.CreateDbContextAsync())
+            {
+                foreach (var after in await verify.VpnEndpoints.AsNoTracking().ToArrayAsync())
+                {
+                    Assert.False(after.LastValidationDeferred);
+                    Assert.Null(after.LastError);
+                    Assert.Equal(recoveredAt, after.LastValidationAttemptAt);
+                    Assert.Equal(recoveredAt, after.LastCheckedAt);
+                    Assert.Equal(VpnEndpointStatus.Reachable, after.Status);
+                    Assert.Equal(18, after.LatencyMs);
+                    var before = original.Single(item => item.Id == after.Id);
+                    Assert.Equal(before.SuccessfulChecks == 0 ? 1 : int.MaxValue, after.SuccessfulChecks);
+                    Assert.Equal(before.FailedChecks, after.FailedChecks);
+                }
+            }
+            Assert.Equal(1, await service.PersistValidationResultsAsync(
+                [new(original[2].Id, VpnEndpointStatus.Unreachable, null, "refused",
+                    recoveredAt.AddMinutes(1), recoveredAt.AddMinutes(31))]));
+            await using var final = await factory.CreateDbContextAsync();
+            Assert.Equal(int.MaxValue, (await final.VpnEndpoints.SingleAsync(row => row.Id == original[2].Id)).FailedChecks);
+        }
+        finally
+        {
+            await using var drop = new NpgsqlCommand($"DROP SCHEMA IF EXISTS {schema} CASCADE", admin);
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
+
     [Fact]
     [Trait("Category", "PostgresIntegration")]
     public async Task BulkImportDeduplicatesEndpointsAndUsesConfiguredSourcePriority()

@@ -46,16 +46,24 @@ internal sealed class VpnTcpProbe : IDisposable
         using (var dnsDeadline = new CancellationTokenSource(timeout, clock))
         using (var dnsCancellation = CancellationTokenSource.CreateLinkedTokenSource(token, dnsDeadline.Token))
         {
-            addresses = IPAddress.TryParse(host, out var literal)
-                ? [literal] : await resolve(host, dnsCancellation.Token);
-            dnsCancellation.Token.ThrowIfCancellationRequested();
+            try
+            {
+                addresses = IPAddress.TryParse(host, out var literal)
+                    ? [literal] : await resolve(host, dnsCancellation.Token);
+                dnsCancellation.Token.ThrowIfCancellationRequested();
+            }
+            catch (OperationCanceledException exception) when (!token.IsCancellationRequested)
+            { throw new VpnProbeDeferredException("Проверка отложена: DNS не ответил вовремя.", exception); }
+            catch (SocketException exception) when (VpnProbeDeferredException.IsLocalFailure(exception) ||
+                exception.SocketErrorCode == SocketError.TryAgain)
+            { throw new VpnProbeDeferredException("Проверка отложена: DNS временно недоступен.", exception); }
         }
         if (addresses.Length is 0 or > MaximumAddresses || addresses.Any(x => !NetworkSafety.IsPublicAddress(x)))
             throw new IOException("DNS VPN пуст, содержит локальный или служебный адрес либо превышает лимит 32");
         addresses = Interleave(addresses);
         var dnsElapsed = clock.GetElapsedTime(startedAt);
         var remaining = timeout - dnsElapsed;
-        if (remaining <= TimeSpan.Zero) throw new OperationCanceledException("VPN DNS timeout");
+        if (remaining <= TimeSpan.Zero) throw new VpnProbeDeferredException("Проверка отложена: DNS не ответил вовремя.");
 
         // Ожидание своей очереди — не задержка удалённого сервера и не его отказ.
         // Оно отменяется остановкой партии, но не расходует timeout и не входит в latency.
@@ -66,13 +74,13 @@ internal sealed class VpnTcpProbe : IDisposable
         using var networkDeadline = new CancellationTokenSource(remaining, clock);
         using var networkCancellation = CancellationTokenSource.CreateLinkedTokenSource(token, networkDeadline.Token);
         startedAt = clock.GetTimestamp();
-        await RaceAsync(addresses, port, connect, networkCancellation.Token);
+        await RaceAsync(addresses, port, connect, networkCancellation.Token, token);
         networkCancellation.Token.ThrowIfCancellationRequested();
         return (int)Math.Min((dnsElapsed + clock.GetElapsedTime(startedAt)).TotalMilliseconds, int.MaxValue);
     }
 
     private async Task RaceAsync(IPAddress[] addresses, int port,
-        Func<IPAddress, int, CancellationToken, Task> connect, CancellationToken token)
+        Func<IPAddress, int, CancellationToken, Task> connect, CancellationToken token, CancellationToken callerToken)
     {
         using var race = CancellationTokenSource.CreateLinkedTokenSource(token);
         var pending = new List<Task<Exception?>>(addresses.Length);
@@ -107,7 +115,18 @@ internal sealed class VpnTcpProbe : IDisposable
                 if (next < addresses.Length) await Task.WhenAny(pending.Cast<Task>().Append(delay));
                 else await Task.WhenAny(pending);
             }
+            var deferred = (await Task.WhenAll(attempts)).OfType<VpnProbeDeferredException>().FirstOrDefault();
+            if (deferred is not null) throw deferred;
             throw new IOException("VPN endpoint недоступен по всем публичным адресам", last);
+        }
+        catch (OperationCanceledException) when (!callerToken.IsCancellationRequested)
+        {
+            // Если хотя бы один IP нельзя проверить из-за локальной сети, тайм-аут
+            // остальных адресов не доказывает отказ всего endpoint. Caller cancellation
+            // всегда остаётся отменой, а не результатом для записи в БД.
+            var deferred = (await Task.WhenAll(attempts)).OfType<VpnProbeDeferredException>().FirstOrDefault();
+            if (deferred is not null) throw deferred;
+            throw;
         }
         finally
         {
@@ -122,6 +141,8 @@ internal sealed class VpnTcpProbe : IDisposable
         Func<IPAddress, int, CancellationToken, Task> connect, CancellationToken token)
     {
         try { await connect(address, port, token); return null; }
+        catch (SocketException exception) when (VpnProbeDeferredException.IsLocalFailure(exception))
+        { return VpnProbeDeferredException.FromSocket(exception); }
         catch (Exception exception) when (exception is SocketException or IOException or OperationCanceledException)
         { return exception; }
     }

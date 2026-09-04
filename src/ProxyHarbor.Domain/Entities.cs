@@ -90,6 +90,10 @@ public sealed class VpnEndpoint
     public DateTimeOffset? LastCheckedAt { get; set; }
     /// <summary>План следующей проверки.</summary>
     public DateTimeOffset? NextCheckAt { get; set; }
+    /// <summary>Последняя попытка, включая отложенную из-за ограничений проверяющего.</summary>
+    public DateTimeOffset? LastValidationAttemptAt { get; set; }
+    /// <summary>Последняя попытка не дала достоверного результата о состоянии VPN.</summary>
+    public bool LastValidationDeferred { get; set; }
     /// <summary>Число успешных TCP-проверок.</summary>
     public int SuccessfulChecks { get; set; }
     /// <summary>Число неуспешных TCP-проверок.</summary>

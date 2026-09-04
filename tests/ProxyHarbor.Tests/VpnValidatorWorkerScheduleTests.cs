@@ -5,6 +5,19 @@ namespace ProxyHarbor.Tests;
 
 public sealed class VpnValidatorWorkerScheduleTests
 {
+    [Fact]
+    public void DeferredProbeIsRetriedWithoutAQualityResult()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var update = VpnCatalogService.ToValidationUpdate(
+            new VpnProbeResult(Guid.NewGuid(), false, 42, "local network unavailable", IsDeferred: true),
+            now, 10, 30, 360);
+        Assert.True(update.IsDeferred);
+        Assert.Null(update.LatencyMs);
+        Assert.Equal("local network unavailable", update.Error);
+        Assert.Equal(now.AddMinutes(1), update.NextCheckAt);
+    }
+
     [Theory]
     [InlineData(true, VpnEndpointStatus.Reachable, 10)]
     [InlineData(false, VpnEndpointStatus.Unreachable, 30)]

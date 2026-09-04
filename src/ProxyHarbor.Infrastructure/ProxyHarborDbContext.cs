@@ -458,6 +458,7 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
         vpnEndpoint.Property(x => x.CountryCode).HasMaxLength(2);
         vpnEndpoint.Property(x => x.ConnectionUri).HasMaxLength(16_384);
         vpnEndpoint.Property(x => x.LastError).HasMaxLength(500);
+        vpnEndpoint.Property(x => x.LastValidationDeferred).HasDefaultValue(false);
         vpnEndpoint.HasOne(x => x.FirstSource).WithMany().HasForeignKey(x => x.FirstSourceId)
             .OnDelete(DeleteBehavior.SetNull);
         vpnEndpoint.ToTable(table =>
@@ -465,6 +466,7 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
             table.HasCheckConstraint("CK_VpnEndpoints_Identity", "\"Port\" BETWEEN 1 AND 65535 AND \"Protocol\" BETWEEN 0 AND 7 AND \"Status\" BETWEEN 0 AND 3 AND \"Transport\" IN ('tcp', 'udp')");
             table.HasCheckConstraint("CK_VpnEndpoints_Counters", "\"SuccessfulChecks\" >= 0 AND \"FailedChecks\" >= 0");
             table.HasCheckConstraint("CK_VpnEndpoints_Timeline", "\"LastSeenAt\" >= \"FirstSeenAt\"");
+            table.HasCheckConstraint("CK_VpnEndpoints_DeferredAttempt", "NOT \"LastValidationDeferred\" OR \"LastValidationAttemptAt\" IS NOT NULL");
         });
 
         var vpnEndpointSource = builder.Entity<VpnEndpointSource>();
