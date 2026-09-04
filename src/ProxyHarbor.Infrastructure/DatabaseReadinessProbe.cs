@@ -21,12 +21,15 @@ public sealed class DatabaseReadinessProbe(IDbContextFactory<ProxyHarborDbContex
                     proxy."FirstAliveAt",
                     proxy."LastAliveAt",
                     proxy."CurrentAliveSince",
+                    vpn."LastValidationAttemptAt",
+                    vpn."LastValidationDeferred",
                     source."LastContentFetchedAt",
                     run."CandidateLimitReached",
                     validation."LeaseId",
                     backup."SentToTelegram",
                     backup."SentToObjectStorage"
                 FROM "Proxies" AS proxy
+                CROSS JOIN "VpnEndpoints" AS vpn
                 CROSS JOIN "Sources" AS source
                 CROSS JOIN "Runs" AS run
                 CROSS JOIN "ValidationRuns" AS validation

@@ -371,11 +371,11 @@ public sealed class AdminVpnController(
             ("status", false) => filtered.OrderByDescending(item => item.Status).ThenBy(item => item.Host),
             ("latency", true) => filtered.OrderBy(item => item.LatencyMs == null).ThenBy(item => item.LatencyMs).ThenBy(item => item.Id),
             ("latency", false) => filtered.OrderBy(item => item.LatencyMs == null).ThenByDescending(item => item.LatencyMs).ThenBy(item => item.Id),
-            ("quality", true) => filtered.OrderBy(item => item.SuccessfulChecks + item.FailedChecks == 0
-                    ? -1.0 : item.SuccessfulChecks / (double)(item.SuccessfulChecks + item.FailedChecks))
+            ("quality", true) => filtered.OrderBy(item => (long)item.SuccessfulChecks + item.FailedChecks == 0
+                    ? -1.0 : item.SuccessfulChecks / (double)((long)item.SuccessfulChecks + item.FailedChecks))
                 .ThenBy(item => item.Id),
-            ("quality", false) => filtered.OrderByDescending(item => item.SuccessfulChecks + item.FailedChecks == 0
-                    ? -1.0 : item.SuccessfulChecks / (double)(item.SuccessfulChecks + item.FailedChecks))
+            ("quality", false) => filtered.OrderByDescending(item => (long)item.SuccessfulChecks + item.FailedChecks == 0
+                    ? -1.0 : item.SuccessfulChecks / (double)((long)item.SuccessfulChecks + item.FailedChecks))
                 .ThenBy(item => item.Id),
             ("firstSeen", true) => filtered.OrderBy(item => item.FirstSeenAt).ThenBy(item => item.Id),
             ("firstSeen", false) => filtered.OrderByDescending(item => item.FirstSeenAt).ThenBy(item => item.Id),
@@ -489,16 +489,18 @@ public sealed record AdminVpnCountry(string Code, int Count);
 public sealed record AdminVpnEndpointItem(Guid Id, string Host, int Port, string? CountryCode, VpnProtocol Protocol,
     string Transport, VpnEndpointStatus Status, int? LatencyMs, DateTimeOffset FirstSeenAt, DateTimeOffset LastSeenAt,
     DateTimeOffset? LastCheckedAt, DateTimeOffset? NextCheckAt, int SuccessfulChecks, int FailedChecks,
-    decimal SuccessRate, long KnownForSeconds, string? LastError, string? ConnectionUri)
+    decimal SuccessRate, long KnownForSeconds, string? LastError, string? ConnectionUri,
+    DateTimeOffset? LastValidationAttemptAt = null, bool LastValidationDeferred = false)
 {
     public static AdminVpnEndpointItem From(VpnEndpoint item, DateTimeOffset now)
     {
-        var checks = item.SuccessfulChecks + item.FailedChecks;
+        var checks = (long)item.SuccessfulChecks + item.FailedChecks;
         var successRate = checks == 0 ? 0 : Math.Round(item.SuccessfulChecks * 100m / checks, 1);
         return new(item.Id, item.Host, item.Port, item.CountryCode, item.Protocol, item.Transport, item.Status,
             item.LatencyMs, item.FirstSeenAt, item.LastSeenAt, item.LastCheckedAt, item.NextCheckAt,
             item.SuccessfulChecks, item.FailedChecks, successRate,
-            Math.Max(0, (long)(now - item.FirstSeenAt).TotalSeconds), item.LastError, item.ConnectionUri);
+            Math.Max(0, (long)(now - item.FirstSeenAt).TotalSeconds), item.LastError, item.ConnectionUri,
+            item.LastValidationAttemptAt, item.LastValidationDeferred);
     }
 }
 #pragma warning restore CS1591

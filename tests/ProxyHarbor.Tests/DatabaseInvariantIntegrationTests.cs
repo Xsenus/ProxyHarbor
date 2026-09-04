@@ -69,6 +69,7 @@ public sealed class DatabaseInvariantIntegrationTests
         "CK_UserApiTokenRequests_ItemCount",
         "CK_UserApiTokenRequests_Status",
         "CK_VpnEndpoints_Counters",
+        "CK_VpnEndpoints_DeferredAttempt",
         "CK_VpnEndpoints_Identity",
         "CK_VpnEndpoints_Timeline",
         "CK_VpnSources_Counters",
@@ -297,6 +298,12 @@ public sealed class DatabaseInvariantIntegrationTests
             {
                 Host = "8.8.8.8",
                 Port = 0
+            }));
+            await AssertRejectedAsync(options, db => db.VpnEndpoints.Add(new VpnEndpoint
+            {
+                Host = "8.8.8.8",
+                Port = 443,
+                LastValidationDeferred = true
             }));
             await AssertRejectedAsync(options, db => db.Sources.Add(new ProxySource
             {
