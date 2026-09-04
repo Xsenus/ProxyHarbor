@@ -141,7 +141,9 @@ jobs:
       # Audit is an explicit required step below, not repeated during installation.
       - run: npm ci --no-audit
         working-directory: src/proxyharbor-web
-      - run: npm audit --audit-level=moderate --fetch-timeout=30000 --fetch-retries=1 --fetch-retry-mintimeout=1000 --fetch-retry-maxtimeout=5000
+      # The official advisory API can return successfully after >90 seconds.
+      # Keep a bounded retry and an overall deadline without cutting that response short.
+      - run: npm audit --audit-level=moderate --fetch-timeout=120000 --fetch-retries=1 --fetch-retry-mintimeout=1000 --fetch-retry-maxtimeout=5000
         timeout-minutes: 5
         working-directory: src/proxyharbor-web
       - run: npm run lint

@@ -96,7 +96,7 @@ jobs:
       - name: Audit frontend dependencies
         working-directory: src/proxyharbor-web
         timeout-minutes: 5
-        run: npm audit --audit-level=moderate --fetch-timeout=30000 --fetch-retries=1 --fetch-retry-mintimeout=1000 --fetch-retry-maxtimeout=5000
+        run: npm audit --audit-level=moderate --fetch-timeout=120000 --fetch-retries=1 --fetch-retry-mintimeout=1000 --fetch-retry-maxtimeout=5000
       - name: Build and test frontend
         working-directory: src/proxyharbor-web
         run: |
