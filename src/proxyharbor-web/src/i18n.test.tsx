@@ -1,6 +1,8 @@
-import { fireEvent, render, screen } from '@testing-library/react'
-import { beforeEach, describe, expect, it } from 'vitest'
-import { I18nProvider, LanguageSwitcher, useI18n } from './i18n'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { I18nProvider, LanguageSwitcher, currentLocale, useI18n } from './i18n'
+
+afterEach(() => { cleanup(); vi.restoreAllMocks() })
 
 function Sample() {
   const { t } = useI18n()
@@ -28,4 +30,20 @@ describe('ProxyHarbor localization', () => {
     render(<I18nProvider><Sample/></I18nProvider>)
     expect(screen.getByRole('heading', { name: 'Лучшие прямо сейчас' })).toBeInTheDocument()
   })
+})
+
+function LanguageProbe() {
+  const { language, setLanguage } = useI18n()
+  return <button onClick={() => setLanguage('de')}>{language}</button>
+}
+
+it('renders and changes language with storage and cookies blocked', () => {
+  vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('Denied') })
+  vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('Denied') })
+  vi.spyOn(document, 'cookie', 'set').mockImplementation(() => { throw new Error('Denied') })
+  render(<I18nProvider><LanguageProbe/></I18nProvider>)
+  fireEvent.click(screen.getByRole('button'))
+  expect(screen.getByRole('button', {name:'de'})).toBeVisible()
+  expect(document.documentElement.lang).toBe('de')
+  expect(currentLocale()).toBe('de-DE')
 })
