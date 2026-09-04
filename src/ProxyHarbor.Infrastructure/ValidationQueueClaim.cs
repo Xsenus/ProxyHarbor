@@ -226,10 +226,12 @@ internal static class VpnValidationQueue
             .ThenBy(endpoint => endpoint.Id)
             .Select(endpoint => new VpnValidationCandidate(
                 endpoint.Id, endpoint.Host, endpoint.Port, endpoint.Transport))
-            .Take(neverCheckedQuota)
+            // Keep enough narrow candidates to borrow unused due slots without
+            // a third database round trip. The quota reserves seats, not a cap.
+            .Take(batchSize)
             .ToArrayAsync(token);
 
-        var reservedForNeverChecked = neverChecked.Length;
+        var reservedForNeverChecked = Math.Min(neverCheckedQuota, neverChecked.Length);
         var dueCapacity = batchSize - reservedForNeverChecked;
         var due = dueCapacity == 0
             ? []
