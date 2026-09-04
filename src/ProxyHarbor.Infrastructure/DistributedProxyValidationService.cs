@@ -201,8 +201,24 @@ public sealed class DistributedProxyValidationService(
             """).SingleOrDefaultAsync(token);
         if (node is null || !node.Enabled)
             throw new InvalidOperationException("Checker-узел отключён или удалён.");
-        if (node.CurrentLeaseId != leaseId || node.CurrentLeaseUntil < now)
+        if (node.CurrentLeaseId != leaseId || node.CurrentLeaseUntil is null || node.CurrentLeaseUntil < now)
+        {
+            // A commit can succeed while its HTTP/database acknowledgement is lost.
+            // LeaseId is an immutable completion key: acknowledge the original
+            // persisted result, never merge a replay or clear a newer node lease.
+            // The unique lease index is queried only on this recovery path; normal
+            // completions keep the same number of database round trips.
+            var completed = await db.ValidationRuns.AsNoTracking()
+                .Where(run => run.LeaseId == leaseId && run.CheckerNodeId == nodeId && run.Status == "completed")
+                .Select(run => new CheckerLeaseCompletion(run.Checked, run.Alive, run.Deferred))
+                .SingleOrDefaultAsync(token);
+            if (completed is not null)
+            {
+                await transaction.CommitAsync(token);
+                return completed;
+            }
             throw new InvalidOperationException("Аренда истекла или больше не принадлежит checker-узлу.");
+        }
 
         var leasedIds = await (
                 from lease in db.ProxyValidationLeases.AsNoTracking()

@@ -230,6 +230,95 @@ public sealed class DistributedProxyValidationIntegrationTests
 
     [Fact]
     [Trait("Category", "PostgresIntegration")]
+    public async Task CompletionReplayAcknowledgesCommittedBatchWithoutTouchingNewLease()
+    {
+        var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
+        if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
+
+        var schema = $"proxyharbor_completion_replay_{Guid.NewGuid():N}";
+        var connection = new NpgsqlConnectionStringBuilder(baseConnectionString) { SearchPath = schema };
+        await using var admin = new NpgsqlConnection(baseConnectionString);
+        await admin.OpenAsync();
+        await using (var create = new NpgsqlCommand($"CREATE SCHEMA {schema}", admin))
+            await create.ExecuteNonQueryAsync();
+
+        try
+        {
+            var dbOptions = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+                .UseNpgsql(connection.ConnectionString, postgres => postgres.EnableRetryOnFailure()).Options;
+            var factory = new TestDbFactory(dbOptions);
+            var node = Node("first", batchSize: 3);
+            var otherNode = Node("second", batchSize: 3);
+            await using (var seed = await factory.CreateDbContextAsync())
+            {
+                await seed.Database.MigrateAsync();
+                seed.CheckerNodes.AddRange(node, otherNode);
+                seed.Proxies.AddRange(Enumerable.Range(1, 6).Select(index =>
+                    Endpoint($"198.51.100.{index}", ProxyStatus.Pending, DateTimeOffset.UtcNow.AddMinutes(-1))));
+                await seed.SaveChangesAsync();
+            }
+
+            var dispatcher = new DistributedProxyValidationService(
+                factory, Options.Create(new CollectorOptions { ProbeTimeoutSeconds = 5 }), new ValidationClaimIdleGate());
+            var lease = Assert.IsType<CheckerLeaseResponse>(await dispatcher.ClaimAsync(node.Id, CancellationToken.None));
+            var request = new CheckerLeaseResultRequest(lease.Items.Select((item, index) =>
+                new CheckerProxyResult(item.Id, index == 0, index == 0 ? 25 : null,
+                    null, false, index == 0 ? null : "test probe", IsDeferred: index == 2)).ToArray());
+
+            // Simulate a committed response lost in transit: two uploads race,
+            // then the client retransmits again after the first reply is gone.
+            var replies = await Task.WhenAll(
+                dispatcher.CompleteAsync(node.Id, lease.LeaseId, request, CancellationToken.None),
+                dispatcher.CompleteAsync(node.Id, lease.LeaseId, request, CancellationToken.None));
+            Assert.All(replies, reply => Assert.Equal(new CheckerLeaseCompletion(2, 1, 1), reply));
+            Assert.Equal(replies[0], await dispatcher.CompleteAsync(node.Id, lease.LeaseId, request, CancellationToken.None));
+
+            var next = Assert.IsType<CheckerLeaseResponse>(await dispatcher.ClaimAsync(node.Id, CancellationToken.None));
+            Assert.NotEqual(lease.LeaseId, next.LeaseId);
+            Assert.Equal(replies[0], await dispatcher.CompleteAsync(node.Id, lease.LeaseId, request, CancellationToken.None));
+            // A lease ID is an immutable completion key. A changed replay cannot
+            // overwrite the first committed results or contribute more counters.
+            var changed = new CheckerLeaseResultRequest(request.Results.Select(result => result with
+            {
+                IsAlive = true, LatencyMs = 1, IsDeferred = false, Error = null
+            }).ToArray());
+            Assert.Equal(replies[0], await dispatcher.CompleteAsync(node.Id, lease.LeaseId, changed, CancellationToken.None));
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                dispatcher.CompleteAsync(otherNode.Id, lease.LeaseId, request, CancellationToken.None));
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                dispatcher.CompleteAsync(node.Id, Guid.NewGuid(), request, CancellationToken.None));
+
+            await using var verify = await factory.CreateDbContextAsync();
+            var saved = await verify.CheckerNodes.AsNoTracking().SingleAsync(x => x.Id == node.Id);
+            Assert.Equal(3, saved.CompletedChecks);
+            Assert.Equal(1, saved.AliveChecks);
+            Assert.Equal(next.LeaseId, saved.CurrentLeaseId);
+            Assert.Equal(next.LeaseUntil, saved.CurrentLeaseUntil);
+            Assert.Equal(3, await verify.ProxyValidationLeases.CountAsync(x => x.LeaseId == next.LeaseId));
+            Assert.False(await verify.ProxyValidationLeases.AnyAsync(x => x.LeaseId == lease.LeaseId));
+            Assert.Equal(1, await verify.Proxies.SumAsync(x => x.SuccessfulChecks));
+            Assert.Equal(1, await verify.Proxies.SumAsync(x => x.FailedChecks));
+            Assert.Equal(1, await verify.ValidationRuns.CountAsync(x => x.Status == "completed"));
+
+            // Actual expired, uncommitted work must still be rejected.
+            await verify.CheckerNodes.Where(x => x.Id == node.Id).ExecuteUpdateAsync(setters =>
+                setters.SetProperty(x => x.CurrentLeaseUntil, DateTimeOffset.UtcNow.AddMinutes(-1)));
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                dispatcher.CompleteAsync(node.Id, next.LeaseId, request, CancellationToken.None));
+            await verify.CheckerNodes.Where(x => x.Id == node.Id).ExecuteUpdateAsync(setters =>
+                setters.SetProperty(x => x.Enabled, false));
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                dispatcher.CompleteAsync(node.Id, lease.LeaseId, request, CancellationToken.None));
+        }
+        finally
+        {
+            await using var drop = new NpgsqlCommand($"DROP SCHEMA IF EXISTS {schema} CASCADE", admin);
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
     public async Task CompletionFailureRollsBackProxyRunAndNodeInOneTransaction()
     {
         var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
