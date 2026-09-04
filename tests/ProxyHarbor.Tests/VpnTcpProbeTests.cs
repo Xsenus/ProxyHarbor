@@ -158,6 +158,54 @@ public sealed class VpnTcpProbeTests
     }
 
     [Fact]
+    public async Task NonCooperativeDnsCannotHoldTheProbePastItsDeadline()
+    {
+        using var clock = new ProbeClock();
+        var gate = new VpnDnsGate(1);
+        using var probe = new VpnTcpProbe(32, clock, gate);
+        var nativeResult = new TaskCompletionSource<IPAddress[]>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var operation = probe.ProbeCoreAsync("slow-dns.example", 443, TimeSpan.FromSeconds(8),
+            (_, _) => nativeResult.Task,
+            (_, _, _) => throw new InvalidOperationException("Unexpected connect"), CancellationToken.None);
+        try
+        {
+            clock.Advance(TimeSpan.FromSeconds(8));
+            await Assert.ThrowsAsync<VpnProbeDeferredException>(() => operation.WaitAsync(TestDeadline));
+            probe.Dispose();
+            // A new batch/probe cannot bypass the still-running native operation.
+            using var nextProbe = new VpnTcpProbe(32, clock, gate);
+            var queued = nextProbe.ProbeCoreAsync("next.example", 443, TimeSpan.FromSeconds(8),
+                (_, _) => throw new InvalidOperationException("Native DNS budget exceeded"),
+                (_, _, _) => throw new InvalidOperationException("Unexpected connect"), CancellationToken.None);
+            clock.Advance(TimeSpan.FromSeconds(8));
+            await Assert.ThrowsAsync<VpnProbeDeferredException>(() => queued.WaitAsync(TestDeadline));
+        }
+        finally
+        {
+            nativeResult.TrySetResult(Addresses(1));
+            try { await operation.WaitAsync(TestDeadline); }
+            catch (VpnProbeDeferredException) { }
+        }
+    }
+
+    [Fact]
+    public async Task CallerCanCancelNonCooperativeDnsWithoutStartingConnection()
+    {
+        using var probe = new VpnTcpProbe(32, dnsGate: new VpnDnsGate(1));
+        using var cancellation = new CancellationTokenSource();
+        var native = new TaskCompletionSource<IPAddress[]>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var operation = probe.ProbeCoreAsync("slow.example", 443, TimeSpan.FromSeconds(8),
+            (_, _) => native.Task,
+            (_, _, _) => throw new InvalidOperationException("Unexpected connect"), cancellation.Token);
+        try
+        {
+            cancellation.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => operation.WaitAsync(TestDeadline));
+        }
+        finally { native.TrySetResult(Addresses(1)); }
+    }
+
+    [Fact]
     public async Task DnsTimeIsDeductedFromConnectionBudget()
     {
         using var clock = new ProbeClock();
@@ -169,6 +217,55 @@ public sealed class VpnTcpProbeTests
             CancellationToken.None);
         await started.Task.WaitAsync(TestDeadline);
         clock.Advance(TimeSpan.FromSeconds(2));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => operation.WaitAsync(TestDeadline));
+    }
+
+    [Fact]
+    public async Task DnsAdmissionIsBoundedAndPublicLiteralsBypassIt()
+    {
+        var gate = new VpnDnsGate(1);
+        using var clock = new ProbeClock();
+        using var occupied = await gate.AcquireAsync(CancellationToken.None);
+        using var probe = new VpnTcpProbe(32, clock, gate);
+        var operation = probe.ProbeCoreAsync("queued.example", 443, TimeSpan.FromSeconds(8),
+            (_, _) => throw new InvalidOperationException("Unexpected DNS"),
+            (_, _, _) => throw new InvalidOperationException("Unexpected connect"), CancellationToken.None);
+        var literal = await probe.ProbeCoreAsync("8.8.8.8", 443, TimeSpan.FromSeconds(1),
+            (_, _) => throw new InvalidOperationException("Unexpected DNS"),
+            (_, _, _) => Task.CompletedTask, CancellationToken.None);
+        Assert.Equal(0, literal);
+        clock.Advance(TimeSpan.FromSeconds(8));
+        await Assert.ThrowsAsync<VpnProbeDeferredException>(() => operation.WaitAsync(TestDeadline));
+        Assert.Equal(0, clock.ActiveTimers);
+    }
+
+    [Fact]
+    public async Task DnsAdmissionWaitDoesNotInflateEndpointLatency()
+    {
+        var gate = new VpnDnsGate(1);
+        using var clock = new ProbeClock();
+        using var occupied = await gate.AcquireAsync(CancellationToken.None);
+        using var probe = new VpnTcpProbe(32, clock, gate);
+        var operation = probe.ProbeCoreAsync("queued.example", 443, TimeSpan.FromSeconds(8),
+            (_, _) => { clock.Advance(TimeSpan.FromSeconds(1)); return Task.FromResult(Addresses(1)); },
+            (_, _, _) => Task.CompletedTask, CancellationToken.None);
+        clock.Advance(TimeSpan.FromSeconds(6));
+        occupied.Dispose();
+        Assert.Equal(1000, await operation.WaitAsync(TestDeadline));
+        Assert.Equal(0, clock.ActiveTimers);
+    }
+
+    [Fact]
+    public async Task CallerCanCancelDnsAdmissionWithoutStartingResolution()
+    {
+        var gate = new VpnDnsGate(1);
+        using var occupied = await gate.AcquireAsync(CancellationToken.None);
+        using var probe = new VpnTcpProbe(32, dnsGate: gate);
+        using var cancellation = new CancellationTokenSource();
+        var operation = probe.ProbeCoreAsync("queued.example", 443, TimeSpan.FromSeconds(8),
+            (_, _) => throw new InvalidOperationException("Unexpected DNS"),
+            (_, _, _) => throw new InvalidOperationException("Unexpected connect"), cancellation.Token);
+        cancellation.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => operation.WaitAsync(TestDeadline));
     }
 
