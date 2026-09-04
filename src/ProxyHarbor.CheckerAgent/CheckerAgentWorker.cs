@@ -48,7 +48,18 @@ public sealed class CheckerAgentWorker(
         LogLevel.Debug, new EventId(1004, nameof(StatusHeartbeatFailed)),
         "Status heartbeat was not delivered.");
     private readonly string version = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "unknown";
+    private readonly TimeProvider clock = TimeProvider.System;
     private string token = "";
+
+    internal CheckerAgentWorker(
+        IHttpClientFactory clients,
+        CheckerAgentProbeRuntime probeRuntime,
+        IOptions<CheckerAgentOptions> configured,
+        ILogger<CheckerAgentWorker> logger,
+        TimeProvider clock) : this(clients, probeRuntime, configured, logger)
+    {
+        this.clock = clock;
+    }
 
     /// <inheritdoc />
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -91,10 +102,11 @@ public sealed class CheckerAgentWorker(
             ?? throw new InvalidOperationException("Central service returned an empty lease.");
     }
 
-    private async Task ProcessAsync(CheckerLeaseResponse lease, CancellationToken stoppingToken)
+    internal async Task ProcessAsync(CheckerLeaseResponse lease, CancellationToken stoppingToken)
     {
         using var heartbeatStop = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
-        var heartbeat = MaintainLeaseAsync(lease.LeaseId, lease.Items.Count, heartbeatStop.Token);
+        using var checksStop = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+        var heartbeat = MaintainLeaseAsync(lease.LeaseId, lease.Items.Count, checksStop, heartbeatStop.Token);
         var results = new ConcurrentBag<CheckerProxyResult>();
         try
         {
@@ -105,7 +117,7 @@ public sealed class CheckerAgentWorker(
             await Parallel.ForEachAsync(lease.Items, new ParallelOptions
             {
                 MaxDegreeOfParallelism = Math.Clamp(lease.Concurrency, 1, 1_000),
-                CancellationToken = stoppingToken
+                CancellationToken = checksStop.Token
             }, async (item, itemToken) =>
             {
                 try
@@ -129,12 +141,17 @@ public sealed class CheckerAgentWorker(
                 }
             });
 
+            checksStop.Token.ThrowIfCancellationRequested();
             if (results.Count != lease.Items.Count)
                 throw new InvalidOperationException($"Incomplete local result: {results.Count}/{lease.Items.Count}.");
             // Heartbeat продолжает продлевать ownership и во время повторных попыток
             // отправки: кратковременный сбой API не превращает готовую партию в просроченную.
             await UploadWithRetryAsync(
                 lease.LeaseId, new CheckerLeaseResultRequest(results.ToArray()), stoppingToken);
+        }
+        catch (OperationCanceledException) when (checksStop.IsCancellationRequested && !stoppingToken.IsCancellationRequested)
+        {
+            throw new LeaseLostException("Central service no longer accepts probes for this lease.");
         }
         finally
         {
@@ -144,9 +161,10 @@ public sealed class CheckerAgentWorker(
         LeaseCompleted(logger, lease.LeaseId, results.Count, null);
     }
 
-    private async Task MaintainLeaseAsync(Guid leaseId, int activeChecks, CancellationToken token)
+    private async Task MaintainLeaseAsync(
+        Guid leaseId, int activeChecks, CancellationTokenSource checksStop, CancellationToken token)
     {
-        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(30));
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(30), clock);
         try
         {
             while (await timer.WaitForNextTickAsync(token))
@@ -156,7 +174,15 @@ public sealed class CheckerAgentWorker(
                     using var request = Request(HttpMethod.Post, $"api/v1/checker-agent/leases/{leaseId}/heartbeat");
                     request.Content = JsonContent.Create(new CheckerHeartbeatRequest(version, activeChecks), options: JsonOptions);
                     using var response = await clients.CreateClient("control-plane").SendAsync(request, token);
-                    if (response.StatusCode == HttpStatusCode.Conflict) return;
+                    if (response.StatusCode is HttpStatusCode.Conflict or HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+                    {
+                        // Stop unfinished probes promptly once ownership/access is
+                        // explicitly revoked. Do not cancel an upload already in
+                        // progress: a committed completion also clears its lease,
+                        // and its lost acknowledgement must still be retried.
+                        await checksStop.CancelAsync();
+                        return;
+                    }
                     response.EnsureSuccessStatusCode();
                 }
                 catch (OperationCanceledException) when (token.IsCancellationRequested) { return; }
