@@ -19,13 +19,23 @@ export function PrivacyControls() {
   useEffect(() => {
     const refresh = () => setChoice(readAnalyticsChoice(revision));
     const show = () => setOpen(true);
+    const synchronizeStorage = () => {
+      const next = readAnalyticsChoice(revision);
+      setChoice(next);
+      // Another tab can complete the initial choice or clear consent entirely.
+      // Keep explicitly opened settings visible when a known choice changes.
+      if (next === null) setOpen(true);
+      else if (choice === null) setOpen(false);
+    };
     window.addEventListener(privacyPreferenceChanged, refresh);
     window.addEventListener(openPrivacyPreferences, show);
+    window.addEventListener("storage", synchronizeStorage);
     return () => {
       window.removeEventListener(privacyPreferenceChanged, refresh);
       window.removeEventListener(openPrivacyPreferences, show);
+      window.removeEventListener("storage", synchronizeStorage);
     };
-  }, [revision]);
+  }, [revision, choice]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
