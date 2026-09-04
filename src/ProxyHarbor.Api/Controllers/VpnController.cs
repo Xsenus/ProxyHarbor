@@ -49,6 +49,7 @@ public sealed class VpnController(
         [FromQuery] string[]? country = null,
         CancellationToken token = default)
     {
+        using var timing = CatalogRequestTrace.Measure(ControllerContext.HttpContext, CatalogReadPhase.Controller);
         if (!TryNormalizeCountries(country, out var countries)) return InvalidCountries();
         page = Math.Clamp(page, 1, 100_000); pageSize = Math.Clamp(pageSize, 10, 100);
         await using var db = await dbFactory.CreateDbContextAsync(token);
@@ -70,28 +71,35 @@ public sealed class VpnController(
             query = query.Where(x => x.LastCheckedAt >= freshAfter);
         }
         if (countries.Length > 0) query = query.Where(x => x.CountryCode != null && countries.Contains(x.CountryCode));
-        var total = await query.CountAsync(token);
-        var paid = await accessService.HasPaidAccessAsync(CurrentUser, token);
+        int total;
+        using (CatalogRequestTrace.Measure(ControllerContext.HttpContext, CatalogReadPhase.Count))
+            total = await query.CountAsync(token);
+        bool paid;
+        using (CatalogRequestTrace.Measure(ControllerContext.HttpContext, CatalogReadPhase.Access))
+            paid = await accessService.HasPaidAccessAsync(CurrentUser, token);
         var effectivePage = paid ? page : 1;
         var effectivePageSize = paid ? pageSize : FreeExportAccessService.FreeVpnLimit;
         VpnEndpointResponse[] items;
-        if (paid)
+        using (CatalogRequestTrace.Measure(ControllerContext.HttpContext, CatalogReadPhase.Selection))
         {
-            items = await Ordered(query).Skip((page - 1) * pageSize).Take(pageSize)
-                .Select(ToResponse()).ToArrayAsync(token);
-        }
-        else
-        {
-            var candidates = await Ordered(query).Take(FreeCatalogSelector.CandidatePoolSize).ToArrayAsync(token);
-            items = FreeCatalogSelector.Select(candidates,
-                    x => $"{x.Protocol}:{x.Host}:{x.Port}", x => x.CountryCode,
-                    FreeExportAccessService.FreeVpnLimit, DateTimeOffset.UtcNow)
-                .OrderBy(x => x.LatencyMs == null).ThenBy(x => x.LatencyMs)
-                .ThenByDescending(x => x.SuccessfulChecks)
-                .Select(x => new VpnEndpointResponse(x.Id, x.Host, x.Port, x.CountryCode, x.Protocol,
-                    x.Transport, x.Status, x.LatencyMs, x.FirstSeenAt, x.LastSeenAt, x.LastCheckedAt,
-                    x.SuccessfulChecks, x.FailedChecks, x.ConnectionUri))
-                .ToArray();
+            if (paid)
+            {
+                items = await Ordered(query).Skip((page - 1) * pageSize).Take(pageSize)
+                    .Select(ToResponse()).ToArrayAsync(token);
+            }
+            else
+            {
+                var candidates = await Ordered(query).Take(FreeCatalogSelector.CandidatePoolSize).ToArrayAsync(token);
+                items = FreeCatalogSelector.Select(candidates,
+                        x => $"{x.Protocol}:{x.Host}:{x.Port}", x => x.CountryCode,
+                        FreeExportAccessService.FreeVpnLimit, DateTimeOffset.UtcNow)
+                    .OrderBy(x => x.LatencyMs == null).ThenBy(x => x.LatencyMs)
+                    .ThenByDescending(x => x.SuccessfulChecks)
+                    .Select(x => new VpnEndpointResponse(x.Id, x.Host, x.Port, x.CountryCode, x.Protocol,
+                        x.Transport, x.Status, x.LatencyMs, x.FirstSeenAt, x.LastSeenAt, x.LastCheckedAt,
+                        x.SuccessfulChecks, x.FailedChecks, x.ConnectionUri))
+                    .ToArray();
+            }
         }
         return Ok(new PagedResult<VpnEndpointResponse>(items, effectivePage, effectivePageSize, total)
         {

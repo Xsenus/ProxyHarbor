@@ -116,7 +116,8 @@ internal enum HttpRouteGroup
 public sealed class HttpRequestTelemetryMiddleware(RequestDelegate next)
 {
     /// <summary>Измеряет запрос, классифицирует итоговый status и не раскрывает raw route values.</summary>
-    public async Task InvokeAsync(HttpContext context, HttpRequestTelemetry telemetry)
+    public async Task InvokeAsync(HttpContext context, HttpRequestTelemetry telemetry,
+        CatalogRequestDiagnostics? diagnostics = null)
     {
         var route = Classify(context.Request.Path);
         if (route is null)
@@ -126,6 +127,7 @@ public sealed class HttpRequestTelemetryMiddleware(RequestDelegate next)
         }
 
         var startedAt = Stopwatch.GetTimestamp();
+        var catalogTrace = diagnostics?.Begin(context);
         var statusCode = StatusCodes.Status200OK;
         try
         {
@@ -146,6 +148,7 @@ public sealed class HttpRequestTelemetryMiddleware(RequestDelegate next)
         finally
         {
             telemetry.Record(route.Value, statusCode, Stopwatch.GetElapsedTime(startedAt));
+            diagnostics?.Complete(catalogTrace);
         }
     }
 

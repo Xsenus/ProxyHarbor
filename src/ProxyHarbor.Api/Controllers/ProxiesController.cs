@@ -80,6 +80,7 @@ public sealed class ProxiesController(
         [FromQuery] int pageSize = 100,
         CancellationToken cancellationToken = default)
     {
+        using var timing = CatalogRequestTrace.Measure(ControllerContext.HttpContext, CatalogReadPhase.Controller);
         if (!TryNormalizeCountries(country, out var countries)) return InvalidCountries();
         page = Math.Max(1, page);
         pageSize = Math.Clamp(pageSize, 1, 1000);
@@ -100,19 +101,27 @@ public sealed class ProxiesController(
                 db.Proxies.AsNoTracking().Where(x =>
                     x.Status == ProxyStatus.Alive && x.LastCheckedAt >= freshAfter),
                 protocol, maxLatencyMs, minSuccessRate, countries));
-            var total = await query.CountAsync(token);
-            var paid = await freeExportAccess.HasPaidAccessAsync(
-                ControllerContext.HttpContext?.User ?? new System.Security.Claims.ClaimsPrincipal(), token);
+            int total;
+            using (CatalogRequestTrace.Measure(ControllerContext.HttpContext, CatalogReadPhase.Count))
+                total = await query.CountAsync(token);
+            bool paid;
+            using (CatalogRequestTrace.Measure(ControllerContext.HttpContext, CatalogReadPhase.Access))
+                paid = await freeExportAccess.HasPaidAccessAsync(
+                    ControllerContext.HttpContext?.User ?? new System.Security.Claims.ClaimsPrincipal(), token);
             if (paid)
             {
-                var entities = await OrderForPublication(query).Skip(skip).Take(pageSize).ToListAsync(token);
+                List<ProxyEndpoint> entities;
+                using (CatalogRequestTrace.Measure(ControllerContext.HttpContext, CatalogReadPhase.Selection))
+                    entities = await OrderForPublication(query).Skip(skip).Take(pageSize).ToListAsync(token);
                 return new PagedResult<ProxyDto>(entities.Select(ProxyDto.From).ToList(), page, pageSize, total)
                 {
                     FullAccess = true
                 };
             }
 
-            var freeEntities = await SelectDiversifiedFreeProxiesAsync(query, token);
+            List<ProxyEndpoint> freeEntities;
+            using (CatalogRequestTrace.Measure(ControllerContext.HttpContext, CatalogReadPhase.Selection))
+                freeEntities = await SelectDiversifiedFreeProxiesAsync(query, token);
             return new PagedResult<ProxyDto>(freeEntities.Select(ProxyDto.From).ToList(), 1,
                 FreeExportAccessService.FreeLimit, total)
             {
