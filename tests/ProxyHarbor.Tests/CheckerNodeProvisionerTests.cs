@@ -70,6 +70,8 @@ public sealed class CheckerNodeProvisionerTests
 
         Assert.Contains("if command -v docker >/dev/null 2>&1 && docker info", script, StringComparison.Ordinal);
         Assert.Contains("proxyharbor-checker-agent-next", script, StringComparison.Ordinal);
+        Assert.Contains("--stop-timeout 30", script, StringComparison.Ordinal);
+        Assert.Contains("TimeoutStopSec=30s", DecodeUnit(script), StringComparison.Ordinal);
         Assert.Contains("systemctl enable proxyharbor-checker-agent.service", script, StringComparison.Ordinal);
         Assert.Contains("chown root:proxyharbor-checker /opt/proxyharbor-checker", script, StringComparison.Ordinal);
         Assert.Contains("chmod 0750 /opt/proxyharbor-checker", script, StringComparison.Ordinal);

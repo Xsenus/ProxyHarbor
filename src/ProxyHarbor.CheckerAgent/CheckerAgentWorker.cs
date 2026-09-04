@@ -47,8 +47,14 @@ public sealed class CheckerAgentWorker(
     private static readonly Action<ILogger, Exception?> StatusHeartbeatFailed = LoggerMessage.Define(
         LogLevel.Debug, new EventId(1004, nameof(StatusHeartbeatFailed)),
         "Status heartbeat was not delivered.");
+    private static readonly Action<ILogger, Exception?> DrainTimedOut = LoggerMessage.Define(
+        LogLevel.Warning, new EventId(1005, nameof(DrainTimedOut)),
+        "Checker shutdown drain reached its deadline; unfinished work will recover through its central lease.");
+    private static readonly TimeSpan DrainTimeout = TimeSpan.FromSeconds(25);
     private readonly string version = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "unknown";
     private readonly TimeProvider clock = TimeProvider.System;
+    private readonly CancellationTokenSource pollingStop = new();
+    private int drainRequested;
     private string token = "";
 
     internal CheckerAgentWorker(
@@ -61,33 +67,70 @@ public sealed class CheckerAgentWorker(
         this.clock = clock;
     }
 
+    /// <summary>
+    /// Stops acquiring work, allowing an issued claim/current batch and its acknowledgement
+    /// to finish before the host deadline (at most 25 seconds). Heartbeats keep running.
+    /// </summary>
+    public override async Task StopAsync(CancellationToken cancellationToken)
+    {
+        Interlocked.Exchange(ref drainRequested, 1);
+        await pollingStop.CancelAsync();
+        try
+        {
+            if (ExecuteTask is { } execution)
+                // The host observes background faults; stopping must not rethrow them
+                // as a new shutdown failure (same behavior as BackgroundService).
+                await Task.WhenAny(execution).WaitAsync(DrainTimeout, clock, cancellationToken);
+        }
+        catch (TimeoutException) { DrainTimedOut(logger, null); }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
+        finally
+        {
+            // Do not introduce a second, unbounded wait after the drain deadline.
+            // BackgroundService still cancels the actual probe/upload token here.
+            using var forceStop = new CancellationTokenSource();
+            await forceStop.CancelAsync();
+            await base.StopAsync(forceStop.Token);
+        }
+    }
+
+    /// <inheritdoc />
+    public override void Dispose()
+    {
+        base.Dispose();
+        pollingStop.Dispose();
+    }
+
     /// <inheritdoc />
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        using var pollWait = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken, pollingStop.Token);
         var options = configured.Value;
         token = (await File.ReadAllTextAsync(options.TokenFile, stoppingToken)).Trim();
         if (token.Length < 32) throw new InvalidOperationException("Checker agent token is missing or invalid.");
         // Недоступность control plane в момент старта не должна завершать контейнер:
         // основной цикл сам продолжит переподключение с bounded backoff.
         await SendHeartbeatBestEffortAsync(null, stoppingToken);
-        while (!stoppingToken.IsCancellationRequested)
+        while (!stoppingToken.IsCancellationRequested && Volatile.Read(ref drainRequested) == 0)
         {
             try
             {
                 var lease = await ClaimAsync(stoppingToken);
                 if (lease is null)
                 {
-                    await Task.Delay(TimeSpan.FromSeconds(Math.Clamp(options.EmptyPollSeconds, 1, 60)), stoppingToken);
+                    await Task.Delay(TimeSpan.FromSeconds(Math.Clamp(options.EmptyPollSeconds, 1, 60)), pollWait.Token);
                     continue;
                 }
                 await ProcessAsync(lease, stoppingToken);
             }
-            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { return; }
+            catch (OperationCanceledException) when (pollWait.IsCancellationRequested) { return; }
             catch (Exception exception)
             {
                 CycleFailed(logger, exception);
+                if (Volatile.Read(ref drainRequested) != 0) return;
                 await SendHeartbeatBestEffortAsync(exception.Message, stoppingToken);
-                await Task.Delay(TimeSpan.FromSeconds(10), stoppingToken);
+                try { await Task.Delay(TimeSpan.FromSeconds(10), pollWait.Token); }
+                catch (OperationCanceledException) when (pollWait.IsCancellationRequested) { return; }
             }
         }
     }

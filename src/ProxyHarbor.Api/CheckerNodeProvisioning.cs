@@ -157,7 +157,7 @@ public sealed class CheckerNodeProvisioner(IOptions<CheckerAgentDeploymentOption
             cp -p /opt/proxyharbor-checker/agent_token /opt/proxyharbor-checker/agent_token.previous
           fi
           mv /opt/proxyharbor-checker/agent_token.next /opt/proxyharbor-checker/agent_token
-          next_id=$(docker run --detach --name proxyharbor-checker-agent-next --restart unless-stopped \
+          next_id=$(docker run --detach --name proxyharbor-checker-agent-next --restart unless-stopped --stop-timeout 30 \
             --read-only --tmpfs /tmp:rw,noexec,nosuid,size=32m \
             --pids-limit 512 --memory 1536m --cpus 2 \
             --cap-drop ALL --security-opt no-new-privileges:true \
