@@ -14,8 +14,11 @@ function Get-FreeTcpPort {
 }
 
 function Start-ValidationAuditMock([int]$Port, [ValidateSet('success', 'accumulated', 'mismatch', 'zero-alive')][string]$Mode) {
-    return Start-Job -ArgumentList $Port, $Mode -ScriptBlock {
+    # Match the source-audit fixture: a runspace avoids cold pwsh process startup
+    # for every case, especially on a runner also building the PostgreSQL suite.
+    return Start-ThreadJob -ArgumentList $Port, $Mode -ScriptBlock {
         param($Port, $Mode)
+        $ErrorActionPreference = 'Stop'
 
         $listener = [Net.HttpListener]::new()
         $listener.Prefixes.Add("http://127.0.0.1:$Port/")
@@ -24,7 +27,11 @@ function Start-ValidationAuditMock([int]$Port, [ValidateSet('success', 'accumula
         $expectedRequests = if ($Mode -eq 'zero-alive') { 1 } else { 6 }
         try {
             while ($handled -lt $expectedRequests) {
-                $context = $listener.GetContext()
+                # Yield to PowerShell cancellation while idle so Stop-Job can
+                # always reach finally, even if the audit fails before a request.
+                $pending = $listener.GetContextAsync()
+                while (-not $pending.Wait(100)) { }
+                $context = $pending.GetAwaiter().GetResult()
                 $path = $context.Request.Url.AbsolutePath
                 if ($path -eq '/ready') {
                     $contentType = 'application/json'
@@ -83,16 +90,25 @@ function Start-ValidationAuditMock([int]$Port, [ValidateSet('success', 'accumula
     }
 }
 
-function Wait-ValidationAuditMock([int]$Port) {
-    foreach ($attempt in 1..50) {
+function Wait-ValidationAuditMock(
+    [int]$Port,
+    [Management.Automation.Job]$Job,
+    [ValidateRange(1, 60)][int]$TimeoutSeconds = 15
+) {
+    $timer = [Diagnostics.Stopwatch]::StartNew()
+    while ($timer.Elapsed.TotalSeconds -lt $TimeoutSeconds) {
+        if ($Job.State -in @('Completed', 'Failed', 'Stopped')) {
+            Receive-Job $Job -ErrorAction Stop | Out-Null
+            throw "Validation-audit mock на порту $Port завершился до readiness-check."
+        }
         try {
-            Invoke-WebRequest -Uri "http://127.0.0.1:$Port/ready" -TimeoutSec 1 | Out-Null
+            Invoke-WebRequest -Uri "http://127.0.0.1:$Port/ready" -TimeoutSec 1 -NoProxy | Out-Null
             return
         } catch {
-            if ($attempt -eq 50) { throw "Validation-audit mock на порту $Port не запустился." }
             Start-Sleep -Milliseconds 100
         }
     }
+    throw "Validation-audit mock на порту $Port не запустился за $TimeoutSeconds секунд (job: $($Job.State))."
 }
 
 function Invoke-ValidationAuditCase([string]$Mode, [bool]$ShouldSucceed) {
@@ -100,7 +116,7 @@ function Invoke-ValidationAuditCase([string]$Mode, [bool]$ShouldSucceed) {
     $job = Start-ValidationAuditMock -Port $port -Mode $Mode
     $reportPath = Join-Path $testRoot "$Mode.json"
     try {
-        Wait-ValidationAuditMock -Port $port
+        Wait-ValidationAuditMock -Port $port -Job $job
         $rejected = $false
         try {
             $auditParameters = @{
@@ -143,6 +159,51 @@ function Invoke-ValidationAuditCase([string]$Mode, [bool]$ShouldSucceed) {
 }
 
 try {
+    # A failed worker must surface its original exception, not a readiness timeout.
+    $failedJob = Start-ThreadJob { throw 'validation-mock-startup-contract' }
+    try {
+        if (-not (Wait-Job $failedJob -Timeout 10)) { throw 'Failed-job fixture did not finish.' }
+        $startupError = $null
+        try { Wait-ValidationAuditMock -Port (Get-FreeTcpPort) -Job $failedJob }
+        catch { $startupError = $_.Exception.Message }
+        if ($startupError -notmatch 'validation-mock-startup-contract') {
+            throw 'Readiness-check потерял исходную ошибку фоновой задачи.'
+        }
+    } finally {
+        if ($failedJob.State -eq 'Running') { Stop-Job $failedJob }
+        Remove-Job $failedJob -Force
+    }
+
+    # A live worker that never binds still has a finite startup deadline.
+    $idleJob = Start-ThreadJob { Start-Sleep -Seconds 30 }
+    try {
+        $startupError = $null
+        try { Wait-ValidationAuditMock -Port (Get-FreeTcpPort) -Job $idleJob -TimeoutSeconds 1 }
+        catch { $startupError = $_.Exception.Message }
+        if ($startupError -notmatch 'не запустился за 1 секунд') {
+            throw 'Readiness-check не ограничил ожидание живой фоновой задачи.'
+        }
+    } finally {
+        Stop-Job $idleJob
+        Remove-Job $idleJob -Force
+    }
+
+    # Cancelling a ready mock with no audit requests must release its bound port.
+    $cancelPort = Get-FreeTcpPort
+    $cancelJob = Start-ValidationAuditMock -Port $cancelPort -Mode 'success'
+    try {
+        Wait-ValidationAuditMock -Port $cancelPort -Job $cancelJob
+        Stop-Job $cancelJob
+        $replacement = [Net.HttpListener]::new()
+        try {
+            $replacement.Prefixes.Add("http://127.0.0.1:$cancelPort/")
+            $replacement.Start()
+        } finally { $replacement.Close() }
+    } finally {
+        if ($cancelJob.State -eq 'Running') { Stop-Job $cancelJob }
+        Remove-Job $cancelJob -Force
+    }
+
     $success = Invoke-ValidationAuditCase -Mode 'success' -ShouldSucceed $true
     $accumulated = Invoke-ValidationAuditCase -Mode 'accumulated' -ShouldSucceed $true
     $mismatch = Invoke-ValidationAuditCase -Mode 'mismatch' -ShouldSucceed $false
