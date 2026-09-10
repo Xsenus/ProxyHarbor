@@ -203,7 +203,7 @@ public sealed class BuiltInVpnSourceCatalogTests
     {
         var sources = BuiltInVpnSourceCatalog.Sources;
 
-        Assert.Equal(174, sources.Count);
+        Assert.Equal(273, sources.Count);
         Assert.Equal(new DateOnly(2026, 9, 2), BuiltInVpnSourceCatalog.LastAuditedOn);
         Assert.Equal(32, BuiltInVpnSourceCatalog.ProviderCount);
         Assert.Equal(sources.Count, sources.Select(x => x.Url).Distinct(StringComparer.Ordinal).Count());
@@ -225,5 +225,16 @@ public sealed class BuiltInVpnSourceCatalogTests
         Assert.Contains(sources, x => x.Protocol == VpnProtocol.Tuic);
         Assert.Same(sources[0], BuiltInVpnSourceCatalog.FindByUrl(sources[0].Url));
         Assert.Null(BuiltInVpnSourceCatalog.FindByUrl(sources[0].Url.ToUpperInvariant()));
+    }
+
+    [Fact]
+    public void RegionalExpansionAddsExactlyOneHundredCountryFeeds()
+    {
+        var sources = BuiltInVpnSourceCatalog.Sources.Where(source =>
+            source.Name.StartsWith("Telegram collector country ", StringComparison.Ordinal) ||
+            source.Name.StartsWith("Au1rxx country ", StringComparison.Ordinal)).ToArray();
+
+        Assert.Equal(100, sources.Length);
+        Assert.All(sources, source => Assert.Equal("MIT", source.License));
     }
 }

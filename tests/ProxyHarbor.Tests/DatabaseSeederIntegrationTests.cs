@@ -421,6 +421,66 @@ public sealed class DatabaseSeederIntegrationTests
         }
     }
 
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
+    public async Task StartupRemovesRetiredBuiltInProxyAndVpnFeeds()
+    {
+        var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
+        if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
+
+        var schema = $"proxyharbor_retired_feeds_{Guid.NewGuid():N}";
+        var builder = new NpgsqlConnectionStringBuilder(baseConnectionString) { SearchPath = schema };
+        await using var admin = new NpgsqlConnection(baseConnectionString);
+        await admin.OpenAsync();
+        await using (var create = new NpgsqlCommand($"CREATE SCHEMA {schema}", admin))
+            await create.ExecuteNonQueryAsync();
+
+        const string retiredProxyUrl =
+            "https://raw.githubusercontent.com/CelestialBrain/worldpool/main/proxies/http.txt";
+        const string retiredVpnUrl =
+            "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/all-verified/v2ray-base64-0009.txt";
+
+        try
+        {
+            var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+                .UseNpgsql(builder.ConnectionString)
+                .Options;
+            await using (var first = new ProxyHarborDbContext(options))
+            {
+                await DatabaseSeeder.InitializeAsync(first);
+                first.Sources.Add(new ProxySource
+                {
+                    Name = "Retired Worldpool HTTP",
+                    Url = retiredProxyUrl,
+                    DefaultProtocol = ProxyProtocol.Http
+                });
+                first.VpnSources.Add(new VpnSource
+                {
+                    Name = "Retired Au1rxx shard",
+                    Provider = "Au1rxx/free-vpn-subscriptions",
+                    Url = retiredVpnUrl,
+                    DefaultProtocol = VpnProtocol.Vless,
+                    License = "MIT"
+                });
+                await first.SaveChangesAsync();
+            }
+
+            await using (var second = new ProxyHarborDbContext(options))
+                await DatabaseSeeder.InitializeAsync(second);
+
+            await using var verify = new ProxyHarborDbContext(options);
+            Assert.False(await verify.Sources.AnyAsync(source => source.Url == retiredProxyUrl));
+            Assert.False(await verify.VpnSources.AnyAsync(source => source.Url == retiredVpnUrl));
+            Assert.Equal(BuiltInSourceCatalog.Sources.Count, await verify.Sources.CountAsync());
+            Assert.Equal(BuiltInVpnSourceCatalog.Sources.Count, await verify.VpnSources.CountAsync());
+        }
+        finally
+        {
+            await using var drop = new NpgsqlCommand($"DROP SCHEMA {schema} CASCADE", admin);
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
+
     [Theory]
     [InlineData(
         "TheSpeedX HTTP",

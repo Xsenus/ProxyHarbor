@@ -4,18 +4,40 @@ using ProxyHarbor.Infrastructure;
 
 namespace ProxyHarbor.Tests;
 
-/// <summary>Не позволяет случайно сузить каталог из 85 независимых провайдеров.</summary>
+/// <summary>Не позволяет случайно сузить каталог независимых провайдеров.</summary>
 public sealed class BuiltInSourceCatalogTests
 {
     [Fact]
-    public void CatalogContainsTwoHundredFiftyFiveUniqueFeedsFromEightyFiveProviders()
+    public void CatalogContainsExpectedUniqueFeedsAndProviders()
     {
-        Assert.Equal(255, BuiltInSourceCatalog.Sources.Count);
-        Assert.Equal(255, BuiltInSourceCatalog.Sources.Select(x => x.Url).Distinct(StringComparer.OrdinalIgnoreCase).Count());
-        Assert.Equal(85, BuiltInSourceCatalog.Sources.Select(x => x.Provider).Distinct(StringComparer.OrdinalIgnoreCase).Count());
-        Assert.Equal(85, BuiltInSourceCatalog.Sources.Select(x => x.ProviderIdentity).Distinct(StringComparer.Ordinal).Count());
-        Assert.Equal(85, BuiltInSourceCatalog.ProviderCount);
-        Assert.Equal(Enumerable.Range(1, 255), BuiltInSourceCatalog.Sources.Select(x => x.Rank));
+        Assert.Equal(547, BuiltInSourceCatalog.Sources.Count);
+        Assert.Equal(547, BuiltInSourceCatalog.Sources.Select(x => x.Url).Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        Assert.Equal(283, BuiltInSourceCatalog.Sources.Select(x => x.Provider).Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        Assert.Equal(283, BuiltInSourceCatalog.Sources.Select(x => x.ProviderIdentity).Distinct(StringComparer.Ordinal).Count());
+        Assert.Equal(283, BuiltInSourceCatalog.ProviderCount);
+        Assert.Equal(Enumerable.Range(1, 547), BuiltInSourceCatalog.Sources.Select(x => x.Rank));
+    }
+
+    [Fact]
+    public void RegionalExpansionAddsExactlyOneHundredCountryFeeds()
+    {
+        var feeds = BuiltInSourceCatalog.Sources.Where(source =>
+            source.Name.StartsWith("HProxy country ", StringComparison.Ordinal) ||
+            source.Name.StartsWith("Proxifly country ", StringComparison.Ordinal)).ToArray();
+
+        Assert.Equal(100, feeds.Length);
+        Assert.All(feeds, source => Assert.True(
+            source.Url.Contains("/countries/", StringComparison.Ordinal) ||
+            source.Url.Contains("/by-country/", StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public void IndependentExpansionAddsExactlyTwoHundredProviders()
+    {
+        var feeds = BuiltInSourceCatalog.Sources.Skip(347).ToArray();
+
+        Assert.Equal(200, feeds.Length);
+        Assert.Equal(200, feeds.Select(source => source.ProviderIdentity).Distinct(StringComparer.Ordinal).Count());
     }
 
     [Fact]

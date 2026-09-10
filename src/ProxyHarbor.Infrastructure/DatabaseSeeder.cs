@@ -179,7 +179,15 @@ public static class DatabaseSeeder
             "https://raw.githubusercontent.com/CB-X2-Jun/proxy-lists/main/proxy.txt",
             "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/cr/data.txt",
             "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/cu/data.txt",
-            "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/gr/data.txt"
+            "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/gr/data.txt",
+            "https://raw.githubusercontent.com/Seeh-Saah/awesome-free-proxy-list/main/proxies/all.txt",
+            "https://raw.githubusercontent.com/Seeh-Saah/awesome-free-proxy-list/main/proxies/http.txt",
+            "https://raw.githubusercontent.com/Seeh-Saah/awesome-free-proxy-list/main/proxies/https.txt",
+            "https://raw.githubusercontent.com/Seeh-Saah/awesome-free-proxy-list/main/proxies/socks4.txt",
+            "https://raw.githubusercontent.com/Seeh-Saah/awesome-free-proxy-list/main/proxies/socks5.txt",
+            "https://raw.githubusercontent.com/CelestialBrain/worldpool/main/proxies/http.txt",
+            "https://raw.githubusercontent.com/CelestialBrain/worldpool/main/proxies/socks4.txt",
+            "https://raw.githubusercontent.com/CelestialBrain/worldpool/main/proxies/socks5.txt"
         };
         // Uri.AbsoluteUri уже канонизирует scheme/host, но path и query остаются
         // регистрозависимыми: /Feed и /feed могут быть разными HTTPS-ресурсами.
@@ -243,6 +251,10 @@ public static class DatabaseSeeder
         }
 
         var existingVpnSourcesList = await db.VpnSources.ToListAsync(cancellationToken);
+        var retiredVpnSources = existingVpnSourcesList.Where(source => source.Url ==
+            "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/all-verified/v2ray-base64-0009.txt").ToArray();
+        db.VpnSources.RemoveRange(retiredVpnSources);
+        existingVpnSourcesList = existingVpnSourcesList.Except(retiredVpnSources).ToList();
         foreach (var (replacedUrl, canonicalUrl) in CanonicalVpnSourceUrlReplacements)
         {
             var replaced = existingVpnSourcesList.SingleOrDefault(source => source.Url == replacedUrl);
