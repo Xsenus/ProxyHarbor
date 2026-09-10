@@ -19,6 +19,34 @@ public sealed class BuiltInSourceCatalogTests
     }
 
     [Fact]
+    public void CatalogReplacesEmptyLocalVpnAndHtmlInputsWithTextFeeds()
+    {
+        string[] retiredUrls =
+        [
+            "https://raw.githubusercontent.com/gproxynet/free-proxy-list/main/http.txt",
+            "https://raw.githubusercontent.com/lanzm/MetaFetch/master/list.txt",
+            "https://raw.githubusercontent.com/KhaiNguyenDuc/proxy-generator/main/proxies.txt",
+            "https://cyber-gateway.net/get-proxy/free-proxy/24-free-http-proxy",
+            "https://raw.githubusercontent.com/BuntheaTaing/Proxy-Scraper/main/proxy.txt",
+            "https://raw.githubusercontent.com/CrateC/proxy_list/main/proxies.txt",
+            "https://raw.githubusercontent.com/du0ngtrunghieu/proxy-scraper/main/http.txt",
+            "https://raw.githubusercontent.com/Yogazyy/PROXY-List/main/http.txt",
+            "https://raw.githubusercontent.com/mishakorzik/100000-Proxy/main/proxy.txt"
+        ];
+
+        Assert.DoesNotContain(BuiltInSourceCatalog.Sources, source => retiredUrls.Contains(source.Url));
+        Assert.Contains(BuiltInSourceCatalog.Sources, source => source.Provider == "merlinepedra25");
+        Assert.Contains(BuiltInSourceCatalog.Sources, source => source.Provider == "ahahaabas");
+        Assert.Contains(BuiltInSourceCatalog.Sources, source => source.Provider == "Timskt");
+        Assert.Contains(BuiltInSourceCatalog.Sources, source => source.Provider == "webdevsk");
+        Assert.Contains(BuiltInSourceCatalog.Sources, source => source.Provider == "AKANINE00");
+        Assert.Contains(BuiltInSourceCatalog.Sources, source => source.Provider == "Hugo-WB");
+        Assert.Contains(BuiltInSourceCatalog.Sources, source => source.Provider == "MatteoGitM");
+        Assert.Contains(BuiltInSourceCatalog.Sources, source => source.Provider == "SaraanshSharma");
+        Assert.Contains(BuiltInSourceCatalog.Sources, source => source.Provider == "a2u");
+    }
+
+    [Fact]
     public void RegionalExpansionAddsExactlyOneHundredCountryFeeds()
     {
         var feeds = BuiltInSourceCatalog.Sources.Where(source =>

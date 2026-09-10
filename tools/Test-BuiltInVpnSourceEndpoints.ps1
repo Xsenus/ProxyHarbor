@@ -3,8 +3,8 @@ param(
     [ValidateRange(1, 300)][int]$TimeoutSeconds = 25,
     [ValidateRange(1024, 33554432)][int]$MaxBodyBytes = 33554432,
     [ValidateRange(1, 64)][int]$ThrottleLimit = 12,
-    [ValidateRange(1, 10000)][int]$ExpectedFeeds = 174,
-    [ValidateRange(1, 10000)][int]$ExpectedProviders = 32,
+    [ValidateRange(1, 10000)][int]$ExpectedFeeds = 272,
+    [ValidateRange(1, 10000)][int]$ExpectedProviders = 33,
     [switch]$CatalogOnly,
     [string]$ReportPath
 )
@@ -15,13 +15,39 @@ $ErrorActionPreference = 'Stop'
 $catalogPath = Join-Path $PSScriptRoot '../src/ProxyHarbor.Infrastructure/BuiltInVpnSourceCatalog.cs'
 $catalogText = Get-Content -LiteralPath $catalogPath -Raw
 $pattern = 'new\("(?<name>[^"]+)",\s*"(?<provider>[^"]+)",\s*"(?<url>https://[^"]+)",\s*VpnProtocol\.(?<protocol>\w+),\s*"(?<license>[^"]+)"\)'
-$feeds = @([regex]::Matches($catalogText, $pattern) | ForEach-Object {
+$definitions = @([regex]::Matches($catalogText, $pattern))
+
+foreach ($countrySet in @(
+    [pscustomobject]@{ Variable = 'telegramCountries'; Separator = '|'; Provider = 'mohamadfg-dev/telegram-v2ray-configs-collector'; Prefix = 'https://raw.githubusercontent.com/mohamadfg-dev/telegram-v2ray-configs-collector/main/category/'; Suffix = '.txt' },
+    [pscustomobject]@{ Variable = 'au1rxxCountries'; Separator = ' '; Provider = 'Au1rxx/free-vpn-subscriptions'; Prefix = 'https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/country/'; Suffix = '/v2ray-base64-0001.txt' }
+)) {
+    $assignment = [regex]::Match(
+        $catalogText,
+        "const string $($countrySet.Variable) =(?<body>.*?);",
+        [Text.RegularExpressions.RegexOptions]::Singleline)
+    if (-not $assignment.Success) { throw "Не найден набор $($countrySet.Variable)." }
+    $countries = ([regex]::Matches($assignment.Groups['body'].Value, '"(?<value>[^"]*)"') |
+        ForEach-Object { $_.Groups['value'].Value }) -join ''
+    foreach ($country in $countries.Split($countrySet.Separator, [StringSplitOptions]::RemoveEmptyEntries)) {
+        $encodedCountry = [Uri]::EscapeDataString($country)
+        $definitions += [pscustomobject]@{
+            Name = "$($countrySet.Variable) $country"
+            Provider = $countrySet.Provider
+            Url = "$($countrySet.Prefix)$encodedCountry$($countrySet.Suffix)"
+            Protocol = 'Vless'
+            License = 'MIT'
+        }
+    }
+}
+
+$feeds = @($definitions | ForEach-Object {
+    $isMatch = $_ -is [Text.RegularExpressions.Match]
     [pscustomobject]@{
-        Name = $_.Groups['name'].Value
-        Provider = $_.Groups['provider'].Value
-        Url = $_.Groups['url'].Value
-        Protocol = $_.Groups['protocol'].Value
-        License = $_.Groups['license'].Value
+        Name = if ($isMatch) { $_.Groups['name'].Value } else { $_.Name }
+        Provider = if ($isMatch) { $_.Groups['provider'].Value } else { $_.Provider }
+        Url = if ($isMatch) { $_.Groups['url'].Value } else { $_.Url }
+        Protocol = if ($isMatch) { $_.Groups['protocol'].Value } else { $_.Protocol }
+        License = if ($isMatch) { $_.Groups['license'].Value } else { $_.License }
     }
 })
 

@@ -3,8 +3,8 @@ param(
     [ValidateRange(1, 300)][int]$TimeoutSeconds = 25,
     [ValidateRange(1024, 1048576)][int]$MaxBodyBytes = 262144,
     [ValidateRange(1, 64)][int]$ThrottleLimit = 12,
-    [ValidateRange(1, 10000)][int]$ExpectedFeeds = 255,
-    [ValidateRange(1, 10000)][int]$ExpectedProviders = 85,
+    [ValidateRange(1, 10000)][int]$ExpectedFeeds = 547,
+    [ValidateRange(1, 10000)][int]$ExpectedProviders = 283,
     [switch]$CatalogOnly,
     [string]$ReportPath
 )
@@ -17,11 +17,39 @@ $ErrorActionPreference = 'Stop'
 # воспроизводит тот же порядок, а не доверяет историческому числу в Feed(...).
 $catalogPath = Join-Path $PSScriptRoot '../src/ProxyHarbor.Infrastructure/BuiltInSourceCatalog.cs'
 $catalogText = Get-Content -LiteralPath $catalogPath -Raw
-$feedPattern = 'Feed\((?<rank>\d+),\s*"[^"]+",\s*"(?<provider>[^"]+)",\s*"(?<url>https://[^"]+)",\s*ProxyProtocol\.(?<protocol>\w+)\)'
+$literalFeedPattern = 'Feed\((?:\d+|rank(?:\+\+)?),\s*"[^"]+",\s*"(?<provider>[^"]+)",\s*"(?<url>https://[^"]+)",\s*ProxyProtocol\.(?<protocol>\w+)\)'
+$tableFeedPattern = '(?m)^\s*(?<provider>[^|\r\n]+)\|(?<url>https://[^|\r\n]+)\|(?<protocol>\w+)\s*$'
+$definitions = @(
+    [regex]::Matches($catalogText, $literalFeedPattern)
+    [regex]::Matches($catalogText, $tableFeedPattern)
+)
+
+foreach ($countrySet in @(
+    [pscustomobject]@{ Variable = 'hProxyCountries'; Provider = 'HProxy'; Prefix = 'https://raw.githubusercontent.com/hproxy-com/free-proxy-list/main/by-country/'; Suffix = '.txt' },
+    [pscustomobject]@{ Variable = 'proxiflyCountries'; Provider = 'Proxifly'; Prefix = 'https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/countries/'; Suffix = '/data.txt' }
+)) {
+    $assignment = [regex]::Match(
+        $catalogText,
+        "const string $($countrySet.Variable) =(?<body>.*?);",
+        [Text.RegularExpressions.RegexOptions]::Singleline)
+    if (-not $assignment.Success) { throw "Не найден набор $($countrySet.Variable)." }
+    $countries = ([regex]::Matches($assignment.Groups['body'].Value, '"(?<value>[^"]*)"') |
+        ForEach-Object { $_.Groups['value'].Value }) -join ''
+    foreach ($country in $countries.Split(' ', [StringSplitOptions]::RemoveEmptyEntries)) {
+        $definitions += [pscustomobject]@{
+            Provider = $countrySet.Provider
+            Url = "$($countrySet.Prefix)$country$($countrySet.Suffix)"
+            Protocol = 'Http'
+        }
+    }
+}
+
 $nextRank = 0
-$feeds = @([regex]::Matches($catalogText, $feedPattern) | ForEach-Object {
+$feeds = @($definitions | ForEach-Object {
     $nextRank++
-    $url = $_.Groups['url'].Value
+    $url = if ($_ -is [Text.RegularExpressions.Match]) { $_.Groups['url'].Value } else { $_.Url }
+    $provider = if ($_ -is [Text.RegularExpressions.Match]) { $_.Groups['provider'].Value } else { $_.Provider }
+    $protocol = if ($_ -is [Text.RegularExpressions.Match]) { $_.Groups['protocol'].Value } else { $_.Protocol }
     $uri = [Uri]::new($url, [UriKind]::Absolute)
     $providerIdentity = if ($uri.IdnHost.Equals('raw.githubusercontent.com', [StringComparison]::OrdinalIgnoreCase)) {
         $owner = $uri.AbsolutePath.Split('/', [StringSplitOptions]::RemoveEmptyEntries)[0]
@@ -32,10 +60,10 @@ $feeds = @([regex]::Matches($catalogText, $feedPattern) | ForEach-Object {
     }
     [pscustomobject]@{
         Rank = $nextRank
-        Provider = $_.Groups['provider'].Value
+        Provider = $provider
         ProviderIdentity = $providerIdentity
         Url = $url
-        Protocol = $_.Groups['protocol'].Value
+        Protocol = $protocol
     }
 })
 

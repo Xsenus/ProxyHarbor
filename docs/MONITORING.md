@@ -2,7 +2,7 @@
 
 Профиль `monitoring` запускает закреплённые Prometheus и Alertmanager без root, capabilities и writable root filesystem. Prometheus опрашивает API и Alertmanager внутри Docker-сети каждые 15 секунд, хранит не более 30 дней/10 ГБ и доступен только на `127.0.0.1:${PROMETHEUS_PORT}`. Alertmanager доступен на loopback-порту `${ALERTMANAGER_PORT}`, группирует alarms и передаёт firing/resolved группы во внутренний API. API ставит их в ту же постоянную Telegram-очередь, что использует основной бот, поэтому применяются настроенные SOCKS5 failover, повторы и аудит доставки. Production Caddy возвращает 404 для внешнего `/metrics`, поэтому operational topology не публикуется в интернет.
 
-Alertmanager получает только отдельный `ALERTMANAGER_WEBHOOK_TOKEN` через Compose secret-файл. Telegram bot token и chat ID ему не монтируются: Bot API URL с token не может попасть в журнал сетевой ошибки. Внутренний endpoint дополнительно принимает только service-host `api`, ограничивает тело 64 КиБ и 20 alerts, сравнивает Bearer token за постоянное время, экранирует Telegram HTML и дедуплицирует краткие повторы. Получателем служит выбранный в настройках backup Telegram-диалог с fallback на `TELEGRAM_CHAT_ID`. Критические alarms повторяются раз в час, warning — раз в четыре часа; resolved-сообщение закрывает инцидент.
+Alertmanager получает только отдельный `ALERTMANAGER_WEBHOOK_TOKEN` через Compose secret-файл. Telegram bot token и chat ID ему не монтируются: Bot API URL с token не может попасть в журнал сетевой ошибки. Внутренний endpoint дополнительно принимает только service-host `api`, ограничивает тело 64 КиБ и 20 alerts, сравнивает Bearer token за постоянное время, экранирует Telegram HTML и дедуплицирует краткие повторы. Получателем служит выбранный в настройках backup Telegram-диалог с fallback на `TELEGRAM_CHAT_ID`. Критические alarms повторяются раз в час, warning — раз в двенадцать часов; resolved-сообщение закрывает инцидент.
 
 Runtime HTTP SLI публикуются как `proxyharbor_http_requests_total` и cumulative `proxyharbor_http_request_duration_seconds`. Labels ограничены фиксированными группами route/status; произвольные URL, IP и заголовки никогда не попадают в time-series, а `/metrics` исключён из измерения. Counters локальны реплике и сбрасываются при рестарте, поэтому alarms используют `rate()` и суммируют все scrape targets.
 
@@ -37,13 +37,13 @@ curl --fail http://127.0.0.1:9093/-/ready
 | `ProxyHarborCollectionStalled` | нет успеха дольше четырёх интервалов | Проверить последний collection audit, DNS/egress и ошибки feed |
 | `ProxyHarborCollectionHung` | run активен более 30 минут | Проверить зависшие HTTP-загрузки и cluster lock; не удалять audit row вручную |
 | `ProxyHarborSourceCatalogIncomplete` | отсутствует/выключена каноническая запись | Перезапустить актуальную версию для seed и проверить миграции |
-| `ProxyHarborSourceCatalogUnhealthy` | каталог нездоров более часа | Открыть diagnostics и разбирать failing/stale/truncated feed по провайдеру |
+| `ProxyHarborSourceCatalogUnhealthy` | менее 95% встроенных feed здоровы более часа | Открыть diagnostics и разбирать failing/stale/truncated feed по провайдеру |
 | `ProxyHarborVpnSourceCatalogIncomplete` | отсутствует/выключен канонический VPN feed либо провайдер | Перезапустить актуальную версию для seed и проверить `VpnSources` |
-| `ProxyHarborVpnSourceCatalogUnhealthy` | VPN-каталог нездоров более часа | Открыть вкладку источников VPN и разбирать failing/stale/empty feed по провайдеру |
+| `ProxyHarborVpnSourceCatalogUnhealthy` | менее 95% встроенных VPN feed здоровы более часа | Открыть вкладку источников VPN и разбирать failing/stale/empty feed по провайдеру |
 | `ProxyHarborCollectionTruncated` | сработал source/global limit | Проверить feed на аномалию; повышать лимит только после измерения памяти |
 | `ProxyHarborProbeControlUnavailable` | control endpoint недоступен 10 минут | Проверить доверенный endpoint, DNS, TLS и исходящий firewall |
 | `ProxyHarborValidationStalled` | due queue есть, попыток нет 15 минут | Проверить worker logs, leases, лимит файлов и PostgreSQL |
-| `ProxyHarborValidationFailures` | failed batches за последние 5 минут | Проверить первую исходную ошибку в validation audit и доступность БД |
+| `ProxyHarborValidationFailures` | не менее трёх failed batches удерживаются в пятиминутном окне пять минут | Проверить первую исходную ошибку в validation audit и доступность БД |
 | `ProxyHarborValidationBacklogAtRisk` | ETA ещё не арендованной due-очереди 10 минут превышает окно публичной свежести | Проверить latency/timeout, файловые дескрипторы и CPU; после измерения увеличить concurrency либо добавить worker-replica |
 | `ProxyHarborVpnValidationStalled` | due VPN-очередь есть, но завершённых проверок нет 15 минут | Проверить worker logs, DNS/egress, лимит файлов и PostgreSQL; VPN-проверка не зависит от proxy control endpoint |
 | `ProxyHarborVpnValidationBacklogAtRisk` | ETA due VPN-очереди 10 минут превышает окно публичной свежести | Проверить TCP timeout, файловые дескрипторы, CPU/RAM и новые VPN concurrency/batch settings; повышать concurrency только после измерения ресурсов |

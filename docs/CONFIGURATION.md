@@ -24,6 +24,7 @@ docker compose up -d --build
 | `ADMIN_PASSWORD` | Bootstrap-пароль первого администратора; в Production 24–256 символов, обязательно upper/lowercase, цифра и специальный знак |
 | `ADMIN_API_KEY` | Независимый ключ automation-заголовка `X-Admin-Key`; в Production 24–256 значимых символов |
 | `BACKGROUND_WORKERS_ENABLED` | Запуск collector, validator, maintenance и backup workers в API-реплике |
+| `PUBLIC_FRESHNESS_MINUTES` | Возраст успешной proxy-проверки в публичной выдаче; production default 60 минут |
 | `VALIDATION_CONCURRENCY` | Параллельные сетевые проверки, `1..1000` |
 | `VALIDATION_BATCH_SIZE` | Размер распределённой validation lease, `1..100000` |
 | `VPN_VALIDATION_CONCURRENCY` | Параллелизм VPN endpoint, `1..1000`; общий TCP socket budget партии — `max(32, concurrency)`, с атомарным резервом всех DNS-адресов endpoint |
@@ -149,7 +150,7 @@ Defaults ниже соответствуют `src/ProxyHarbor.Api/appsettings.js
 | `BackgroundWorkersEnabled` | `true` | bool | Фоновые циклы этой реплики |
 | `CollectionIntervalMinutes` | 5 | 1..10080 | Период полного сбора |
 | `ValidationIntervalMinutes` | 2 | 1..1440 | Интервал повторной проверки Alive-прокси |
-| `PublicFreshnessMinutes` | 15 | 2..2880 | Максимальный возраст Alive-проверки; не меньше validation interval |
+| `PublicFreshnessMinutes` | 15 (60 в Docker Compose) | 2..2880 | Максимальный возраст Alive-проверки; не меньше validation interval |
 | `DeadRetryBaseMinutes` | 15 | 1..1440 | Начало exponential backoff Dead-прокси |
 | `DeadRetryMaxHours` | 24 | 1..720 | Максимальный Dead backoff |
 | `ValidationConcurrency` | 800 | 1..1000 | Одновременные пробы |

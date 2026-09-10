@@ -187,7 +187,16 @@ public static class DatabaseSeeder
             "https://raw.githubusercontent.com/Seeh-Saah/awesome-free-proxy-list/main/proxies/socks5.txt",
             "https://raw.githubusercontent.com/CelestialBrain/worldpool/main/proxies/http.txt",
             "https://raw.githubusercontent.com/CelestialBrain/worldpool/main/proxies/socks4.txt",
-            "https://raw.githubusercontent.com/CelestialBrain/worldpool/main/proxies/socks5.txt"
+            "https://raw.githubusercontent.com/CelestialBrain/worldpool/main/proxies/socks5.txt",
+            "https://raw.githubusercontent.com/gproxynet/free-proxy-list/main/http.txt",
+            "https://raw.githubusercontent.com/lanzm/MetaFetch/master/list.txt",
+            "https://raw.githubusercontent.com/KhaiNguyenDuc/proxy-generator/main/proxies.txt",
+            "https://cyber-gateway.net/get-proxy/free-proxy/24-free-http-proxy",
+            "https://raw.githubusercontent.com/BuntheaTaing/Proxy-Scraper/main/proxy.txt",
+            "https://raw.githubusercontent.com/CrateC/proxy_list/main/proxies.txt",
+            "https://raw.githubusercontent.com/du0ngtrunghieu/proxy-scraper/main/http.txt",
+            "https://raw.githubusercontent.com/Yogazyy/PROXY-List/main/http.txt",
+            "https://raw.githubusercontent.com/mishakorzik/100000-Proxy/main/proxy.txt"
         };
         // Uri.AbsoluteUri уже канонизирует scheme/host, но path и query остаются
         // регистрозависимыми: /Feed и /feed могут быть разными HTTPS-ресурсами.
@@ -251,8 +260,13 @@ public static class DatabaseSeeder
         }
 
         var existingVpnSourcesList = await db.VpnSources.ToListAsync(cancellationToken);
-        var retiredVpnSources = existingVpnSourcesList.Where(source => source.Url ==
-            "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/all-verified/v2ray-base64-0009.txt").ToArray();
+        var retiredVpnUrls = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/all-verified/v2ray-base64-0009.txt",
+            "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/country/AF/v2ray-base64-0001.txt",
+            "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/country/MU/v2ray-base64-0001.txt"
+        };
+        var retiredVpnSources = existingVpnSourcesList.Where(source => retiredVpnUrls.Contains(source.Url)).ToArray();
         db.VpnSources.RemoveRange(retiredVpnSources);
         existingVpnSourcesList = existingVpnSourcesList.Except(retiredVpnSources).ToList();
         foreach (var (replacedUrl, canonicalUrl) in CanonicalVpnSourceUrlReplacements)

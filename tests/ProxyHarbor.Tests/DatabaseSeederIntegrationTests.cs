@@ -435,10 +435,25 @@ public sealed class DatabaseSeederIntegrationTests
         await using (var create = new NpgsqlCommand($"CREATE SCHEMA {schema}", admin))
             await create.ExecuteNonQueryAsync();
 
-        const string retiredProxyUrl =
-            "https://raw.githubusercontent.com/CelestialBrain/worldpool/main/proxies/http.txt";
-        const string retiredVpnUrl =
-            "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/all-verified/v2ray-base64-0009.txt";
+        string[] retiredProxyUrls =
+        [
+            "https://raw.githubusercontent.com/CelestialBrain/worldpool/main/proxies/http.txt",
+            "https://raw.githubusercontent.com/gproxynet/free-proxy-list/main/http.txt",
+            "https://raw.githubusercontent.com/lanzm/MetaFetch/master/list.txt",
+            "https://raw.githubusercontent.com/KhaiNguyenDuc/proxy-generator/main/proxies.txt",
+            "https://cyber-gateway.net/get-proxy/free-proxy/24-free-http-proxy",
+            "https://raw.githubusercontent.com/BuntheaTaing/Proxy-Scraper/main/proxy.txt",
+            "https://raw.githubusercontent.com/CrateC/proxy_list/main/proxies.txt",
+            "https://raw.githubusercontent.com/du0ngtrunghieu/proxy-scraper/main/http.txt",
+            "https://raw.githubusercontent.com/Yogazyy/PROXY-List/main/http.txt",
+            "https://raw.githubusercontent.com/mishakorzik/100000-Proxy/main/proxy.txt"
+        ];
+        string[] retiredVpnUrls =
+        [
+            "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/all-verified/v2ray-base64-0009.txt",
+            "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/country/AF/v2ray-base64-0001.txt",
+            "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/country/MU/v2ray-base64-0001.txt"
+        ];
 
         try
         {
@@ -448,20 +463,20 @@ public sealed class DatabaseSeederIntegrationTests
             await using (var first = new ProxyHarborDbContext(options))
             {
                 await DatabaseSeeder.InitializeAsync(first);
-                first.Sources.Add(new ProxySource
+                first.Sources.AddRange(retiredProxyUrls.Select((url, index) => new ProxySource
                 {
-                    Name = "Retired Worldpool HTTP",
-                    Url = retiredProxyUrl,
+                    Name = $"Retired proxy {index}",
+                    Url = url,
                     DefaultProtocol = ProxyProtocol.Http
-                });
-                first.VpnSources.Add(new VpnSource
+                }));
+                first.VpnSources.AddRange(retiredVpnUrls.Select((url, index) => new VpnSource
                 {
-                    Name = "Retired Au1rxx shard",
+                    Name = $"Retired VPN {index}",
                     Provider = "Au1rxx/free-vpn-subscriptions",
-                    Url = retiredVpnUrl,
+                    Url = url,
                     DefaultProtocol = VpnProtocol.Vless,
                     License = "MIT"
-                });
+                }));
                 await first.SaveChangesAsync();
             }
 
@@ -469,8 +484,8 @@ public sealed class DatabaseSeederIntegrationTests
                 await DatabaseSeeder.InitializeAsync(second);
 
             await using var verify = new ProxyHarborDbContext(options);
-            Assert.False(await verify.Sources.AnyAsync(source => source.Url == retiredProxyUrl));
-            Assert.False(await verify.VpnSources.AnyAsync(source => source.Url == retiredVpnUrl));
+            Assert.False(await verify.Sources.AnyAsync(source => retiredProxyUrls.Contains(source.Url)));
+            Assert.False(await verify.VpnSources.AnyAsync(source => retiredVpnUrls.Contains(source.Url)));
             Assert.Equal(BuiltInSourceCatalog.Sources.Count, await verify.Sources.CountAsync());
             Assert.Equal(BuiltInVpnSourceCatalog.Sources.Count, await verify.VpnSources.CountAsync());
         }
