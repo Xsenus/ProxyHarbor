@@ -67,6 +67,7 @@ services:
       Collector__BackgroundWorkersEnabled: ${BACKGROUND_WORKERS_ENABLED:-true}
       Collector__ValidationConcurrency: ${VALIDATION_CONCURRENCY:-800}
       Collector__ValidationBatchSize: ${VALIDATION_BATCH_SIZE:-1600}
+      Collector__PublicFreshnessMinutes: ${PUBLIC_FRESHNESS_MINUTES:-60}
       Collector__VpnValidationConcurrency: ${VPN_VALIDATION_CONCURRENCY:-800}
       Collector__VpnValidationBatchSize: ${VPN_VALIDATION_BATCH_SIZE:-1600}
       Collector__VpnReachableValidationIntervalMinutes: ${VPN_REACHABLE_VALIDATION_INTERVAL_MINUTES:-10}

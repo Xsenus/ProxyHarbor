@@ -7,7 +7,7 @@ namespace ProxyHarbor.Tests;
 public sealed class VpnSourceCatalogHealthTests
 {
     private static readonly DateTimeOffset AuditNow =
-        new(2026, 9, 2, 12, 15, 0, TimeSpan.Zero);
+        new(2026, 9, 10, 12, 15, 0, TimeSpan.Zero);
     private static readonly TimeSpan FreshnessWindow = SourceCatalogHealth.FreshnessWindow(15);
 
     [Fact]
@@ -27,13 +27,13 @@ public sealed class VpnSourceCatalogHealthTests
 
         var snapshot = VpnSourceCatalogHealth.Calculate(sources, AuditNow, FreshnessWindow);
 
-        Assert.Equal(174, snapshot.ExpectedSources);
-        Assert.Equal(new DateOnly(2026, 9, 2), snapshot.LastAuditedOn);
-        Assert.Equal(174, snapshot.PresentSources);
-        Assert.Equal(174, snapshot.EnabledSources);
-        Assert.Equal(174, snapshot.HealthySources);
-        Assert.Equal(32, snapshot.ExpectedProviders);
-        Assert.Equal(32, snapshot.PresentProviders);
+        Assert.Equal(272, snapshot.ExpectedSources);
+        Assert.Equal(new DateOnly(2026, 9, 10), snapshot.LastAuditedOn);
+        Assert.Equal(272, snapshot.PresentSources);
+        Assert.Equal(272, snapshot.EnabledSources);
+        Assert.Equal(272, snapshot.HealthySources);
+        Assert.Equal(33, snapshot.ExpectedProviders);
+        Assert.Equal(33, snapshot.PresentProviders);
         Assert.True(snapshot.IsComplete);
         Assert.True(snapshot.IsHealthy);
     }
@@ -46,9 +46,9 @@ public sealed class VpnSourceCatalogHealthTests
 
         var snapshot = VpnSourceCatalogHealth.Calculate(sources, AuditNow, FreshnessWindow);
 
-        Assert.Equal(174, snapshot.PresentSources);
-        Assert.Equal(173, snapshot.EnabledSources);
-        Assert.Equal(173, snapshot.HealthySources);
+        Assert.Equal(272, snapshot.PresentSources);
+        Assert.Equal(271, snapshot.EnabledSources);
+        Assert.Equal(271, snapshot.HealthySources);
         Assert.False(snapshot.IsComplete);
         Assert.False(snapshot.IsHealthy);
     }
@@ -68,11 +68,11 @@ public sealed class VpnSourceCatalogHealthTests
 
         var snapshot = VpnSourceCatalogHealth.Calculate(sources, AuditNow, FreshnessWindow);
 
-        Assert.Equal(173, snapshot.PresentSources);
-        Assert.Equal(31, snapshot.PresentProviders);
+        Assert.Equal(271, snapshot.PresentSources);
+        Assert.Equal(32, snapshot.PresentProviders);
         Assert.Equal(1, snapshot.StaleSources);
         Assert.Equal(1, snapshot.FailingSources);
-        Assert.Equal(171, snapshot.HealthySources);
+        Assert.Equal(269, snapshot.HealthySources);
         Assert.False(snapshot.IsComplete);
         Assert.False(snapshot.IsHealthy);
     }
@@ -89,13 +89,13 @@ public sealed class VpnSourceCatalogHealthTests
 
         Assert.True(snapshot.IsComplete);
         Assert.Equal(1, snapshot.NeverAuditedSources);
-        Assert.Equal(173, snapshot.HealthySources);
+        Assert.Equal(271, snapshot.HealthySources);
         Assert.False(snapshot.IsHealthy);
     }
 
     private static List<VpnSource> HealthyCatalog()
     {
-        var auditedAt = new DateTimeOffset(2026, 9, 2, 12, 0, 0, TimeSpan.Zero);
+        var auditedAt = new DateTimeOffset(2026, 9, 10, 12, 0, 0, TimeSpan.Zero);
         return BuiltInVpnSourceCatalog.Sources.Select(definition => new VpnSource
         {
             Name = definition.Name,

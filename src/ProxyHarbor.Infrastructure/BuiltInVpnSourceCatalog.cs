@@ -9,7 +9,7 @@ namespace ProxyHarbor.Infrastructure;
 public static class BuiltInVpnSourceCatalog
 {
     /// <summary>Дата последней ручной проверки происхождения и лицензий.</summary>
-    public static DateOnly LastAuditedOn { get; } = new(2026, 9, 2);
+    public static DateOnly LastAuditedOn { get; } = new(2026, 9, 10);
 
     /// <summary>Начальный набор разрешённых VPN feed'ов.</summary>
     public static IReadOnlyList<VpnSourceDefinition> Sources { get; } =
@@ -197,8 +197,35 @@ public static class BuiltInVpnSourceCatalog
         new("Au1rxx verified 6", "Au1rxx/free-vpn-subscriptions", "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/all-verified/v2ray-base64-0006.txt", VpnProtocol.Vless, "MIT"),
         new("Au1rxx verified 7", "Au1rxx/free-vpn-subscriptions", "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/all-verified/v2ray-base64-0007.txt", VpnProtocol.Vless, "MIT"),
         new("Au1rxx verified 8", "Au1rxx/free-vpn-subscriptions", "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/all-verified/v2ray-base64-0008.txt", VpnProtocol.Vless, "MIT"),
-        new("Au1rxx verified 9", "Au1rxx/free-vpn-subscriptions", "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/all-verified/v2ray-base64-0009.txt", VpnProtocol.Vless, "MIT"),
+        new("MetaFetch mixed", "lanzm/MetaFetch", "https://raw.githubusercontent.com/lanzm/MetaFetch/master/list.txt", VpnProtocol.Vless, "MIT"),
+
+        // Сто новых country-feed, live-проверенных с production VPS 10.09.2026.
+        // 57 endpoint ориентированы на СНГ и Европу, остальные дают географический резерв.
+        .. RegionalCountrySources(),
     ];
+
+    private static IEnumerable<VpnSourceDefinition> RegionalCountrySources()
+    {
+        const string telegramCountries =
+            "Russia|Ukraine|Belarus|Kazakhstan|Azerbaijan|Georgia|Moldova|Uzbekistan|Croatia|Cyprus|Greece|Hungary|" +
+            "Latvia|Lithuania|Luxembourg|Malta|The Netherlands|North Macedonia|Norway|Portugal|Romania|Serbia|Spain|" +
+            "Switzerland|Turkey|Türkiye|United Kingdom|Bahrain|Belize|British Virgin Islands|Cambodia|Colombia|" +
+            "Costa Rica|Curacao|Indonesia|Iran|Israel|Malaysia|Mexico|New Zealand|Pakistan|Peru|Philippines|" +
+            "Saudi Arabia|Seychelles|South Africa|South Korea|Taiwan|Thailand|United Arab Emirates";
+        const string au1rxxCountries =
+            "RU UA KZ AM MD UZ AL AT BE BG CH DE DK EE ES FI FR GB GR IE IT LT LV NL NO PL RO SE TR CZ " +
+            "AE AR AU BR CA CN EG HK ID IL IN JP KR MO MX MY NG PH";
+
+        foreach (var country in telegramCountries.Split('|', StringSplitOptions.RemoveEmptyEntries))
+            yield return new($"Telegram collector country {country}",
+                "mohamadfg-dev/telegram-v2ray-configs-collector",
+                $"https://raw.githubusercontent.com/mohamadfg-dev/telegram-v2ray-configs-collector/main/category/{Uri.EscapeDataString(country)}.txt",
+                VpnProtocol.Vless, "MIT");
+        foreach (var country in au1rxxCountries.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+            yield return new($"Au1rxx country {country}", "Au1rxx/free-vpn-subscriptions",
+                $"https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/country/{country}/v2ray-base64-0001.txt",
+                VpnProtocol.Vless, "MIT");
+    }
 
     /// <summary>Число независимых владельцев встроенных VPN feed.</summary>
     public static int ProviderCount { get; } = Sources.Select(source => source.Provider)

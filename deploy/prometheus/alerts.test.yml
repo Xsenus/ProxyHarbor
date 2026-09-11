@@ -104,6 +104,38 @@ tests:
         alertname: ProxyHarborTelegramDeliveryFailed
         exp_alerts: []
 
+  - name: Small proxy source degradation does not page the operator
+    interval: 5m
+    input_series:
+      - series: proxyharbor_builtin_sources_enabled
+        values: '100x15'
+      - series: proxyharbor_builtin_sources_healthy
+        values: '96x15'
+    alert_rule_test:
+      - eval_time: 65m
+        alertname: ProxyHarborSourceCatalogUnhealthy
+        exp_alerts: []
+
+  - name: Broad proxy source degradation warns after a sustained hour
+    interval: 5m
+    input_series:
+      - series: proxyharbor_builtin_sources_enabled
+        values: '100x15'
+      - series: proxyharbor_builtin_sources_healthy
+        values: '90x15'
+    alert_rule_test:
+      - eval_time: 55m
+        alertname: ProxyHarborSourceCatalogUnhealthy
+        exp_alerts: []
+      - eval_time: 65m
+        alertname: ProxyHarborSourceCatalogUnhealthy
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Каталог источников длительно нездоров
+              description: Менее 95% включённых встроенных feed имеют свежий полный успешный результат.
+
   - name: Incomplete VPN source catalog raises a critical alert after grace period
     interval: 1m
     input_series:
@@ -125,8 +157,10 @@ tests:
   - name: Unhealthy VPN source catalog warns only after a sustained hour
     interval: 5m
     input_series:
-      - series: proxyharbor_vpn_source_catalog_healthy
-        values: '0x15'
+      - series: proxyharbor_builtin_vpn_sources_enabled
+        values: '100x15'
+      - series: proxyharbor_builtin_vpn_sources_healthy
+        values: '90x15'
     alert_rule_test:
       - eval_time: 55m
         alertname: ProxyHarborVpnSourceCatalogUnhealthy
@@ -138,7 +172,19 @@ tests:
               severity: warning
             exp_annotations:
               summary: Каталог VPN-источников длительно нездоров
-              description: Не все встроенные VPN feed имеют свежий успешный непустой результат.
+              description: Менее 95% включённых встроенных VPN feed имеют свежий успешный непустой результат.
+
+  - name: Small VPN source degradation does not page the operator
+    interval: 5m
+    input_series:
+      - series: proxyharbor_builtin_vpn_sources_enabled
+        values: '100x15'
+      - series: proxyharbor_builtin_vpn_sources_healthy
+        values: '96x15'
+    alert_rule_test:
+      - eval_time: 65m
+        alertname: ProxyHarborVpnSourceCatalogUnhealthy
+        exp_alerts: []
 
   - name: Runtime backup configuration read failure respects the grace period
     interval: 1m
@@ -229,6 +275,34 @@ tests:
             exp_annotations:
               summary: Очередь проверки не обрабатывается
               description: Есть due-прокси и доступный control endpoint, но попыток проверки нет.
+
+  - name: Isolated validation lease loss does not page the operator
+    interval: 1m
+    input_series:
+      - series: proxyharbor_validation_runs_failed_last_5m
+        values: '1x12'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: ProxyHarborValidationFailures
+        exp_alerts: []
+
+  - name: Sustained validation failures warn after five minutes
+    interval: 1m
+    input_series:
+      - series: proxyharbor_validation_runs_failed_last_5m
+        values: '3x8'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: ProxyHarborValidationFailures
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: ProxyHarborValidationFailures
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Validation-партии систематически завершаются ошибкой
+              description: Не менее трёх failed validation runs удерживаются в пятиминутном окне пять минут подряд.
 
   - name: Validation capacity warns before published proxies become stale
     interval: 1m

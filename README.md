@@ -2,14 +2,14 @@
 
 Высокопроизводительный сервис на ASP.NET Core 10, React 19 и PostgreSQL для сбора, объективной проверки и публикации бесплатных публичных HTTP(S), SOCKS4 и SOCKS5 прокси.
 
-ProxyHarbor загружает 320 HTTPS-feed от 85 независимых провайдеров, нормализует и дедуплицирует адреса, проверяет их через настоящий proxy-туннель до доверенного TLS endpoint, измеряет задержку и отдаёт только свежие подтверждённые прокси через API и экспорты JSON, XML, TXT и CSV.
+ProxyHarbor загружает 547 proxy-feed от 283 независимых провайдеров, нормализует и дедуплицирует адреса, проверяет их через настоящий proxy-туннель до доверенного TLS endpoint, измеряет задержку и отдаёт только свежие подтверждённые прокси через API и экспорты JSON, XML, TXT и CSV.
 
 > Публичные прокси принадлежат третьим лицам и могут читать или изменять незашифрованный трафик. Не передавайте через них пароли, cookies, платёжные данные и другие секреты. Используйте сервис законно и соблюдайте условия источников и целевых ресурсов.
 
 ## Состояние проекта
 
-- 320 встроенных proxy-feed от 85 провайдеров и 174 VPN-feed от 32 провайдеров; операторский каталог: [docs/SOURCE_CATALOG.md](docs/SOURCE_CATALOG.md).
-- Все 320 proxy-feed и 174 VPN-feed прошли URL/live-аудит 2 сентября 2026 года; полный proxy end-to-end аудит выполняется CI и перед production-релизом.
+- 547 встроенных proxy-feed от 283 провайдеров и 272 VPN-feed от 33 провайдеров; операторский каталог: [docs/SOURCE_CATALOG.md](docs/SOURCE_CATALOG.md).
+- Каталоги прошли URL/content-аудит 10 сентября 2026 года; полный proxy end-to-end аудит выполняется CI и перед production-релизом.
 - Последний полный production-цикл: 888 116 разобранных строк, 290 217 уникальных кандидатов за 4,965 секунды.
 - Проверочная партия: 1 600/1 600 результатов, без `Deferred`; одинаковый набор Alive во всех четырёх форматах.
 - Backend: 1172 автоматических теста; frontend: 68 component/accessibility tests.
@@ -47,7 +47,7 @@ ProxyHarbor загружает 320 HTTPS-feed от 85 независимых п�
 
 ```mermaid
 flowchart LR
-    A["320 HTTPS feeds / 85 providers"] --> B["Bounded collector"]
+    A["547 feeds / 283 providers"] --> B["Bounded collector"]
     B --> C["Normalize + deduplicate"]
     C --> D["PostgreSQL candidate queue"]
     D --> E["HTTP/SOCKS validation workers"]
@@ -346,7 +346,7 @@ docs/                            архитектура и operator runbooks
 - [производительность](docs/PERFORMANCE.md);
 - [распределённые checker-узлы](docs/DISTRIBUTED_CHECKERS.md);
 - [источники и live audit](docs/SOURCES.md);
-- [каталог 85 провайдеров](docs/SOURCE_CATALOG.md);
+- [операторский каталог источников](docs/SOURCE_CATALOG.md);
 - [выпуск версии](docs/RELEASING.md);
 - [первая публикация на GitHub](docs/GITHUB_SETUP.md);
 - [политика безопасности](SECURITY.md);
