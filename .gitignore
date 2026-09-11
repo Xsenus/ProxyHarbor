@@ -18,4 +18,6 @@ TestResults-*/
 TestResults*/
 .tmp-postgres/
 .tmp-ci-secrets/
+.codex-tmp/
+.serena/
 src/proxyharbor-web/src/assets/
