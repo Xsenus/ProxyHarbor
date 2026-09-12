@@ -1,6 +1,7 @@
 using System.IO.Compression;
 using System.Net;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -33,9 +34,10 @@ public sealed class BackupAuditIntegrationTests
         try
         {
             var dbOptions = new DbContextOptionsBuilder<ProxyHarborDbContext>()
-                .UseNpgsql(builder.ConnectionString)
+                .UseNpgsql(builder.ConnectionString, postgres => postgres.EnableRetryOnFailure())
                 .Options;
             var factory = new TestDbFactory(dbOptions);
+            var snapshotFactory = new GuardedExportDbFactory(builder.ConnectionString);
             await using (var migrationDb = await factory.CreateDbContextAsync())
                 await migrationDb.Database.MigrateAsync();
 
@@ -49,7 +51,8 @@ public sealed class BackupAuditIntegrationTests
                 }),
                 Options.Create(new CollectorOptions()),
                 new ConfigurationBuilder().Build(),
-                new ThrowingLogger<BackupService>());
+                new ThrowingLogger<BackupService>(),
+                snapshotDbFactory: snapshotFactory);
 
             var path = await service.CreateAndSendAsync(CancellationToken.None);
 
@@ -59,6 +62,7 @@ public sealed class BackupAuditIntegrationTests
             Assert.Equal("completed", audit.Status);
             Assert.Equal(Path.GetFileName(path), audit.FileName);
             Assert.True(audit.SizeBytes > 0);
+            Assert.True(snapshotFactory.WasCalled);
         }
         finally
         {
@@ -567,6 +571,19 @@ public sealed class BackupAuditIntegrationTests
         public ProxyHarborDbContext CreateDbContext() => new(options);
         public Task<ProxyHarborDbContext> CreateDbContextAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult(CreateDbContext());
+    }
+
+    private sealed class GuardedExportDbFactory(string connectionString) : IProxyExportDbContextFactory
+    {
+        private readonly NpgsqlExportDbContextFactory _inner = new(connectionString);
+        internal bool WasCalled { get; private set; }
+
+        public Task<ProxyHarborDbContext> CreateDbContextAsync(CancellationToken cancellationToken = default)
+        {
+            Assert.Null(ExecutionStrategy.Current);
+            WasCalled = true;
+            return _inner.CreateDbContextAsync(cancellationToken);
+        }
     }
 
     private sealed class UnusedHttpClientFactory : IHttpClientFactory

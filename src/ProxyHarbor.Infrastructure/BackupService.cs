@@ -123,10 +123,11 @@ public sealed class BackupService(
                 // Advisory lock доказывает отсутствие другого backup этой БД: можно безопасно
                 // удалить legacy plaintext/partial артефакты после kill -9 или power loss.
                 DeleteOrphanArtifacts(options.Directory);
-                await using var strategyDb = await dbFactory.CreateDbContextAsync(cancellationToken);
-                var strategy = strategyDb.Database.CreateExecutionStrategy();
-                await strategy.ExecuteAsync(() => CreateEncryptedSnapshotAsync(
-                    partialEncryptedPath, backupRun.Id, options, telegramConfigured, cancellationToken));
+                // Файловый pipeline нельзя безопасно повторить после записи первых байтов.
+                // Кроме того, ambient EF retry strategy заставляет даже отдельный non-retrying
+                // snapshot context буферизовать миллионы строк и приводит к OOM.
+                await CreateEncryptedSnapshotAsync(
+                    partialEncryptedPath, backupRun.Id, options, telegramConfigured, cancellationToken);
 
                 // Перечитываем ciphertext целиком и проверяем AEAD-тег каждого блока и
                 // финального маркера. До успеха файл остаётся partial: retention и Telegram
