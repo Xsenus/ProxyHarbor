@@ -166,6 +166,33 @@ public sealed class BackupPipelineTests
     }
 
     [Fact]
+    public async Task SnapshotUsesNonRetryingStreamingFactoryWhenConfigured()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"proxyharbor-streaming-factory-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var dbOptions = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+                .UseInMemoryDatabase($"streaming-backup-{Guid.NewGuid():N}")
+                .ConfigureWarnings(warnings => warnings.Ignore(InMemoryEventId.TransactionIgnoredWarning))
+                .Options;
+            var streamingFactory = new TrackingExportDbFactory(dbOptions);
+            var options = new BackupOptions { Directory = directory, EncryptionKey = EncryptionKey };
+            using var service = CreateService(new FailingDbFactory(), options, streamingFactory);
+
+            await service.CreateEncryptedSnapshotAsync(
+                Path.Combine(directory, "streamed.phbackup.partial"),
+                Guid.NewGuid(), options, telegramConfigured: false, CancellationToken.None);
+
+            Assert.Equal(1, streamingFactory.CreateCalls);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task ProducerFailureCancelsEncryptorAndPreservesOriginalException()
     {
         var directory = Path.Combine(Path.GetTempPath(), $"proxyharbor-pipeline-producer-{Guid.NewGuid():N}");
@@ -219,14 +246,16 @@ public sealed class BackupPipelineTests
 
     private static BackupService CreateService(
         IDbContextFactory<ProxyHarborDbContext> factory,
-        BackupOptions options) =>
+        BackupOptions options,
+        IProxyExportDbContextFactory? snapshotDbFactory = null) =>
         new(
             factory,
             new UnusedHttpClientFactory(),
             Options.Create(options),
             Options.Create(new CollectorOptions()),
             new ConfigurationBuilder().Build(),
-            NullLogger<BackupService>.Instance);
+            NullLogger<BackupService>.Instance,
+            snapshotDbFactory: snapshotDbFactory);
 
     private sealed class TestDbFactory(DbContextOptions<ProxyHarborDbContext> options)
         : IDbContextFactory<ProxyHarborDbContext>
@@ -239,6 +268,19 @@ public sealed class BackupPipelineTests
     private sealed class UnusedHttpClientFactory : IHttpClientFactory
     {
         public HttpClient CreateClient(string name) => throw new InvalidOperationException("HTTP не должен использоваться.");
+    }
+
+    private sealed class TrackingExportDbFactory(DbContextOptions<ProxyHarborDbContext> options)
+        : IProxyExportDbContextFactory
+    {
+        internal int CreateCalls { get; private set; }
+
+        public Task<ProxyHarborDbContext> CreateDbContextAsync(CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            CreateCalls++;
+            return Task.FromResult(new ProxyHarborDbContext(options));
+        }
     }
 
     /// <summary>Детерминированно ломает ZIP producer до первой строки БД.</summary>

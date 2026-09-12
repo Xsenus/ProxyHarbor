@@ -23,7 +23,8 @@ public sealed class BackupService(
     IBackupConfigurationStore? backupConfigurationStore = null,
     ITelegramBackupDeliveryResolver? telegramDeliveryResolver = null,
     ITelegramBackupTransport? telegramTransport = null,
-    IBackupObjectStorageTransport? objectStorageTransport = null) : IDisposable
+    IBackupObjectStorageTransport? objectStorageTransport = null,
+    IProxyExportDbContextFactory? snapshotDbFactory = null) : IDisposable
 {
     internal const string PipeCompletionFailureDataKey = "ProxyHarbor.BackupPipeCompletionFailure";
     private const string PublishedBackupPrefix = "proxyharbor-";
@@ -345,7 +346,13 @@ public sealed class BackupService(
         Exception? failure = null;
         try
         {
-            await using var db = await dbFactory.CreateDbContextAsync(token);
+            // Пул приложения использует retry execution strategy. EF Core буферизует
+            // результаты retryable query целиком, поэтому экспорт миллионов proxy через
+            // AsAsyncEnumerable всё равно заканчивался OOM. Специализированная фабрика
+            // отключает retry и действительно читает repeatable-read snapshot потоково.
+            await using var db = snapshotDbFactory is null
+                ? await dbFactory.CreateDbContextAsync(token)
+                : await snapshotDbFactory.CreateDbContextAsync(token);
             await using var snapshot = await db.Database.BeginTransactionAsync(
                 System.Data.IsolationLevel.RepeatableRead, token);
             await using var output = writer.AsStream(leaveOpen: true);

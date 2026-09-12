@@ -446,13 +446,18 @@ public sealed class DatabaseSeederIntegrationTests
             "https://raw.githubusercontent.com/CrateC/proxy_list/main/proxies.txt",
             "https://raw.githubusercontent.com/du0ngtrunghieu/proxy-scraper/main/http.txt",
             "https://raw.githubusercontent.com/Yogazyy/PROXY-List/main/http.txt",
-            "https://raw.githubusercontent.com/mishakorzik/100000-Proxy/main/proxy.txt"
+            "https://raw.githubusercontent.com/mishakorzik/100000-Proxy/main/proxy.txt",
+            "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/countries/MD/data.txt",
+            "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/countries/UZ/data.txt",
+            "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/countries/CY/data.txt",
+            "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/countries/LU/data.txt"
         ];
         string[] retiredVpnUrls =
         [
             "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/all-verified/v2ray-base64-0009.txt",
             "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/country/AF/v2ray-base64-0001.txt",
-            "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/country/MU/v2ray-base64-0001.txt"
+            "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/country/MU/v2ray-base64-0001.txt",
+            "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/country/EG/v2ray-base64-0001.txt"
         ];
 
         try

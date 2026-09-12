@@ -27,11 +27,11 @@ public sealed class VpnSourceCatalogHealthTests
 
         var snapshot = VpnSourceCatalogHealth.Calculate(sources, AuditNow, FreshnessWindow);
 
-        Assert.Equal(272, snapshot.ExpectedSources);
-        Assert.Equal(new DateOnly(2026, 9, 10), snapshot.LastAuditedOn);
-        Assert.Equal(272, snapshot.PresentSources);
-        Assert.Equal(272, snapshot.EnabledSources);
-        Assert.Equal(272, snapshot.HealthySources);
+        Assert.Equal(271, snapshot.ExpectedSources);
+        Assert.Equal(new DateOnly(2026, 9, 12), snapshot.LastAuditedOn);
+        Assert.Equal(271, snapshot.PresentSources);
+        Assert.Equal(271, snapshot.EnabledSources);
+        Assert.Equal(271, snapshot.HealthySources);
         Assert.Equal(33, snapshot.ExpectedProviders);
         Assert.Equal(33, snapshot.PresentProviders);
         Assert.True(snapshot.IsComplete);
@@ -46,9 +46,9 @@ public sealed class VpnSourceCatalogHealthTests
 
         var snapshot = VpnSourceCatalogHealth.Calculate(sources, AuditNow, FreshnessWindow);
 
-        Assert.Equal(272, snapshot.PresentSources);
-        Assert.Equal(271, snapshot.EnabledSources);
-        Assert.Equal(271, snapshot.HealthySources);
+        Assert.Equal(271, snapshot.PresentSources);
+        Assert.Equal(270, snapshot.EnabledSources);
+        Assert.Equal(270, snapshot.HealthySources);
         Assert.False(snapshot.IsComplete);
         Assert.False(snapshot.IsHealthy);
     }
@@ -68,11 +68,11 @@ public sealed class VpnSourceCatalogHealthTests
 
         var snapshot = VpnSourceCatalogHealth.Calculate(sources, AuditNow, FreshnessWindow);
 
-        Assert.Equal(271, snapshot.PresentSources);
+        Assert.Equal(270, snapshot.PresentSources);
         Assert.Equal(32, snapshot.PresentProviders);
         Assert.Equal(1, snapshot.StaleSources);
         Assert.Equal(1, snapshot.FailingSources);
-        Assert.Equal(269, snapshot.HealthySources);
+        Assert.Equal(268, snapshot.HealthySources);
         Assert.False(snapshot.IsComplete);
         Assert.False(snapshot.IsHealthy);
     }
@@ -89,7 +89,7 @@ public sealed class VpnSourceCatalogHealthTests
 
         Assert.True(snapshot.IsComplete);
         Assert.Equal(1, snapshot.NeverAuditedSources);
-        Assert.Equal(271, snapshot.HealthySources);
+        Assert.Equal(270, snapshot.HealthySources);
         Assert.False(snapshot.IsHealthy);
     }
 

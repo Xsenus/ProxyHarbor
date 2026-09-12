@@ -6,7 +6,7 @@ namespace ProxyHarbor.Infrastructure;
 public static class BuiltInSourceCatalog
 {
     /// <summary>Дата последнего полного URL/live-аудита всех канонических feed'ов.</summary>
-    public static DateOnly LastAuditedOn => new(2026, 9, 10);
+    public static DateOnly LastAuditedOn => new(2026, 9, 12);
 
     /// <summary>Источники ранжированы по свежести, объёму, стабильности ответа и разнообразию провайдеров.</summary>
     public static IReadOnlyList<BuiltInSource> Sources { get; } = RankSources(
@@ -349,7 +349,7 @@ public static class BuiltInSourceCatalog
             "RU UA BY KZ AM AZ GE KG MD UZ AL AT BA BE BG CY DK EE GR HR HU IE LT LV ME PT RO RS SI SK TR XK " +
             "AE AF AO AR BD BF BI BJ BO BT BW CD CG CI CL CM CN CO CR DO DZ EC EG GA GH GM GQ GT HK";
         const string proxiflyCountries =
-            "RU UA KZ AM GE MD UZ AL AT BG CH CY DE DK EE ES FI FR GB GR HR HU IE IT LT LU LV ME NL NO PL PT RO RS SE SI SK TR CZ";
+            "RU UA KZ AM GE AL AT BG CH DE DK EE ES FI FR GB GR HR HU IE IT LT LV ME NL NO PL PT RO RS SE SI SK TR CZ";
 
         var rank = 321;
         foreach (var country in hProxyCountries.Split(' ', StringSplitOptions.RemoveEmptyEntries))

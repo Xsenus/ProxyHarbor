@@ -61,9 +61,9 @@ public sealed class MetricsControllerTests
         Assert.Contains("proxyharbor_vpn_sources_stale 0", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_vpn_source_catalog_complete 0", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_vpn_source_catalog_healthy 0", metrics, StringComparison.Ordinal);
-        Assert.Contains("proxyharbor_builtin_vpn_catalog_audit_timestamp_seconds 1788998400", metrics,
+        Assert.Contains("proxyharbor_builtin_vpn_catalog_audit_timestamp_seconds 1789171200", metrics,
             StringComparison.Ordinal);
-        Assert.Contains("proxyharbor_builtin_vpn_sources_expected 272", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_builtin_vpn_sources_expected 271", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_builtin_vpn_sources_present 1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_builtin_vpn_sources_enabled 1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_builtin_vpn_sources_healthy 1", metrics, StringComparison.Ordinal);
@@ -296,9 +296,9 @@ public sealed class MetricsControllerTests
         Assert.Contains("proxyharbor_sources_truncated 1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_source_catalog_complete 0", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_source_catalog_healthy 0", metrics, StringComparison.Ordinal);
-        Assert.Contains("proxyharbor_builtin_catalog_audit_timestamp_seconds 1788998400", metrics,
+        Assert.Contains("proxyharbor_builtin_catalog_audit_timestamp_seconds 1789171200", metrics,
             StringComparison.Ordinal);
-        Assert.Contains("proxyharbor_builtin_sources_expected 547", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_builtin_sources_expected 543", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_builtin_sources_present 1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_builtin_sources_enabled 1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_builtin_sources_healthy 0", metrics, StringComparison.Ordinal);

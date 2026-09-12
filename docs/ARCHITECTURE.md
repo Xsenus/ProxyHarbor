@@ -53,7 +53,7 @@ sequenceDiagram
 
 ### Каталог
 
-Встроенный каталог компилируется в приложение и содержит 547 proxy-feed от 283 независимых provider identities. GitHub raw feed считается принадлежащим owner репозитория; остальные — DNS hostname. Startup seed синхронизирует канонические URL, protocol, name и priority, сохраняя операторский `Enabled`, и удаляет только явно распознаваемые ранее встроенные нестабильные endpoint.
+Встроенный каталог компилируется в приложение и содержит 543 proxy-feed от 283 независимых provider identities. GitHub raw feed считается принадлежащим owner репозитория; остальные — DNS hostname. Startup seed синхронизирует канонические URL, protocol, name и priority, сохраняя операторский `Enabled`, и удаляет только явно распознаваемые ранее встроенные нестабильные endpoint.
 
 ### Загрузка
 

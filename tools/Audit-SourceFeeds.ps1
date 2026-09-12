@@ -2,7 +2,7 @@ param(
     [string]$ApiBaseUrl = 'http://localhost:8080',
     [Parameter(Mandatory)][string]$AdminKey,
     [string]$ReportPath,
-    [ValidateRange(1, 10000)][int]$ExpectedBuiltInSources = 547,
+    [ValidateRange(1, 10000)][int]$ExpectedBuiltInSources = 543,
     [ValidateRange(1, 10000)][int]$ExpectedProviders = 283,
     [switch]$SkipCollection
 )

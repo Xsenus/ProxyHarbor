@@ -18,8 +18,8 @@ public sealed class ProxyCollector(
     ValidationWakeSignal? validationWakeSignal = null) : IDisposable
 {
     private const int MaxSourceBytes = 10_000_000;
-    internal const int IndexedRefreshCandidateLimit = 10_000;
     internal const int HashImportCandidateThreshold = 10_000;
+    internal const int LastSeenRefreshBatchSize = 10_000;
     private static readonly TimeSpan AuditWriteTimeout = TimeSpan.FromSeconds(15);
     private static readonly Action<ILogger, string, Exception?> SourceFailed =
         LoggerMessage.Define<string>(LogLevel.Warning, new EventId(1001, "SourceFailed"), "Не удалось получить источник {Source}");
@@ -30,6 +30,9 @@ public sealed class ProxyCollector(
         LoggerMessage.Define<int, long, long, long, int, int>(LogLevel.Information,
             new EventId(1003, "BulkUpsertCompleted"),
             "Proxy import: {Candidates} кандидатов; COPY {CopyMs} мс, INSERT {InsertMs} мс, refresh {RefreshMs} мс; добавлено {Added}, обновлено {Refreshed}.");
+    private static readonly Action<ILogger, Exception?> ImportCleanupFailed =
+        LoggerMessage.Define(LogLevel.Warning, new EventId(1004, "ImportCleanupFailed"),
+            "Не удалось удалить временную таблицу proxy_import; она будет удалена при закрытии соединения.");
     private readonly SemaphoreSlim _runGate = new(1, 1);
 
     /// <summary>Запускает один полный цикл сбора и возвращает его аудит.</summary>
@@ -191,6 +194,9 @@ public sealed class ProxyCollector(
                 }
 
                 var now = DateTimeOffset.UtcNow;
+                // Доступность feed и импорт endpoint'ов — разные факты. Успешный HTTP/parser
+                // аудит не должен откатываться из-за последующего сбоя PostgreSQL bulk import.
+                await db.SaveChangesAsync(cancellationToken);
                 var added = await BulkUpsertAsync(
                     db, candidates.Items, candidates.Count, now,
                     options.Value.LastSeenRefreshMinutes, cancellationToken);
@@ -206,9 +212,8 @@ public sealed class ProxyCollector(
                 var aliveProxies = await db.Proxies.CountAsync(
                     x => x.Status == ProxyStatus.Alive, cancellationToken);
 
-                // Сначала фиксируем source health, затем отдельным conditional UPDATE завершаем
-                // только принадлежащую этому циклу running-строку. Обычный tracked UPDATE по ID
-                // мог бы затереть параллельный administrative/restore результат.
+                // Source health уже зафиксирован до bulk import. Здесь сохраняем только возможные
+                // изменения остальных tracked entities, затем завершаем принадлежащий циклу audit.
                 await db.SaveChangesAsync(cancellationToken);
 
                 // now выше является единым timestamp данных каталога.
@@ -345,121 +350,148 @@ public sealed class ProxyCollector(
 
         var connection = (NpgsqlConnection)db.Database.GetDbConnection();
         if (connection.State != System.Data.ConnectionState.Open) await connection.OpenAsync(token);
-        await using var transaction = await connection.BeginTransactionAsync(token);
-        await using (var create = new NpgsqlCommand(
-            "CREATE TEMP TABLE proxy_import (host text NOT NULL, port integer NOT NULL, protocol integer NOT NULL) ON COMMIT DROP",
-            connection, transaction))
-            await create.ExecuteNonQueryAsync(token);
-
-        var phaseStarted = Stopwatch.GetTimestamp();
-        await using (var writer = await connection.BeginBinaryImportAsync(
-            "COPY proxy_import (host, port, protocol) FROM STDIN (FORMAT BINARY)", token))
+        var copyMs = 0L;
+        var insertMs = 0L;
+        var refreshMs = 0L;
+        var added = 0;
+        var refreshed = 0;
+        try
         {
-            // WriteRowAsync отдаёт Npgsql целую строку за один async-вызов.
-            // На сотнях тысяч endpoint'ов это убирает миллионы мелких
-            // await-переходов; одинаковый seen_at передаётся ниже SQL-параметром.
-            var row = new object[3];
-            foreach (var candidate in candidates)
+            // PRESERVE ROWS позволяет отпускать row locks после каждой небольшой refresh-
+            // партии. Раньше один UPDATE сотен тысяч строк превышал Npgsql timeout и на всё
+            // время удерживал validator в transactionid wait.
+            await using (var importTransaction = await connection.BeginTransactionAsync(token))
             {
-                row[0] = candidate.Host;
-                row[1] = candidate.Port;
-                row[2] = (int)candidate.Protocol;
-                await writer.WriteRowAsync(token, row);
+                await using (var create = new NpgsqlCommand(
+                    "CREATE TEMP TABLE proxy_import (host text NOT NULL, port integer NOT NULL, protocol integer NOT NULL, proxy_id uuid) ON COMMIT PRESERVE ROWS",
+                    connection, importTransaction))
+                    await create.ExecuteNonQueryAsync(token);
+
+                var phaseStarted = Stopwatch.GetTimestamp();
+                await using (var writer = await connection.BeginBinaryImportAsync(
+                    "COPY proxy_import (host, port, protocol) FROM STDIN (FORMAT BINARY)", token))
+                {
+                    var row = new object[3];
+                    foreach (var candidate in candidates)
+                    {
+                        row[0] = candidate.Host;
+                        row[1] = candidate.Port;
+                        row[2] = (int)candidate.Protocol;
+                        await writer.WriteRowAsync(token, row);
+                    }
+                    await writer.CompleteAsync(token);
+                }
+                copyMs = (long)Stopwatch.GetElapsedTime(phaseStarted).TotalMilliseconds;
+
+                // Binary COPY не собирает статистику. Для крупного staging явно выбираем
+                // один bounded hash registry вместо сотен тысяч отдельных index probes.
+                if (PreferHashImport(candidateCount))
+                {
+                    await using var planner = new NpgsqlCommand("""
+                        ANALYZE proxy_import;
+                        SET LOCAL work_mem = '64MB';
+                        SET LOCAL enable_nestloop = off;
+                        SET LOCAL enable_mergejoin = off
+                        """, connection, importTransaction);
+                    await planner.ExecuteNonQueryAsync(token);
+                }
+
+                // Отдельный INSERT возвращает точное число новых строк.
+                phaseStarted = Stopwatch.GetTimestamp();
+                await using var insert = new NpgsqlCommand("""
+                    INSERT INTO "Proxies" ("Id", "Host", "Port", "Protocol", "Status", "IsAnonymous", "FirstSeenAt", "LastSeenAt", "SuccessfulChecks", "FailedChecks")
+                    SELECT gen_random_uuid(), i.host, i.port, i.protocol, 0, false, @seen_at, @seen_at, 0, 0
+                    FROM proxy_import i
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM "Proxies" p
+                        WHERE p."Host" = i.host AND p."Port" = i.port AND p."Protocol" = i.protocol)
+                    ON CONFLICT ("Host", "Port", "Protocol") DO NOTHING
+                    """, connection, importTransaction);
+                insert.Parameters.AddWithValue("seen_at", NpgsqlDbType.TimestampTz, now);
+                added = await insert.ExecuteNonQueryAsync(token);
+                insertMs = (long)Stopwatch.GetElapsedTime(phaseStarted).TotalMilliseconds;
+
+                // Один read-only hash/index join сопоставляет staging с UUID. Последующие
+                // UPDATE используют только PK и не перечитывают широкий registry на каждую партию.
+                await using var map = new NpgsqlCommand("""
+                    UPDATE proxy_import i
+                    SET proxy_id = p."Id"
+                    FROM "Proxies" p
+                    WHERE p."Host" = i.host AND p."Port" = i.port AND p."Protocol" = i.protocol
+                    """, connection, importTransaction);
+                await map.ExecuteNonQueryAsync(token);
+
+                await using var prune = new NpgsqlCommand("""
+                    DELETE FROM proxy_import i
+                    USING "Proxies" p
+                    WHERE p."Id" = i.proxy_id AND p."LastSeenAt" >= @refresh_before
+                    """, connection, importTransaction);
+                prune.Parameters.AddWithValue("refresh_before", NpgsqlDbType.TimestampTz,
+                    now.AddMinutes(-Math.Max(1, lastSeenRefreshMinutes)));
+                await prune.ExecuteNonQueryAsync(token);
+
+                // Индекс строится уже после удаления свежих строк. Каждая следующая партия
+                // читает следующие UUID по порядку без повторной сортировки всего staging.
+                await using var index = new NpgsqlCommand("""
+                    CREATE INDEX proxy_import_proxy_id_idx ON proxy_import (proxy_id);
+                    ANALYZE proxy_import
+                    """, connection, importTransaction);
+                await index.ExecuteNonQueryAsync(token);
+                await importTransaction.CommitAsync(token);
             }
-            await writer.CompleteAsync(token);
-        }
-        var copyMs = (long)Stopwatch.GetElapsedTime(phaseStarted).TotalMilliseconds;
 
-        // Binary COPY intentionally bypasses PostgreSQL statistics collection. On a
-        // large temporary relation the default estimate is therefore far below the
-        // real row count and the anti-join below can degrade into one index probe per
-        // candidate. Production profiling on a 906k-row registry measured 500k
-        // duplicate candidates at 13.08 s with that nested-loop plan versus 3.47 s
-        // with one bounded in-memory hash of the registry. Collection is protected by
-        // a cluster-wide lock, so this transaction is the only large importer and a
-        // 64 MiB work_mem budget cannot multiply across concurrent collection runs.
-        // INSERT и LastSeen refresh имеют отдельные crossover: production-партия
-        // 20k прочитала около 30k buffers hash-планом вместо 80k при index probes
-        // и завершилась за 2,62 вместо 8,26 секунды; на 10k планы сравнялись.
-        // Поэтому hash crossover начинается сразу после 10k. Тот же production-
-        // crossover применяется к refresh: более крупный staging-набор дешевле
-        // сопоставить одним последовательным hash join.
-        if (PreferHashImport(candidateCount))
+            // Занятые валидатором строки безопасно пропускаются и обновятся при следующем
+            // появлении в feed. Коммит каждой bounded-партии быстро освобождает остальные locks.
+            var refreshStarted = Stopwatch.GetTimestamp();
+            while (true)
+            {
+                await using var refreshTransaction = await connection.BeginTransactionAsync(token);
+                await using var refresh = new NpgsqlCommand("""
+                    WITH locked AS MATERIALIZED (
+                        SELECT p."Id"
+                        FROM proxy_import i
+                        JOIN "Proxies" p ON p."Id" = i.proxy_id
+                        ORDER BY p."Id"
+                        LIMIT @batch_size
+                        FOR UPDATE OF p SKIP LOCKED
+                    ), updated AS (
+                        UPDATE "Proxies" p
+                        SET "LastSeenAt" = @seen_at
+                        FROM locked
+                        WHERE p."Id" = locked."Id"
+                        RETURNING p."Id"
+                    )
+                    DELETE FROM proxy_import i
+                    USING updated
+                    WHERE i.proxy_id = updated."Id"
+                    """, connection, refreshTransaction);
+                refresh.Parameters.AddWithValue("batch_size", NpgsqlDbType.Integer, LastSeenRefreshBatchSize);
+                refresh.Parameters.AddWithValue("seen_at", NpgsqlDbType.TimestampTz, now);
+                var batchRefreshed = await refresh.ExecuteNonQueryAsync(token);
+                await refreshTransaction.CommitAsync(token);
+                refreshed += batchRefreshed;
+                if (batchRefreshed < LastSeenRefreshBatchSize) break;
+            }
+            refreshMs = (long)Stopwatch.GetElapsedTime(refreshStarted).TotalMilliseconds;
+        }
+        finally
         {
-            await using var planner = new NpgsqlCommand("""
-                ANALYZE proxy_import;
-                SET LOCAL work_mem = '64MB';
-                SET LOCAL enable_nestloop = off;
-                SET LOCAL enable_mergejoin = off
-                """, connection, transaction);
-            await planner.ExecuteNonQueryAsync(token);
+            if (connection.State == System.Data.ConnectionState.Open)
+            {
+                try
+                {
+                    await using var drop = new NpgsqlCommand("DROP TABLE IF EXISTS proxy_import", connection);
+                    await drop.ExecuteNonQueryAsync(CancellationToken.None);
+                }
+                catch (Exception cleanupException)
+                {
+                    OperationalLogBoundary.Write(() => ImportCleanupFailed(logger, cleanupException));
+                }
+            }
         }
-
-        // Отдельный INSERT возвращает точное число новых строк и не заставляет PostgreSQL
-        // выполнять бесполезный UPDATE каждого существующего proxy на каждом 15-минутном цикле.
-        phaseStarted = Stopwatch.GetTimestamp();
-        await using var insert = new NpgsqlCommand("""
-            INSERT INTO "Proxies" ("Id", "Host", "Port", "Protocol", "Status", "IsAnonymous", "FirstSeenAt", "LastSeenAt", "SuccessfulChecks", "FailedChecks")
-            SELECT gen_random_uuid(), i.host, i.port, i.protocol, 0, false, @seen_at, @seen_at, 0, 0
-            FROM proxy_import i
-            WHERE NOT EXISTS (
-                SELECT 1 FROM "Proxies" p
-                WHERE p."Host" = i.host AND p."Port" = i.port AND p."Protocol" = i.protocol)
-            ON CONFLICT ("Host", "Port", "Protocol") DO NOTHING
-            """, connection, transaction);
-        insert.Parameters.AddWithValue("seen_at", NpgsqlDbType.TimestampTz, now);
-        var added = await insert.ExecuteNonQueryAsync(token);
-        var insertMs = (long)Stopwatch.GetElapsedTime(phaseStarted).TotalMilliseconds;
-
-        // LastSeenAt не является срочной мутацией: строки, занятые проверкой, безопасно
-        // пропускаются и обновятся на следующем collection-цикле. Это не даёт collector'у
-        // ждать validator locks и образовывать с ними обратный порядок блокировок.
-        // Для небольшого импорта PostgreSQL без статистики временной таблицы склонен
-        // строить hash join с полным чтением реестра. На production это означало чтение
-        // около 1 ГБ ради 53 тысяч кандидатов. После удаления write-amplifying
-        // LastSeenAt-index production-срез 20k/50k/97k подтвердил hash crossover
-        // сразу после 10k. Ограничение действует только на последний
-        // statement текущей транзакции; крупные импорты сохраняют свободу выбрать
-        // последовательный план, когда он действительно дешевле.
-        if (PreferIndexedLastSeenRefresh(candidateCount))
-        {
-            await using var planner = new NpgsqlCommand(
-                "SET LOCAL enable_hashjoin = off; SET LOCAL enable_mergejoin = off",
-                connection,
-                transaction);
-            await planner.ExecuteNonQueryAsync(token);
-        }
-        phaseStarted = Stopwatch.GetTimestamp();
-        await using var refresh = new NpgsqlCommand("""
-            WITH locked AS MATERIALIZED (
-                SELECT p."Id"
-                FROM "Proxies" p
-                JOIN proxy_import i
-                  ON p."Host" = i.host AND p."Port" = i.port AND p."Protocol" = i.protocol
-                WHERE p."LastSeenAt" < @refresh_before
-                ORDER BY p."Id"
-                FOR UPDATE OF p SKIP LOCKED
-            )
-            UPDATE "Proxies" p
-            SET "LastSeenAt" = @seen_at
-            FROM locked
-            WHERE p."Id" = locked."Id"
-            """, connection, transaction);
-        refresh.Parameters.AddWithValue("refresh_before", NpgsqlDbType.TimestampTz,
-            now.AddMinutes(-Math.Max(1, lastSeenRefreshMinutes)));
-        refresh.Parameters.AddWithValue("seen_at", NpgsqlDbType.TimestampTz, now);
-        var refreshed = await refresh.ExecuteNonQueryAsync(token);
-        var refreshMs = (long)Stopwatch.GetElapsedTime(phaseStarted).TotalMilliseconds;
-        await transaction.CommitAsync(token);
         OperationalLogBoundary.Write(() => BulkUpsertCompleted(
             logger, candidateCount, copyMs, insertMs, refreshMs, added, refreshed, null));
         return added;
-    }
-
-    internal static bool PreferIndexedLastSeenRefresh(int candidateCount)
-    {
-        ArgumentOutOfRangeException.ThrowIfNegative(candidateCount);
-        return candidateCount is > 0 and <= IndexedRefreshCandidateLimit;
     }
 
     /// <summary>
