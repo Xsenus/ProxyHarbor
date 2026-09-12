@@ -10,12 +10,12 @@ public sealed class BuiltInSourceCatalogTests
     [Fact]
     public void CatalogContainsExpectedUniqueFeedsAndProviders()
     {
-        Assert.Equal(547, BuiltInSourceCatalog.Sources.Count);
-        Assert.Equal(547, BuiltInSourceCatalog.Sources.Select(x => x.Url).Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        Assert.Equal(543, BuiltInSourceCatalog.Sources.Count);
+        Assert.Equal(543, BuiltInSourceCatalog.Sources.Select(x => x.Url).Distinct(StringComparer.OrdinalIgnoreCase).Count());
         Assert.Equal(283, BuiltInSourceCatalog.Sources.Select(x => x.Provider).Distinct(StringComparer.OrdinalIgnoreCase).Count());
         Assert.Equal(283, BuiltInSourceCatalog.Sources.Select(x => x.ProviderIdentity).Distinct(StringComparer.Ordinal).Count());
         Assert.Equal(283, BuiltInSourceCatalog.ProviderCount);
-        Assert.Equal(Enumerable.Range(1, 547), BuiltInSourceCatalog.Sources.Select(x => x.Rank));
+        Assert.Equal(Enumerable.Range(1, 543), BuiltInSourceCatalog.Sources.Select(x => x.Rank));
     }
 
     [Fact]
@@ -47,22 +47,25 @@ public sealed class BuiltInSourceCatalogTests
     }
 
     [Fact]
-    public void RegionalExpansionAddsExactlyOneHundredCountryFeeds()
+    public void RegionalExpansionContainsOnlyPublishedCountryFeeds()
     {
         var feeds = BuiltInSourceCatalog.Sources.Where(source =>
             source.Name.StartsWith("HProxy country ", StringComparison.Ordinal) ||
             source.Name.StartsWith("Proxifly country ", StringComparison.Ordinal)).ToArray();
 
-        Assert.Equal(100, feeds.Length);
+        Assert.Equal(96, feeds.Length);
         Assert.All(feeds, source => Assert.True(
             source.Url.Contains("/countries/", StringComparison.Ordinal) ||
             source.Url.Contains("/by-country/", StringComparison.Ordinal)));
+        Assert.DoesNotContain(feeds, source => source.Name is
+            "Proxifly country MD" or "Proxifly country UZ" or
+            "Proxifly country CY" or "Proxifly country LU");
     }
 
     [Fact]
     public void IndependentExpansionAddsExactlyTwoHundredProviders()
     {
-        var feeds = BuiltInSourceCatalog.Sources.Skip(347).ToArray();
+        var feeds = BuiltInSourceCatalog.Sources.Skip(343).ToArray();
 
         Assert.Equal(200, feeds.Length);
         Assert.Equal(200, feeds.Select(source => source.ProviderIdentity).Distinct(StringComparer.Ordinal).Count());

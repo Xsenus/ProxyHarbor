@@ -203,8 +203,8 @@ public sealed class BuiltInVpnSourceCatalogTests
     {
         var sources = BuiltInVpnSourceCatalog.Sources;
 
-        Assert.Equal(272, sources.Count);
-        Assert.Equal(new DateOnly(2026, 9, 10), BuiltInVpnSourceCatalog.LastAuditedOn);
+        Assert.Equal(271, sources.Count);
+        Assert.Equal(new DateOnly(2026, 9, 12), BuiltInVpnSourceCatalog.LastAuditedOn);
         Assert.Equal(33, BuiltInVpnSourceCatalog.ProviderCount);
         Assert.Equal(sources.Count, sources.Select(x => x.Url).Distinct(StringComparer.Ordinal).Count());
         Assert.Equal(33, sources.Select(x => x.Provider).Distinct(StringComparer.Ordinal).Count());
@@ -234,9 +234,10 @@ public sealed class BuiltInVpnSourceCatalogTests
             source.Name.StartsWith("Telegram collector country ", StringComparison.Ordinal) ||
             source.Name.StartsWith("Au1rxx country ", StringComparison.Ordinal)).ToArray();
 
-        Assert.Equal(98, sources.Length);
+        Assert.Equal(97, sources.Length);
         Assert.All(sources, source => Assert.Equal("MIT", source.License));
-        Assert.DoesNotContain(sources, source => source.Name is "Au1rxx country AF" or "Au1rxx country MU");
+        Assert.DoesNotContain(sources, source => source.Name is
+            "Au1rxx country AF" or "Au1rxx country MU" or "Au1rxx country EG");
         Assert.Contains(BuiltInVpnSourceCatalog.Sources, source =>
             source.Provider == "lanzm/MetaFetch" && source.License == "MIT");
     }
