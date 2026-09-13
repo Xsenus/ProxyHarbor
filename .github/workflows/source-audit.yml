@@ -44,7 +44,9 @@ jobs:
         env:
           ASPNETCORE_ENVIRONMENT: Production
           ASPNETCORE_URLS: http://127.0.0.1:5080
-          ConnectionStrings__Postgres: Host=127.0.0.1;Port=5432;Database=proxyharbor;Username=proxyharbor;Password=audit-password
+          # A full clean-DB import can legitimately exceed Npgsql's 30-second
+          # command default; this disposable audit gets a bounded 10-minute SQL budget.
+          ConnectionStrings__Postgres: Host=127.0.0.1;Port=5432;Database=proxyharbor;Username=proxyharbor;Password=audit-password;Command Timeout=600
           Security__AdminApiKey: source-audit-admin-key-at-least-24-chars
           Security__AdminPassword: Source-audit-admin-password-at-least-24-chars-1!
           Security__DataProtectionKeysDirectory: /tmp/proxyharbor-data-protection

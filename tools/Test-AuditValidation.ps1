@@ -1,7 +1,8 @@
 $ErrorActionPreference = 'Stop'
 
 # Контракт запускает настоящий Audit-Validation.ps1 через HTTP mock и доказывает,
-# что weekly gate требует непустой и одинаковый ordered-set во всех форматах.
+# что weekly gate требует одинаковый ordered-set во всех форматах, в том числе
+# корректно принимает пустой published-set, когда вся внешняя партия недоступна.
 $auditScript = Join-Path $PSScriptRoot 'Audit-Validation.ps1'
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) "proxyharbor-validation-audit-$([Guid]::NewGuid().ToString('N'))"
 New-Item -ItemType Directory -Path $testRoot | Out-Null
@@ -24,7 +25,7 @@ function Start-ValidationAuditMock([int]$Port, [ValidateSet('success', 'accumula
         $listener.Prefixes.Add("http://127.0.0.1:$Port/")
         $listener.Start()
         $handled = 0
-        $expectedRequests = if ($Mode -eq 'zero-alive') { 1 } else { 7 }
+        $expectedRequests = 7
         $diagnosticReads = 0
         try {
             while ($handled -lt $expectedRequests) {
@@ -64,20 +65,26 @@ function Start-ValidationAuditMock([int]$Port, [ValidateSet('success', 'accumula
                             }
                         }
                         '/api/v1/export/json' {
-                            '[{"url":"http://1.1.1.1:80"},{"url":"socks5://8.8.8.8:1080"}]'
+                            if ($Mode -eq 'zero-alive') { '[]' }
+                            else { '[{"url":"http://1.1.1.1:80"},{"url":"socks5://8.8.8.8:1080"}]' }
                         }
                         '/api/v1/export/xml' {
                             $contentType = 'application/xml'
-                            '<proxies><proxy><url>http://1.1.1.1:80</url></proxy><proxy><url>socks5://8.8.8.8:1080</url></proxy></proxies>'
+                            if ($Mode -eq 'zero-alive') { '<proxies />' }
+                            else { '<proxies><proxy><url>http://1.1.1.1:80</url></proxy><proxy><url>socks5://8.8.8.8:1080</url></proxy></proxies>' }
                         }
                         '/api/v1/export/txt' {
                             $contentType = 'text/plain'
-                            "http://1.1.1.1:80`nsocks5://8.8.8.8:1080`n"
+                            if ($Mode -eq 'zero-alive') { '' }
+                            else { "http://1.1.1.1:80`nsocks5://8.8.8.8:1080`n" }
                         }
                         '/api/v1/export/csv' {
                             $contentType = 'text/csv'
-                            $second = if ($Mode -eq 'mismatch') { 'socks4://9.9.9.9:1080' } else { 'socks5://8.8.8.8:1080' }
-                            "url`n`"http://1.1.1.1:80`"`n`"$second`"`n"
+                            if ($Mode -eq 'zero-alive') { "url`n" }
+                            else {
+                                $second = if ($Mode -eq 'mismatch') { 'socks4://9.9.9.9:1080' } else { 'socks5://8.8.8.8:1080' }
+                                "url`n`"http://1.1.1.1:80`"`n`"$second`"`n"
+                            }
                         }
                         default { throw "Unexpected mock path: $path" }
                     }
@@ -150,11 +157,12 @@ function Invoke-ValidationAuditCase([string]$Mode, [bool]$ShouldSucceed) {
         $report = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json
 
         if ($ShouldSucceed) {
-            $expectedAlive = if ($Mode -eq 'accumulated') { 1 } else { 2 }
+            $expectedAlive = if ($Mode -eq 'accumulated') { 1 } elseif ($Mode -eq 'zero-alive') { 0 } else { 2 }
+            $expectedPublishedRows = if ($Mode -eq 'zero-alive') { 0 } else { 2 }
             $expectedStrictBatchMatch = $Mode -ne 'accumulated'
             if ($rejected -or -not $report.success -or $report.alive -ne $expectedAlive -or
-                $report.jsonRows -ne 2 -or $report.xmlRows -ne 2 -or
-                $report.txtRows -ne 2 -or $report.csvRows -ne 2 -or
+                $report.jsonRows -ne $expectedPublishedRows -or $report.xmlRows -ne $expectedPublishedRows -or
+                $report.txtRows -ne $expectedPublishedRows -or $report.csvRows -ne $expectedPublishedRows -or
                 $report.telemetryPolls -ne 2 -or
                 $report.requirePublishedRowsMatchBatch -ne $expectedStrictBatchMatch -or
                 $report.publishedSetSha256 -notmatch '^[0-9a-f]{64}$' -or $report.error) {
@@ -219,18 +227,18 @@ try {
     $success = Invoke-ValidationAuditCase -Mode 'success' -ShouldSucceed $true
     $accumulated = Invoke-ValidationAuditCase -Mode 'accumulated' -ShouldSucceed $true
     $mismatch = Invoke-ValidationAuditCase -Mode 'mismatch' -ShouldSucceed $false
-    $zeroAlive = Invoke-ValidationAuditCase -Mode 'zero-alive' -ShouldSucceed $false
+    $zeroAlive = Invoke-ValidationAuditCase -Mode 'zero-alive' -ShouldSucceed $true
     if ($mismatch.error -notmatch 'CSV.*JSON') {
         throw 'Mismatch-контракт не зафиксировал расхождение CSV с JSON.'
     }
-    if ($zeroAlive.alive -ne 0 -or $zeroAlive.error -notmatch 'Alive') {
-        throw 'Zero-Alive контракт не сохранил точную причину отказа.'
+    if ($zeroAlive.alive -ne 0 -or $zeroAlive.jsonRows -ne 0 -or $zeroAlive.error) {
+        throw 'Zero-Alive контракт не принял согласованный пустой published-set.'
     }
 
     $repositoryRoot = Split-Path -Parent $PSScriptRoot
     $sourceWorkflow = Get-Content (Join-Path $repositoryRoot '.github/workflows/source-audit.yml') -Raw
     foreach ($fragment in @('futureEvidence', 'publishedSetSha256', '-RequirePublishedRowsMatchBatch',
-        'telemetryPolls', 'Collector__MaxCandidatesPerRun: 5000000',
+        'telemetryPolls', 'Collector__MaxCandidatesPerRun: 5000000', 'Command Timeout=600',
         'vpn-audit.json', 'continue-on-error: true', "steps.vpn_audit.outcome == 'failure'")) {
         if (-not $sourceWorkflow.Contains($fragment, [StringComparison]::Ordinal)) {
             throw "Source-audit summary не публикует обязательное поле $fragment."
@@ -254,7 +262,7 @@ try {
         }
     }
 
-    Write-Host 'Validation-audit contracts пройдены: strict clean-DB и accumulated production modes, authenticated ordered exports, mismatch/zero-Alive rejection, summary и CI/release wiring.' -ForegroundColor Green
+    Write-Host 'Validation-audit contracts пройдены: strict clean-DB и accumulated production modes, authenticated ordered exports, zero-Alive consistency, mismatch rejection, summary и CI/release wiring.' -ForegroundColor Green
 } finally {
     if (Test-Path -LiteralPath $testRoot) {
         Remove-Item -LiteralPath $testRoot -Recurse -Force

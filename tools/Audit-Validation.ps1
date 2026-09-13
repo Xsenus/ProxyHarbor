@@ -31,6 +31,7 @@ function Assert-OrderedProxyUrls([string]$Format, [object[]]$Expected, [object[]
     if ($Actual.Count -ne $Expected.Count) {
         throw "Формат $Format вернул $($Actual.Count) строк вместо $($Expected.Count) Alive-прокси."
     }
+    if ($Expected.Count -eq 0) { return }
     foreach ($index in 0..($Expected.Count - 1)) {
         if ([string]$Actual[$index] -cne [string]$Expected[$index]) {
             throw "Формат $Format расходится с JSON в строке $($index + 1)."
@@ -54,10 +55,6 @@ try {
         $report.alive -gt $report.checked) {
         throw "Некорректные validation counters: checked=$($report.checked), alive=$($report.alive), deferred=$($report.deferred)."
     }
-    if ($report.alive -eq 0) {
-        throw 'Validation-аудит не нашёл ни одного публикуемого Alive-прокси.'
-    }
-
     # Сам mutation endpoint только ставит bounded demand-сигнал: полный aggregate
     # большой таблицы пересчитывается отдельно. Ждём именно снимок этой партии, а
     # не принимаем за доказательство непустую, но устаревшую дату прошлой проверки.
