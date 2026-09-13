@@ -457,6 +457,7 @@ public sealed class DatabaseSeederIntegrationTests
             "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/all-verified/v2ray-base64-0009.txt",
             "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/country/AF/v2ray-base64-0001.txt",
             "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/country/MU/v2ray-base64-0001.txt",
+            "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/country/BE/v2ray-base64-0001.txt",
             "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/country/EG/v2ray-base64-0001.txt"
         ];
 

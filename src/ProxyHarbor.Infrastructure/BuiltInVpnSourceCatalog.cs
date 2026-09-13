@@ -9,7 +9,7 @@ namespace ProxyHarbor.Infrastructure;
 public static class BuiltInVpnSourceCatalog
 {
     /// <summary>Дата последней ручной проверки происхождения и лицензий.</summary>
-    public static DateOnly LastAuditedOn { get; } = new(2026, 9, 12);
+    public static DateOnly LastAuditedOn { get; } = new(2026, 9, 14);
 
     /// <summary>Начальный набор разрешённых VPN feed'ов.</summary>
     public static IReadOnlyList<VpnSourceDefinition> Sources { get; } =
@@ -213,7 +213,7 @@ public static class BuiltInVpnSourceCatalog
             "Costa Rica|Curacao|Indonesia|Iran|Israel|Malaysia|Mexico|New Zealand|Pakistan|Peru|Philippines|" +
             "Saudi Arabia|Seychelles|South Africa|South Korea|Taiwan|Thailand|United Arab Emirates";
         const string au1rxxCountries =
-            "RU UA KZ AM MD UZ AL AT BE BG CH DE DK EE ES FI FR GB GR IE IT LT LV NL NO PL RO SE TR CZ " +
+            "RU UA KZ AM MD UZ AL AT BG CH DE DK EE ES FI FR GB GR IE IT LT LV NL NO PL RO SE TR CZ " +
             "AE AR AU BR CA CN HK ID IL IN JP KR MO MX MY NG PH";
 
         foreach (var country in telegramCountries.Split('|', StringSplitOptions.RemoveEmptyEntries))
