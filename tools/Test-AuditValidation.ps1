@@ -217,7 +217,8 @@ try {
 
     $repositoryRoot = Split-Path -Parent $PSScriptRoot
     $sourceWorkflow = Get-Content (Join-Path $repositoryRoot '.github/workflows/source-audit.yml') -Raw
-    foreach ($fragment in @('futureEvidence', 'publishedSetSha256', '-RequirePublishedRowsMatchBatch')) {
+    foreach ($fragment in @('futureEvidence', 'publishedSetSha256', '-RequirePublishedRowsMatchBatch',
+        'vpn-audit.json', 'continue-on-error: true', "steps.vpn_audit.outcome == 'failure'")) {
         if (-not $sourceWorkflow.Contains($fragment, [StringComparison]::Ordinal)) {
             throw "Source-audit summary не публикует обязательное поле $fragment."
         }

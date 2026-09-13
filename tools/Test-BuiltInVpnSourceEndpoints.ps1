@@ -3,7 +3,7 @@ param(
     [ValidateRange(1, 300)][int]$TimeoutSeconds = 25,
     [ValidateRange(1024, 33554432)][int]$MaxBodyBytes = 33554432,
     [ValidateRange(1, 64)][int]$ThrottleLimit = 12,
-    [ValidateRange(1, 10000)][int]$ExpectedFeeds = 271,
+    [ValidateRange(1, 10000)][int]$ExpectedFeeds = 270,
     [ValidateRange(1, 10000)][int]$ExpectedProviders = 33,
     [switch]$CatalogOnly,
     [string]$ReportPath
