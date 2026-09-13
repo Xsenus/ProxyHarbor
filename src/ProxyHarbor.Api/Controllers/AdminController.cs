@@ -362,6 +362,7 @@ public sealed class AdminController(
         {
             return Conflict(new ProblemDetails { Title = exception.Message, Status = 409 });
         }
+        if (result.Checked + result.Deferred > 0) proxySnapshotCache?.RequestRefresh();
         return Ok(new ValidationTriggerResponse(result.Checked, result.Alive, result.Deferred));
     }
 

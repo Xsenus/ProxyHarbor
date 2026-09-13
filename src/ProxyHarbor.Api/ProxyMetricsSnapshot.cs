@@ -406,6 +406,7 @@ public sealed class ProxyMetricsSnapshotCache(
     private long _databaseReads;
     private long _refreshRequestsQueued;
     private long _refreshRequestsCoalesced;
+    private long _mutationVersion;
 
     internal Task<ProxyMetricsSnapshot> GetAsync(CancellationToken token) =>
         GetAsync(MaximumAge, token);
@@ -428,10 +429,7 @@ public sealed class ProxyMetricsSnapshotCache(
         // Serve the last internally consistent snapshot immediately. The bounded
         // signal means any number of simultaneous /stats and /metrics consumers
         // causes at most one background full-table aggregate.
-        if (_refreshRequests.Writer.TryWrite(0))
-            Interlocked.Increment(ref _refreshRequestsQueued);
-        else
-            Interlocked.Increment(ref _refreshRequestsCoalesced);
+        QueueRefresh();
         return Task.FromResult(observed.Snapshot);
     }
 
@@ -440,6 +438,24 @@ public sealed class ProxyMetricsSnapshotCache(
 
     internal Task<ProxyMetricsSnapshot> WarmAsync(CancellationToken token) =>
         GetOrRefreshAsync(force: false, token);
+
+    /// <summary>
+    /// Просит demand-worker пересчитать aggregate после записи большой партии, не
+    /// задерживая сам mutation endpoint полным scan таблицы Proxies.
+    /// </summary>
+    internal void RequestRefresh()
+    {
+        Interlocked.Increment(ref _mutationVersion);
+        QueueRefresh();
+    }
+
+    private void QueueRefresh()
+    {
+        if (_refreshRequests.Writer.TryWrite(0))
+            Interlocked.Increment(ref _refreshRequestsQueued);
+        else
+            Interlocked.Increment(ref _refreshRequestsCoalesced);
+    }
 
     /// <summary>
     /// До запуска listener восстанавливает последний точный небольшой snapshot.
@@ -481,6 +497,7 @@ public sealed class ProxyMetricsSnapshotCache(
     internal long DatabaseReads => Interlocked.Read(ref _databaseReads);
     internal long RefreshRequestsQueued => Interlocked.Read(ref _refreshRequestsQueued);
     internal long RefreshRequestsCoalesced => Interlocked.Read(ref _refreshRequestsCoalesced);
+    internal long MutationVersion => Interlocked.Read(ref _mutationVersion);
 
     private async Task<ProxyMetricsSnapshot> GetOrRefreshAsync(bool force, CancellationToken token)
     {
@@ -587,8 +604,9 @@ internal sealed class ProxyMetricsSnapshotRefreshWorker(
         try
         {
             cache.DrainRefreshRequests();
+            var mutationVersion = cache.MutationVersion;
             await cache.RefreshAsync(stoppingToken);
-            cache.DrainRefreshRequests();
+            if (cache.MutationVersion == mutationVersion) cache.DrainRefreshRequests();
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
@@ -606,11 +624,13 @@ internal sealed class ProxyMetricsSnapshotRefreshWorker(
             try
             {
                 if (!await cache.WaitForRefreshRequestAsync(stoppingToken)) break;
-                // Сигналы, накопленные до и во время текущего refresh, относятся
-                // к одному устаревшему snapshot и не должны запускать второй scan.
+                // Сигналы, уже накопленные до refresh, объединяются в один scan.
+                // Новую запись во время scan нельзя терять: оставшийся bounded
+                // сигнал запустит ещё один пересчёт и захватит следующую эпоху.
                 cache.DrainRefreshRequests();
+                var mutationVersion = cache.MutationVersion;
                 await cache.RefreshAsync(stoppingToken);
-                cache.DrainRefreshRequests();
+                if (cache.MutationVersion == mutationVersion) cache.DrainRefreshRequests();
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
