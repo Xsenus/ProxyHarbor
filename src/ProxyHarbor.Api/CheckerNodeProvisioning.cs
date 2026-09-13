@@ -19,13 +19,13 @@ public sealed class CheckerAgentDeploymentOptions
     public string NativeAssetBaseUrl { get; set; } =
         "https://github.com/Xsenus/ProxyHarbor/releases/latest/download";
     /// <summary>Private .NET runtime version installed for the systemd fallback.</summary>
-    public string NativeRuntimeVersion { get; set; } = "10.0.11";
+    public string NativeRuntimeVersion { get; set; } = "10.0.12";
     /// <summary>SHA-512 of the official Microsoft linux-x64 runtime archive.</summary>
     public string NativeRuntimeLinuxX64Sha512 { get; set; } =
-        "4c6be0623330074e699dab8084be15a1baebb7a518c0dd8ce99f93cf79777cd46f3a38ef9d25edc152ed606f084b63736bd9e4082eb32d188fc357bf6ac4d1d6";
+        "c489fc3a9dcc85f24f2d52e9a81b46fdf51affc8a360d008dbd5e3b7ce524969adc4a54f555ad13e29b822f59ed1cae9785608cbac2282f2c9c4fda45c21c7d1";
     /// <summary>SHA-512 of the official Microsoft linux-arm64 runtime archive.</summary>
     public string NativeRuntimeLinuxArm64Sha512 { get; set; } =
-        "9549f7a59d5d6f7dd3e965bf88631698b23974aff4e34d589037d6ae9a3f4433902881b4d23f7e18602ab954823f5be35015054a6eccb57041b0f20d92873ed7";
+        "9ba9889057a8b8a8371099f1fc99c6710b723fd0359941183b9a5040b7d9fb7f03bc06b7dad100969f43f852da88b6d843f6c7983c86691594612043233f2e02";
     /// <summary>Minimum free space required for an atomic native installation.</summary>
     public int NativeMinimumFreeMegabytes { get; set; } = 300;
 }

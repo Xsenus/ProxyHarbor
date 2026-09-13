@@ -1,4 +1,4 @@
-FROM mcr.microsoft.com/dotnet/sdk:10.0.400-alpine3.23@sha256:b36516b249f0cccf9e5017082f51d4bda2d61469f205a7167fbf3b8498ecdd59 AS build
+FROM mcr.microsoft.com/dotnet/sdk:10.0.401-alpine3.23@sha256:84c5d09dfeb4275f6540084e69331f140223eb968b5ef48023923b0b2eda156b AS build
 WORKDIR /src
 COPY Directory.Build.props NuGet.Config global.json ./
 COPY src/ProxyHarbor.Domain/ProxyHarbor.Domain.csproj src/ProxyHarbor.Domain/packages.lock.json src/ProxyHarbor.Domain/
@@ -13,7 +13,7 @@ ARG SOURCE_REVISION=unknown
 RUN dotnet publish src/ProxyHarbor.CheckerAgent/ProxyHarbor.CheckerAgent.csproj -c Release --no-restore -o /app/publish \
     -p:Version=$VERSION -p:InformationalVersion=$VERSION+$SOURCE_REVISION -p:ContinuousIntegrationBuild=true
 
-FROM mcr.microsoft.com/dotnet/aspnet:10.0.11-alpine3.23@sha256:4d5339ac9814f1a033a09e664bcf159e9fb386c89b6e7917b3dca7254e656027
+FROM mcr.microsoft.com/dotnet/aspnet:10.0.12-alpine3.23@sha256:68eeb5922e4737a0f4657e3a631e566c38186f910c7155fb7c377414ce58a64d
 WORKDIR /app
 RUN apk upgrade --no-cache libcrypto3 libssl3 && \
     addgroup -S checker && adduser -S checker -G checker

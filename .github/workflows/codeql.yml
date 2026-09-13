@@ -37,7 +37,7 @@ jobs:
       - name: Configure .NET SDK
         if: matrix.language == 'csharp'
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
-        with: { dotnet-version: '10.0.302' }
+        with: { dotnet-version: '10.0.401' }
       - name: Build C# database
         if: matrix.language == 'csharp'
         run: |
