@@ -391,6 +391,8 @@ jobs:
           docker inspect --format '{{json .Mounts}}' "$restore_id" | jq --exit-status \
             '[.[] | select(.Destination | startswith("/run/secrets/"))] | length == 2'
           test "$(docker inspect --format '{{.Config.User}}' "$api_id")" = 'proxyharbor'
+          test "$(docker compose exec -T api id -u)" = '100'
+          test "$(docker compose exec -T api id -g)" = '101'
           test "$(docker inspect --format '{{.HostConfig.ReadonlyRootfs}}' "$api_id")" = 'true'
           test "$(docker inspect --format '{{.HostConfig.PidsLimit}}' "$api_id")" = '512'
           test "$(docker inspect --format '{{.HostConfig.Init}}' "$api_id")" = 'true'

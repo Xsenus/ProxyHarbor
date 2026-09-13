@@ -21,8 +21,8 @@ FROM mcr.microsoft.com/dotnet/aspnet:10.0.12-noble@sha256:6a94333d37514e385650a3
 # and libgssapi is loaded by Npgsql during streamed PostgreSQL backups.
 RUN apt-get update && apt-get install -y --no-install-recommends curl libgssapi-krb5-2 && \
     rm -rf /var/lib/apt/lists/* && \
-    groupadd --system proxyharbor && \
-    useradd --system --gid proxyharbor --home-dir /app --no-create-home --shell /usr/sbin/nologin proxyharbor && \
+    groupadd --system --gid 101 proxyharbor && \
+    useradd --system --uid 100 --gid 101 --home-dir /app --no-create-home --shell /usr/sbin/nologin proxyharbor && \
     mkdir -p /app/backups /app/data-protection /app/geo-data && \
     chown -R proxyharbor:proxyharbor /app
 WORKDIR /app
