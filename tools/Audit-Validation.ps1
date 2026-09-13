@@ -3,6 +3,7 @@ param(
     [Parameter(Mandatory)][string]$AdminKey,
     [string]$ReportPath,
     [ValidateRange(1, 50000)][int]$ExportLimit = 1000,
+    [ValidateRange(1, 300)][int]$TelemetryTimeoutSeconds = 90,
     [switch]$RequirePublishedRowsMatchBatch
 )
 
@@ -16,6 +17,7 @@ $report = [ordered]@{
     alive = 0
     deferred = 0
     attemptsLastFiveMinutes = 0
+    telemetryPolls = 0
     jsonRows = 0
     xmlRows = 0
     txtRows = 0
@@ -40,6 +42,7 @@ try {
     # Ручной endpoint использует тот же lease/probe/persistence pipeline, что и
     # background worker, но позволяет аудиту дождаться точного результата партии.
     $headers = @{ 'X-Admin-Key' = $AdminKey }
+    $validationStartedAt = [DateTimeOffset]::UtcNow
     $validation = Invoke-RestMethod -Method Post -Uri "$ApiBaseUrl/api/v1/admin/validate" -Headers $headers
     $report.checked = [int]$validation.checked
     $report.alive = [int]$validation.alive
@@ -55,10 +58,25 @@ try {
         throw 'Validation-аудит не нашёл ни одного публикуемого Alive-прокси.'
     }
 
-    $diagnostics = Invoke-RestMethod -Method Get -Uri "$ApiBaseUrl/api/v1/admin/diagnostics" -Headers $headers
-    $report.attemptsLastFiveMinutes = [int]$diagnostics.validationQueue.attemptsLastFiveMinutes
-    if ($report.attemptsLastFiveMinutes -lt $report.attempts -or
-        -not $diagnostics.validationQueue.lastAttemptAt) {
+    # Сам mutation endpoint только ставит bounded demand-сигнал: полный aggregate
+    # большой таблицы пересчитывается отдельно. Ждём именно снимок этой партии, а
+    # не принимаем за доказательство непустую, но устаревшую дату прошлой проверки.
+    $telemetryDeadline = [DateTimeOffset]::UtcNow.AddSeconds($TelemetryTimeoutSeconds)
+    $telemetryCurrent = $false
+    do {
+        $report.telemetryPolls++
+        $diagnostics = Invoke-RestMethod -Method Get -Uri "$ApiBaseUrl/api/v1/admin/diagnostics" -Headers $headers
+        $report.attemptsLastFiveMinutes = [int]$diagnostics.validationQueue.attemptsLastFiveMinutes
+        $lastAttemptAt = if ($diagnostics.validationQueue.lastAttemptAt) {
+            [DateTimeOffset]$diagnostics.validationQueue.lastAttemptAt
+        } else { $null }
+        $telemetryCurrent = $report.attemptsLastFiveMinutes -ge $report.attempts -and
+            $null -ne $lastAttemptAt -and $lastAttemptAt -ge $validationStartedAt
+        if (-not $telemetryCurrent -and [DateTimeOffset]::UtcNow -lt $telemetryDeadline) {
+            Start-Sleep -Seconds 1
+        }
+    } while (-not $telemetryCurrent -and [DateTimeOffset]::UtcNow -lt $telemetryDeadline)
+    if (-not $telemetryCurrent) {
         throw 'Persisted validation telemetry не отражает только что завершённую партию.'
     }
 

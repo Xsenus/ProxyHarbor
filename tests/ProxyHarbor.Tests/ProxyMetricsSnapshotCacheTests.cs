@@ -126,6 +126,40 @@ public sealed class ProxyMetricsSnapshotCacheTests
     }
 
     [Fact]
+    public async Task ExplicitMutationDemandRefreshesOtherwiseFreshSnapshot()
+    {
+        var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+            .UseInMemoryDatabase($"proxy-metrics-mutation-{Guid.NewGuid():N}").Options;
+        await using (var seed = new ProxyHarborDbContext(options))
+        {
+            seed.Proxies.Add(new ProxyEndpoint { Host = "192.0.2.35", Port = 8080 });
+            await seed.SaveChangesAsync();
+        }
+
+        var factory = new CountingFactory(options);
+        using var cache = CreateCache(factory, new ManualTimeProvider());
+        var worker = new ProxyMetricsSnapshotRefreshWorker(
+            cache, NullLogger<ProxyMetricsSnapshotRefreshWorker>.Instance);
+        await worker.StartAsync(CancellationToken.None);
+        try
+        {
+            await WaitUntilAsync(() => factory.Created == 1);
+            cache.RequestRefresh();
+            cache.RequestRefresh();
+
+            await WaitUntilAsync(() => factory.Created == 2);
+            Assert.Equal(2, cache.DatabaseReads);
+            Assert.Equal(1, cache.RefreshRequestsQueued);
+            Assert.Equal(1, cache.RefreshRequestsCoalesced);
+        }
+        finally
+        {
+            await worker.StopAsync(CancellationToken.None);
+            worker.Dispose();
+        }
+    }
+
+    [Fact]
     public async Task PassiveDemandRefreshesAtFiveMinutesInsteadOfOne()
     {
         var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()

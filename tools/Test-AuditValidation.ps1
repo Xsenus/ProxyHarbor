@@ -24,7 +24,8 @@ function Start-ValidationAuditMock([int]$Port, [ValidateSet('success', 'accumula
         $listener.Prefixes.Add("http://127.0.0.1:$Port/")
         $listener.Start()
         $handled = 0
-        $expectedRequests = if ($Mode -eq 'zero-alive') { 1 } else { 6 }
+        $expectedRequests = if ($Mode -eq 'zero-alive') { 1 } else { 7 }
+        $diagnosticReads = 0
         try {
             while ($handled -lt $expectedRequests) {
                 # Yield to PowerShell cancellation while idle so Stop-Job can
@@ -54,7 +55,13 @@ function Start-ValidationAuditMock([int]$Port, [ValidateSet('success', 'accumula
                             }
                         }
                         '/api/v1/admin/diagnostics' {
-                            '{"validationQueue":{"attemptsLastFiveMinutes":2,"lastAttemptAt":"2026-08-10T12:00:00Z"}}'
+                            $diagnosticReads++
+                            if ($diagnosticReads -eq 1) {
+                                '{"validationQueue":{"attemptsLastFiveMinutes":2,"lastAttemptAt":null}}'
+                            } else {
+                                $attemptAt = [DateTimeOffset]::UtcNow.ToString('O')
+                                "{`"validationQueue`":{`"attemptsLastFiveMinutes`":2,`"lastAttemptAt`":`"$attemptAt`"}}"
+                            }
                         }
                         '/api/v1/export/json' {
                             '[{"url":"http://1.1.1.1:80"},{"url":"socks5://8.8.8.8:1080"}]'
@@ -118,6 +125,7 @@ function Invoke-ValidationAuditCase([string]$Mode, [bool]$ShouldSucceed) {
     try {
         Wait-ValidationAuditMock -Port $port -Job $job
         $rejected = $false
+        $auditError = $null
         try {
             $auditParameters = @{
                 ApiBaseUrl = "http://127.0.0.1:$port"
@@ -128,10 +136,13 @@ function Invoke-ValidationAuditCase([string]$Mode, [bool]$ShouldSucceed) {
             & $auditScript @auditParameters
         } catch {
             $rejected = $true
+            $auditError = $_.Exception.Message
         }
 
         $completed = Wait-Job $job -Timeout 10
-        if (-not $completed) { throw "Validation mock $Mode не завершил ожидаемые запросы." }
+        if (-not $completed) {
+            throw "Validation mock $Mode не завершил ожидаемые запросы (audit error: $auditError)."
+        }
         Receive-Job $job -ErrorAction Stop | Out-Null
         if (-not (Test-Path -LiteralPath $reportPath -PathType Leaf)) {
             throw "Validation audit $Mode не создал JSON-отчёт."
@@ -144,6 +155,7 @@ function Invoke-ValidationAuditCase([string]$Mode, [bool]$ShouldSucceed) {
             if ($rejected -or -not $report.success -or $report.alive -ne $expectedAlive -or
                 $report.jsonRows -ne 2 -or $report.xmlRows -ne 2 -or
                 $report.txtRows -ne 2 -or $report.csvRows -ne 2 -or
+                $report.telemetryPolls -ne 2 -or
                 $report.requirePublishedRowsMatchBatch -ne $expectedStrictBatchMatch -or
                 $report.publishedSetSha256 -notmatch '^[0-9a-f]{64}$' -or $report.error) {
                 throw 'Положительный validation-audit контракт нарушен.'
@@ -218,6 +230,7 @@ try {
     $repositoryRoot = Split-Path -Parent $PSScriptRoot
     $sourceWorkflow = Get-Content (Join-Path $repositoryRoot '.github/workflows/source-audit.yml') -Raw
     foreach ($fragment in @('futureEvidence', 'publishedSetSha256', '-RequirePublishedRowsMatchBatch',
+        'telemetryPolls', 'Collector__MaxCandidatesPerRun: 5000000',
         'vpn-audit.json', 'continue-on-error: true', "steps.vpn_audit.outcome == 'failure'")) {
         if (-not $sourceWorkflow.Contains($fragment, [StringComparison]::Ordinal)) {
             throw "Source-audit summary не публикует обязательное поле $fragment."

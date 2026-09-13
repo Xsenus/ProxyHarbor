@@ -15,7 +15,7 @@ concurrency:
 jobs:
   audit:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 60
     services:
       postgres:
         image: postgres:18-alpine@sha256:d3e1620b530c944afa6e887d22eb899824da68e19c52024bf98f5220c88a65b2
@@ -51,6 +51,9 @@ jobs:
           AllowedHosts: 127.0.0.1;localhost
           Collector__BackgroundWorkersEnabled: false
           Collector__SourceTimeoutSeconds: 30
+          # Weekly audit runs against an empty disposable database and must not
+          # confuse the production safety cap with an unavailable source feed.
+          Collector__MaxCandidatesPerRun: 5000000
           Collector__ValidationConcurrency: 200
           Collector__ValidationBatchSize: 250
           Backup__Enabled: false
@@ -121,6 +124,7 @@ jobs:
             "- Checked: $($validation.checked)" >> $env:GITHUB_STEP_SUMMARY
             "- Alive: $($validation.alive)" >> $env:GITHUB_STEP_SUMMARY
             "- Deferred: $($validation.deferred)" >> $env:GITHUB_STEP_SUMMARY
+            "- Telemetry polls: $($validation.telemetryPolls)" >> $env:GITHUB_STEP_SUMMARY
             "- Published JSON/XML/TXT/CSV: $($validation.jsonRows)/$($validation.xmlRows)/$($validation.txtRows)/$($validation.csvRows)" >> $env:GITHUB_STEP_SUMMARY
             "- Published ordered-set SHA-256: $($validation.publishedSetSha256)" >> $env:GITHUB_STEP_SUMMARY
           }
