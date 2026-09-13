@@ -147,8 +147,12 @@ public sealed class ProxyMetricsSnapshotCacheTests
             cache.RequestRefresh();
             cache.RequestRefresh();
 
-            await WaitUntilAsync(() => factory.Created == 2);
+            // CreateDbContext increments the factory counter immediately before
+            // the cache records its database read; wait for the observable that
+            // the assertion actually verifies instead of racing those two lines.
+            await WaitUntilAsync(() => cache.DatabaseReads == 2);
             Assert.Equal(2, cache.DatabaseReads);
+            Assert.Equal(2, factory.Created);
             Assert.Equal(1, cache.RefreshRequestsQueued);
             Assert.Equal(1, cache.RefreshRequestsCoalesced);
         }
