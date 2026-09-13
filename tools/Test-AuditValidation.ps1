@@ -222,6 +222,17 @@ try {
             throw "Source-audit summary не публикует обязательное поле $fragment."
         }
     }
+    if ($sourceWorkflow -notmatch '(?m)^\s*Security__AdminPassword:\s*([^\s#]+)\s*$') {
+        throw 'Source-audit workflow не задаёт bootstrap-пароль администратора.'
+    }
+    $sourceAuditPassword = $Matches[1].Trim([char]39, [char]34)
+    $hasControlCharacter = @($sourceAuditPassword.ToCharArray() | Where-Object { [char]::IsControl($_) }).Count -gt 0
+    if ($sourceAuditPassword.Length -lt 24 -or $sourceAuditPassword.Length -gt 256 -or
+        $sourceAuditPassword -cnotmatch '[A-Z]' -or $sourceAuditPassword -cnotmatch '[a-z]' -or
+        $sourceAuditPassword -notmatch '[0-9]' -or $sourceAuditPassword -notmatch '[^A-Za-z0-9]' -or
+        $hasControlCharacter) {
+        throw 'Source-audit bootstrap-пароль не соответствует Production и ASP.NET Core Identity policy.'
+    }
     foreach ($workflowPath in @('.github/workflows/ci.yml', '.github/workflows/release.yml')) {
         $workflow = Get-Content (Join-Path $repositoryRoot $workflowPath) -Raw
         if (-not $workflow.Contains('./tools/Test-AuditValidation.ps1', [StringComparison]::Ordinal)) {
