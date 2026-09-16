@@ -7,6 +7,8 @@ $requiredPatterns = @(
     '(?m)^\s+security-events:\s+write\s*$',
     '(?m)^\s+contents:\s+read\s*$',
     '(?m)^\s+actions:\s+read\s*$',
+    '(?m)^\s+group:\s+\$\{\{ github\.workflow \}\}-\$\{\{ github\.event\.pull_request\.number \|\| github\.ref \}\}\s*$',
+    '(?m)^\s+cancel-in-progress:\s+true\s*$',
     '(?m)^\s+- language:\s+csharp\s*$',
     '(?m)^\s+build-mode:\s+manual\s*$',
     '(?m)^\s+- language:\s+javascript-typescript\s*$',
@@ -29,4 +31,4 @@ if ($codeQlPins.Count -ne 2 -or @($codeQlPins | ForEach-Object { $_.Groups['sha'
     throw 'CodeQL init/analyze должны использовать один и тот же полный commit SHA.'
 }
 
-Write-Host 'CodeQL contracts пройдены: C#/JS, security-extended, locked manual build, least privilege и единый action SHA.' -ForegroundColor Green
+Write-Host 'CodeQL contracts пройдены: C#/JS, security-extended, locked manual build, concurrency, least privilege и единый action SHA.' -ForegroundColor Green

@@ -34,6 +34,16 @@ foreach ($workflowName in 'ci.yml', 'release.yml') {
 # backup-вызова и проверять как API-ответ, так и сохранённый audit. Иначе CI
 # обращается к Bot API с заведомо неверным token и падает не по причине продукта.
 $ciWorkflow = Get-Content -LiteralPath (Join-Path $repositoryRoot '.github/workflows/ci.yml') -Raw
+$requiredConcurrencyFragments = @(
+    'group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}',
+    'cancel-in-progress: true'
+)
+foreach ($fragment in $requiredConcurrencyFragments) {
+    if (-not $ciWorkflow.Contains($fragment, [StringComparison]::Ordinal)) {
+        throw "CI workflow потерял отмену устаревших запусков: $fragment"
+    }
+}
+
 $requiredContainerSmokeFragments = @(
     ': > .tmp-ci-secrets/telegram_bot_token',
     'docker-compose.ci.yml',
@@ -72,4 +82,4 @@ try {
     }
 }
 
-Write-Host 'Actionlint contracts пройдены: version/hash pins, CI+release wiring, backup smoke и fail-closed archive rejection.' -ForegroundColor Green
+Write-Host 'Actionlint contracts пройдены: version/hash pins, CI+release wiring, concurrency, backup smoke и fail-closed archive rejection.' -ForegroundColor Green
