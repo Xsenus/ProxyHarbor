@@ -140,7 +140,8 @@ public sealed class CheckerAgentWorkerTests
     private static CheckerAgentWorker Worker(TestClients clients, CheckerAgentProbeRuntime runtime, TimeProvider clock) =>
         new(clients, runtime, Options.Create(new CheckerAgentOptions
         {
-            ControlPlaneBaseUrl = "https://control.example", NodeId = Guid.NewGuid()
+            ControlPlaneBaseUrl = "https://control.example",
+            NodeId = Guid.NewGuid()
         }), NullLogger<CheckerAgentWorker>.Instance, clock);
 
     private static CheckerLeaseResponse Lease(int count) => new(

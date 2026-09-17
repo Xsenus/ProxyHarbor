@@ -3,8 +3,8 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using ProxyHarbor.Api;
 using ProxyHarbor.Api.Controllers;
@@ -269,7 +269,7 @@ public sealed class CatalogRequestDiagnosticsTests
         {
             // Catalog reads never use the separate streaming-export factory.
             var controller = new ProxiesController(factory, Options.Create(new CollectorOptions()), null!, access)
-                { ControllerContext = controllerContext };
+            { ControllerContext = controllerContext };
             Assert.IsType<OkObjectResult>((await controller.Get(null, null, null, null)).Result);
         }
         Assert.True(trace.Milliseconds(CatalogReadPhase.Controller) > 0);

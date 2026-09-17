@@ -42,7 +42,9 @@ public sealed class CheckerAgentShutdownTests
         {
             var current = name == "origin" ? "probe" : request.RequestUri!.AbsolutePath.Split('/')[^1] switch
             {
-                "lease" => "claim", "results" => "upload", _ => "heartbeat"
+                "lease" => "claim",
+                "results" => "upload",
+                _ => "heartbeat"
             };
             if (current == "claim") Interlocked.Increment(ref claims);
             if (current == phase)
@@ -197,8 +199,10 @@ public sealed class CheckerAgentShutdownTests
             runtime = new CheckerAgentProbeRuntime(this);
             Worker = new CheckerAgentWorker(this, runtime, Options.Create(new CheckerAgentOptions
             {
-                ControlPlaneBaseUrl = "https://control.example", NodeId = Guid.NewGuid(),
-                TokenFile = tokenFile, EmptyPollSeconds = 60
+                ControlPlaneBaseUrl = "https://control.example",
+                NodeId = Guid.NewGuid(),
+                TokenFile = tokenFile,
+                EmptyPollSeconds = 60
             }), NullLogger<CheckerAgentWorker>.Instance, clock ?? TimeProvider.System);
         }
         public HttpClient CreateClient(string name)
