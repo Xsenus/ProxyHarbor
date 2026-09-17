@@ -23,8 +23,15 @@ public sealed class VpnValidationReplayIntegrationTests
                 now, now.AddMinutes(5), deferred);
             Assert.Equal(1, await service.PersistValidationResultsAsync([update]));
             var before = await ReadAsync(factory, endpoint.Id);
-            if (older) update = update with { CheckedAt = now.AddSeconds(-1), NextCheckAt = now.AddMinutes(1),
-                Status = VpnEndpointStatus.Unreachable, LatencyMs = null, Error = "stale", IsDeferred = !deferred };
+            if (older) update = update with
+            {
+                CheckedAt = now.AddSeconds(-1),
+                NextCheckAt = now.AddMinutes(1),
+                Status = VpnEndpointStatus.Unreachable,
+                LatencyMs = null,
+                Error = "stale",
+                IsDeferred = !deferred
+            };
             Assert.Equal(1, await service.PersistValidationResultsAsync([update]));
             var after = await ReadAsync(factory, endpoint.Id);
             Assert.Equal(before, after);
@@ -145,8 +152,16 @@ public sealed class VpnValidationReplayIntegrationTests
                 .UseNpgsql(new NpgsqlConnectionStringBuilder(connectionString) { SearchPath = schema }.ConnectionString,
                     pg => pg.EnableRetryOnFailure(2, TimeSpan.FromMilliseconds(10), null)).Options);
             var now = new DateTimeOffset(2026, 9, 4, 8, 0, 0, TimeSpan.Zero).AddTicks(7);
-            var endpoint = new VpnEndpoint { Host = "8.8.8.8", Port = 443, Protocol = VpnProtocol.Trojan,
-                FirstSeenAt = now.AddDays(-1), LastSeenAt = now.AddDays(-1), SuccessfulChecks = 3, FailedChecks = 2 };
+            var endpoint = new VpnEndpoint
+            {
+                Host = "8.8.8.8",
+                Port = 443,
+                Protocol = VpnProtocol.Trojan,
+                FirstSeenAt = now.AddDays(-1),
+                LastSeenAt = now.AddDays(-1),
+                SuccessfulChecks = 3,
+                FailedChecks = 2
+            };
             await using (var db = factory.CreateDbContext())
             {
                 await db.Database.MigrateAsync();

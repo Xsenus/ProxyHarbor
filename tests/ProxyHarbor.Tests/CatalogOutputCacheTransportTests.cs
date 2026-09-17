@@ -37,7 +37,8 @@ public sealed class CatalogOutputCacheTransportTests
         using var handler = new SocketsHttpHandler { UseProxy = false };
         using var client = new HttpClient(handler)
         {
-            BaseAddress = new Uri(app.Urls.Single()), Timeout = TimeSpan.FromSeconds(10)
+            BaseAddress = new Uri(app.Urls.Single()),
+            Timeout = TimeSpan.FromSeconds(10)
         };
         using var warm = await client.GetAsync("/catalog?page=1&pageSize=10");
         Assert.Equal(HttpStatusCode.OK, warm.StatusCode);

@@ -3,9 +3,9 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Npgsql;
+using ProxyHarbor.Api.Controllers;
 using ProxyHarbor.Domain;
 using ProxyHarbor.Infrastructure;
-using ProxyHarbor.Api.Controllers;
 
 namespace ProxyHarbor.Tests;
 
@@ -34,8 +34,12 @@ public sealed class VpnCatalogIntegrationTests
             var original = new[] { VpnEndpointStatus.Pending, VpnEndpointStatus.Reachable, VpnEndpointStatus.Unreachable }
                 .Select((status, index) => new VpnEndpoint
                 {
-                    Host = $"8.8.8.{index + 1}", Port = 443, Protocol = VpnProtocol.Vless, Status = status,
-                    FirstSeenAt = now.AddDays(-1), LastSeenAt = now.AddMinutes(-1),
+                    Host = $"8.8.8.{index + 1}",
+                    Port = 443,
+                    Protocol = VpnProtocol.Vless,
+                    Status = status,
+                    FirstSeenAt = now.AddDays(-1),
+                    LastSeenAt = now.AddMinutes(-1),
                     LastCheckedAt = status == VpnEndpointStatus.Pending ? null : now.AddMinutes(-20),
                     LatencyMs = status == VpnEndpointStatus.Reachable ? 42 : null,
                     SuccessfulChecks = status == VpnEndpointStatus.Pending ? 0 : int.MaxValue,

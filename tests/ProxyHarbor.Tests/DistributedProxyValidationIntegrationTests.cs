@@ -286,7 +286,10 @@ public sealed class DistributedProxyValidationIntegrationTests
             // overwrite the first committed results or contribute more counters.
             var changed = new CheckerLeaseResultRequest(request.Results.Select(result => result with
             {
-                IsAlive = true, LatencyMs = 1, IsDeferred = false, Error = null
+                IsAlive = true,
+                LatencyMs = 1,
+                IsDeferred = false,
+                Error = null
             }).ToArray());
             Assert.Equal(replies[0], await dispatcher.CompleteAsync(node.Id, lease.LeaseId, changed, CancellationToken.None));
             await Assert.ThrowsAsync<InvalidOperationException>(() =>
