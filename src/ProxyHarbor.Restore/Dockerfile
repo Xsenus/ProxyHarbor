@@ -15,7 +15,7 @@ ARG SOURCE_REVISION=unknown
 RUN dotnet publish "src/ProxyHarbor.Restore/ProxyHarbor.Restore.csproj" -c Release -o /app --no-restore \
     /p:UseAppHost=false /p:Version="$VERSION" /p:SourceRevisionId="$SOURCE_REVISION" /p:ContinuousIntegrationBuild=true
 
-FROM mcr.microsoft.com/dotnet/aspnet:10.0.12-alpine3.23@sha256:68eeb5922e4737a0f4657e3a631e566c38186f910c7155fb7c377414ce58a64d AS runtime
+FROM mcr.microsoft.com/dotnet/aspnet:10.0.12-alpine3.23@sha256:23c1e50c547546cb1192b84369ecfc6fa227cb447b17fee57456bd178962c213 AS runtime
 RUN apk upgrade --no-cache libcrypto3 libssl3
 # Restore работает без root. Отдельная точка монтирования получает временный
 # расшифрованный ZIP и удаляется вместе с одноразовым контейнером.
