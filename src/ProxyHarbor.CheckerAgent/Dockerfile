@@ -13,7 +13,7 @@ ARG SOURCE_REVISION=unknown
 RUN dotnet publish src/ProxyHarbor.CheckerAgent/ProxyHarbor.CheckerAgent.csproj -c Release --no-restore -o /app/publish \
     -p:Version=$VERSION -p:InformationalVersion=$VERSION+$SOURCE_REVISION -p:ContinuousIntegrationBuild=true
 
-FROM mcr.microsoft.com/dotnet/aspnet:10.0.12-alpine3.23@sha256:68eeb5922e4737a0f4657e3a631e566c38186f910c7155fb7c377414ce58a64d
+FROM mcr.microsoft.com/dotnet/aspnet:10.0.12-alpine3.23@sha256:23c1e50c547546cb1192b84369ecfc6fa227cb447b17fee57456bd178962c213
 WORKDIR /app
 RUN apk upgrade --no-cache libcrypto3 libssl3 && \
     addgroup -S checker && adduser -S checker -G checker
