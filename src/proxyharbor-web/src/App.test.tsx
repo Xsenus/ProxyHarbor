@@ -662,6 +662,43 @@ describe('ProxyHarbor UI', () => {
       String(input).endsWith('/source-edit') && options?.method === 'DELETE')).toBe(true))
   })
 
+  it('replaces a paid source key without ever receiving the stored secret', async () => {
+    window.history.replaceState({}, '', '/admin/sources')
+    const source = {
+      id:'best-proxies',name:'Best Proxies Premium',url:'https://api.best-proxies.ru/proxylist.txt',
+      defaultProtocol:'Http',enabled:true,priority:-1000,lastItemCount:15000,lastResultTruncated:false,
+      consecutiveFailures:0,isBuiltIn:false,isPaid:true,credentialConfigured:true,credentialStatus:'active',
+      credentialExpiresAt:'2026-09-22T03:00:00Z',credentialCheckedAt:'2026-09-21T03:00:00Z',provider:'Best Proxies',
+    }
+    vi.mocked(fetch).mockImplementation(async (input, options) => {
+      const url=String(input)
+      if(url.includes('/api/v1/admin/sources?'))return jsonResponse({items:[source],page:1,pageSize:10,total:1})
+      if(url.endsWith('/api/v1/admin/sources/best-proxies')&&options?.method==='PUT')return new Response(null,{status:204})
+      if(url.endsWith('/api/v1/admin/sources/best-proxies/credential')&&options?.method==='PUT')return jsonResponse(source)
+      if(url.includes('/api/v1/admin/diagnostics'))return jsonResponse({serverTime:new Date().toISOString(),databaseBytes:0,validationQueue:{total:0,due:0},recentRuns:[],recentValidationRuns:[],recentBackups:[]})
+      return jsonResponse({title:'Unexpected request'},500)
+    })
+
+    render(<App/>)
+    expect(await screen.findByText('платный')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button',{name:'Изменить'}))
+    const dialog=screen.getByRole('dialog',{name:'Редактировать источник'})
+    expect(within(dialog).getByLabelText('Название')).toBeDisabled()
+    expect(within(dialog).getByLabelText('HTTPS URL')).toBeDisabled()
+    const key=within(dialog).getByLabelText('Новый API key')
+    expect(key).toHaveAttribute('type','password')
+    expect(key).toHaveValue('')
+    const replacementKey=['replacement','key','123456789'].join('-')
+    fireEvent.change(key,{target:{value:replacementKey}})
+    fireEvent.click(within(dialog).getByRole('button',{name:'Сохранить изменения'}))
+
+    await waitFor(()=>expect(vi.mocked(fetch).mock.calls.some(([input,options])=>{
+      if(!String(input).endsWith('/best-proxies/credential')||options?.method!=='PUT')return false
+      return JSON.parse(String(options.body)).apiKey===replacementKey
+    })).toBe(true))
+    expect(screen.queryByDisplayValue(replacementKey)).not.toBeInTheDocument()
+  })
+
   it('downloads and safely deletes a backup from the paged registry', async () => {
     window.history.replaceState({}, '', '/admin/backups')
     const backup = { id:'backup-1',startedAt:new Date().toISOString(),finishedAt:new Date().toISOString(),status:'completed',fileName:'proxyharbor-20260826-123456-1234.phbackup',sizeBytes:1024,telegramConfigured:true,sentToTelegram:true,objectStorageConfigured:true,sentToObjectStorage:true,objectStorageKey:'production/backups/proxyharbor.phbackup',available:true }

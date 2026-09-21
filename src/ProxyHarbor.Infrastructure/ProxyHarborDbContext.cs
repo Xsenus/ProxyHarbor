@@ -15,6 +15,8 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
     public DbSet<ProxyValidationLease> ProxyValidationLeases => Set<ProxyValidationLease>();
     /// <summary>Встроенные и пользовательские proxy feed'ы.</summary>
     public DbSet<ProxySource> Sources => Set<ProxySource>();
+    /// <summary>Отделённые от backup зашифрованные ключи платных proxy provider.</summary>
+    public DbSet<ProxySourceCredential> ProxySourceCredentials => Set<ProxySourceCredential>();
     /// <summary>Найденные VPN endpoint и опубликованные ссылки подключения.</summary>
     public DbSet<VpnEndpoint> VpnEndpoints => Set<VpnEndpoint>();
     /// <summary>Разрешённые публичные VPN feed'ы.</summary>
@@ -431,6 +433,18 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
             table.HasCheckConstraint("CK_Sources_FetchTimeline", "\"LastSucceededAt\" IS NULL OR (\"LastFetchedAt\" IS NOT NULL AND \"LastSucceededAt\" <= \"LastFetchedAt\")");
             table.HasCheckConstraint("CK_Sources_ContentTimeline", "\"LastContentFetchedAt\" IS NULL OR (\"LastFetchedAt\" IS NOT NULL AND \"LastSucceededAt\" IS NOT NULL AND \"LastContentFetchedAt\" <= \"LastFetchedAt\" AND \"LastContentFetchedAt\" <= \"LastSucceededAt\")");
         });
+
+        var sourceCredential = builder.Entity<ProxySourceCredential>();
+        sourceCredential.HasKey(x => x.ProxySourceId);
+        sourceCredential.Property(x => x.ProtectedApiKey).HasMaxLength(4096);
+        sourceCredential.Property(x => x.Status).HasMaxLength(32);
+        sourceCredential.Property(x => x.LastError).HasMaxLength(500);
+        sourceCredential.HasOne(x => x.ProxySource).WithOne(x => x.Credential)
+            .HasForeignKey<ProxySourceCredential>(x => x.ProxySourceId)
+            .OnDelete(DeleteBehavior.Cascade);
+        sourceCredential.ToTable(table => table.HasCheckConstraint(
+            "CK_ProxySourceCredentials_Status",
+            "\"Status\" IN ('not_configured', 'active', 'expired', 'invalid', 'rate_limited', 'error')"));
 
         var vpnSource = builder.Entity<VpnSource>();
         vpnSource.HasIndex(x => x.Url).IsUnique();

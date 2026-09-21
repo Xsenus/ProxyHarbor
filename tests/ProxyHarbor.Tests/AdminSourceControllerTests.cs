@@ -1,6 +1,7 @@
 using System.ComponentModel.DataAnnotations;
 using System.Data.Common;
 using System.Reflection;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -17,6 +18,13 @@ namespace ProxyHarbor.Tests;
 [Collection(PostgresIntegrationGroup.Name)]
 public sealed class AdminSourceControllerTests
 {
+    [Theory]
+    [InlineData("aaaaaaaaaaaaaaaa", true)]
+    [InlineData("short", false)]
+    [InlineData("valid-but-has-query?separator", false)]
+    public void PaidApiKeyPolicyRejectsUnsafeTokens(string value, bool expected) =>
+        Assert.Equal(expected, ProxySourceApiKeyPolicy.IsValid(value));
+
     [Theory]
     [InlineData("   ", ProxyProtocol.Http, "Name")]
     [InlineData("Valid source", (ProxyProtocol)999, "Protocol")]
@@ -123,6 +131,44 @@ public sealed class AdminSourceControllerTests
         var conflict = Assert.IsType<ConflictObjectResult>(duplicate.Result);
         Assert.Equal(409, Assert.IsType<ProblemDetails>(conflict.Value).Status);
         Assert.Equal(1, await verify.Sources.CountAsync());
+    }
+
+    [Fact]
+    public async Task PaidCredentialIsEncryptedAndResponseNeverReturnsSecret()
+    {
+        var options = Options($"paid-source-{Guid.NewGuid():N}");
+        var paid = new ProxySource
+        {
+            Name = PaidProxySourceCatalog.BestProxiesName,
+            Url = PaidProxySourceCatalog.BestProxiesUrl,
+            DefaultProtocol = ProxyProtocol.Http,
+            Priority = PaidProxySourceCatalog.BestProxiesPriority,
+            Enabled = false,
+            ConsecutiveFailures = 4,
+            NextFetchAt = DateTimeOffset.UtcNow.AddHours(1)
+        };
+        await SeedAsync(options, paid);
+        var protection = new EphemeralDataProtectionProvider();
+        var controller = Controller(options, protectionProvider: protection);
+        const string apiKey = "unit-test-paid-key-123456789";
+
+        var result = await controller.UpdateSourceCredential(
+            paid.Id, new ProxySourceCredentialRequest(apiKey), CancellationToken.None);
+
+        var response = Assert.IsType<SourceResponse>(Assert.IsType<OkObjectResult>(result.Result).Value);
+        Assert.True(response.IsPaid);
+        Assert.True(response.CredentialConfigured);
+        Assert.Equal("not_configured", response.CredentialStatus);
+        Assert.DoesNotContain(apiKey, System.Text.Json.JsonSerializer.Serialize(response), StringComparison.Ordinal);
+        await using var verify = new ProxyHarborDbContext(options);
+        var stored = await verify.ProxySourceCredentials.SingleAsync();
+        Assert.DoesNotContain(apiKey, stored.ProtectedApiKey, StringComparison.Ordinal);
+        Assert.Equal(apiKey, ProxySourceCredentialProtection.Create(protection)
+            .Unprotect(stored.ProtectedApiKey));
+        var storedSource = await verify.Sources.SingleAsync();
+        Assert.True(storedSource.Enabled);
+        Assert.Equal(0, storedSource.ConsecutiveFailures);
+        Assert.Null(storedSource.NextFetchAt);
     }
 
     [Fact]
@@ -456,11 +502,13 @@ public sealed class AdminSourceControllerTests
 
     private static AdminController Controller(
         DbContextOptions<ProxyHarborDbContext> options,
-        ISourceCatalogMutationCoordinator? mutationCoordinator = null) =>
+        ISourceCatalogMutationCoordinator? mutationCoordinator = null,
+        IDataProtectionProvider? protectionProvider = null) =>
         new(new TestDbFactory(options), null!, null!, null!,
             mutationCoordinator ?? new AvailableMutationCoordinator(),
             Microsoft.Extensions.Options.Options.Create(new BackupOptions()),
-            Microsoft.Extensions.Options.Options.Create(new CollectorOptions()));
+            Microsoft.Extensions.Options.Options.Create(new CollectorOptions()),
+            credentialProtectionProvider: protectionProvider);
 
     private sealed class AvailableMutationCoordinator : ISourceCatalogMutationCoordinator
     {

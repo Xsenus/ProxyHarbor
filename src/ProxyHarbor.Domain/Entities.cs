@@ -277,6 +277,32 @@ public sealed class ProxySource
     public int ConsecutiveFailures { get; set; }
     /// <summary>Безопасная bounded-диагностика последнего отказа источника.</summary>
     public string? LastError { get; set; }
+    /// <summary>Защищённая конфигурация платного provider, если она требуется этому источнику.</summary>
+    public ProxySourceCredential? Credential { get; set; }
+}
+
+/// <summary>
+/// Секрет и безопасное runtime-состояние платного proxy provider. Сущность намеренно
+/// отделена от ProxySource: стандартный backup источников не должен содержать API-ключ.
+/// </summary>
+public sealed class ProxySourceCredential
+{
+    /// <summary>Одновременно PK и FK к единственному платному источнику.</summary>
+    public Guid ProxySourceId { get; set; }
+    /// <summary>Data Protection ciphertext; открытый ключ никогда не хранится в БД.</summary>
+    public required string ProtectedApiKey { get; set; }
+    /// <summary>not_configured/active/expired/invalid/rate_limited/error.</summary>
+    public string Status { get; set; } = "not_configured";
+    /// <summary>Оценка окончания подписки по ответу provider API.</summary>
+    public DateTimeOffset? ExpiresAt { get; set; }
+    /// <summary>Последняя проверка ключа у provider.</summary>
+    public DateTimeOffset? CheckedAt { get; set; }
+    /// <summary>Последняя замена ключа оператором.</summary>
+    public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
+    /// <summary>Безопасная диагностика без URL и ключа.</summary>
+    public string? LastError { get; set; }
+    /// <summary>Родительский источник.</summary>
+    public ProxySource? ProxySource { get; set; }
 }
 
 /// <summary>Аудит одного цикла сбора источников.</summary>

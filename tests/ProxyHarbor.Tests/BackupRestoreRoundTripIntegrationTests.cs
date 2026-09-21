@@ -121,7 +121,7 @@ public sealed class BackupRestoreRoundTripIntegrationTests
             await using (var unchanged = new ProxyHarborDbContext(targetOptions))
             {
                 Assert.Equal(1, await unchanged.Proxies.CountAsync(proxy => proxy.Host == "9.9.9.9"));
-                Assert.Equal(BuiltInSourceCatalog.Sources.Count, await unchanged.Sources.CountAsync());
+                Assert.Equal(BuiltInSourceCatalog.Sources.Count + 1, await unchanged.Sources.CountAsync());
                 Assert.Equal(
                     "Target metadata must survive failed restore",
                     await unchanged.Sources.OrderBy(source => source.Priority).Select(source => source.Name).FirstAsync());
@@ -260,7 +260,7 @@ public sealed class BackupRestoreRoundTripIntegrationTests
         await using var unchanged = new ProxyHarborDbContext(options);
         Assert.Equal(1, await unchanged.Proxies.CountAsync(proxy => proxy.Host == "9.9.9.9"));
         Assert.Equal(0, await unchanged.Proxies.CountAsync(proxy => proxy.Host == "8.8.8.8"));
-        Assert.Equal(BuiltInSourceCatalog.Sources.Count, await unchanged.Sources.CountAsync());
+        Assert.Equal(BuiltInSourceCatalog.Sources.Count + 1, await unchanged.Sources.CountAsync());
         Assert.Equal(
             "Target metadata must survive failed restore",
             await unchanged.Sources.OrderBy(source => source.Priority).Select(source => source.Name).FirstAsync());
@@ -331,7 +331,8 @@ public sealed class BackupRestoreRoundTripIntegrationTests
 
     private static async Task SeedRepresentativeSnapshotAsync(ProxyHarborDbContext db)
     {
-        var builtIn = await db.Sources.OrderBy(source => source.Priority).FirstAsync();
+        var builtInUrl = BuiltInSourceCatalog.Sources[0].Url;
+        var builtIn = await db.Sources.SingleAsync(source => source.Url == builtInUrl);
         builtIn.Enabled = false;
         builtIn.LastFetchedAt = SnapshotTime;
         builtIn.LastSucceededAt = SnapshotTime.AddMinutes(-1);
@@ -363,7 +364,7 @@ public sealed class BackupRestoreRoundTripIntegrationTests
         expectedRestoredProxy.CheckLeaseUntil = null;
         Assert.Equivalent(expectedRestoredProxy, proxy, strict: true);
 
-        Assert.Equal(BuiltInSourceCatalog.Sources.Count + 1, await db.Sources.CountAsync());
+        Assert.Equal(BuiltInSourceCatalog.Sources.Count + 2, await db.Sources.CountAsync());
         var customSource = await db.Sources.AsNoTracking().SingleAsync(source => source.Id == SnapshotIds.CustomSource);
         Assert.Equivalent(ExpectedCustomSource(), customSource, strict: true);
         var builtIn = await db.Sources.AsNoTracking()

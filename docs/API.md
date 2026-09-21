@@ -345,6 +345,9 @@ Invoke-RestMethod https://proxy.example.com/api/v1/admin/diagnostics -Headers $a
 `PagedResult<SourceResponse>` с полями `items`, `page`, `pageSize`, `total`.
 Строки стабильно упорядочены по priority, имени и идентификатору; каждая содержит
 runtime state, conditional validators evidence, errors, completeness flags и built-in metadata.
+Для управляемого платного источника дополнительно возвращаются `isPaid`,
+`credentialConfigured`, безопасный `credentialStatus`, `credentialExpiresAt`,
+`credentialCheckedAt` и `credentialError`. Сам API key и его ciphertext не возвращаются.
 
 ### GET `/api/v1/admin/sources/{id}`
 
@@ -376,9 +379,28 @@ DNS проверяется до сохранения. Collection/source mutation
 
 Пользовательский feed изменяется полностью. У built-in разрешено менять только `enabled`; name/URL/protocol/rank immutable. Смена пользовательского endpoint сбрасывает stale conditional/error state.
 
+Для управляемого платного источника также неизменяемы name, URL, protocol и priority;
+обычный `PUT` управляет только `enabled`.
+
+### PUT `/api/v1/admin/sources/{id}/credential`
+
+Заменяет credential управляемого платного источника:
+
+```json
+{
+  "apiKey": "provider-secret-value",
+  "enabled": true
+}
+```
+
+Ключ должен содержать 16–256 печатных ASCII-символов без пробелов. Он сразу шифруется
+Data Protection, никогда не попадает в ответ, а source failure/backoff и прежний credential
+status сбрасываются. Endpoint возвращает обычный безопасный `SourceResponse`. Для публичного
+или пользовательского feed возвращается `400`.
+
 ### DELETE `/api/v1/admin/sources/{id}`
 
-Пользовательский feed удаляется. Built-in устойчиво переводится в `enabled=false`, потому что startup seed восстановил бы физически удалённую строку.
+Пользовательский feed удаляется. Built-in и управляемый платный источник устойчиво переводятся в `enabled=false`, потому что startup seed восстановил бы физически удалённую строку.
 
 ## GET `/api/v1/admin/diagnostics`
 
