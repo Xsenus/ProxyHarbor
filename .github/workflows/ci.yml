@@ -577,7 +577,7 @@ jobs:
           docker compose --profile tools run --rm restore \
             --input "/app/backups/$backup_file" --replace-existing-data
           test "$(docker compose exec -T postgres psql --username proxyharbor --dbname proxyharbor \
-            --tuples-only --no-align --command 'SELECT COUNT(*) FROM "Sources";')" -eq 543
+            --tuples-only --no-align --command 'SELECT COUNT(*) FROM "Sources";')" -eq 544
           docker compose up --detach api web
           for attempt in {1..60}; do
             if curl --fail --silent http://127.0.0.1:8080/health/ready; then break; fi
@@ -901,10 +901,10 @@ jobs:
           echo "$metrics" | grep 'proxyharbor_advisory_lock_cleanup_failures_total 0'
           integration_admin_key='integration-admin-key-at-least-24-chars'
           sources=$(curl --fail --silent -H "X-Admin-Key: ${integration_admin_key}" 'http://127.0.0.1:5080/api/v1/admin/sources?page=1&pageSize=100')
-          test "$(echo "$sources" | jq '.total')" -eq 543
+          test "$(echo "$sources" | jq '.total')" -eq 544
           test "$(echo "$sources" | jq '.items | length')" -eq 100
-          test "$(echo "$sources" | jq '[.items[] | select(.isBuiltIn)] | length')" -eq 100
-          test "$(echo "$sources" | jq '[.items[].provider] | unique | length')" -eq 57
+          test "$(echo "$sources" | jq '[.items[] | select(.isBuiltIn)] | length')" -eq 99
+          test "$(echo "$sources" | jq '[.items[] | select(.isPaid and (.credentialConfigured | not))] | length')" -eq 1
           invalid_status=$(curl --silent --output /dev/null --write-out '%{http_code}' \
             -X POST -H 'Content-Type: application/json' -H 'X-Admin-Key: integration-admin-key-at-least-24-chars' \
             --data '{"name":"x","url":"http://127.0.0.1/list.txt","protocol":"Http"}' \
@@ -1051,7 +1051,7 @@ jobs:
           done
           integration_admin_key='integration-admin-key-at-least-24-chars'
           restored_sources=$(curl --fail --silent -H "X-Admin-Key: ${integration_admin_key}" 'http://127.0.0.1:5080/api/v1/admin/sources?page=1&pageSize=100')
-          test "$(echo "$restored_sources" | jq '.total')" -eq 543
+          test "$(echo "$restored_sources" | jq '.total')" -eq 544
           test "$(echo "$restored_sources" | jq '.items | length')" -eq 100
           restored_proxy=$(PGPASSWORD=integration-password psql -tA -F '|' \
             -h 127.0.0.1 -U proxyharbor -d proxyharbor \
