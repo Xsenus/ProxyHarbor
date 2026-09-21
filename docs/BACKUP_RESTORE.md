@@ -15,7 +15,7 @@ Manifest v7 содержит согласованный repeatable-read snapshot
 - внешние checker-узлы, их несекретные SSH-реквизиты, fingerprint, состояние текущей партии и счётчики;
 - UTC-время, версии manifest/settings schema и `secretsIncluded=false`.
 
-В архив никогда не входят PostgreSQL connection string/password, admin password, admin API key, credentials Telegram/S3-доставки backup, data-protection keys или encryption key. Token commerce-бота сохраняется только как Data Protection ciphertext. Без независимо сохранённого volume ключей он после переноса не расшифруется, поэтому ключи и исходный token необходимо хранить во внешнем secret manager.
+В архив никогда не входят PostgreSQL connection string/password, admin password, admin API key, credentials Telegram/S3-доставки backup, API keys платных proxy-провайдеров, data-protection keys или encryption key. Token commerce-бота сохраняется только как Data Protection ciphertext. После restore ключ платного proxy-источника нужно ввести заново через админку. Без независимо сохранённого volume ключей commerce-token после переноса не расшифруется, поэтому ключи и исходный token необходимо хранить во внешнем secret manager.
 
 `ProxyValidationLeases` — эфемерное operational ownership и в архив не входит. Legacy-архив может содержать прежние `CheckLeaseId/CheckLeaseUntil` внутри `Proxies`; restore проверяет целостность пары, но намеренно очищает её перед импортом. После запуска незавершённые проверки безопасно возвращаются в общую очередь, а durable `ValidationRuns` сохраняют историю и будут закрыты штатным recovery.
 

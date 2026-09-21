@@ -49,6 +49,7 @@ public sealed class DatabaseInvariantIntegrationTests
         "CK_PaymentOrders_Status",
         "CK_PaymentOrders_Timeline",
         "CK_ProxyAccessBuckets_Counters",
+        "CK_ProxySourceCredentials_Status",
         "CK_ReferralRelationships_DifferentUsers",
         "CK_ReferralRelationships_Slot",
         "CK_ReferralRewards_Days",

@@ -41,12 +41,14 @@ public sealed class DistributedProxyValidationIntegrationTests
             var pendingDue = Endpoint("198.51.100.4", ProxyStatus.Pending, now.AddMinutes(-5));
             var deadDue = Endpoint("198.51.100.5", ProxyStatus.Dead, now.AddHours(-1));
             var leasedDead = Endpoint("198.51.100.6", ProxyStatus.Dead, now.AddHours(-2));
+            var paidDead = Endpoint("198.51.100.7", ProxyStatus.Dead,
+                PaidProxySourceCatalog.ImmediateValidationMarker);
 
             await using (var migrate = new ProxyHarborDbContext(dbOptions))
             {
                 await migrate.Database.MigrateAsync();
                 migrate.Proxies.AddRange(
-                    aliveNeverChecked, aliveDue, aliveFuture, pendingDue, deadDue, leasedDead);
+                    aliveNeverChecked, aliveDue, aliveFuture, pendingDue, deadDue, leasedDead, paidDead);
                 migrate.ProxyValidationLeases.Add(new ProxyValidationLease
                 {
                     ProxyId = leasedDead.Id,
@@ -75,7 +77,7 @@ public sealed class DistributedProxyValidationIntegrationTests
                 claimDb, 3, now, leaseUntil, leaseId, serializedIdleGate, CancellationToken.None);
 
             Assert.Equal(
-                [aliveNeverChecked.Id, aliveDue.Id, pendingDue.Id],
+                [paidDead.Id, aliveNeverChecked.Id, aliveDue.Id],
                 claimed.Select(proxy => proxy.Id));
             Assert.DoesNotContain(claimed, proxy => proxy.Id == aliveFuture.Id);
             Assert.DoesNotContain(claimed, proxy => proxy.Id == deadDue.Id);
@@ -103,7 +105,7 @@ public sealed class DistributedProxyValidationIntegrationTests
             var underfilledGate = new ValidationClaimIdleGate();
             var underfilled = await ValidationQueueClaim.ClaimAndLeaseAsync(
                 underfilledDb, 10, now, leaseUntil, Guid.NewGuid(), underfilledGate, CancellationToken.None);
-            Assert.Equal(4, underfilled.Count);
+            Assert.Equal(5, underfilled.Count);
             Assert.True(underfilledGate.CooldownActive);
 
             var commandsAfterDrain = claimShape.CommandCount;

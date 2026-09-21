@@ -118,6 +118,24 @@ public static class ServiceCollectionExtensions
                 PooledConnectionLifetime = TimeSpan.FromMinutes(5)
             });
         });
+        // Query платного provider содержит API key. Полностью отключаем стандартные
+        // HttpClient-логи, чтобы request URI никогда не попал в stdout/collector logs.
+        services.AddHttpClient("paid-sources", client =>
+        {
+            client.DefaultRequestHeaders.UserAgent.ParseAdd("ProxyHarbor/1.0");
+            client.Timeout = Timeout.InfiniteTimeSpan;
+        }).ConfigurePrimaryHttpMessageHandler(serviceProvider =>
+        {
+            var sourceConcurrency = serviceProvider.GetRequiredService<
+                Microsoft.Extensions.Options.IOptions<CollectorOptions>>().Value.SourceConcurrency;
+            return PublicNetworkConnector.Harden(new SocketsHttpHandler
+            {
+                AutomaticDecompression = DecompressionMethods.All,
+                ConnectTimeout = TimeSpan.FromSeconds(10),
+                MaxConnectionsPerServer = SourceConnectionsPerServer(sourceConcurrency),
+                PooledConnectionLifetime = TimeSpan.FromMinutes(5)
+            });
+        }).RemoveAllLoggers();
         services.AddHttpClient("telegram", client => client.Timeout = TimeSpan.FromMinutes(5))
             .ConfigurePrimaryHttpMessageHandler(() => PublicNetworkConnector.Harden(new SocketsHttpHandler
             {

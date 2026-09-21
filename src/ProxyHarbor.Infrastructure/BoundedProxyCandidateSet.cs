@@ -29,12 +29,19 @@ internal sealed class BoundedProxyCandidateSet
     /// Дубликаты и уникальные элементы сверх лимита возвращают false.
     /// </summary>
     internal bool TryAdd((string Host, int Port, ProxyProtocol Protocol) candidate)
-        => TryAdd(ProxyCandidateKey.Parse(candidate.Host, candidate.Port, candidate.Protocol));
+        => TryAdd(ProxyCandidateKey.Parse(candidate.Host, candidate.Port, candidate.Protocol), preferred: false);
 
     /// <summary>Горячий collector-path не материализует каноническую IP-строку.</summary>
-    internal bool TryAdd(ProxyCandidateKey candidate)
+    internal bool TryAdd(ProxyCandidateKey candidate, bool preferred = false)
     {
-        if (!_items.TryAdd(candidate, 0)) return false;
+        var marker = preferred ? (byte)1 : (byte)0;
+        if (!_items.TryAdd(candidate, marker))
+        {
+            if (preferred)
+                _items.AddOrUpdate(candidate, marker, static (_, existing) =>
+                    existing == 0 ? (byte)1 : existing);
+            return false;
+        }
 
         var count = Interlocked.Increment(ref _count);
         if (count <= _limit) return true;
@@ -54,6 +61,14 @@ internal sealed class BoundedProxyCandidateSet
     /// <summary>Снимок endpoint'ов для последующего PostgreSQL binary COPY.</summary>
     internal IEnumerable<(string Host, int Port, ProxyProtocol Protocol)> Items =>
         _items.Keys.Select(static candidate => candidate.ToEndpoint());
+
+    /// <summary>Снимок endpoint'ов вместе с приоритетом платного provenance.</summary>
+    internal IEnumerable<(string Host, int Port, ProxyProtocol Protocol, bool Preferred)> ImportItems =>
+        _items.Select(static pair =>
+        {
+            var endpoint = pair.Key.ToEndpoint();
+            return (endpoint.Host, endpoint.Port, endpoint.Protocol, pair.Value != 0);
+        });
 
     /// <summary>Истина только если хотя бы один новый уникальный endpoint был отброшен.</summary>
     internal bool LimitReached => Volatile.Read(ref _limitReached) != 0;

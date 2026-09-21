@@ -1,4 +1,5 @@
 using System.Net;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -12,6 +13,149 @@ namespace ProxyHarbor.Tests;
 [Collection(PostgresIntegrationGroup.Name)]
 public sealed class ProxyCollectorIntegrationTests
 {
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
+    public async Task PaidSourceUsesEncryptedKeyAndMarksCandidatesForImmediateValidation()
+    {
+        var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
+        if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
+        var schema = $"proxyharbor_paid_source_{Guid.NewGuid():N}";
+        var builder = new NpgsqlConnectionStringBuilder(baseConnectionString) { SearchPath = schema };
+        await using var admin = new NpgsqlConnection(baseConnectionString);
+        await admin.OpenAsync();
+        await using (var create = new NpgsqlCommand($"CREATE SCHEMA {schema}", admin))
+            await create.ExecuteNonQueryAsync();
+        try
+        {
+            var dbOptions = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+                .UseNpgsql(builder.ConnectionString).Options;
+            var factory = new TestDbFactory(dbOptions);
+            var protection = new EphemeralDataProtectionProvider();
+            var source = new ProxySource
+            {
+                Name = PaidProxySourceCatalog.BestProxiesName,
+                Url = PaidProxySourceCatalog.BestProxiesUrl,
+                DefaultProtocol = ProxyProtocol.Http,
+                Priority = PaidProxySourceCatalog.BestProxiesPriority
+            };
+            await using (var seed = await factory.CreateDbContextAsync())
+            {
+                await seed.Database.MigrateAsync();
+                seed.Sources.Add(source);
+                seed.ProxySourceCredentials.Add(new ProxySourceCredential
+                {
+                    ProxySourceId = source.Id,
+                    ProtectedApiKey = ProxySourceCredentialProtection.Create(protection)
+                        .Protect("paid-test-key-1234567890")
+                });
+                await seed.SaveChangesAsync();
+            }
+
+            var handler = new PaidFeedHandler();
+            using var clients = new PaidHttpClientFactory(handler);
+            using var collector = new ProxyCollector(
+                factory, clients,
+                Options.Create(new CollectorOptions { SourceRetryCount = 0 }),
+                NullLogger<ProxyCollector>.Instance,
+                credentialProtectionProvider: protection);
+
+            var run = await collector.CollectAsync(CancellationToken.None, forceAllSources: true);
+
+            Assert.Equal("completed", run.Status);
+            Assert.Equal(4, run.CandidatesFound);
+            Assert.Equal(2, handler.Requests);
+            Assert.All(handler.ObservedKeys, key => Assert.Equal("paid-test-key-1234567890", key));
+            await using var verify = await factory.CreateDbContextAsync();
+            Assert.Equal(4, await verify.Proxies.CountAsync());
+            Assert.All(await verify.Proxies.ToArrayAsync(), proxy =>
+                Assert.Equal(PaidProxySourceCatalog.ImmediateValidationMarker, proxy.NextCheckAt));
+            var credential = await verify.ProxySourceCredentials.SingleAsync();
+            Assert.Equal("active", credential.Status);
+            Assert.NotNull(credential.CheckedAt);
+            Assert.True(credential.ExpiresAt > credential.CheckedAt);
+            Assert.DoesNotContain("paid-test-key", credential.ProtectedApiKey, StringComparison.Ordinal);
+        }
+        finally
+        {
+            await using var drop = new NpgsqlCommand($"DROP SCHEMA IF EXISTS {schema} CASCADE", admin);
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
+    public async Task ExpiredPaidCredentialIsRecordedWithoutLeakingKeyAndUsesBackoff()
+    {
+        var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
+        if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
+        var schema = $"proxyharbor_expired_paid_source_{Guid.NewGuid():N}";
+        var builder = new NpgsqlConnectionStringBuilder(baseConnectionString) { SearchPath = schema };
+        await using var admin = new NpgsqlConnection(baseConnectionString);
+        await admin.OpenAsync();
+        await using (var create = new NpgsqlCommand($"CREATE SCHEMA {schema}", admin))
+            await create.ExecuteNonQueryAsync();
+        try
+        {
+            var dbOptions = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+                .UseNpgsql(builder.ConnectionString).Options;
+            var factory = new TestDbFactory(dbOptions);
+            var protection = new EphemeralDataProtectionProvider();
+            const string secret = "expired-test-key-1234567890";
+            var source = new ProxySource
+            {
+                Name = PaidProxySourceCatalog.BestProxiesName,
+                Url = PaidProxySourceCatalog.BestProxiesUrl,
+                DefaultProtocol = ProxyProtocol.Http,
+                Priority = PaidProxySourceCatalog.BestProxiesPriority
+            };
+            await using (var seed = await factory.CreateDbContextAsync())
+            {
+                await seed.Database.MigrateAsync();
+                seed.Sources.Add(source);
+                seed.ProxySourceCredentials.Add(new ProxySourceCredential
+                {
+                    ProxySourceId = source.Id,
+                    ProtectedApiKey = ProxySourceCredentialProtection.Create(protection).Protect(secret)
+                });
+                await seed.SaveChangesAsync();
+            }
+
+            using var clients = new PaidHttpClientFactory(new ExpiredPaidFeedHandler());
+            using var collector = new ProxyCollector(
+                factory, clients,
+                Options.Create(new CollectorOptions
+                {
+                    SourceRetryCount = 0,
+                    SourceFailureBackoffBaseMinutes = 5
+                }),
+                NullLogger<ProxyCollector>.Instance,
+                credentialProtectionProvider: protection);
+            var startedAt = DateTimeOffset.UtcNow;
+
+            var run = await collector.CollectAsync(CancellationToken.None, forceAllSources: true);
+
+            Assert.Equal("completed", run.Status);
+            Assert.Equal(1, run.SourcesFailed);
+            await using var verify = await factory.CreateDbContextAsync();
+            var storedSource = await verify.Sources.SingleAsync(item => item.Id == source.Id);
+            var credential = await verify.ProxySourceCredentials.SingleAsync();
+            Assert.Equal("expired", credential.Status);
+            Assert.NotNull(credential.CheckedAt);
+            Assert.NotNull(credential.ExpiresAt);
+            Assert.True(credential.ExpiresAt <= credential.CheckedAt);
+            Assert.DoesNotContain(secret, credential.LastError ?? string.Empty, StringComparison.Ordinal);
+            Assert.Equal(1, storedSource.ConsecutiveFailures);
+            Assert.True(storedSource.NextFetchAt >= startedAt.AddMinutes(4));
+            Assert.DoesNotContain(secret, storedSource.LastError ?? string.Empty, StringComparison.Ordinal);
+            Assert.Empty(verify.Proxies);
+        }
+        finally
+        {
+            await using var drop = new NpgsqlCommand($"DROP SCHEMA IF EXISTS {schema} CASCADE", admin);
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
+
     [Fact]
     [Trait("Category", "PostgresIntegration")]
     public async Task CompletedAuditIncludesDatabasePersistenceWait()
@@ -833,6 +977,48 @@ public sealed class ProxyCollectorIntegrationTests
         }
 
         public void Dispose() => _client.Dispose();
+    }
+
+    private sealed class PaidHttpClientFactory(HttpMessageHandler handler) : IHttpClientFactory, IDisposable
+    {
+        private readonly HttpClient _client = new(handler) { Timeout = Timeout.InfiniteTimeSpan };
+        public HttpClient CreateClient(string name)
+        {
+            Assert.Equal("paid-sources", name);
+            return _client;
+        }
+        public void Dispose() => _client.Dispose();
+    }
+
+    private sealed class PaidFeedHandler : HttpMessageHandler
+    {
+        internal int Requests { get; private set; }
+        internal List<string> ObservedKeys { get; } = [];
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            Requests++;
+            var keyPart = request.RequestUri!.Query.TrimStart('?').Split('&')
+                .Single(part => part.StartsWith("key=", StringComparison.Ordinal));
+            ObservedKeys.Add(Uri.UnescapeDataString(keyPart[4..]));
+            var content = request.RequestUri.AbsolutePath.EndsWith("key.txt", StringComparison.Ordinal)
+                ? "3600"
+                : "http://1.1.1.1:80\nhttps://8.8.8.8:443\nsocks4://9.9.9.9:1080\nsocks5://4.4.4.4:1080";
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(content)
+            });
+        }
+    }
+
+    private sealed class ExpiredPaidFeedHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.Forbidden));
     }
 
     private sealed class StaticFeedHandler : HttpMessageHandler

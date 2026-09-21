@@ -15,7 +15,7 @@ type ProxyCountry = { code: string; count: number }
 type PagedResult<T> = { items: T[]; page: number; pageSize: number; total: number; fullAccess?:boolean; accessible?:number; limited?:boolean; message?:string; upgradeUrl?:string }
 type CommerceAvailability = { available:boolean;showOffer:boolean;fullAccess:boolean;paymentProviders:number;telegram:boolean;accountUrl:string }
 type Stats = { alive: number; staleAlive: number; pending: number; dead: number; dueForCheck: number; checksInProgress: number; scheduledChecks: number; averageLatencyMs: number | null; sources: number; failingSources: number; repeatedlyFailingSources: number; truncatedSources: number; byProtocol: { protocol: Protocol; count: number }[]; lastRun?: { startedAt: string; candidatesFound: number; newProxies: number; sourcesTruncated: number; candidateLimitReached: boolean; status: string } }
-type Source = { id: string; name: string; url: string; defaultProtocol: Protocol; enabled: boolean; priority: number; lastItemCount: number; lastResultTruncated: boolean; lastFetchedAt?: string; lastSucceededAt?: string; lastContentFetchedAt?: string; nextFetchAt?: string; consecutiveFailures: number; lastError?: string; isBuiltIn: boolean; provider?: string; providerIdentity?: string; catalogRank?: number }
+type Source = { id: string; name: string; url: string; defaultProtocol: Protocol; enabled: boolean; priority: number; lastItemCount: number; lastResultTruncated: boolean; lastFetchedAt?: string; lastSucceededAt?: string; lastContentFetchedAt?: string; nextFetchAt?: string; consecutiveFailures: number; lastError?: string; isBuiltIn: boolean; provider?: string; providerIdentity?: string; catalogRank?: number; isPaid:boolean;credentialConfigured:boolean;credentialStatus?:string;credentialExpiresAt?:string;credentialCheckedAt?:string;credentialError?:string }
 type CollectionRun = { id: string; startedAt: string; finishedAt?: string; sourcesProcessed: number; sourcesSucceeded: number; sourcesFailed: number; sourcesSkipped: number; sourcesTruncated: number; candidatesFound: number; candidateLimitReached: boolean; newProxies: number; status: string; error?: string }
 type ValidationRun = { id: string; startedAt: string; finishedAt?: string; claimed: number; checked: number; alive: number; deferred: number; status: string; error?: string }
 type BackupRun = { id: string; startedAt: string; finishedAt?: string; status: string; fileName?: string; sizeBytes: number; telegramConfigured: boolean; sentToTelegram: boolean; objectStorageConfigured?:boolean; sentToObjectStorage?:boolean; objectStorageKey?:string; error?: string }
@@ -155,6 +155,7 @@ export default function App() {
   const [action, setAction] = useState('')
   const [sourceBusy, setSourceBusy] = useState('')
   const [sourceDraft, setSourceDraft] = useState<SourceDraft>(emptySourceDraft)
+  const [sourceApiKey, setSourceApiKey] = useState('')
   const [sourceEditorOpen, setSourceEditorOpen] = useState(false)
   const [editingSource, setEditingSource] = useState<Source | null>(null)
   const [sourceDeleteConfirm, setSourceDeleteConfirm] = useState(false)
@@ -487,6 +488,7 @@ export default function App() {
   const openNewSource = () => {
     setEditingSource(null)
     setSourceDraft(emptySourceDraft)
+    setSourceApiKey('')
     setSourceDeleteConfirm(false)
     setAdminError('')
     setSourceEditorOpen(true)
@@ -501,6 +503,7 @@ export default function App() {
       priority: source.priority,
       enabled: source.enabled,
     })
+    setSourceApiKey('')
     setSourceDeleteConfirm(false)
     setAdminError('')
     setSourceEditorOpen(true)
@@ -512,11 +515,16 @@ export default function App() {
     setEditingSource(null)
     setSourceDeleteConfirm(false)
     setSourceDraft(emptySourceDraft)
+    setSourceApiKey('')
   }
 
   const saveSource = async (event: React.FormEvent) => {
     event.preventDefault()
     if (!adminAuthenticated || action || sourceBusy) return
+    if (editingSource?.isPaid && sourceDraft.enabled && !editingSource.credentialConfigured && !sourceApiKey.trim()) {
+      setAdminError('Укажите API key перед включением платного источника')
+      return
+    }
     const sessionId = adminSessionIdRef.current
     const controller = new AbortController()
     adminMutationAbortRefs.current.add(controller)
@@ -534,10 +542,19 @@ export default function App() {
         if (response.status === 401) { setAdminAuthenticated(false); window.location.replace('/login') }
         throw new Error(await responseMessage(response, source ? 'Не удалось изменить источник' : 'Не удалось добавить источник'))
       }
+      if (source?.isPaid && sourceApiKey.trim()) {
+        const credentialResponse = await fetch(`${API}/api/v1/admin/sources/${source.id}/credential`, {
+          method: 'PUT', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({apiKey:sourceApiKey.trim(),enabled:sourceDraft.enabled}), signal: controller.signal,
+        })
+        if (!credentialResponse.ok)
+          throw new Error(await responseMessage(credentialResponse, 'Не удалось сохранить ключ платного источника'))
+      }
       setSourceEditorOpen(false)
       setEditingSource(null)
       setSourceDeleteConfirm(false)
       setSourceDraft(emptySourceDraft)
+      setSourceApiKey('')
       await loadAdminData(false, sourcePage, sourcePageSize)
     } catch (reason) {
       if (!isAbortError(reason) && sessionId === adminSessionIdRef.current)
@@ -737,8 +754,8 @@ export default function App() {
             <AdminPageHeader id="admin-sources-title" title="Источники"><button className="primary-admin-button" onClick={openNewSource} disabled={!adminAuthenticated || adminMutationBusy}><Plus/>Добавить источник</button></AdminPageHeader>
             <nav className="admin-tabs source-type-tabs" aria-label="Тип источников"><a className="active" aria-current="page" href="/admin/sources">Прокси</a><a href="/admin/vpn?tab=sources">VPN</a></nav>
             <section className="admin-card source-catalog-card"><div className="card-heading"><div><span className="kicker">ВСЕ ИСТОЧНИКИ</span><h2>Каталог <em>{sourceTotal}</em></h2></div><button className="icon-button" aria-label="Обновить источники" onClick={() => void loadAdminData()} disabled={adminLoading}><RefreshCw className={adminLoading ? 'spin' : ''}/></button></div><form className="source-search" role="search" onSubmit={event => { event.preventDefault(); const nextSearch = sourceSearchDraft.trim(); setSourceSearch(nextSearch); setSourcePage(1); void loadAdminData(false, 1, sourcePageSize, nextSearch) }}><Search aria-hidden="true"/><input type="search" aria-label="Поиск источников" maxLength={200} placeholder="Название, провайдер или адрес feed" value={sourceSearchDraft} onChange={event => setSourceSearchDraft(event.target.value)}/>{sourceSearchDraft && <button type="button" className="source-search-clear" aria-label="Очистить поиск" onClick={() => { setSourceSearchDraft(''); setSourceSearch(''); setSourcePage(1); void loadAdminData(false, 1, sourcePageSize, '') }}><X/></button>}<button type="submit" className="source-search-submit" disabled={adminLoading}>Найти</button></form><div className="source-list">{sources.length === 0 ? <div className="source-search-empty"><Search/>По вашему запросу источники не найдены.</div> : sources.map(source => <article key={source.id}>
-              <div><b>{source.name}</b><small>{source.defaultProtocol} · {source.lastItemCount.toLocaleString('ru-RU')} адресов{source.lastContentFetchedAt ? ` · полный feed ${new Date(source.lastContentFetchedAt).toLocaleString('ru-RU')}` : ' · полный feed ещё не получен'}{source.lastResultTruncated ? ' · результат усечён' : ''}{source.consecutiveFailures > 0 ? ` · сбоев подряд: ${source.consecutiveFailures}` : ''}{source.nextFetchAt ? ` · повтор ${timeUntil(source.nextFetchAt)}` : ''}</small></div>
-              <div className="source-controls"><span title={source.isBuiltIn ? `Встроенный источник · ${source.provider} · ${source.providerIdentity} · ранг ${source.catalogRank}` : 'Пользовательский источник'} className="source-kind">{source.isBuiltIn ? source.provider : 'свой'}</span><span title={source.lastError} className={source.lastError ? 'source-error' : 'source-ok'}>{source.lastError ? 'ошибка' : source.enabled ? 'активен' : 'пауза'}</span><button className="source-edit-button" disabled={adminMutationBusy} onClick={() => openSourceEditor(source)}><Pencil/>Изменить</button></div>
+              <div><b>{source.name}</b><small>{source.defaultProtocol} · {source.lastItemCount.toLocaleString('ru-RU')} адресов{source.lastContentFetchedAt ? ` · полный feed ${new Date(source.lastContentFetchedAt).toLocaleString('ru-RU')}` : ' · полный feed ещё не получен'}{source.isPaid&&source.credentialExpiresAt?` · ключ действует до ${formatDateTime(source.credentialExpiresAt)}`:''}{source.isPaid&&!source.credentialConfigured?' · ключ не настроен':''}{source.lastResultTruncated ? ' · результат усечён' : ''}{source.consecutiveFailures > 0 ? ` · сбоев подряд: ${source.consecutiveFailures}` : ''}{source.nextFetchAt ? ` · повтор ${timeUntil(source.nextFetchAt)}` : ''}</small></div>
+              <div className="source-controls"><span title={source.isPaid?'Платный управляемый источник':source.isBuiltIn ? `Встроенный источник · ${source.provider} · ${source.providerIdentity} · ранг ${source.catalogRank}` : 'Пользовательский источник'} className="source-kind">{source.isPaid?'платный':source.isBuiltIn ? source.provider : 'свой'}</span><span title={source.credentialError??source.lastError} className={source.lastError||source.credentialStatus==='expired'||source.credentialStatus==='invalid'?'source-error':'source-ok'}>{source.isPaid&&source.credentialStatus==='expired'?'ключ истёк':source.isPaid&&source.credentialStatus==='invalid'?'ключ неверен':source.lastError ? 'ошибка' : source.enabled ? 'активен' : 'пауза'}</span><button className="source-edit-button" disabled={adminMutationBusy} onClick={() => openSourceEditor(source)}><Pencil/>Изменить</button></div>
             </article>)}</div>{sourceTotal > 0 && <ProxyPagination page={sourcePage} pageSize={sourcePageSize} total={sourceTotal} totalPages={sourceTotalPages} onPageChange={next => { setSourcePage(next); void loadAdminData(false, next, sourcePageSize, sourceSearch); document.getElementById('admin-sources-title')?.scrollIntoView?.({behavior:'smooth'}) }} onPageSizeChange={size => { setSourcePageSize(size); setSourcePage(1); void loadAdminData(false, 1, size, sourceSearch) }}/>}</section>
           </section>}
 
@@ -763,15 +780,16 @@ export default function App() {
 
     {sourceEditorOpen && <div className="source-editor-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) closeSourceEditor() }}>
       <section className="source-editor-modal" role="dialog" aria-modal="true" aria-labelledby="source-editor-title">
-        <div className="source-editor-heading"><div><span className="kicker">{editingSource ? 'НАСТРОЙКА FEED' : 'НОВЫЙ FEED'}</span><h2 id="source-editor-title">{editingSource ? 'Редактировать источник' : 'Добавить источник'}</h2><p>{editingSource?.isBuiltIn ? 'У встроенного источника можно изменить только активность.' : 'Укажите публичный HTTPS-адрес и параметры разбора списка прокси.'}</p></div><button type="button" className="icon-button" aria-label="Закрыть редактор источника" onClick={closeSourceEditor} disabled={!!sourceBusy}><X/></button></div>
+        <div className="source-editor-heading"><div><span className="kicker">{editingSource ? 'НАСТРОЙКА FEED' : 'НОВЫЙ FEED'}</span><h2 id="source-editor-title">{editingSource ? 'Редактировать источник' : 'Добавить источник'}</h2><p>{editingSource?.isPaid?'Ключ хранится в БД в зашифрованном виде и никогда не возвращается в браузер.':editingSource?.isBuiltIn ? 'У встроенного источника можно изменить только активность.' : 'Укажите публичный HTTPS-адрес и параметры разбора списка прокси.'}</p></div><button type="button" className="icon-button" aria-label="Закрыть редактор источника" onClick={closeSourceEditor} disabled={!!sourceBusy}><X/></button></div>
         <ToastSignal kind="error" message={adminError}/>
         <form className="source-editor-form" onSubmit={saveSource}>
-          <label>Название<input autoFocus required minLength={2} maxLength={120} disabled={editingSource?.isBuiltIn} value={sourceDraft.name} onChange={event => setSourceDraft({...sourceDraft, name:event.target.value})}/></label>
-          <label>HTTPS URL<input required type="url" maxLength={2048} pattern="https://.*" disabled={editingSource?.isBuiltIn} placeholder="https://example.org/proxies.txt" value={sourceDraft.url} onChange={event => setSourceDraft({...sourceDraft, url:event.target.value})}/></label>
-          <div className="source-editor-grid"><label>Протокол<StyledSelect ariaLabel="Протокол источника" disabled={editingSource?.isBuiltIn} value={sourceDraft.protocol} onChange={protocol => setSourceDraft({...sourceDraft, protocol:protocol as Protocol})} options={protocols.map(item=>[item,label(item)] as const)}/></label><label>Приоритет<input type="number" min={-10000} max={10000} disabled={editingSource?.isBuiltIn} value={sourceDraft.priority} onChange={event => setSourceDraft({...sourceDraft, priority:Number(event.target.value)})}/></label></div>
+          <label>Название<input autoFocus={!editingSource?.isPaid} required minLength={2} maxLength={120} disabled={editingSource?.isBuiltIn||editingSource?.isPaid} value={sourceDraft.name} onChange={event => setSourceDraft({...sourceDraft, name:event.target.value})}/></label>
+          <label>HTTPS URL<input required type="url" maxLength={2048} pattern="https://.*" disabled={editingSource?.isBuiltIn||editingSource?.isPaid} placeholder="https://example.org/proxies.txt" value={sourceDraft.url} onChange={event => setSourceDraft({...sourceDraft, url:event.target.value})}/></label>
+          <div className="source-editor-grid"><label>Протокол<StyledSelect ariaLabel="Протокол источника" disabled={editingSource?.isBuiltIn||editingSource?.isPaid} value={sourceDraft.protocol} onChange={protocol => setSourceDraft({...sourceDraft, protocol:protocol as Protocol})} options={protocols.map(item=>[item,label(item)] as const)}/></label><label>Приоритет<input type="number" min={-10000} max={10000} disabled={editingSource?.isBuiltIn||editingSource?.isPaid} value={sourceDraft.priority} onChange={event => setSourceDraft({...sourceDraft, priority:Number(event.target.value)})}/></label></div>
+          {editingSource?.isPaid&&<label>Новый API key<input aria-label="Новый API key" autoFocus type="password" minLength={16} maxLength={256} autoComplete="new-password" placeholder={editingSource.credentialConfigured?'Оставьте пустым, чтобы сохранить текущий ключ':'Введите ключ provider'} value={sourceApiKey} onChange={event=>setSourceApiKey(event.target.value)}/><small>{editingSource.credentialCheckedAt?`Последняя проверка: ${formatDateTime(editingSource.credentialCheckedAt)}.`:'Ключ ещё не проверялся.'} После замены следующий сбор запустится без backoff.</small></label>}
           <label className="source-enabled"><input className="ui-checkbox-input" type="checkbox" checked={sourceDraft.enabled} onChange={event => setSourceDraft({...sourceDraft, enabled:event.target.checked})}/><CheckboxMark/><span className="source-enabled-copy"><b>Источник активен</b><small>Активные источники участвуют в очередном цикле сбора.</small></span></label>
-          {sourceDeleteConfirm && editingSource && <div className="source-delete-confirm" role="alert"><div><b>{editingSource.isBuiltIn ? 'Отключить встроенный источник?' : 'Удалить источник безвозвратно?'}</b><p>{editingSource.isBuiltIn ? 'Он останется в каталоге и его можно будет включить позже.' : 'Запись источника будет удалена. Уже собранные прокси сохранятся в базе.'}</p></div><button type="button" onClick={() => setSourceDeleteConfirm(false)} disabled={!!sourceBusy}>Отмена</button><button type="button" className="danger" onClick={() => void removeSource(editingSource)} disabled={!!sourceBusy}>{sourceBusy ? 'Выполняем…' : editingSource.isBuiltIn ? 'Отключить' : 'Удалить'}</button></div>}
-          <div className="source-editor-actions">{editingSource && !sourceDeleteConfirm && <button type="button" className="danger-link" onClick={() => setSourceDeleteConfirm(true)} disabled={!!sourceBusy}><Trash2/>{editingSource.isBuiltIn ? 'Отключить источник' : 'Удалить источник'}</button>}<span/><button type="button" className="secondary-admin-button" onClick={closeSourceEditor} disabled={!!sourceBusy}>Отмена</button><button type="submit" className="primary-admin-button" disabled={!adminAuthenticated || adminMutationBusy}>{sourceBusy ? 'Сохраняем…' : editingSource ? 'Сохранить изменения' : 'Добавить источник'}</button></div>
+          {sourceDeleteConfirm && editingSource && <div className="source-delete-confirm" role="alert"><div><b>{editingSource.isBuiltIn || editingSource.isPaid ? 'Отключить управляемый источник?' : 'Удалить источник безвозвратно?'}</b><p>{editingSource.isBuiltIn || editingSource.isPaid ? 'Он останется в каталоге и его можно будет включить позже.' : 'Запись источника будет удалена. Уже собранные прокси сохранятся в базе.'}</p></div><button type="button" onClick={() => setSourceDeleteConfirm(false)} disabled={!!sourceBusy}>Отмена</button><button type="button" className="danger" onClick={() => void removeSource(editingSource)} disabled={!!sourceBusy}>{sourceBusy ? 'Выполняем…' : editingSource.isBuiltIn || editingSource.isPaid ? 'Отключить' : 'Удалить'}</button></div>}
+          <div className="source-editor-actions">{editingSource && !sourceDeleteConfirm && <button type="button" className="danger-link" onClick={() => setSourceDeleteConfirm(true)} disabled={!!sourceBusy}><Trash2/>{editingSource.isBuiltIn || editingSource.isPaid ? 'Отключить источник' : 'Удалить источник'}</button>}<span/><button type="button" className="secondary-admin-button" onClick={closeSourceEditor} disabled={!!sourceBusy}>Отмена</button><button type="submit" className="primary-admin-button" disabled={!adminAuthenticated || adminMutationBusy}>{sourceBusy ? 'Сохраняем…' : editingSource ? 'Сохранить изменения' : 'Добавить источник'}</button></div>
         </form>
       </section>
     </div>}

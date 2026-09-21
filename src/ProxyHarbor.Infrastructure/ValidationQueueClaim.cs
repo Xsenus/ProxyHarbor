@@ -14,6 +14,34 @@ namespace ProxyHarbor.Infrastructure;
 /// </summary>
 internal static class ValidationQueueClaim
 {
+    private const string PaidPriorityClaimSql = """
+        WITH candidate AS MATERIALIZED (
+            SELECT proxy."Id", proxy."Host", proxy."Port", proxy."Protocol",
+                   proxy."ConsecutiveFailedChecks",
+                   NULL::uuid AS "PreviousLeaseId", proxy."Status", proxy."LastCheckedAt"
+            FROM "Proxies" AS proxy
+            WHERE proxy."NextCheckAt" = @paid_priority_at
+              AND NOT EXISTS (
+                  SELECT 1 FROM "ProxyValidationLeases" AS lease
+                  WHERE lease."ProxyId" = proxy."Id")
+            ORDER BY CASE proxy."Status" WHEN 1 THEN 0 WHEN 0 THEN 1 ELSE 2 END,
+                     proxy."LastCheckedAt" NULLS FIRST
+            LIMIT @limit
+        ), claimed AS (
+            INSERT INTO "ProxyValidationLeases" ("ProxyId", "LeaseId", "LeaseUntil")
+            SELECT candidate."Id", @lease_id, @lease_until
+            FROM candidate
+            ON CONFLICT ("ProxyId") DO NOTHING
+            RETURNING "ProxyId"
+        )
+        SELECT candidate."Id", candidate."Host", candidate."Port", candidate."Protocol",
+               candidate."ConsecutiveFailedChecks", candidate."PreviousLeaseId"
+        FROM claimed
+        JOIN candidate ON candidate."Id" = claimed."ProxyId"
+        ORDER BY CASE candidate."Status" WHEN 1 THEN 0 WHEN 0 THEN 1 ELSE 2 END,
+                 candidate."LastCheckedAt" NULLS FIRST
+        """;
+
     private const string ExpiredClaimSql = """
         WITH candidate AS MATERIALIZED (
             SELECT proxy."Id", proxy."Host", proxy."Port", proxy."Protocol",
@@ -129,6 +157,16 @@ internal static class ValidationQueueClaim
         // очередь; остальные завершаются без повторных index seek по 900k+ строк.
         if (idleGate?.TryCoalesceSerializedProbe() == true) return claimed;
 
+        // Платный provider обновляет NextCheckAt до специального маркера. Такой
+        // endpoint забирается раньше любого обычного status/due диапазона.
+        claimed.AddRange(await ClaimPaidPriorityAsync(
+            db, batchSize, leaseUntil, leaseId, token));
+        if (claimed.Count >= batchSize)
+        {
+            idleGate?.MarkClaimResult(claimed.Count, batchSize);
+            return claimed;
+        }
+
         var hasExpiredLeases = await db.ProxyValidationLeases.AsNoTracking()
             .AnyAsync(lease => lease.LeaseUntil < now, token);
         for (var priority = 0; priority <= 2 && claimed.Count < batchSize; priority++)
@@ -182,6 +220,21 @@ internal static class ValidationQueueClaim
             new NpgsqlParameter<int>("priority", priority),
             new NpgsqlParameter<int>("limit", limit),
             new NpgsqlParameter<DateTimeOffset>("now", now),
+            new NpgsqlParameter<DateTimeOffset>("lease_until", leaseUntil),
+            new NpgsqlParameter<Guid>("lease_id", leaseId))
+            .ToListAsync(token);
+
+    private static Task<List<ValidationClaimCandidate>> ClaimPaidPriorityAsync(
+        ProxyHarborDbContext db,
+        int limit,
+        DateTimeOffset leaseUntil,
+        Guid leaseId,
+        CancellationToken token) =>
+        db.Database.SqlQueryRaw<ValidationClaimCandidate>(
+            PaidPriorityClaimSql,
+            new NpgsqlParameter<int>("limit", limit),
+            new NpgsqlParameter<DateTimeOffset>("paid_priority_at",
+                PaidProxySourceCatalog.ImmediateValidationMarker),
             new NpgsqlParameter<DateTimeOffset>("lease_until", leaseUntil),
             new NpgsqlParameter<Guid>("lease_id", leaseId))
             .ToListAsync(token);

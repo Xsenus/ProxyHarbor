@@ -47,7 +47,7 @@ public sealed class DatabaseReadinessProbeIntegrationTests
             }
 
             await using (var damage = await factory.CreateDbContextAsync())
-                await damage.Database.ExecuteSqlRawAsync("""DROP TABLE "Sources";""");
+                await damage.Database.ExecuteSqlRawAsync("""DROP TABLE "ProxySourceCredentials";""");
 
             await using (var connectivity = await factory.CreateDbContextAsync())
                 Assert.True(await connectivity.Database.CanConnectAsync());

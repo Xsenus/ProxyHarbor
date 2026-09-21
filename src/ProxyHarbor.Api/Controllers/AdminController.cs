@@ -1,5 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
@@ -25,7 +26,8 @@ public sealed class AdminController(
     IBackupConfigurationStore? backupConfigurationStore = null,
     ITelegramBackupDeliveryResolver? telegramBackupDeliveryResolver = null,
     ProxyMetricsSnapshotCache? proxySnapshotCache = null,
-    VpnMetricsSnapshotCache? vpnSnapshotCache = null) : ControllerBase
+    VpnMetricsSnapshotCache? vpnSnapshotCache = null,
+    IDataProtectionProvider? credentialProtectionProvider = null) : ControllerBase
 {
     /// <summary>Возвращает стабильную bounded-страницу источников и их runtime-состояние.</summary>
     [HttpGet("sources")]
@@ -39,7 +41,7 @@ public sealed class AdminController(
         page = Math.Clamp(page, 1, 100_000);
         pageSize = Math.Clamp(pageSize, 10, 100);
         await using var db = await dbFactory.CreateDbContextAsync(token);
-        var query = db.Sources.AsNoTracking();
+        IQueryable<ProxySource> query = db.Sources.AsNoTracking().Include(source => source.Credential);
 
         // Фильтрация выполняется до Count/Skip/Take, поэтому поиск охватывает весь
         // каталог, а не только уже загруженную страницу. Провайдер хранится в
@@ -75,7 +77,8 @@ public sealed class AdminController(
     public async Task<ActionResult<SourceResponse>> GetSource(Guid id, CancellationToken token)
     {
         await using var db = await dbFactory.CreateDbContextAsync(token);
-        var source = await db.Sources.AsNoTracking().SingleOrDefaultAsync(item => item.Id == id, token);
+        var source = await db.Sources.AsNoTracking().Include(item => item.Credential)
+            .SingleOrDefaultAsync(item => item.Id == id, token);
         return source is null ? NotFound() : Ok(SourceResponse.From(source));
     }
 
@@ -123,6 +126,17 @@ public sealed class AdminController(
         var source = await db.Sources.FindAsync([id], token);
         if (source is null) return NotFound();
         var builtIn = BuiltInSourceCatalog.FindByUrl(source.Url);
+        var paid = PaidProxySourceCatalog.IsPaid(source);
+        if (paid &&
+            (!string.Equals(normalizedUrl, PaidProxySourceCatalog.BestProxiesUrl, StringComparison.Ordinal) ||
+                request.Protocol != ProxyProtocol.Http ||
+                !string.Equals(request.Name.Trim(), PaidProxySourceCatalog.BestProxiesName, StringComparison.Ordinal) ||
+                request.Priority != PaidProxySourceCatalog.BestProxiesPriority))
+            return Conflict(new ProblemDetails
+            {
+                Title = "Метаданные платного источника неизменяемы; можно менять ключ и активность",
+                Status = 409
+            });
         if (builtIn is not null &&
             (!string.Equals(normalizedUrl, builtIn.Url, StringComparison.Ordinal) ||
                 request.Protocol != builtIn.Protocol ||
@@ -135,7 +149,7 @@ public sealed class AdminController(
             });
         // Канонический built-in уже прошёл release-аудит и не меняется этим запросом.
         // Для пользовательского endpoint проверяем актуальный DNS до сохранения.
-        if (builtIn is null && !await NetworkSafety.IsSafePublicHttpsUrlAsync(normalizedUrl, token))
+        if (builtIn is null && !paid && !await NetworkSafety.IsSafePublicHttpsUrlAsync(normalizedUrl, token))
             return Problem("Разрешены только публичные HTTPS-адреса источников без fragment.", statusCode: 400);
         if (await db.Sources.AnyAsync(x => x.Id != id && x.Url == normalizedUrl, token))
             return Conflict(new ProblemDetails { Title = "Источник с таким URL уже существует", Status = 409 });
@@ -178,12 +192,72 @@ public sealed class AdminController(
         var source = await db.Sources.FindAsync([id], token);
         if (source is null) return NotFound();
         // Встроенные feed'ы синхронизируются при старте, поэтому DELETE для них означает устойчивое отключение.
-        if (BuiltInSourceCatalog.FindByUrl(source.Url) is not null)
+        if (BuiltInSourceCatalog.FindByUrl(source.Url) is not null || PaidProxySourceCatalog.IsPaid(source))
             source.Enabled = false;
         else
             db.Sources.Remove(source);
         await db.SaveChangesAsync(token);
         return NoContent();
+    }
+
+    /// <summary>Заменяет зашифрованный API key платного источника и сбрасывает backoff.</summary>
+    [HttpPut("sources/{id:guid}/credential")]
+    [ProducesResponseType<SourceResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]
+    public async Task<ActionResult<SourceResponse>> UpdateSourceCredential(
+        Guid id,
+        [FromBody] ProxySourceCredentialRequest request,
+        CancellationToken token)
+    {
+        if (!ProxySourceApiKeyPolicy.IsValid(request.ApiKey))
+            return Problem(
+                "API key должен содержать 16–256 printable ASCII-символов без URL-разделителей.",
+                statusCode: 400);
+        if (credentialProtectionProvider is null)
+            return Problem("Шифрование credentials недоступно.", statusCode: 503);
+        await using var mutationLease = await sourceMutationCoordinator.TryAcquireAsync(token);
+        if (mutationLease is null) return SourceMutationConflict();
+        await using var db = await dbFactory.CreateDbContextAsync(token);
+        var source = await db.Sources.Include(item => item.Credential)
+            .SingleOrDefaultAsync(item => item.Id == id, token);
+        if (source is null) return NotFound();
+        if (!PaidProxySourceCatalog.IsPaid(source))
+            return Problem("Credentials поддерживаются только для управляемого платного источника.", statusCode: 400);
+
+        var protector = ProxySourceCredentialProtection.Create(credentialProtectionProvider);
+        var credential = source.Credential ?? new ProxySourceCredential
+        {
+            ProxySourceId = source.Id,
+            ProtectedApiKey = string.Empty
+        };
+        if (source.Credential is null) db.ProxySourceCredentials.Add(credential);
+        credential.ProtectedApiKey = protector.Protect(request.ApiKey);
+        credential.Status = "not_configured";
+        credential.ExpiresAt = null;
+        credential.CheckedAt = null;
+        credential.UpdatedAt = DateTimeOffset.UtcNow;
+        credential.LastError = null;
+        source.Enabled = request.Enabled;
+        ResetSourceFetchState(source);
+        await db.SaveChangesAsync(token);
+        source.Credential = credential;
+        return Ok(SourceResponse.From(source));
+    }
+
+    private static void ResetSourceFetchState(ProxySource source)
+    {
+        source.LastFetchedAt = null;
+        source.LastSucceededAt = null;
+        source.LastContentFetchedAt = null;
+        source.NextFetchAt = null;
+        source.HttpETag = null;
+        source.HttpLastModifiedAt = null;
+        source.LastItemCount = 0;
+        source.LastResultTruncated = false;
+        source.ConsecutiveFailures = 0;
+        source.LastError = null;
     }
 
     private ConflictObjectResult SourceMutationConflict() => Conflict(new ProblemDetails
@@ -773,6 +847,11 @@ public sealed record SourceRequest(
     }
 }
 
+/// <summary>Новый secret платного provider; существующее значение никогда не возвращается.</summary>
+public sealed record ProxySourceCredentialRequest(
+    [Required, StringLength(256, MinimumLength = 16)] string ApiKey,
+    bool Enabled = true);
+
 /// <summary>Источник вместе с неизменяемой принадлежностью к встроенному каталогу.</summary>
 public sealed record SourceResponse(
     Guid Id,
@@ -792,12 +871,19 @@ public sealed record SourceResponse(
     bool IsBuiltIn,
     string? Provider,
     string? ProviderIdentity,
-    int? CatalogRank)
+    int? CatalogRank,
+    bool IsPaid,
+    bool CredentialConfigured,
+    string? CredentialStatus,
+    DateTimeOffset? CredentialExpiresAt,
+    DateTimeOffset? CredentialCheckedAt,
+    string? CredentialError)
 {
     /// <summary>Обогащает изменяемую запись БД каноническими метаданными каталога.</summary>
     public static SourceResponse From(ProxySource source)
     {
         var builtIn = BuiltInSourceCatalog.FindByUrl(source.Url);
+        var paid = PaidProxySourceCatalog.IsPaid(source);
         return new SourceResponse(
             source.Id,
             source.Name,
@@ -814,8 +900,14 @@ public sealed record SourceResponse(
             source.ConsecutiveFailures,
             source.LastError,
             builtIn is not null,
-            builtIn?.Provider,
-            builtIn?.ProviderIdentity,
-            builtIn?.Rank);
+            paid ? "Best Proxies" : builtIn?.Provider,
+            paid ? "best-proxies.ru" : builtIn?.ProviderIdentity,
+            builtIn?.Rank,
+            paid,
+            source.Credential is not null,
+            source.Credential?.Status,
+            source.Credential?.ExpiresAt,
+            source.Credential?.CheckedAt,
+            source.Credential?.LastError);
     }
 }

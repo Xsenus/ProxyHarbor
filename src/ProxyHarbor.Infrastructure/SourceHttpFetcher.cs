@@ -18,7 +18,8 @@ internal static class SourceHttpFetcher
         int retryCount,
         CancellationToken token,
         Action<string?>? ensureSupportedMediaType = null,
-        Func<TimeSpan, CancellationToken, Task>? delayAsync = null)
+        Func<TimeSpan, CancellationToken, Task>? delayAsync = null,
+        bool sameOriginRedirectsOnly = false)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumBytes);
         delayAsync ??= static (delay, cancellationToken) => Task.Delay(delay, cancellationToken);
@@ -33,7 +34,8 @@ internal static class SourceHttpFetcher
                 using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
                 timeout.CancelAfter(TimeSpan.FromSeconds(Math.Max(2, timeoutSeconds)));
                 using var response = await GetWithSafeRedirectsAsync(
-                    client, url, httpETag, requestLastModifiedAt, timeout.Token);
+                    client, url, httpETag, requestLastModifiedAt,
+                    sameOriginRedirectsOnly, timeout.Token);
                 if (((int)response.StatusCode == 429 || (int)response.StatusCode >= 500) && attempt < retries)
                 {
                     var retryAfter = response.Headers.RetryAfter?.Delta ??
@@ -88,12 +90,14 @@ internal static class SourceHttpFetcher
         string url,
         string? httpETag,
         DateTimeOffset? httpLastModifiedAt,
+        bool sameOriginRedirectsOnly,
         CancellationToken token)
     {
         EntityTagHeaderValue? parsedETag = null;
         if (httpETag is not null && !EntityTagHeaderValue.TryParse(httpETag, out parsedETag))
             throw new InvalidDataException("Сохранённый ETag источника имеет некорректный формат.");
         var current = new Uri(url, UriKind.Absolute);
+        var originalOrigin = current.GetLeftPart(UriPartial.Authority);
         for (var redirect = 0; redirect <= 3; redirect++)
         {
             if (!await NetworkSafety.IsSafePublicHttpsUrlAsync(current.AbsoluteUri, token))
@@ -132,6 +136,11 @@ internal static class SourceHttpFetcher
             if (location is null)
                 throw new HttpRequestException("Перенаправление источника не содержит Location.");
             current = location.IsAbsoluteUri ? location : new Uri(current, location);
+            if (sameOriginRedirectsOnly && !string.Equals(
+                    current.GetLeftPart(UriPartial.Authority), originalOrigin,
+                    StringComparison.OrdinalIgnoreCase))
+                throw new HttpRequestException(
+                    "Аутентифицированный источник перенаправил запрос на другой origin.");
         }
 
         throw new HttpRequestException("Источник превысил лимит в три перенаправления.");

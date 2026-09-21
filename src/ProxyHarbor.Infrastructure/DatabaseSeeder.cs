@@ -244,6 +244,28 @@ public static class DatabaseSeeder
             .Except(legacySources)
             .ToDictionary(source => source.Url, StringComparer.Ordinal);
 
+        // Платный provider хранится как обычный Source без секрета в URL. Ключ
+        // настраивается отдельно и только после этого источник можно включить.
+        if (existing.TryGetValue(PaidProxySourceCatalog.BestProxiesUrl, out var paidSource))
+        {
+            paidSource.Name = PaidProxySourceCatalog.BestProxiesName;
+            paidSource.DefaultProtocol = ProxyProtocol.Http;
+            paidSource.Priority = PaidProxySourceCatalog.BestProxiesPriority;
+        }
+        else
+        {
+            paidSource = new ProxySource
+            {
+                Name = PaidProxySourceCatalog.BestProxiesName,
+                Url = PaidProxySourceCatalog.BestProxiesUrl,
+                DefaultProtocol = ProxyProtocol.Http,
+                Priority = PaidProxySourceCatalog.BestProxiesPriority,
+                Enabled = false
+            };
+            db.Sources.Add(paidSource);
+            existing.Add(paidSource.Url, paidSource);
+        }
+
         foreach (var definition in BuiltInSourceCatalog.Sources)
         {
             if (existing.TryGetValue(definition.Url, out var source))

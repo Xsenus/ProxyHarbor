@@ -108,6 +108,19 @@ public sealed class DatabaseSeederIntegrationTests
             Assert.Contains("WHEN 0 THEN 1", definition, StringComparison.Ordinal);
             Assert.Contains("\"NextCheckAt\" NULLS FIRST", definition, StringComparison.Ordinal);
             Assert.Contains("\"LastCheckedAt\" NULLS FIRST", definition, StringComparison.Ordinal);
+            await using var inspectPaidPriority = new NpgsqlCommand(
+                """
+                SELECT indexdef
+                FROM pg_indexes
+                WHERE schemaname = @schema
+                  AND indexname = 'IX_Proxies_PaidValidationPriority'
+                """,
+                admin);
+            inspectPaidPriority.Parameters.AddWithValue("schema", schema);
+            var paidDefinition = Assert.IsType<string>(await inspectPaidPriority.ExecuteScalarAsync());
+            Assert.Contains("CASE \"Status\"", paidDefinition, StringComparison.Ordinal);
+            Assert.Contains("\"LastCheckedAt\" NULLS FIRST", paidDefinition, StringComparison.Ordinal);
+            Assert.Contains("1970-01-01", paidDefinition, StringComparison.Ordinal);
             await using var inspectLeaseTable = new NpgsqlCommand(
                 """
                 SELECT c.relpersistence,
@@ -352,7 +365,7 @@ public sealed class DatabaseSeederIntegrationTests
 
             await using var verify = new ProxyHarborDbContext(options);
             Assert.Equal(2, await verify.Sources.CountAsync(source => source.Url.StartsWith("https://8.8.8.8/")));
-            Assert.Equal(BuiltInSourceCatalog.Sources.Count + 2, await verify.Sources.CountAsync());
+            Assert.Equal(BuiltInSourceCatalog.Sources.Count + 3, await verify.Sources.CountAsync());
         }
         finally
         {
@@ -412,7 +425,7 @@ public sealed class DatabaseSeederIntegrationTests
             Assert.False(await verify.Sources.AnyAsync(source => source.Url == retiredUrl));
             Assert.True(await verify.Sources.AnyAsync(source => source.Url == aggregateUrl));
             Assert.True(await verify.Sources.AnyAsync(source => source.Url == customUrl));
-            Assert.Equal(BuiltInSourceCatalog.Sources.Count + 1, await verify.Sources.CountAsync());
+            Assert.Equal(BuiltInSourceCatalog.Sources.Count + 2, await verify.Sources.CountAsync());
         }
         finally
         {
@@ -492,7 +505,7 @@ public sealed class DatabaseSeederIntegrationTests
             await using var verify = new ProxyHarborDbContext(options);
             Assert.False(await verify.Sources.AnyAsync(source => retiredProxyUrls.Contains(source.Url)));
             Assert.False(await verify.VpnSources.AnyAsync(source => retiredVpnUrls.Contains(source.Url)));
-            Assert.Equal(BuiltInSourceCatalog.Sources.Count, await verify.Sources.CountAsync());
+            Assert.Equal(BuiltInSourceCatalog.Sources.Count + 1, await verify.Sources.CountAsync());
             Assert.Equal(BuiltInVpnSourceCatalog.Sources.Count, await verify.VpnSources.CountAsync());
         }
         finally
@@ -571,7 +584,7 @@ public sealed class DatabaseSeederIntegrationTests
             Assert.Equal(0, migrated.ConsecutiveFailures);
             Assert.Null(migrated.NextFetchAt);
             Assert.Null(migrated.LastError);
-            Assert.Equal(BuiltInSourceCatalog.Sources.Count, await verify.Sources.CountAsync());
+            Assert.Equal(BuiltInSourceCatalog.Sources.Count + 1, await verify.Sources.CountAsync());
         }
         finally
         {
@@ -678,10 +691,15 @@ public sealed class DatabaseSeederIntegrationTests
 
             await using var verify = new ProxyHarborDbContext(options);
             Assert.Empty(await verify.Database.GetPendingMigrationsAsync());
-            Assert.Equal(BuiltInSourceCatalog.Sources.Count, await verify.Sources.CountAsync());
+            Assert.Equal(BuiltInSourceCatalog.Sources.Count + 1, await verify.Sources.CountAsync());
             Assert.Equal(
-                BuiltInSourceCatalog.Sources.Count,
+                BuiltInSourceCatalog.Sources.Count + 1,
                 await verify.Sources.Select(source => source.Url).Distinct().CountAsync());
+            var paid = await verify.Sources.SingleAsync(source =>
+                source.Url == PaidProxySourceCatalog.BestProxiesUrl);
+            Assert.Equal(PaidProxySourceCatalog.BestProxiesName, paid.Name);
+            Assert.Equal(PaidProxySourceCatalog.BestProxiesPriority, paid.Priority);
+            Assert.False(paid.Enabled);
         }
         finally
         {
