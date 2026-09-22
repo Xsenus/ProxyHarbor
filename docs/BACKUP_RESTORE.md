@@ -4,18 +4,20 @@ Backup ProxyHarbor — это переносимый зашифрованный 
 
 ## Что входит в архив
 
-Manifest v7 содержит согласованный repeatable-read snapshot:
+Manifest v8 содержит согласованный repeatable-read snapshot всех durable-таблиц EF-модели:
 
-- `Proxies`, `Sources`, collection runs, validation runs и завершённые предыдущие backup runs;
+- `Proxies`, `Sources`, защищённые credentials платных источников, collection runs, validation runs и завершённые предыдущие backup runs;
 - настройки Collector и Backup;
 - безопасные runtime-настройки CORS, trusted networks, hosts и logging;
 - счета со способом оплаты, подписки, одноразовые уведомления, аудит ручных продлений, агрегаты выдачи по IP и правила блокировки;
 - конфигурацию commerce-бота, Telegram CRM, очередь доставки и обработанные update;
 - управляемые публичные реквизиты, публикацию разделов, cookie-тексты и идентификаторы аналитики;
 - внешние checker-узлы, их несекретные SSH-реквизиты, fingerprint, состояние текущей партии и счётчики;
+- Identity users/roles вместе с claims, внешними login и identity token records, персональными API-токенами (только SHA-256 hash) и аудитом запросов;
+- реферальные связи/начисления и последний рассчитанный operational metrics snapshot;
 - UTC-время, версии manifest/settings schema и `secretsIncluded=false`.
 
-В архив никогда не входят PostgreSQL connection string/password, admin password, admin API key, credentials Telegram/S3-доставки backup, API keys платных proxy-провайдеров, data-protection keys или encryption key. Token commerce-бота сохраняется только как Data Protection ciphertext. После restore ключ платного proxy-источника нужно ввести заново через админку. Без независимо сохранённого volume ключей commerce-token после переноса не расшифруется, поэтому ключи и исходный token необходимо хранить во внешнем secret manager.
+В архив никогда не входят PostgreSQL connection string/password, admin password, admin API key, открытые API-секреты, credentials Telegram/S3-доставки backup, data-protection keys или encryption key. Token commerce-бота и ключ платного proxy-источника сохраняются только как Data Protection ciphertext. Персональные API-токены представлены только необратимым SHA-256 hash. Без независимо сохранённого volume Data Protection keys защищённые значения после переноса не расшифруются: восстановите тот же key ring либо повторно введите исходные secrets из внешнего secret manager.
 
 `ProxyValidationLeases` — эфемерное operational ownership и в архив не входит. Legacy-архив может содержать прежние `CheckLeaseId/CheckLeaseUntil` внутри `Proxies`; restore проверяет целостность пары, но намеренно очищает её перед импортом. После запуска незавершённые проверки безопасно возвращаются в общую очередь, а durable `ValidationRuns` сохраняют историю и будут закрыты штатным recovery.
 
@@ -70,7 +72,7 @@ Audit требует непустой канонический PHB3, завер�
 docker compose --profile tools run --rm --no-deps -T restore \
   --input /app/backups/proxyharbor-YYYYMMDD-HHMMSS.phbackup \
   --inspect-settings > recovery-settings.json
-jq --exit-status '.manifest.version == 7 and .manifest.secretsIncluded == false' recovery-settings.json
+jq --exit-status '.manifest.version == 8 and .manifest.secretsIncluded == false' recovery-settings.json
 ```
 
 Этот JSON предназначен для операторской сверки. Настройки автоматически не применяются.
@@ -104,7 +106,7 @@ curl --fail https://proxy.example.com/health/ready
 
 API удерживает shared PostgreSQL lifetime lease, restore требует exclusive lease. Поэтому забытая живая реплика блокирует замену данных. Во время restore новые API/worker write pipelines также не стартуют.
 
-Restore выполняет migrations и транзакционный импорт proxy/audit-таблиц. Backup v6 добавляет аккаунты, роли и подписки, а v7 — внешний checker-каталог и связь validation-аудита с узлами. Архивы v2–v5 не содержат Identity snapshot и сохраняют текущие аккаунты целевой БД. SSH-пароли и agent-токены в backup не попадают: после переноса checker-узлы нужно переустановить из админки. Успешное сообщение появляется только после подтверждённого удаления временного plaintext. Если cleanup завершился ошибкой, считайте это инцидентом обращения с plaintext и удалите названный каталог вручную.
+Restore выполняет migrations и транзакционный импорт. Backup v6 добавляет аккаунты, роли и подписки, v7 — внешний checker-каталог и связь validation-аудита с узлами, а v8 — все ранее пропущенные durable-таблицы и S3-поля backup-аудита. Архивы v2–v5 не содержат Identity snapshot и сохраняют текущие аккаунты целевой БД; архивы v2–v7 продолжают приниматься по своим историческим контрактам. SSH-пароли и agent-токены в backup не попадают: после переноса checker-узлы нужно переустановить из админки. Успешное сообщение появляется только после подтверждённого удаления временного plaintext. Если cleanup завершился ошибкой, считайте это инцидентом обращения с plaintext и удалите названный каталог вручную.
 
 Если ошибка произошла после возможного commit, сначала исследуйте целевую БД. Не повторяйте destructive restore вслепую.
 

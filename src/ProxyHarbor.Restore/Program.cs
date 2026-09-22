@@ -187,13 +187,13 @@ internal static class RestoreApplication
         await Console.Out.WriteLineAsync();
     }
 
-    /// <summary>Читает настройки из v5-v7, чья точная схема уже проверена валидатором.</summary>
+    /// <summary>Читает настройки из v5-v8, чья точная схема уже проверена валидатором.</summary>
     internal static RestoreSettingsInspection ReadSettingsInspection(ZipArchive archive)
     {
         var manifest = ReadJsonObject(archive, "manifest.json");
-        if (manifest.GetProperty("version").GetInt32() is not (5 or 6 or 7))
+        if (manifest.GetProperty("version").GetInt32() is not (5 or 6 or 7 or 8))
             throw new InvalidDataException(
-                "Полный снимок настроек доступен только для backup manifest v5, v6 или v7.");
+                "Полный снимок настроек доступен только для backup manifest v5-v8.");
 
         return new RestoreSettingsInspection(
             manifest,
@@ -225,6 +225,14 @@ internal static class RestoreApplication
     {
         using var archive = ZipFile.OpenRead(zipPath);
         BackupArchiveValidator.Validate(archive);
+        var backupVersion = ReadJsonObject(archive, "manifest.json")
+            .GetProperty("version").GetInt32();
+        var hasCompleteVersionEightSnapshot = backupVersion >= 8;
+        if (hasCompleteVersionEightSnapshot)
+            await Console.Error.WriteLineAsync(
+                "Предупреждение: v8 восстанавливает Data Protection ciphertext и Identity credential state. " +
+                "Для использования защищённых интеграций перенесите исходный Data Protection key ring " +
+                "либо повторно настройте secrets после restore.");
         // Exclusive lifetime-lease охватывает и migrations, и destructive transaction.
         // Любая живая API-реплика держит shared lease, поэтому restore fail-closed требует
         // её явной остановки, а новая реплика не может стартовать посередине замены данных.
@@ -250,6 +258,8 @@ internal static class RestoreApplication
             await db.CheckerNodes.ExecuteDeleteAsync(token);
             await db.Runs.ExecuteDeleteAsync(token);
             await db.Proxies.ExecuteDeleteAsync(token);
+            if (hasCompleteVersionEightSnapshot)
+                await db.ProxySourceCredentials.ExecuteDeleteAsync(token);
             await db.Sources.ExecuteDeleteAsync(token);
             var hasIdentitySnapshot = archive.GetEntry("database/users.json") is not null;
             var hasPaymentConfiguration = archive.GetEntry("database/payment-configuration.json") is not null;
@@ -280,6 +290,13 @@ internal static class RestoreApplication
                 await db.UserClaims.ExecuteDeleteAsync(token);
                 await db.RoleClaims.ExecuteDeleteAsync(token);
                 await db.UserRoles.ExecuteDeleteAsync(token);
+                if (hasCompleteVersionEightSnapshot)
+                {
+                    await db.UserApiTokenRequests.ExecuteDeleteAsync(token);
+                    await db.UserApiTokens.ExecuteDeleteAsync(token);
+                    await db.ReferralRewards.ExecuteDeleteAsync(token);
+                    await db.ReferralRelationships.ExecuteDeleteAsync(token);
+                }
                 await db.SiteVisitLogs.ExecuteDeleteAsync(token);
                 await db.ProxyAccessBuckets.ExecuteDeleteAsync(token);
                 await db.FreeProxyExportGrants.ExecuteDeleteAsync(token);
@@ -291,6 +308,8 @@ internal static class RestoreApplication
                 await db.Users.ExecuteDeleteAsync(token);
                 await db.Roles.ExecuteDeleteAsync(token);
             }
+            if (hasCompleteVersionEightSnapshot)
+                await db.MetricsSnapshotStates.ExecuteDeleteAsync(token);
 
             // PostgreSQL binary COPY сохраняет потоковый характер restore и на больших снимках
             // на порядки быстрее отдельных INSERT, создаваемых ChangeTracker/SaveChanges.
@@ -329,6 +348,9 @@ internal static class RestoreApplication
                 WriteSourceAsync,
                 hooks,
                 token);
+            if (hasCompleteVersionEightSnapshot)
+                _ = await ImportIdentityAsync<ProxySourceCredential>(
+                    archive, "database/proxy-source-credentials.json", db, token);
             var runCount = await ImportAsync<CollectionRun>(
                 archive,
                 "database/runs.json",
@@ -359,7 +381,7 @@ internal static class RestoreApplication
                     archive,
                     "database/backup-runs.json",
                     connection,
-                    """COPY "BackupRuns" ("Id", "StartedAt", "FinishedAt", "Status", "FileName", "SizeBytes", "TelegramConfigured", "SentToTelegram", "Error") FROM STDIN (FORMAT BINARY)""",
+                    """COPY "BackupRuns" ("Id", "StartedAt", "FinishedAt", "Status", "FileName", "SizeBytes", "TelegramConfigured", "SentToTelegram", "ObjectStorageConfigured", "SentToObjectStorage", "ObjectStorageKey", "Error") FROM STDIN (FORMAT BINARY)""",
                     RestoreEntityValidator.ValidateBackupRun,
                     WriteBackupRunAsync,
                     hooks,
@@ -369,10 +391,36 @@ internal static class RestoreApplication
             {
                 _ = await ImportIdentityAsync<IdentityRole<Guid>>(archive, "database/roles.json", db, token);
                 userCount = await ImportIdentityAsync<ApplicationUser>(archive, "database/users.json", db, token);
+                if (hasCompleteVersionEightSnapshot)
+                {
+                    _ = await ImportIdentityAsync<IdentityRoleClaim<Guid>>(
+                        archive, "database/role-claims.json", db, token);
+                    _ = await ImportIdentityAsync<IdentityUserClaim<Guid>>(
+                        archive, "database/user-claims.json", db, token);
+                    _ = await ImportIdentityAsync<IdentityUserLogin<Guid>>(
+                        archive, "database/user-logins.json", db, token);
+                }
                 _ = await ImportIdentityAsync<IdentityUserRole<Guid>>(archive, "database/user-roles.json", db, token);
+                if (hasCompleteVersionEightSnapshot)
+                    _ = await ImportIdentityAsync<IdentityUserToken<Guid>>(
+                        archive, "database/user-identity-tokens.json", db, token);
                 _ = await ImportIdentityAsync<UserSubscription>(archive, "database/subscriptions.json", db, token);
+                if (hasCompleteVersionEightSnapshot)
+                {
+                    _ = await ImportIdentityAsync<UserApiToken>(
+                        archive, "database/user-api-tokens.json", db, token);
+                    _ = await ImportIdentityAsync<UserApiTokenRequest>(
+                        archive, "database/user-api-token-requests.json", db, token);
+                }
                 if (archive.GetEntry("database/payment-orders.json") is not null)
                     _ = await ImportIdentityAsync<PaymentOrder>(archive, "database/payment-orders.json", db, token);
+                if (hasCompleteVersionEightSnapshot)
+                {
+                    _ = await ImportIdentityAsync<ReferralRelationship>(
+                        archive, "database/referral-relationships.json", db, token);
+                    _ = await ImportIdentityAsync<ReferralReward>(
+                        archive, "database/referral-rewards.json", db, token);
+                }
                 if (archive.GetEntry("database/user-notifications.json") is not null)
                     _ = await ImportIdentityAsync<UserNotification>(archive, "database/user-notifications.json", db, token);
                 if (archive.GetEntry("database/subscription-admin-actions.json") is not null)
@@ -400,6 +448,9 @@ internal static class RestoreApplication
             if (hasSiteConfiguration)
                 _ = await ImportIdentityAsync<SiteConfiguration>(
                     archive, "database/site-configuration.json", db, token);
+            if (hasCompleteVersionEightSnapshot)
+                _ = await ImportIdentityAsync<MetricsSnapshotState>(
+                    archive, "database/metrics-snapshot-states.json", db, token);
             if (hasBackupConfiguration)
             {
                 await db.BackupConfigurations.ExecuteDeleteAsync(token);
@@ -551,6 +602,9 @@ internal static class RestoreApplication
         await writer.WriteAsync(entity.SizeBytes, token);
         await writer.WriteAsync(entity.TelegramConfigured, token);
         await writer.WriteAsync(entity.SentToTelegram, token);
+        await writer.WriteAsync(entity.ObjectStorageConfigured, token);
+        await writer.WriteAsync(entity.SentToObjectStorage, token);
+        await WriteNullableReferenceAsync(writer, entity.ObjectStorageKey, token);
         await WriteNullableReferenceAsync(writer, entity.Error, token);
     }
 
@@ -775,6 +829,13 @@ internal static class RestoreEntityValidator
             Invalid("backupRun не может быть доставлен без Telegram-конфигурации.");
         if (entity.Status == "completed" && entity.TelegramConfigured && !entity.SentToTelegram)
             Invalid("завершённый backup с Telegram должен иметь подтверждение доставки.");
+        RequireOptionalText(entity.ObjectStorageKey, 768, "backupRun.objectStorageKey");
+        if (entity.SentToObjectStorage && !entity.ObjectStorageConfigured)
+            Invalid("backupRun не может быть доставлен без object-storage конфигурации.");
+        if (entity.ObjectStorageKey is not null && !entity.SentToObjectStorage)
+            Invalid("backupRun.objectStorageKey требует подтверждённой object-storage доставки.");
+        if (entity.Status == "completed" && entity.ObjectStorageConfigured && !entity.SentToObjectStorage)
+            Invalid("завершённый backup с object storage должен иметь подтверждение доставки.");
     }
 
     private static void RequireRunState(
@@ -849,7 +910,7 @@ internal sealed record RestoreOptions(
         dotnet run --project src/ProxyHarbor.Restore -- \
           --input ./proxyharbor.phbackup --replace-existing-data
 
-        Без подключения к БД вывести безопасные настройки manifest v5-v7 в JSON:
+        Без подключения к БД вывести безопасные настройки manifest v5-v8 в JSON:
           --input ./proxyharbor.phbackup --inspect-settings
 
         По умолчанию строка БД читается из ConnectionStrings__Postgres,

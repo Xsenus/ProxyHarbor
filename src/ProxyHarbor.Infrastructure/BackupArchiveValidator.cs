@@ -33,6 +33,19 @@ public static class BackupArchiveValidator
         "database/user-roles.json",
         "database/subscriptions.json"
     ];
+    private static readonly string[] VersionEightEntries =
+    [
+        "database/proxy-source-credentials.json",
+        "database/role-claims.json",
+        "database/user-claims.json",
+        "database/user-logins.json",
+        "database/user-identity-tokens.json",
+        "database/user-api-tokens.json",
+        "database/user-api-token-requests.json",
+        "database/referral-relationships.json",
+        "database/referral-rewards.json",
+        "database/metrics-snapshot-states.json"
+    ];
     private static readonly HashSet<string> AllowedEntries = new(
         RequiredDatabaseEntries
             .Concat(["database/backup-runs.json", "database/validation-runs.json", "database/checker-nodes.json"])
@@ -54,6 +67,7 @@ public static class BackupArchiveValidator
             .Append("database/telegram-update-receipts.json")
             .Append("database/telegram-outbound-messages.json")
             .Append("database/telegram-conversation-messages.json")
+            .Concat(VersionEightEntries)
             .Append("manifest.json"),
         StringComparer.Ordinal);
 
@@ -87,7 +101,7 @@ public static class BackupArchiveValidator
         if (!root.TryGetProperty("version", out var version) ||
             version.ValueKind != JsonValueKind.Number ||
             !version.TryGetInt32(out var versionNumber) ||
-            versionNumber is < 2 or > 7)
+            versionNumber is < 2 or > 8)
             throw new InvalidDataException("Версия manifest backup не поддерживается.");
         if (!root.TryGetProperty("secretsIncluded", out var secretsIncluded) ||
             secretsIncluded.ValueKind is not (JsonValueKind.True or JsonValueKind.False) ||
@@ -105,13 +119,23 @@ public static class BackupArchiveValidator
                 !settingsSchemaVersion.TryGetInt32(out var settingsSchemaVersionNumber) ||
                 settingsSchemaVersionNumber != 1))
             throw new InvalidDataException("Manifest текущего backup не содержит поддерживаемую схему настроек.");
-        if (versionNumber >= 5)
+        if (versionNumber is >= 5 and < 8)
             RequireExactProperties(root,
                 ["version", "settingsSchemaVersion", "createdAt", "secretsIncluded"], "manifest.json");
+        if (versionNumber >= 8)
+        {
+            RequireExactProperties(root,
+                ["version", "settingsSchemaVersion", "createdAt", "secretsIncluded", "databaseEntries"],
+                "manifest.json");
+            ValidateDatabaseEntryInventory(root);
+        }
 
         if (versionNumber < 6 &&
             archive.Entries.Any(entry => IdentityEntries.Contains(entry.FullName, StringComparer.Ordinal)))
             throw new InvalidDataException("Identity snapshot поддерживается только backup schema версии 6.");
+        if (versionNumber < 8 &&
+            archive.Entries.Any(entry => VersionEightEntries.Contains(entry.FullName, StringComparer.Ordinal)))
+            throw new InvalidDataException("Расширенный полный snapshot поддерживается только backup schema версии 8.");
 
         foreach (var name in RequiredDatabaseEntries)
             _ = RequiredEntry(archive, name);
@@ -127,6 +151,11 @@ public static class BackupArchiveValidator
             foreach (var name in IdentityEntries) _ = RequiredEntry(archive, name);
         if (versionNumber >= 7)
             _ = RequiredEntry(archive, "database/checker-nodes.json");
+        if (versionNumber >= 8)
+            foreach (var name in BackupSchemaInventory.Tables
+                         .Where(item => item.Disposition == BackupTableDisposition.Included)
+                         .Select(item => item.ArchiveEntry!))
+                _ = RequiredEntry(archive, name);
 
         if (versionNumber >= 5)
         {
@@ -207,6 +236,29 @@ public static class BackupArchiveValidator
         if (!root.TryGetProperty(propertyName, out var property) ||
             property.ValueKind is not (JsonValueKind.True or JsonValueKind.False) || property.GetBoolean())
             throw new InvalidDataException($"Файл настроек {entryName} нарушает политику исключения секретов.");
+    }
+
+    private static void ValidateDatabaseEntryInventory(JsonElement manifest)
+    {
+        if (!manifest.TryGetProperty("databaseEntries", out var entries) ||
+            entries.ValueKind != JsonValueKind.Array)
+            throw new InvalidDataException("Manifest v8 не содержит inventory файлов базы данных.");
+
+        var actual = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var entry in entries.EnumerateArray())
+        {
+            if (entry.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(entry.GetString()))
+                throw new InvalidDataException("Manifest v8 содержит некорректное имя файла базы данных.");
+            if (!actual.Add(entry.GetString()!))
+                throw new InvalidDataException("Manifest v8 содержит повторяющееся имя файла базы данных.");
+        }
+
+        var expected = BackupSchemaInventory.Tables
+            .Where(item => item.Disposition == BackupTableDisposition.Included)
+            .Select(item => item.ArchiveEntry!)
+            .ToHashSet(StringComparer.Ordinal);
+        if (!actual.SetEquals(expected))
+            throw new InvalidDataException("Manifest v8 не соответствует полной inventory durable-таблиц.");
     }
 
     private static void RequireExactProperties(

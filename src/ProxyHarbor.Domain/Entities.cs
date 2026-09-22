@@ -283,7 +283,8 @@ public sealed class ProxySource
 
 /// <summary>
 /// Секрет и безопасное runtime-состояние платного proxy provider. Сущность намеренно
-/// отделена от ProxySource: стандартный backup источников не должен содержать API-ключ.
+/// отделена от ProxySource: backup v8 переносит только Data Protection ciphertext,
+/// а открытый API-ключ никогда не сериализуется.
 /// </summary>
 public sealed class ProxySourceCredential
 {

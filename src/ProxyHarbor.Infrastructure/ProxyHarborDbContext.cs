@@ -15,7 +15,7 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
     public DbSet<ProxyValidationLease> ProxyValidationLeases => Set<ProxyValidationLease>();
     /// <summary>Встроенные и пользовательские proxy feed'ы.</summary>
     public DbSet<ProxySource> Sources => Set<ProxySource>();
-    /// <summary>Отделённые от backup зашифрованные ключи платных proxy provider.</summary>
+    /// <summary>Отделённые от источников Data Protection ciphertext ключей платных proxy provider.</summary>
     public DbSet<ProxySourceCredential> ProxySourceCredentials => Set<ProxySourceCredential>();
     /// <summary>Найденные VPN endpoint и опубликованные ссылки подключения.</summary>
     public DbSet<VpnEndpoint> VpnEndpoints => Set<VpnEndpoint>();

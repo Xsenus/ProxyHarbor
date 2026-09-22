@@ -348,6 +348,76 @@ public sealed class BackupAuditIntegrationTests
 
     [Fact]
     [Trait("Category", "PostgresIntegration")]
+    public async Task ObjectStorageFailureStopsLegacyPipelineBeforeTelegramDelivery()
+    {
+        var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
+        if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
+
+        var schema = $"proxyharbor_backup_s3_first_{Guid.NewGuid():N}";
+        var backupDirectory = Path.Combine(Path.GetTempPath(), $"proxyharbor-s3-first-{Guid.NewGuid():N}");
+        var builder = new NpgsqlConnectionStringBuilder(baseConnectionString) { SearchPath = schema };
+        await using var admin = new NpgsqlConnection(baseConnectionString);
+        await admin.OpenAsync();
+        await using (var create = new NpgsqlCommand($"CREATE SCHEMA {schema}", admin))
+            await create.ExecuteNonQueryAsync();
+
+        try
+        {
+            var dbOptions = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+                .UseNpgsql(builder.ConnectionString)
+                .Options;
+            var factory = new TestDbFactory(dbOptions);
+            await using (var migrationDb = await factory.CreateDbContextAsync())
+                await migrationDb.Database.MigrateAsync();
+
+            using var telegram = new AcceptingTelegramClientFactory();
+            using var service = new BackupService(
+                factory,
+                telegram,
+                Options.Create(new BackupOptions
+                {
+                    Directory = backupDirectory,
+                    EncryptionKey = EncryptionKey,
+                    TelegramBotToken = "test-token",
+                    TelegramChatId = "123456",
+                    SendToObjectStorage = true,
+                    ObjectStorageEndpoint = "https://storage.example.test",
+                    ObjectStorageRegion = "test-region-1",
+                    ObjectStorageBucket = "proxyharbor-backups",
+                    ObjectStoragePrefix = "production/backups",
+                    ObjectStorageUsePathStyle = true,
+                    ObjectStorageAccessKey = "test-access-key",
+                    ObjectStorageSecretKey = "test-secret-key"
+                }),
+                Options.Create(new CollectorOptions()),
+                new ConfigurationBuilder().Build(),
+                NullLogger<BackupService>.Instance,
+                objectStorageTransport: new RejectingObjectStorageTransport());
+
+            var exception = await Assert.ThrowsAsync<IOException>(
+                () => service.CreateAndSendAsync(CancellationToken.None));
+
+            Assert.Contains("object storage", exception.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(0, telegram.Requests);
+            await using var verify = await factory.CreateDbContextAsync();
+            var failed = await verify.BackupRuns.AsNoTracking().SingleAsync();
+            Assert.Equal("failed", failed.Status);
+            Assert.True(failed.ObjectStorageConfigured);
+            Assert.False(failed.SentToObjectStorage);
+            Assert.True(failed.TelegramConfigured);
+            Assert.False(failed.SentToTelegram);
+            Assert.Null(failed.ObjectStorageKey);
+        }
+        finally
+        {
+            if (Directory.Exists(backupDirectory)) Directory.Delete(backupDirectory, recursive: true);
+            await using var drop = new NpgsqlCommand($"DROP SCHEMA IF EXISTS {schema} CASCADE", admin);
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
     public async Task HistoryRetentionFailureCannotLeaveFalseCompletedBackupAudit()
     {
         var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
@@ -602,6 +672,15 @@ public sealed class BackupAuditIntegrationTests
         }
 
         public void Dispose() => _client.Dispose();
+    }
+
+    private sealed class RejectingObjectStorageTransport : IBackupObjectStorageTransport
+    {
+        public Task<string> UploadAndVerifyAsync(
+            string path,
+            BackupOptions options,
+            CancellationToken token) =>
+            Task.FromException<string>(new IOException("Object storage characterization failure."));
     }
 
     private sealed class AcceptingTelegramClientFactory : IHttpClientFactory, IDisposable

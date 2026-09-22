@@ -1,5 +1,6 @@
 using System.IO.Compression;
 using System.Text.Json;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -345,6 +346,7 @@ public sealed class BackupRestoreRoundTripIntegrationTests
         builtIn.HttpETag = "\"built-in-v1\"";
         builtIn.HttpLastModifiedAt = SnapshotTime.AddHours(-2);
         db.Sources.Add(ExpectedCustomSource());
+        db.ProxySourceCredentials.Add(ExpectedProxySourceCredential());
         db.Proxies.Add(ExpectedProxy());
         db.VpnSources.Add(ExpectedVpnSource());
         db.VpnEndpoints.Add(ExpectedVpnEndpoint());
@@ -352,6 +354,18 @@ public sealed class BackupRestoreRoundTripIntegrationTests
         db.Runs.Add(ExpectedCollectionRun());
         db.ValidationRuns.Add(ExpectedValidationRun());
         db.BackupRuns.Add(ExpectedBackupRun());
+        db.Users.AddRange(ExpectedReferrer(), ExpectedReferredUser());
+        db.Roles.Add(ExpectedRole());
+        db.Set<IdentityUserRole<Guid>>().Add(ExpectedUserRole());
+        db.Set<IdentityRoleClaim<Guid>>().Add(ExpectedRoleClaim());
+        db.Set<IdentityUserClaim<Guid>>().Add(ExpectedUserClaim());
+        db.Set<IdentityUserLogin<Guid>>().Add(ExpectedUserLogin());
+        db.Set<IdentityUserToken<Guid>>().Add(ExpectedIdentityUserToken());
+        db.UserApiTokens.Add(ExpectedApiToken());
+        db.UserApiTokenRequests.Add(ExpectedApiTokenRequest());
+        db.ReferralRelationships.Add(ExpectedReferralRelationship());
+        db.ReferralRewards.Add(ExpectedReferralReward());
+        db.MetricsSnapshotStates.Add(ExpectedMetricsSnapshot());
         await db.SaveChangesAsync();
     }
 
@@ -367,6 +381,9 @@ public sealed class BackupRestoreRoundTripIntegrationTests
         Assert.Equal(BuiltInSourceCatalog.Sources.Count + 2, await db.Sources.CountAsync());
         var customSource = await db.Sources.AsNoTracking().SingleAsync(source => source.Id == SnapshotIds.CustomSource);
         Assert.Equivalent(ExpectedCustomSource(), customSource, strict: true);
+        var sourceCredential = await db.ProxySourceCredentials.AsNoTracking()
+            .SingleAsync(credential => credential.ProxySourceId == SnapshotIds.CustomSource);
+        Assert.Equivalent(ExpectedProxySourceCredential(), sourceCredential, strict: true);
         var builtIn = await db.Sources.AsNoTracking()
             .SingleAsync(source => source.Url == BuiltInSourceCatalog.Sources[0].Url);
         Assert.Equal(BuiltInSourceCatalog.Sources[0].Name, builtIn.Name);
@@ -400,6 +417,78 @@ public sealed class BackupRestoreRoundTripIntegrationTests
 
         var backupRun = await db.BackupRuns.AsNoTracking().SingleAsync();
         Assert.Equivalent(ExpectedBackupRun(), backupRun, strict: true);
+
+        AssertUser(ExpectedReferrer(), await db.Users.AsNoTracking()
+            .SingleAsync(user => user.Id == SnapshotIds.ReferrerUser));
+        AssertUser(ExpectedReferredUser(), await db.Users.AsNoTracking()
+            .SingleAsync(user => user.Id == SnapshotIds.ReferredUser));
+        var role = await db.Roles.AsNoTracking().SingleAsync(role => role.Id == SnapshotIds.Role);
+        Assert.Equal(ExpectedRole().Name, role.Name);
+        Assert.Equal(ExpectedRole().NormalizedName, role.NormalizedName);
+        Assert.Equal(ExpectedRole().ConcurrencyStamp, role.ConcurrencyStamp);
+        Assert.Equal(1, await db.Set<IdentityUserRole<Guid>>().CountAsync(link =>
+            link.UserId == SnapshotIds.ReferrerUser && link.RoleId == SnapshotIds.Role));
+
+        var roleClaim = await db.Set<IdentityRoleClaim<Guid>>().AsNoTracking()
+            .SingleAsync(claim => claim.RoleId == SnapshotIds.Role && claim.ClaimType == "permission");
+        Assert.Equal("backup.roundtrip", roleClaim.ClaimValue);
+        var userClaim = await db.Set<IdentityUserClaim<Guid>>().AsNoTracking()
+            .SingleAsync(claim => claim.UserId == SnapshotIds.ReferrerUser && claim.ClaimType == "tenant");
+        Assert.Equal("roundtrip", userClaim.ClaimValue);
+        var login = await db.Set<IdentityUserLogin<Guid>>().AsNoTracking().SingleAsync(item =>
+            item.UserId == SnapshotIds.ReferrerUser && item.LoginProvider == "roundtrip");
+        Assert.Equal("roundtrip-provider-key", login.ProviderKey);
+        Assert.Equal("Round-trip provider", login.ProviderDisplayName);
+        var identityToken = await db.Set<IdentityUserToken<Guid>>().AsNoTracking().SingleAsync(item =>
+            item.UserId == SnapshotIds.ReferrerUser && item.LoginProvider == "roundtrip" && item.Name == "refresh");
+        Assert.Equal("protected-roundtrip-identity-token", identityToken.Value);
+
+        var apiToken = await db.UserApiTokens.AsNoTracking()
+            .SingleAsync(token => token.Id == SnapshotIds.ApiToken);
+        Assert.Equal(ExpectedApiToken().UserId, apiToken.UserId);
+        Assert.Equal(ExpectedApiToken().Name, apiToken.Name);
+        Assert.Equal(ExpectedApiToken().SecretHash, apiToken.SecretHash);
+        Assert.Equal(ExpectedApiToken().DisplaySuffix, apiToken.DisplaySuffix);
+        Assert.Equal(ExpectedApiToken().Scopes, apiToken.Scopes);
+        Assert.Equal(ExpectedApiToken().CreatedAt, apiToken.CreatedAt);
+        Assert.Equal(ExpectedApiToken().LastUsedAt, apiToken.LastUsedAt);
+        var apiRequest = await db.UserApiTokenRequests.AsNoTracking()
+            .SingleAsync(request => request.Id == SnapshotIds.ApiTokenRequest);
+        Assert.Equivalent(ExpectedApiTokenRequest(), apiRequest, strict: true);
+
+        var referral = await db.ReferralRelationships.AsNoTracking()
+            .SingleAsync(item => item.Id == SnapshotIds.ReferralRelationship);
+        Assert.Equivalent(ExpectedReferralRelationship(), referral, strict: true);
+        var referralReward = await db.ReferralRewards.AsNoTracking()
+            .SingleAsync(item => item.Id == SnapshotIds.ReferralReward);
+        Assert.Equivalent(ExpectedReferralReward(), referralReward, strict: true);
+        var metricsSnapshot = await db.MetricsSnapshotStates.AsNoTracking()
+            .SingleAsync(snapshot => snapshot.Key == "proxy");
+        var expectedMetrics = ExpectedMetricsSnapshot();
+        Assert.Equal(expectedMetrics.Key, metricsSnapshot.Key);
+        Assert.Equal(expectedMetrics.CapturedAt, metricsSnapshot.CapturedAt);
+        Assert.Equal(expectedMetrics.UpdatedAt, metricsSnapshot.UpdatedAt);
+        using var expectedPayload = JsonDocument.Parse(expectedMetrics.PayloadJson);
+        using var actualPayload = JsonDocument.Parse(metricsSnapshot.PayloadJson);
+        Assert.True(JsonElement.DeepEquals(expectedPayload.RootElement, actualPayload.RootElement));
+    }
+
+    private static void AssertUser(ApplicationUser expected, ApplicationUser actual)
+    {
+        Assert.Equal(expected.Id, actual.Id);
+        Assert.Equal(expected.UserName, actual.UserName);
+        Assert.Equal(expected.NormalizedUserName, actual.NormalizedUserName);
+        Assert.Equal(expected.Email, actual.Email);
+        Assert.Equal(expected.NormalizedEmail, actual.NormalizedEmail);
+        Assert.Equal(expected.EmailConfirmed, actual.EmailConfirmed);
+        Assert.Equal(expected.SecurityStamp, actual.SecurityStamp);
+        Assert.Equal(expected.ConcurrencyStamp, actual.ConcurrencyStamp);
+        Assert.Equal(expected.DisplayName, actual.DisplayName);
+        Assert.Equal(expected.PreferredLanguage, actual.PreferredLanguage);
+        Assert.Equal(expected.CreatedAt, actual.CreatedAt);
+        Assert.Equal(expected.LastLoginAt, actual.LastLoginAt);
+        Assert.Equal(expected.IsActive, actual.IsActive);
+        Assert.Equal(expected.ReferralCode, actual.ReferralCode);
     }
 
     private static ProxyEndpoint ExpectedProxy() => new()
@@ -448,6 +537,17 @@ public sealed class BackupRestoreRoundTripIntegrationTests
         LastError = "custom source error",
         HttpETag = "W/\"custom-v1\"",
         HttpLastModifiedAt = SnapshotTime.AddHours(-3)
+    };
+
+    private static ProxySourceCredential ExpectedProxySourceCredential() => new()
+    {
+        ProxySourceId = SnapshotIds.CustomSource,
+        ProtectedApiKey = "CfDJ8-round-trip-protected-provider-key",
+        Status = "active",
+        ExpiresAt = SnapshotTime.AddDays(30),
+        CheckedAt = SnapshotTime.AddMinutes(-5),
+        UpdatedAt = SnapshotTime.AddMinutes(-4),
+        LastError = "representative credential detail"
     };
 
     private static VpnSource ExpectedVpnSource() => new()
@@ -526,7 +626,143 @@ public sealed class BackupRestoreRoundTripIntegrationTests
         SizeBytes = 98_765,
         TelegramConfigured = true,
         SentToTelegram = true,
+        ObjectStorageConfigured = true,
+        SentToObjectStorage = true,
+        ObjectStorageKey = "round-trip/proxyharbor-previous.phbackup",
         Error = "representative backup detail"
+    };
+
+    private static ApplicationUser ExpectedReferrer() => new()
+    {
+        Id = SnapshotIds.ReferrerUser,
+        UserName = "roundtrip-referrer",
+        NormalizedUserName = "ROUNDTRIP-REFERRER",
+        Email = "referrer@example.test",
+        NormalizedEmail = "REFERRER@EXAMPLE.TEST",
+        EmailConfirmed = true,
+        SecurityStamp = "roundtrip-referrer-security",
+        ConcurrencyStamp = "roundtrip-referrer-concurrency",
+        DisplayName = "Round-trip referrer",
+        PreferredLanguage = "en",
+        CreatedAt = SnapshotTime.AddDays(-20),
+        LastLoginAt = SnapshotTime.AddDays(-1),
+        IsActive = true,
+        ReferralCode = "ROUNDREF"
+    };
+
+    private static ApplicationUser ExpectedReferredUser() => new()
+    {
+        Id = SnapshotIds.ReferredUser,
+        UserName = "roundtrip-referred",
+        NormalizedUserName = "ROUNDTRIP-REFERRED",
+        Email = "referred@example.test",
+        NormalizedEmail = "REFERRED@EXAMPLE.TEST",
+        EmailConfirmed = false,
+        SecurityStamp = "roundtrip-referred-security",
+        ConcurrencyStamp = "roundtrip-referred-concurrency",
+        DisplayName = "Round-trip referred",
+        PreferredLanguage = "ru",
+        CreatedAt = SnapshotTime.AddDays(-10),
+        IsActive = true,
+        ReferralCode = "ROUNDNEW"
+    };
+
+    private static IdentityRole<Guid> ExpectedRole() => new()
+    {
+        Id = SnapshotIds.Role,
+        Name = "RoundTripAuditor",
+        NormalizedName = "ROUNDTRIPAUDITOR",
+        ConcurrencyStamp = "roundtrip-role-concurrency"
+    };
+
+    private static IdentityUserRole<Guid> ExpectedUserRole() => new()
+    {
+        UserId = SnapshotIds.ReferrerUser,
+        RoleId = SnapshotIds.Role
+    };
+
+    private static IdentityRoleClaim<Guid> ExpectedRoleClaim() => new()
+    {
+        RoleId = SnapshotIds.Role,
+        ClaimType = "permission",
+        ClaimValue = "backup.roundtrip"
+    };
+
+    private static IdentityUserClaim<Guid> ExpectedUserClaim() => new()
+    {
+        UserId = SnapshotIds.ReferrerUser,
+        ClaimType = "tenant",
+        ClaimValue = "roundtrip"
+    };
+
+    private static IdentityUserLogin<Guid> ExpectedUserLogin() => new()
+    {
+        UserId = SnapshotIds.ReferrerUser,
+        LoginProvider = "roundtrip",
+        ProviderKey = "roundtrip-provider-key",
+        ProviderDisplayName = "Round-trip provider"
+    };
+
+    private static IdentityUserToken<Guid> ExpectedIdentityUserToken() => new()
+    {
+        UserId = SnapshotIds.ReferrerUser,
+        LoginProvider = "roundtrip",
+        Name = "refresh",
+        Value = "protected-roundtrip-identity-token"
+    };
+
+    private static UserApiToken ExpectedApiToken() => new()
+    {
+        Id = SnapshotIds.ApiToken,
+        UserId = SnapshotIds.ReferrerUser,
+        Name = "Round-trip integration",
+        SecretHash = Enumerable.Range(1, 32).Select(value => (byte)value).ToArray(),
+        DisplaySuffix = "c0ffee42",
+        Scopes = "catalog:read",
+        CreatedAt = SnapshotTime.AddHours(-3),
+        LastUsedAt = SnapshotTime.AddHours(-2)
+    };
+
+    private static UserApiTokenRequest ExpectedApiTokenRequest() => new()
+    {
+        Id = SnapshotIds.ApiTokenRequest,
+        UserApiTokenId = SnapshotIds.ApiToken,
+        UserId = SnapshotIds.ReferrerUser,
+        IpAddress = "203.0.113.42",
+        Method = "GET",
+        Path = "/api/proxies",
+        Query = "protocol=socks5&country=DE",
+        StatusCode = 200,
+        ItemCount = 17,
+        DurationMs = 42,
+        RequestedAt = SnapshotTime.AddHours(-1)
+    };
+
+    private static ReferralRelationship ExpectedReferralRelationship() => new()
+    {
+        Id = SnapshotIds.ReferralRelationship,
+        ReferrerUserId = SnapshotIds.ReferrerUser,
+        ReferredUserId = SnapshotIds.ReferredUser,
+        Slot = 1,
+        CreatedAt = SnapshotTime.AddDays(-10)
+    };
+
+    private static ReferralReward ExpectedReferralReward() => new()
+    {
+        Id = SnapshotIds.ReferralReward,
+        ReferralRelationshipId = SnapshotIds.ReferralRelationship,
+        RewardKey = "roundtrip:signup",
+        Kind = ReferralRewardKinds.Signup,
+        DaysGranted = 7,
+        CreatedAt = SnapshotTime.AddDays(-10).AddMinutes(1)
+    };
+
+    private static MetricsSnapshotState ExpectedMetricsSnapshot() => new()
+    {
+        Key = "proxy",
+        PayloadJson = "{\"total\":321,\"alive\":123}",
+        CapturedAt = SnapshotTime.AddMinutes(-2),
+        UpdatedAt = SnapshotTime.AddMinutes(-1)
     };
 
     private static ValidationRun ExpectedValidationRun() => new()
@@ -591,5 +827,12 @@ public sealed class BackupRestoreRoundTripIntegrationTests
         internal static readonly Guid ValidationRun = Guid.Parse("10000000-0000-0000-0000-000000000006");
         internal static readonly Guid VpnSource = Guid.Parse("10000000-0000-0000-0000-000000000007");
         internal static readonly Guid VpnEndpoint = Guid.Parse("10000000-0000-0000-0000-000000000008");
+        internal static readonly Guid ReferrerUser = Guid.Parse("10000000-0000-0000-0000-000000000009");
+        internal static readonly Guid ReferredUser = Guid.Parse("10000000-0000-0000-0000-000000000010");
+        internal static readonly Guid Role = Guid.Parse("10000000-0000-0000-0000-000000000011");
+        internal static readonly Guid ApiToken = Guid.Parse("10000000-0000-0000-0000-000000000012");
+        internal static readonly Guid ReferralRelationship = Guid.Parse("10000000-0000-0000-0000-000000000013");
+        internal static readonly Guid ReferralReward = Guid.Parse("10000000-0000-0000-0000-000000000014");
+        internal const long ApiTokenRequest = 10_001;
     }
 }
