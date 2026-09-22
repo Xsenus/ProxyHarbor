@@ -47,8 +47,8 @@ flowchart LR
 |---|---|---|---|---|
 | STG-00 | DONE locally | Characterization + model coverage guard | clean scoped branch | TEST-001 and legacy integration fixtures green |
 | STG-01 | DONE / merged | Manifest v8/full restore | coverage inventory agreed | PR #262 merged after verify, PostgreSQL, analysis and CodeQL gates |
-| STG-02 | IN PROGRESS | schema, registry, provider adapters | v8 stable | TASK-020–022 merged; TASK-023/024 implemented locally; routing flag off |
-| STG-03 | BLOCKED | durable jobs/fallback/reconcile/repair | schema/adapters | TEST-004–008 local fault matrix |
+| STG-02 | DONE / merged | schema, registry, provider adapters | v8 stable | TASK-020–024 merged with green CI; routing flag off |
+| STG-03 | READY | durable jobs/fallback/reconcile/repair | schema/adapters | TEST-004–008 local fault matrix |
 | STG-04 | BLOCKED | independent catalog/materializer/restore | copies stable | local two-provider fixtures + isolated restore |
 | STG-05 | BLOCKED | API/UI/metrics/runbooks | state contracts stable | UI/a11y + alert contracts + no secrets |
 | STG-06 | BLOCKED by owner/external | inventory/backfill/canary/real drill | all local gates | owner-approved RPO/RTO and observation |
@@ -145,7 +145,7 @@ Compatibility note discovered during STG-01: destination/copy/job entities add d
 
 #### TASK-023 — Adapt S3 without breaking native keys
 
-- Status: `IMPLEMENTED locally / final gates pending`; Codex.
+- Status: `DONE / merged`; Codex. PR #265, commit `5611161`.
 - Changes: adapt `S3BackupObjectStorageTransport`; retain key builder/path style/endpoint validation. Capture `VersionId`/native checksum/ETag when reliable; send SDK checksum; conditional create only after provider capability confirmation. Add streaming `MaterializeAsync` to private partial + local hash + atomic publish.
 - Error map: auth/config permanent; timeout/5xx/429 retryable; response lost after body sent UNKNOWN; 412 deterministic collision reconciled, not blindly overwritten.
 - Tests: local S3-compatible fixture/mock verifies bytes, different endpoints/resources for independence tests; AWS behavior not assumed for all compatible providers.
@@ -153,7 +153,7 @@ Compatibility note discovered during STG-01: destination/copy/job entities add d
 
 #### TASK-024 — Preserve Telegram adapter
 
-- Status: `IMPLEMENTED locally / final gates pending`; Codex.
+- Status: `DONE / merged`; Codex. PR #265, commit `5611161`.
 - Changes: adapter wrapper over existing resolver/transport; declare size/parts and lack of get/list/version/conditional write. Persist safe message/part evidence only if existing API response exposes it; never count partial send verified.
 - Tests: every existing Telegram backup/transport test plus planner fallback and secret redaction. Non-S3 behavior must not be narrowed.
 - Done: AC-011.
@@ -164,7 +164,7 @@ Purpose: fulfill owner requirement without false success. Covers REQ-004–006/0
 
 #### TASK-030 — Protection evaluator and acknowledgement contract
 
-- Status: `BLOCKED: STG-02`; Codex.
+- Status: `READY`; Codex.
 - Changes: `BackupProtectionEvaluator`, policy snapshot on run, states `protected/degraded/pending/unavailable`; modify Admin trigger DTO/status semantics. Required vs desired copies and independent failure domains explicit.
 - Checks: table-driven TEST-007; one physical copy cannot count twice; local staging excluded from external; Telegram capability mismatch excluded; no policy downgrade.
 - Done: AC-005/007; API contract/OpenAPI/docs updated.
@@ -410,8 +410,9 @@ No dates are invented. STG-00–05 may proceed without these decisions using iso
 | 2026-09-22 | implementation checkpoint 3 | Added allowlisted S3/Telegram adapter registry, typed capabilities/errors and idempotent legacy configuration projection; routing remains off and no jobs are created. | EVID-042–044 |
 | 2026-09-22 | merged checkpoint 3 | PR #264 merged to `main` after verify, PostgreSQL/API smoke, C#/JS analysis and CodeQL succeeded; startup retry-strategy regression was fixed before merge. | EVID-046 |
 | 2026-09-22 | implementation checkpoint 4 | Added S3 detailed PUT/HEAD/streaming GET evidence and safe failure map; Telegram adapter now wraps existing resolver/runtime multipart transport and preserves legacy protected credentials. | EVID-047–048 |
+| 2026-09-22 | merged checkpoint 4 | PR #265 merged to `main`; verify/container smoke, PostgreSQL/API smoke, C#/JS analysis and CodeQL all succeeded. | EVID-049 |
 
-Current checkpoint: STG-00/01 and TASK-020–022 are merged in `main` with green CI. TASK-023/024 are implemented on `feature/storage-provider-adapters`; routing remains disabled, legacy behavior remains authoritative, and no destination jobs are created. Existing S3 object keys and Telegram resolver/transport contracts are preserved. Docker and real providers are unavailable locally; checkpoint-4 final gates/CI remain pending. No production/provider access or deployment occurred. Next: complete final gates and publish TASK-023/024, then begin truthful protection evaluation in TASK-030.
+Current checkpoint: STG-00–02 and TASK-020–024 are merged in `main` with green CI. Routing remains disabled, legacy behavior remains authoritative, and no destination jobs are created. Existing S3 object keys and Telegram resolver/transport contracts are preserved. Docker and real providers remain unavailable locally. No production/provider access or deployment occurred. Next: TASK-030 truthful protection evaluation; TASK-031 durable planner/worker remains dependent on it.
 
 ## 16. Регламент продолжения в новой сессии
 
