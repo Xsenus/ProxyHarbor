@@ -391,7 +391,7 @@ internal static class RestoreApplication
                     archive,
                     "database/backup-runs.json",
                     connection,
-                    """COPY "BackupRuns" ("Id", "StartedAt", "FinishedAt", "Status", "FileName", "SizeBytes", "TelegramConfigured", "SentToTelegram", "ObjectStorageConfigured", "SentToObjectStorage", "ObjectStorageKey", "Error") FROM STDIN (FORMAT BINARY)""",
+                    """COPY "BackupRuns" ("Id", "StartedAt", "FinishedAt", "Status", "FileName", "SizeBytes", "ContentSha256", "BackupPoolId", "ProtectionPolicyVersion", "RequiredVerifiedCopies", "DesiredVerifiedCopies", "TelegramConfigured", "SentToTelegram", "ObjectStorageConfigured", "SentToObjectStorage", "ObjectStorageKey", "Error") FROM STDIN (FORMAT BINARY)""",
                     RestoreEntityValidator.ValidateBackupRun,
                     WriteBackupRunAsync,
                     hooks,
@@ -625,6 +625,11 @@ internal static class RestoreApplication
         await writer.WriteAsync(entity.Status, token);
         await WriteNullableReferenceAsync(writer, entity.FileName, token);
         await writer.WriteAsync(entity.SizeBytes, token);
+        await WriteNullableReferenceAsync(writer, entity.ContentSha256, token);
+        await WriteNullableValueAsync(writer, entity.BackupPoolId, token);
+        await WriteNullableValueAsync(writer, entity.ProtectionPolicyVersion, token);
+        await WriteNullableValueAsync(writer, entity.RequiredVerifiedCopies, token);
+        await WriteNullableValueAsync(writer, entity.DesiredVerifiedCopies, token);
         await writer.WriteAsync(entity.TelegramConfigured, token);
         await writer.WriteAsync(entity.SentToTelegram, token);
         await writer.WriteAsync(entity.ObjectStorageConfigured, token);
@@ -848,6 +853,22 @@ internal static class RestoreEntityValidator
         RequireNonNegative(entity.SizeBytes, "backupRun.sizeBytes");
         RequireOptionalText(entity.FileName, 255, "backupRun.fileName");
         RequireOptionalText(entity.Error, 2000, "backupRun.error", allowControlCharacters: true);
+        if (entity.ContentSha256 is not null &&
+            (entity.ContentSha256.Length != 64 ||
+                entity.ContentSha256.Any(character =>
+                    character is not (>= '0' and <= '9') and not (>= 'a' and <= 'f'))))
+            Invalid("backupRun.contentSha256 должен быть lowercase SHA-256.");
+        var hasNoPolicy = entity.BackupPoolId is null &&
+            entity.ProtectionPolicyVersion is null &&
+            entity.RequiredVerifiedCopies is null &&
+            entity.DesiredVerifiedCopies is null;
+        var hasFullPolicy = entity.BackupPoolId is not null &&
+            entity.ProtectionPolicyVersion is >= 1 &&
+            entity.RequiredVerifiedCopies is >= 1 and <= 16 &&
+            entity.DesiredVerifiedCopies >= entity.RequiredVerifiedCopies &&
+            entity.DesiredVerifiedCopies <= 16;
+        if (!hasNoPolicy && !hasFullPolicy)
+            Invalid("backupRun protection policy snapshot должен быть полным и корректным.");
         if (entity.FileName is not null && entity.FileName.IndexOfAny(['/', '\\']) >= 0)
             Invalid("backupRun.fileName не может содержать путь.");
         if (entity.SentToTelegram && !entity.TelegramConfigured)

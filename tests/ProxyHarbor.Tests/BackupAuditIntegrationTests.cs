@@ -1,5 +1,6 @@
 using System.IO.Compression;
 using System.Net;
+using System.Security.Cryptography;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Configuration;
@@ -39,7 +40,18 @@ public sealed class BackupAuditIntegrationTests
             var factory = new TestDbFactory(dbOptions);
             var snapshotFactory = new GuardedExportDbFactory(builder.ConnectionString);
             await using (var migrationDb = await factory.CreateDbContextAsync())
+            {
                 await migrationDb.Database.MigrateAsync();
+                migrationDb.BackupPools.Add(new BackupPool
+                {
+                    Id = BackupLegacyDestinationProjector.LegacyPoolId,
+                    Name = "legacy-default",
+                    RequiredVerifiedCopies = 2,
+                    DesiredVerifiedCopies = 3,
+                    PolicyVersion = 7
+                });
+                await migrationDb.SaveChangesAsync();
+            }
 
             using var service = new BackupService(
                 factory,
@@ -52,7 +64,8 @@ public sealed class BackupAuditIntegrationTests
                 Options.Create(new CollectorOptions()),
                 new ConfigurationBuilder().Build(),
                 new ThrowingLogger<BackupService>(),
-                snapshotDbFactory: snapshotFactory);
+                snapshotDbFactory: snapshotFactory,
+                routingOptions: Options.Create(new BackupRoutingOptions { Enabled = true }));
 
             var path = await service.CreateAndSendAsync(CancellationToken.None);
 
@@ -62,6 +75,14 @@ public sealed class BackupAuditIntegrationTests
             Assert.Equal("completed", audit.Status);
             Assert.Equal(Path.GetFileName(path), audit.FileName);
             Assert.True(audit.SizeBytes > 0);
+            await using (var stream = File.OpenRead(path))
+                Assert.Equal(
+                    Convert.ToHexStringLower(await SHA256.HashDataAsync(stream)),
+                    audit.ContentSha256);
+            Assert.Equal(BackupLegacyDestinationProjector.LegacyPoolId, audit.BackupPoolId);
+            Assert.Equal(7, audit.ProtectionPolicyVersion);
+            Assert.Equal(2, audit.RequiredVerifiedCopies);
+            Assert.Equal(3, audit.DesiredVerifiedCopies);
             Assert.True(snapshotFactory.WasCalled);
         }
         finally

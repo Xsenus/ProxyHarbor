@@ -46,6 +46,11 @@ public sealed class RestoreEntityValidatorTests
             Status = "completed",
             FileName = "proxyharbor.phbackup",
             SizeBytes = 1024,
+            ContentSha256 = new string('a', 64),
+            BackupPoolId = Guid.NewGuid(),
+            ProtectionPolicyVersion = 2,
+            RequiredVerifiedCopies = 1,
+            DesiredVerifiedCopies = 2,
             TelegramConfigured = true,
             SentToTelegram = true,
             Error = "System.Exception: failure\n   at backup"
@@ -240,6 +245,28 @@ public sealed class RestoreEntityValidatorTests
         };
 
         Assert.Throws<InvalidDataException>(() => RestoreEntityValidator.ValidateBackupRun(run));
+    }
+
+    [Fact]
+    public void RejectsInvalidBackupContentIdentityOrPartialPolicySnapshot()
+    {
+        var invalidHash = new BackupRun
+        {
+            StartedAt = DateTimeOffset.UtcNow,
+            Status = "running",
+            ContentSha256 = new string('A', 64)
+        };
+        Assert.Throws<InvalidDataException>(() => RestoreEntityValidator.ValidateBackupRun(invalidHash));
+
+        var partialPolicy = new BackupRun
+        {
+            StartedAt = DateTimeOffset.UtcNow,
+            Status = "running",
+            BackupPoolId = Guid.NewGuid(),
+            ProtectionPolicyVersion = 1,
+            RequiredVerifiedCopies = 1
+        };
+        Assert.Throws<InvalidDataException>(() => RestoreEntityValidator.ValidateBackupRun(partialPolicy));
     }
 
     private static ProxyEndpoint ValidProxy()

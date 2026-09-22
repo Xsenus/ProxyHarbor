@@ -174,6 +174,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<VpnCatalogService>();
         services.AddSingleton<IBackupConfigurationStore, BackupConfigurationStore>();
         services.AddSingleton<BackupLegacyDestinationProjector>();
+        services.AddSingleton<BackupProtectionEvaluator>();
         services.AddSingleton<BackupService>();
         services.AddSingleton<IBackupObjectStorageTransport, S3BackupObjectStorageTransport>();
         services.AddSingleton<IBackupDestinationAdapter, S3BackupDestinationAdapter>();

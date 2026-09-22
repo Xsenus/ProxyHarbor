@@ -436,6 +436,16 @@ public sealed class BackupRun
     public string? FileName { get; set; }
     /// <summary>Размер опубликованного ciphertext в байтах.</summary>
     public long SizeBytes { get; set; }
+    /// <summary>SHA-256 опубликованного ciphertext в lowercase hex.</summary>
+    public string? ContentSha256 { get; set; }
+    /// <summary>Pool, политика которого была зафиксирована для этого run.</summary>
+    public Guid? BackupPoolId { get; set; }
+    /// <summary>Неизменяемая версия policy на момент создания run.</summary>
+    public int? ProtectionPolicyVersion { get; set; }
+    /// <summary>Зафиксированный обязательный минимум независимых verified-копий.</summary>
+    public int? RequiredVerifiedCopies { get; set; }
+    /// <summary>Зафиксированное желаемое число независимых verified-копий.</summary>
+    public int? DesiredVerifiedCopies { get; set; }
     /// <summary>Для попытки были заданы одновременно Telegram token и chat ID.</summary>
     public bool TelegramConfigured { get; set; }
     /// <summary>Telegram подтвердил ok=true для файла или каждой его части.</summary>

@@ -164,7 +164,7 @@ Purpose: fulfill owner requirement without false success. Covers REQ-004–006/0
 
 #### TASK-030 — Protection evaluator and acknowledgement contract
 
-- Status: `READY`; Codex.
+- Status: `LOCAL VERIFIED; PR/CI PENDING`; Codex.
 - Changes: `BackupProtectionEvaluator`, policy snapshot on run, states `protected/degraded/pending/unavailable`; modify Admin trigger DTO/status semantics. Required vs desired copies and independent failure domains explicit.
 - Checks: table-driven TEST-007; one physical copy cannot count twice; local staging excluded from external; Telegram capability mismatch excluded; no policy downgrade.
 - Done: AC-005/007; API contract/OpenAPI/docs updated.
@@ -411,8 +411,9 @@ No dates are invented. STG-00–05 may proceed without these decisions using iso
 | 2026-09-22 | merged checkpoint 3 | PR #264 merged to `main` after verify, PostgreSQL/API smoke, C#/JS analysis and CodeQL succeeded; startup retry-strategy regression was fixed before merge. | EVID-046 |
 | 2026-09-22 | implementation checkpoint 4 | Added S3 detailed PUT/HEAD/streaming GET evidence and safe failure map; Telegram adapter now wraps existing resolver/runtime multipart transport and preserves legacy protected credentials. | EVID-047–048 |
 | 2026-09-22 | merged checkpoint 4 | PR #265 merged to `main`; verify/container smoke, PostgreSQL/API smoke, C#/JS analysis and CodeQL all succeeded. | EVID-049 |
+| 2026-09-22 | implementation checkpoint 5 | Added immutable run policy/content snapshot, fail-closed protection evaluator and `200/202/503` acknowledgement contract; local PostgreSQL 17 and restore coverage are green. | EVID-050–051 |
 
-Current checkpoint: STG-00–02 and TASK-020–024 are merged in `main` with green CI. Routing remains disabled, legacy behavior remains authoritative, and no destination jobs are created. Existing S3 object keys and Telegram resolver/transport contracts are preserved. Docker and real providers remain unavailable locally. No production/provider access or deployment occurred. Next: TASK-030 truthful protection evaluation; TASK-031 durable planner/worker remains dependent on it.
+Current checkpoint: STG-00–02 and TASK-020–024 are merged in `main` with green CI. TASK-030 is implemented and locally verified on its feature branch; PR/CI are still pending. Routing remains disabled, legacy behavior remains authoritative, and no destination jobs are created. Existing S3 object keys and Telegram resolver/transport contracts are preserved. Docker and real providers remain unavailable locally. No production/provider access or deployment occurred. Next after TASK-030 merge: TASK-031 durable planner/worker.
 
 ## 16. Регламент продолжения в новой сессии
 
