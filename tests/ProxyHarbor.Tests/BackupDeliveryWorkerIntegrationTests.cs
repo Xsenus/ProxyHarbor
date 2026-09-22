@@ -108,6 +108,178 @@ public sealed class BackupDeliveryWorkerIntegrationTests
     }
 
     [Fact]
+    public async Task RetryableFailureReturnsToPendingThenExhaustsPolicyBudget()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"delivery-retry-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var path = Path.Combine(directory, "retry.phbackup");
+            await File.WriteAllBytesAsync(path, [1, 2, 3, 4, 5]);
+            var hash = Convert.ToHexStringLower(SHA256.HashData(await File.ReadAllBytesAsync(path)));
+            var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+                .UseInMemoryDatabase($"delivery-retry-{Guid.NewGuid():N}")
+                .Options;
+            var factory = new TestDbFactory(options);
+            var firstLease = Guid.NewGuid();
+            Guid jobId;
+            await using (var seed = await factory.CreateDbContextAsync())
+            {
+                var pool = Pool();
+                pool.MaxAttemptsPerCycle = 2;
+                var run = Run(pool.Id, hash, Path.GetFileName(path));
+                var destination = Destination("retry-s3", "domain-a", 10);
+                var copy = Copy(run.Id, destination.Id, hash);
+                var job = Job(copy.Id, "retry-job");
+                job.State = "processing";
+                job.Attempt = 1;
+                job.LeaseId = firstLease;
+                job.LeaseUntil = DateTimeOffset.UtcNow.AddMinutes(1);
+                seed.AddRange(pool, run, destination, Route(pool.Id, destination.Id, 10), copy, job);
+                await seed.SaveChangesAsync();
+                jobId = job.Id;
+            }
+            var registry = Registry(
+                new FailingAdapter("s3", BackupDestinationFailureDisposition.Retryable),
+                new SuccessfulAdapter("telegram"));
+            var processor = Processor(factory, registry, directory);
+
+            await processor.ProcessAsync(new BackupDeliveryLease(jobId, firstLease), CancellationToken.None);
+
+            var secondLease = Guid.NewGuid();
+            await using (var retry = await factory.CreateDbContextAsync())
+            {
+                var job = await retry.BackupDeliveryJobs.Include(item => item.BackupCopy).SingleAsync();
+                Assert.Equal("pending", job.State);
+                Assert.Equal("retryable_failed", job.BackupCopy.State);
+                Assert.Null(job.LeaseId);
+                Assert.True(job.NotBefore > DateTimeOffset.UtcNow);
+                job.State = "processing";
+                job.Attempt = 2;
+                job.LeaseId = secondLease;
+                job.LeaseUntil = DateTimeOffset.UtcNow.AddMinutes(1);
+                await retry.SaveChangesAsync();
+            }
+
+            await processor.ProcessAsync(new BackupDeliveryLease(jobId, secondLease), CancellationToken.None);
+
+            await using var verify = await factory.CreateDbContextAsync();
+            var exhausted = await verify.BackupDeliveryJobs.Include(item => item.BackupCopy).SingleAsync();
+            Assert.Equal("failed", exhausted.State);
+            Assert.Equal("permanent_failed", exhausted.BackupCopy.State);
+            Assert.Equal(BackupDestinationErrorCode.Unavailable.ToString(), exhausted.LastErrorCode);
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    [Fact]
+    public async Task DestinationWithoutIndependentVerificationCompletesAsManualReview()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"delivery-manual-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var path = Path.Combine(directory, "manual.phbackup");
+            await File.WriteAllBytesAsync(path, [1, 2, 3, 4, 5]);
+            var hash = Convert.ToHexStringLower(SHA256.HashData(await File.ReadAllBytesAsync(path)));
+            var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+                .UseInMemoryDatabase($"delivery-manual-{Guid.NewGuid():N}")
+                .Options;
+            var factory = new TestDbFactory(options);
+            var leaseId = Guid.NewGuid();
+            Guid jobId;
+            await using (var seed = await factory.CreateDbContextAsync())
+            {
+                var pool = Pool();
+                var run = Run(pool.Id, hash, Path.GetFileName(path));
+                var destination = new BackupDestination
+                {
+                    Name = "manual-telegram",
+                    Kind = "telegram",
+                    Enabled = true,
+                    FailureDomain = "telegram"
+                };
+                var copy = Copy(run.Id, destination.Id, hash);
+                var job = Job(copy.Id, "manual-job");
+                job.State = "processing";
+                job.Attempt = 1;
+                job.LeaseId = leaseId;
+                job.LeaseUntil = DateTimeOffset.UtcNow.AddMinutes(1);
+                seed.AddRange(pool, run, destination, Route(pool.Id, destination.Id, 10), copy, job);
+                await seed.SaveChangesAsync();
+                jobId = job.Id;
+            }
+            var processor = Processor(
+                factory,
+                Registry(new SuccessfulAdapter("s3"), new UnverifiedAdapter("telegram")),
+                directory);
+
+            await processor.ProcessAsync(new BackupDeliveryLease(jobId, leaseId), CancellationToken.None);
+
+            await using var verify = await factory.CreateDbContextAsync();
+            var persistedJob = await verify.BackupDeliveryJobs
+                .Include(item => item.BackupCopy).ThenInclude(copy => copy.BackupRun)
+                .SingleAsync();
+            Assert.Equal("completed", persistedJob.State);
+            Assert.Equal("manual_review", persistedJob.BackupCopy.State);
+            Assert.Null(persistedJob.BackupCopy.VerifiedAt);
+            Assert.True(persistedJob.BackupCopy.BackupRun.SentToTelegram);
+            Assert.False(persistedJob.BackupCopy.BackupRun.SentToObjectStorage);
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    [Fact]
+    public async Task UnknownProviderOutcomeRequiresReconciliationInsteadOfBlindRetry()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"delivery-unknown-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var path = Path.Combine(directory, "unknown.phbackup");
+            await File.WriteAllBytesAsync(path, [1, 2, 3, 4, 5]);
+            var hash = Convert.ToHexStringLower(SHA256.HashData(await File.ReadAllBytesAsync(path)));
+            var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+                .UseInMemoryDatabase($"delivery-unknown-{Guid.NewGuid():N}")
+                .Options;
+            var factory = new TestDbFactory(options);
+            var leaseId = Guid.NewGuid();
+            Guid jobId;
+            await using (var seed = await factory.CreateDbContextAsync())
+            {
+                var pool = Pool();
+                var run = Run(pool.Id, hash, Path.GetFileName(path));
+                var destination = Destination("unknown-s3", "domain-a", 10);
+                var copy = Copy(run.Id, destination.Id, hash);
+                var job = Job(copy.Id, "unknown-job");
+                job.State = "processing";
+                job.Attempt = 1;
+                job.LeaseId = leaseId;
+                job.LeaseUntil = DateTimeOffset.UtcNow.AddMinutes(1);
+                seed.AddRange(pool, run, destination, Route(pool.Id, destination.Id, 10), copy, job);
+                await seed.SaveChangesAsync();
+                jobId = job.Id;
+            }
+            var processor = Processor(
+                factory,
+                Registry(
+                    new FailingAdapter("s3", BackupDestinationFailureDisposition.UnknownOutcome),
+                    new SuccessfulAdapter("telegram")),
+                directory);
+
+            await processor.ProcessAsync(new BackupDeliveryLease(jobId, leaseId), CancellationToken.None);
+
+            await using var verify = await factory.CreateDbContextAsync();
+            var persistedJob = await verify.BackupDeliveryJobs.Include(item => item.BackupCopy).SingleAsync();
+            Assert.Equal("reconciling", persistedJob.State);
+            Assert.Equal("unknown", persistedJob.BackupCopy.State);
+            Assert.NotNull(persistedJob.BackupCopy.UnknownSince);
+            Assert.Null(persistedJob.LeaseId);
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    [Fact]
     [Trait("Category", "PostgresIntegration")]
     public async Task TwoWorkersLeaseOnceAndExpiredLeaseBecomesUnknown()
     {
@@ -368,5 +540,39 @@ public sealed class BackupDeliveryWorkerIntegrationTests
             return Task.FromResult(new BackupDestinationWriteResult(
                 $"fallback/{Path.GetFileName(path)}", null, expectedSha256, true));
         }
+    }
+
+    private sealed class UnverifiedAdapter(string kind) : IBackupDestinationAdapter
+    {
+        public string Kind { get; } = kind;
+        public BackupDestinationCapabilities Capabilities { get; } = new(
+            new(true), new(false), new(false), false, false, false);
+
+        public Task<BackupDestinationWriteResult> PutAsync(
+            BackupDestination destination,
+            string path,
+            string expectedSha256,
+            long expectedSize,
+            CancellationToken token) => Task.FromResult(
+                new BackupDestinationWriteResult(null, null, null, IndependentlyVerified: false));
+    }
+
+    private sealed class FailingAdapter(
+        string kind,
+        BackupDestinationFailureDisposition disposition) : IBackupDestinationAdapter
+    {
+        public string Kind { get; } = kind;
+        public BackupDestinationCapabilities Capabilities { get; } = new(
+            new(true), new(true), new(true), false, false, false);
+
+        public Task<BackupDestinationWriteResult> PutAsync(
+            BackupDestination destination,
+            string path,
+            string expectedSha256,
+            long expectedSize,
+            CancellationToken token) => Task.FromException<BackupDestinationWriteResult>(
+                new BackupDestinationOperationException(
+                    new BackupDestinationFailure(BackupDestinationErrorCode.Unavailable, disposition),
+                    "synthetic failure"));
     }
 }
