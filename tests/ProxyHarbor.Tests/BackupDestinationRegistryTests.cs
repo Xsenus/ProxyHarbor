@@ -19,10 +19,12 @@ public sealed class BackupDestinationRegistryTests
         Assert.IsType<S3BackupDestinationAdapter>(adapter);
         Assert.True(adapter.Capabilities.Put.Supported);
         Assert.True(adapter.Capabilities.Verify.Supported);
-        Assert.False(adapter.Capabilities.Materialize.Supported);
+        Assert.True(adapter.Capabilities.Materialize.Supported);
         Assert.False(adapter.Capabilities.SupportsConditionalCreate);
         Assert.False(adapter.Capabilities.ProvidesNativeVersion);
         Assert.False(adapter.Capabilities.ProvidesNativeChecksum);
+        Assert.Same(adapter, registry.Resolve(
+            destination, route, BackupDestinationOperation.Materialize, 1_024));
     }
 
     [Fact]

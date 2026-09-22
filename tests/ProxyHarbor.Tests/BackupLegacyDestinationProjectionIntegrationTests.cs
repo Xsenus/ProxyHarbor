@@ -158,6 +158,8 @@ public sealed class BackupLegacyDestinationProjectionIntegrationTests
                     .OrderBy(route => route.Priority).ToArrayAsync();
                 Assert.Equal("primary", routes[0].Role);
                 Assert.Equal("fallback", routes[1].Role);
+                Assert.Equal("put,verify,read", routes[0].AllowedOperations);
+                Assert.Equal("put", routes[1].AllowedOperations);
                 Assert.All(routes, route => Assert.True(route.Enabled));
                 Assert.Empty(await second.BackupDeliveryJobs.ToArrayAsync());
             }
