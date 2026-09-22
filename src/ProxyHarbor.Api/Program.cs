@@ -124,6 +124,7 @@ builder.Services.AddOptions<TelegramBotHostOptions>()
 builder.Services.AddScoped<ITelegramBotConfigurationStore, TelegramBotConfigurationStore>();
 builder.Services.AddSingleton<ITelegramBackupDeliveryResolver, TelegramBackupDeliveryResolver>();
 builder.Services.AddSingleton<ITelegramBackupTransport, TelegramBackupTransport>();
+builder.Services.AddSingleton<IBackupDestinationAdapter, TelegramBackupDestinationAdapter>();
 builder.Services.AddSingleton<TelegramProxyCandidateCache>();
 builder.Services.AddScoped<ITelegramProxyCandidateProvider, TelegramProxyCandidateProvider>();
 builder.Services.AddSingleton<TelegramTransportHealth>();
@@ -439,6 +440,7 @@ await using (var startupDb = await dbFactory.CreateDbContextAsync())
 {
     await DatabaseSeeder.InitializeAsync(startupDb);
 }
+await app.Services.GetRequiredService<BackupLegacyDestinationProjector>().ProjectAsync();
 await IdentitySeeder.InitializeAsync(app.Services, builder.Configuration);
 
 var runtimeLeaseLost = LoggerMessage.Define(

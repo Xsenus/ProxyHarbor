@@ -22,6 +22,8 @@ Manifest v9 содержит согласованный repeatable-read snapshot
 
 `ProxyValidationLeases` — эфемерное operational ownership и в архив не входит. Legacy-архив может содержать прежние `CheckLeaseId/CheckLeaseUntil` внутри `Proxies`; restore проверяет целостность пары, но намеренно очищает её перед импортом. После запуска незавершённые проверки безопасно возвращаются в общую очередь, а durable `ValidationRuns` сохраняют историю и будут закрыты штатным recovery.
 
+При старте legacy S3/Telegram-конфигурация идемпотентно проецируется в зарезервированные destination/pool rows под PostgreSQL advisory lock. Credentials повторно защищаются отдельным Data Protection purpose; plaintext не попадает в settings/capabilities. Эта проекция не создаёт `BackupCopies` или `BackupDeliveryJobs` и не меняет текущий delivery path, пока `BackupRouting__Enabled=false` (значение по умолчанию).
+
 ## Создание и доставка
 
 Snapshot сериализуется в ZIP-поток и сразу шифруется в PHB3: plaintext ZIP не записывается в backup volume. Результат проверяется, атомарно публикуется и затем сначала загружается в настроенный S3-совместимый bucket. После `PUT` выполняется `HEAD`, сверяются размер и сохранённый SHA-256. Дополнительно архив может отправляться Telegram document; файлы крупнее настроенного лимита делятся максимум на 20 частей.

@@ -7,6 +7,7 @@ services:
       # Публичный сервис обязан создавать шифрованные backup и подтверждать Telegram-доставку.
       # Отсутствующие или некорректные secret-файлы остановят API через options validation.
       Backup__Enabled: true
+      BackupRouting__Enabled: ${BACKUP_ROUTING_ENABLED:-false}
 
   # В production frontend доступен только через TLS gateway.
   web:
