@@ -7,6 +7,12 @@ namespace ProxyHarbor.Tests;
 public sealed class BackupSchemaInventoryTests
 {
     [Fact]
+    public void DestinationRoutingIsDisabledByDefault()
+    {
+        Assert.False(new BackupRoutingOptions().Enabled);
+    }
+
+    [Fact]
     public void EveryRelationalTableHasExactlyOneExplicitBackupClassification()
     {
         var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
@@ -47,6 +53,7 @@ public sealed class BackupSchemaInventoryTests
 
         Assert.All(included, item =>
         {
+            Assert.True(item.IntroducedInManifestVersion is 8 or 9);
             Assert.StartsWith("database/", item.ArchiveEntry, StringComparison.Ordinal);
             Assert.EndsWith(".json", item.ArchiveEntry, StringComparison.Ordinal);
             Assert.DoesNotContain("..", item.ArchiveEntry, StringComparison.Ordinal);
@@ -57,9 +64,11 @@ public sealed class BackupSchemaInventoryTests
             included.Select(item => item.ArchiveEntry).Distinct(StringComparer.Ordinal).Count());
         Assert.All(ephemeral, item =>
         {
+            Assert.Equal(8, item.IntroducedInManifestVersion);
             Assert.Null(item.ArchiveEntry);
             Assert.False(string.IsNullOrWhiteSpace(item.Rationale));
         });
         Assert.Equal(["ProxyValidationLeases"], ephemeral.Select(item => item.TableName));
+        Assert.Equal(6, included.Count(item => item.IntroducedInManifestVersion == 9));
     }
 }

@@ -46,8 +46,8 @@ flowchart LR
 | Stage | Status | Main output | Entry | Exit |
 |---|---|---|---|---|
 | STG-00 | DONE locally | Characterization + model coverage guard | clean scoped branch | TEST-001 and legacy integration fixtures green |
-| STG-01 | IMPLEMENTED / CI pending | Manifest v8/full restore | coverage inventory agreed | local unit, full backend and isolated PostgreSQL gates green; container/CI pending |
-| STG-02 | READY after CI checkpoint | schema, registry, legacy projection | v8 stable | migrations/tests; routing flag off; new durable schema uses a new manifest version rather than mutating v8 |
+| STG-01 | DONE / merged | Manifest v8/full restore | coverage inventory agreed | PR #262 merged after verify, PostgreSQL, analysis and CodeQL gates |
+| STG-02 | IN PROGRESS | schema, registry, legacy projection | v8 stable | TASK-020 local gates green; registry/projection pending; routing flag off |
 | STG-03 | BLOCKED | durable jobs/fallback/reconcile/repair | schema/adapters | TEST-004–008 local fault matrix |
 | STG-04 | BLOCKED | independent catalog/materializer/restore | copies stable | local two-provider fixtures + isolated restore |
 | STG-05 | BLOCKED | API/UI/metrics/runbooks | state contracts stable | UI/a11y + alert contracts + no secrets |
@@ -86,7 +86,7 @@ Purpose: close CRITICAL RISK-001 before multiplying copies. Covers REQ-001/002, 
 
 #### TASK-010 — Define and write manifest v8
 
-- Status: `IMPLEMENTED / CI pending`; Codex.
+- Status: `DONE / merged in PR #262`; Codex.
 - Changes: `BackupService.ProduceSnapshotZipAsync`, `BackupArchiveValidator`, new typed v8 manifest. Add entries for all durable tables: API tokens/requests, referrals/rewards, metrics state, source credentials and Identity auxiliaries that can contain rows. Preserve streaming/repeatable-read/bounded entries and `secretsIncluded=false`; ciphertext secrets remain ciphertext.
 - Design: manifest includes schema version and entry inventory; it does not include secret values. New archives v8 only; reader keeps v2–v7.
 - Tests: validator missing/unexpected/duplicate/oversize cases; snapshot entry list equals inventory; concurrent commit consistency; paid source credential remains protected ciphertext.
@@ -96,7 +96,7 @@ Purpose: close CRITICAL RISK-001 before multiplying copies. Covers REQ-001/002, 
 
 #### TASK-011 — Complete transactional v8 restore
 
-- Status: `IMPLEMENTED / CI pending`; Codex.
+- Status: `DONE / merged in PR #262`; Codex.
 - Changes: `src/ProxyHarbor.Restore/Program.cs` FK-safe delete/import for every included entity; full `BackupRun` columns including S3; post-import invariants. Old archives retain old semantics. New tables must never be silently left from target DB when v8 says full replacement.
 - Unknown/secret handling: DP ciphertext imported exactly; operator preflight warns that DP key ring/reprovision dependencies are required without echoing data.
 - Checks: cancellation before commit leaves target unchanged; cleanup failure behavior unchanged; lease fields cleared; row counts/sentinels checked inside transaction.
@@ -105,7 +105,7 @@ Purpose: close CRITICAL RISK-001 before multiplying copies. Covers REQ-001/002, 
 
 #### TASK-012 — Exhaustive round-trip and CI gate
 
-- Status: `IMPLEMENTED / container+CI pending`; Codex. Isolated PostgreSQL round-trip is green.
+- Status: `DONE / merged in PR #262`; Codex. Isolated PostgreSQL round-trip and CI PostgreSQL job are green.
 - Changes: rebuild `BackupRestoreRoundTripIntegrationTests.EncryptedBackupRestoresEveryDatabaseTableAndRepresentativeField`; seed non-default sentinel in every durable table/field group, target garbage, restore, assert exact replacement/preservation by classification. Add check that test fixture list equals schema inventory.
 - Checks: focused PostgreSQL integration, full backend build/test/format, existing container smoke; CI job artifact contains no backup/secrets.
 - Stop conditions: any table cannot be restored safely; resolve schema/import, do not exclude it without DEC update.
@@ -117,7 +117,7 @@ Purpose: introduce model with routing disabled. Covers REQ-003/006/011/012/015.
 
 #### TASK-020 — Add durable destination/copy/job schema
 
-- Status: `BLOCKED: STG-01`; Codex.
+- Status: `IMPLEMENTED locally / CI pending`; Codex.
 - Changes: entities and EF mappings from TЗ §5.2; migration in `Persistence/Migrations`; readiness invariant updated. Constraints/indexes for state/verified evidence/due jobs/concurrency. `BackupRun` keeps compatibility fields.
 - Backfill: migration creates no remote traffic. Seed/projection from singleton config via app startup task or explicit migration service, not SQL-decrypting Data Protection. Use idempotent marker/version.
 - Checks: `dotnet ef migrations has-pending-model-changes`, PostgreSQL constraints/index tests, downgrade/forward on disposable DB, concurrent uniqueness.
@@ -128,7 +128,7 @@ Compatibility note discovered during STG-01: destination/copy/job entities add d
 
 #### TASK-021 — Adapter/capability contracts and registry
 
-- Status: `BLOCKED: TASK-020`; Codex.
+- Status: `READY after TASK-020 checkpoint`; Codex.
 - Changes: new `IBackupDestinationAdapter`, `BackupDestinationRegistry`, typed capabilities/error codes. Register S3 and Telegram in `ServiceCollectionExtensions`/API DI. Capability is operation-specific (`put`, `verify`, `materialize`, maximum bytes, conditional create, native version/checksum); unsupported is explicit.
 - Security: registry resolves allowlisted kind only; protected secrets stay provider-specific; health probe never needs delete/public ACL/list unless required.
 - Tests: duplicate/missing adapter, forbidden route, read-only/quota/capability mismatch, no fallback across disallowed pool/failure domain.
@@ -404,8 +404,10 @@ No dates are invented. STG-00–05 may proceed without these decisions using iso
 |---|---|---|---|
 | 2026-09-22 | plan v1 | Initial audit/ТЗ/Roadmap; no implementation. | EVID-001–030 |
 | 2026-09-22 | implementation checkpoint 1 | Added exhaustive 39-table classification, strict PHB3 v8 inventory, full v8 writer/transactional restore, S3 audit fields, legacy characterization and exhaustive sentinels for previously omitted tables. | EVID-031–035 |
+| 2026-09-22 | merged checkpoint 1 | PR #262 merged to `main` after verify, PostgreSQL integration, C#/JS analysis and CodeQL succeeded. | EVID-036 |
+| 2026-09-22 | implementation checkpoint 2 | Added additive destination/pool/copy/job/restore-verification schema, routing kill switch off, strict PHB3 v9 while preserving frozen v8, and real PostgreSQL constraint/round-trip coverage. | EVID-037–039 |
 
-Current checkpoint: STG-00 is locally complete; STG-01 code and local backend/PostgreSQL gates are complete, while Docker is unavailable and CI has not yet run. No production/provider access or deployment occurred. Before TASK-020, publish/verify the v8 checkpoint in CI; then add the destination schema with routing disabled and a new archive version rather than changing strict v8 semantics.
+Current checkpoint: STG-00/01 are merged in `main` with green CI. TASK-020 is implemented on `feature/storage-destination-schema`; focused and full local PostgreSQL gates are green, routing remains disabled, and no destination jobs are created automatically. Docker is unavailable locally and checkpoint-2 CI has not yet run. No production/provider access or deployment occurred. Next: complete final local gates, publish TASK-020, then implement TASK-021 registry/adapters.
 
 ## 16. Регламент продолжения в новой сессии
 

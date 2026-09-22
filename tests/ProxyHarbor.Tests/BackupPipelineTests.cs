@@ -132,7 +132,7 @@ public sealed class BackupPipelineTests
             Assert.True(sources.RootElement[0].GetProperty("lastResultTruncated").GetBoolean());
             using var manifestStream = BackupArchiveValidator.RequiredEntry(archive, "manifest.json").Open();
             using var manifest = await JsonDocument.ParseAsync(manifestStream);
-            Assert.Equal(8, manifest.RootElement.GetProperty("version").GetInt32());
+            Assert.Equal(9, manifest.RootElement.GetProperty("version").GetInt32());
             Assert.Equal(1, manifest.RootElement.GetProperty("settingsSchemaVersion").GetInt32());
             Assert.Equal(
                 BackupSchemaInventory.Tables

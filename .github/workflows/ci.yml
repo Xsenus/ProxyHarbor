@@ -532,7 +532,7 @@ jobs:
           recovered_settings=$(docker compose --profile tools run --rm --no-deps -T restore \
             --input "/app/backups/$backup_file" --inspect-settings)
           echo "$recovered_settings" | jq --exit-status \
-            '.manifest.version == 8 and
+            '.manifest.version == 9 and
              .manifest.settingsSchemaVersion == 1 and
              .manifest.secretsIncluded == false and
              .collector.validationConcurrency == 800 and

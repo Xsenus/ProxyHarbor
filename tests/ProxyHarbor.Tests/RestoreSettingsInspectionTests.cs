@@ -17,6 +17,7 @@ public sealed class RestoreSettingsInspectionTests
     [InlineData(6)]
     [InlineData(7)]
     [InlineData(8)]
+    [InlineData(9)]
     public void ReadsValidatedCurrentSettingsWithoutSecrets(int version)
     {
         using var archive = CreateArchive(version);
@@ -46,7 +47,7 @@ public sealed class RestoreSettingsInspectionTests
         var exception = Assert.Throws<InvalidDataException>(
             () => RestoreApplication.ReadSettingsInspection(archive));
 
-        Assert.Contains("только для backup manifest v5-v8", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("только для backup manifest v5-v9", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -120,7 +121,7 @@ public sealed class RestoreSettingsInspectionTests
         var stream = new MemoryStream();
         using (var writer = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true))
         {
-            if (version == 8)
+            if (version >= 8)
                 AddJson(writer, "manifest.json",
                     new
                     {
@@ -129,7 +130,8 @@ public sealed class RestoreSettingsInspectionTests
                         createdAt = DateTimeOffset.UtcNow,
                         secretsIncluded = false,
                         databaseEntries = BackupSchemaInventory.Tables
-                            .Where(item => item.Disposition == BackupTableDisposition.Included)
+                            .Where(item => item.Disposition == BackupTableDisposition.Included &&
+                                item.IntroducedInManifestVersion <= version)
                             .Select(item => item.ArchiveEntry!)
                             .Order(StringComparer.Ordinal)
                             .ToArray()
@@ -171,7 +173,8 @@ public sealed class RestoreSettingsInspectionTests
                     ],
                     StringComparer.Ordinal);
                 foreach (var entry in BackupSchemaInventory.Tables
-                             .Where(item => item.Disposition == BackupTableDisposition.Included)
+                             .Where(item => item.Disposition == BackupTableDisposition.Included &&
+                                 item.IntroducedInManifestVersion <= version)
                              .Select(item => item.ArchiveEntry!)
                              .Where(entry => !existingEntries.Contains(entry)))
                     AddJson(writer, entry, Array.Empty<object>());

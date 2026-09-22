@@ -448,6 +448,186 @@ public sealed class BackupRun
     public string? ObjectStorageKey { get; set; }
     /// <summary>Bounded-диагностика отказа или null при полном успехе.</summary>
     public string? Error { get; set; }
+    /// <summary>Нормализованные физические копии этого immutable snapshot.</summary>
+    public ICollection<BackupCopy> Copies { get; set; } = [];
+    /// <summary>Проверки восстановления этого snapshot.</summary>
+    public ICollection<BackupRestoreVerification> RestoreVerifications { get; set; } = [];
+}
+
+/// <summary>Настроенное внешнее назначение резервных копий.</summary>
+public sealed class BackupDestination
+{
+    /// <summary>Стабильный внутренний идентификатор назначения.</summary>
+    public Guid Id { get; set; } = Guid.NewGuid();
+    /// <summary>Операторское имя без credentials.</summary>
+    public string Name { get; set; } = string.Empty;
+    /// <summary>Allowlisted adapter kind: s3 либо telegram.</summary>
+    public string Kind { get; set; } = string.Empty;
+    /// <summary>Отключённое назначение не получает новые jobs.</summary>
+    public bool Enabled { get; set; }
+    /// <summary>Граница независимого отказа для подсчёта защиты.</summary>
+    public string FailureDomain { get; set; } = string.Empty;
+    /// <summary>Меньшее значение выбирается раньше.</summary>
+    public int Priority { get; set; }
+    /// <summary>Объявленные operation-specific capabilities в JSON.</summary>
+    public string CapabilitiesJson { get; set; } = "{}";
+    /// <summary>Несекретные provider-specific настройки в JSON.</summary>
+    public string SettingsJson { get; set; } = "{}";
+    /// <summary>Data Protection ciphertext либо пустая строка.</summary>
+    public string ProtectedSecrets { get; set; } = string.Empty;
+    /// <summary>Создание записи.</summary>
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+    /// <summary>Последнее изменение.</summary>
+    public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
+    /// <summary>PostgreSQL xmin для optimistic concurrency.</summary>
+    public uint RowVersion { get; set; }
+    /// <summary>Пулы, в которых разрешено назначение.</summary>
+    public ICollection<BackupPoolDestination> Pools { get; set; } = [];
+    /// <summary>Физические копии в этом назначении.</summary>
+    public ICollection<BackupCopy> Copies { get; set; } = [];
+}
+
+/// <summary>Политика защиты одного класса backup.</summary>
+public sealed class BackupPool
+{
+    /// <summary>Идентификатор policy pool.</summary>
+    public Guid Id { get; set; } = Guid.NewGuid();
+    /// <summary>Уникальное стабильное имя.</summary>
+    public string Name { get; set; } = string.Empty;
+    /// <summary>Минимум подтверждённых внешних копий для protected.</summary>
+    public int RequiredVerifiedCopies { get; set; } = 1;
+    /// <summary>Желаемое число подтверждённых внешних копий.</summary>
+    public int DesiredVerifiedCopies { get; set; } = 1;
+    /// <summary>Максимум попыток одного назначения за цикл.</summary>
+    public int MaxAttemptsPerCycle { get; set; } = 3;
+    /// <summary>Общий deadline планировщика в секундах.</summary>
+    public int OverallDeadlineSeconds { get; set; } = 600;
+    /// <summary>Минимальное здоровое окно до автоматического failback.</summary>
+    public int FailbackHealthyForSeconds { get; set; } = 900;
+    /// <summary>Неизменяемая версия policy, записываемая в copy.</summary>
+    public int PolicyVersion { get; set; } = 1;
+    /// <summary>Назначения этого pool.</summary>
+    public ICollection<BackupPoolDestination> Destinations { get; set; } = [];
+}
+
+/// <summary>Разрешённый маршрут pool → destination.</summary>
+public sealed class BackupPoolDestination
+{
+    /// <summary>Родительская policy.</summary>
+    public Guid BackupPoolId { get; set; }
+    /// <summary>Родительская policy.</summary>
+    public BackupPool BackupPool { get; set; } = null!;
+    /// <summary>Разрешённое назначение.</summary>
+    public Guid BackupDestinationId { get; set; }
+    /// <summary>Разрешённое назначение.</summary>
+    public BackupDestination BackupDestination { get; set; } = null!;
+    /// <summary>Порядок внутри pool.</summary>
+    public int Priority { get; set; }
+    /// <summary>CSV allowlist операций: put,verify,read.</summary>
+    public string AllowedOperations { get; set; } = "put,verify";
+    /// <summary>primary/fallback/secondary.</summary>
+    public string Role { get; set; } = "primary";
+    /// <summary>Можно создавать новые jobs.</summary>
+    public bool Enabled { get; set; } = true;
+    /// <summary>Draining запрещает новые copies, сохраняя чтение существующих.</summary>
+    public bool Draining { get; set; }
+}
+
+/// <summary>Состояние одной физической копии immutable PHB3.</summary>
+public sealed class BackupCopy
+{
+    /// <summary>Идентификатор copy record.</summary>
+    public Guid Id { get; set; } = Guid.NewGuid();
+    /// <summary>Логический backup.</summary>
+    public Guid BackupRunId { get; set; }
+    /// <summary>Логический backup.</summary>
+    public BackupRun BackupRun { get; set; } = null!;
+    /// <summary>Физическое назначение.</summary>
+    public Guid BackupDestinationId { get; set; }
+    /// <summary>Физическое назначение.</summary>
+    public BackupDestination BackupDestination { get; set; } = null!;
+    /// <summary>SHA-256 ciphertext в lowercase hex.</summary>
+    public string ContentSha256 { get; set; } = string.Empty;
+    /// <summary>Размер ciphertext.</summary>
+    public long SizeBytes { get; set; }
+    /// <summary>Состояние copy state machine.</summary>
+    public string State { get; set; } = "planned";
+    /// <summary>Opaque provider locator без credentials.</summary>
+    public string? NativeLocator { get; set; }
+    /// <summary>Provider version ID, если подтверждён.</summary>
+    public string? NativeVersion { get; set; }
+    /// <summary>Provider checksum, если подтверждён.</summary>
+    public string? NativeChecksum { get; set; }
+    /// <summary>Общее число попыток.</summary>
+    public int AttemptCount { get; set; }
+    /// <summary>Последняя попытка.</summary>
+    public DateTimeOffset? LastAttemptAt { get; set; }
+    /// <summary>Момент успешной verification.</summary>
+    public DateTimeOffset? VerifiedAt { get; set; }
+    /// <summary>Bounded machine-readable error code.</summary>
+    public string? LastErrorCode { get; set; }
+    /// <summary>Начало неизвестного исхода записи.</summary>
+    public DateTimeOffset? UnknownSince { get; set; }
+    /// <summary>Версия policy на момент планирования.</summary>
+    public int PolicyVersion { get; set; } = 1;
+    /// <summary>Durable delivery/reconcile jobs.</summary>
+    public ICollection<BackupDeliveryJob> Jobs { get; set; } = [];
+    /// <summary>Проверки restore, выполненные с этой копии.</summary>
+    public ICollection<BackupRestoreVerification> RestoreVerifications { get; set; } = [];
+}
+
+/// <summary>Durable job доставки либо reconcile одной copy.</summary>
+public sealed class BackupDeliveryJob
+{
+    /// <summary>Идентификатор job.</summary>
+    public Guid Id { get; set; } = Guid.NewGuid();
+    /// <summary>Целевая copy.</summary>
+    public Guid BackupCopyId { get; set; }
+    /// <summary>Целевая copy.</summary>
+    public BackupCopy BackupCopy { get; set; } = null!;
+    /// <summary>Уникальный ключ повторного планирования.</summary>
+    public string IdempotencyKey { get; set; } = string.Empty;
+    /// <summary>pending/processing/completed/failed/reconciling/manual_review.</summary>
+    public string State { get; set; } = "pending";
+    /// <summary>Не выполнять раньше указанного момента.</summary>
+    public DateTimeOffset NotBefore { get; set; } = DateTimeOffset.UtcNow;
+    /// <summary>Fencing token текущего worker.</summary>
+    public Guid? LeaseId { get; set; }
+    /// <summary>Истечение аренды.</summary>
+    public DateTimeOffset? LeaseUntil { get; set; }
+    /// <summary>Число начатых попыток.</summary>
+    public int Attempt { get; set; }
+    /// <summary>Bounded machine-readable error code.</summary>
+    public string? LastErrorCode { get; set; }
+    /// <summary>Создание job.</summary>
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+    /// <summary>Последнее изменение.</summary>
+    public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
+/// <summary>Аудит доказанного restore drill без connection strings и credentials.</summary>
+public sealed class BackupRestoreVerification
+{
+    /// <summary>Идентификатор проверки.</summary>
+    public Guid Id { get; set; } = Guid.NewGuid();
+    /// <summary>Проверенный logical backup.</summary>
+    public Guid BackupRunId { get; set; }
+    /// <summary>Проверенный logical backup.</summary>
+    public BackupRun BackupRun { get; set; } = null!;
+    /// <summary>Конкретная copy, если materialization шла из destination.</summary>
+    public Guid? BackupCopyId { get; set; }
+    /// <summary>Конкретная copy.</summary>
+    public BackupCopy? BackupCopy { get; set; }
+    /// <summary>local/ci/isolated/staging/production.</summary>
+    public string Environment { get; set; } = "local";
+    /// <summary>Начало проверки.</summary>
+    public DateTimeOffset StartedAt { get; set; } = DateTimeOffset.UtcNow;
+    /// <summary>Завершение проверки.</summary>
+    public DateTimeOffset? FinishedAt { get; set; }
+    /// <summary>running/passed/failed.</summary>
+    public string Result { get; set; } = "running";
+    /// <summary>Revision приложения/контейнера без secret metadata.</summary>
+    public string ApplicationRevision { get; set; } = string.Empty;
 }
 
 /// <summary>Результат сетевой проверки, не привязанный к слою хранения.</summary>

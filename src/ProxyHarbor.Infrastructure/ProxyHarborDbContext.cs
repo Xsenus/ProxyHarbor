@@ -31,6 +31,18 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
     public DbSet<CheckerNode> CheckerNodes => Set<CheckerNode>();
     /// <summary>История создания и Telegram-доставки backup.</summary>
     public DbSet<BackupRun> BackupRuns => Set<BackupRun>();
+    /// <summary>Внешние назначения backup без раскрытия credentials.</summary>
+    public DbSet<BackupDestination> BackupDestinations => Set<BackupDestination>();
+    /// <summary>Политики требуемого числа внешних копий.</summary>
+    public DbSet<BackupPool> BackupPools => Set<BackupPool>();
+    /// <summary>Разрешённые маршруты pool → destination.</summary>
+    public DbSet<BackupPoolDestination> BackupPoolDestinations => Set<BackupPoolDestination>();
+    /// <summary>Нормализованные физические копии PHB3.</summary>
+    public DbSet<BackupCopy> BackupCopies => Set<BackupCopy>();
+    /// <summary>Durable очередь delivery/reconcile.</summary>
+    public DbSet<BackupDeliveryJob> BackupDeliveryJobs => Set<BackupDeliveryJob>();
+    /// <summary>История проверенных restore drill.</summary>
+    public DbSet<BackupRestoreVerification> BackupRestoreVerifications => Set<BackupRestoreVerification>();
     /// <summary>Текущие тарифы пользователей, отделённые от Identity-ролей.</summary>
     public DbSet<UserSubscription> Subscriptions => Set<UserSubscription>();
     /// <summary>Хеши персональных пользовательских API-токенов.</summary>
@@ -543,6 +555,102 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
         {
             table.HasCheckConstraint("CK_BackupRuns_State", "\"Status\" IN ('running', 'completed', 'failed') AND ((\"Status\" = 'running') = (\"FinishedAt\" IS NULL)) AND (\"FinishedAt\" IS NULL OR \"FinishedAt\" >= \"StartedAt\")");
             table.HasCheckConstraint("CK_BackupRuns_Result", "\"SizeBytes\" >= 0 AND (NOT \"SentToTelegram\" OR \"TelegramConfigured\") AND (NOT \"SentToObjectStorage\" OR \"ObjectStorageConfigured\") AND (\"ObjectStorageKey\" IS NULL OR \"SentToObjectStorage\") AND (\"Status\" <> 'completed' OR NOT \"TelegramConfigured\" OR \"SentToTelegram\") AND (\"Status\" <> 'completed' OR NOT \"ObjectStorageConfigured\" OR \"SentToObjectStorage\")");
+        });
+
+        var backupDestination = builder.Entity<BackupDestination>();
+        backupDestination.HasIndex(x => x.Name).IsUnique();
+        backupDestination.HasIndex(x => new { x.Enabled, x.Priority });
+        backupDestination.Property(x => x.Name).HasMaxLength(120);
+        backupDestination.Property(x => x.Kind).HasMaxLength(16);
+        backupDestination.Property(x => x.FailureDomain).HasMaxLength(120);
+        backupDestination.Property(x => x.CapabilitiesJson).HasColumnType("jsonb");
+        backupDestination.Property(x => x.SettingsJson).HasColumnType("jsonb");
+        backupDestination.Property(x => x.ProtectedSecrets).HasMaxLength(65_536);
+        backupDestination.Property(x => x.RowVersion).IsRowVersion();
+        backupDestination.ToTable(table =>
+        {
+            table.HasCheckConstraint("CK_BackupDestinations_Kind", "\"Kind\" IN ('s3', 'telegram')");
+            table.HasCheckConstraint("CK_BackupDestinations_Priority", "\"Priority\" >= 0");
+            table.HasCheckConstraint("CK_BackupDestinations_Timeline", "\"UpdatedAt\" >= \"CreatedAt\"");
+        });
+
+        var backupPool = builder.Entity<BackupPool>();
+        backupPool.HasIndex(x => x.Name).IsUnique();
+        backupPool.Property(x => x.Name).HasMaxLength(120);
+        backupPool.ToTable(table => table.HasCheckConstraint(
+            "CK_BackupPools_Policy",
+            "\"RequiredVerifiedCopies\" BETWEEN 1 AND 16 AND \"DesiredVerifiedCopies\" BETWEEN \"RequiredVerifiedCopies\" AND 16 AND \"MaxAttemptsPerCycle\" BETWEEN 1 AND 20 AND \"OverallDeadlineSeconds\" BETWEEN 30 AND 86400 AND \"FailbackHealthyForSeconds\" BETWEEN 0 AND 604800 AND \"PolicyVersion\" >= 1"));
+
+        var backupPoolDestination = builder.Entity<BackupPoolDestination>();
+        backupPoolDestination.HasKey(x => new { x.BackupPoolId, x.BackupDestinationId });
+        backupPoolDestination.HasIndex(x => new { x.BackupPoolId, x.Enabled, x.Priority });
+        backupPoolDestination.Property(x => x.AllowedOperations).HasMaxLength(32);
+        backupPoolDestination.Property(x => x.Role).HasMaxLength(16);
+        backupPoolDestination.HasOne(x => x.BackupPool).WithMany(x => x.Destinations)
+            .HasForeignKey(x => x.BackupPoolId).OnDelete(DeleteBehavior.Cascade);
+        backupPoolDestination.HasOne(x => x.BackupDestination).WithMany(x => x.Pools)
+            .HasForeignKey(x => x.BackupDestinationId).OnDelete(DeleteBehavior.Restrict);
+        backupPoolDestination.ToTable(table =>
+        {
+            table.HasCheckConstraint("CK_BackupPoolDestinations_Priority", "\"Priority\" >= 0");
+            table.HasCheckConstraint("CK_BackupPoolDestinations_Operations", "\"AllowedOperations\" IN ('put', 'put,verify', 'put,verify,read', 'verify', 'verify,read', 'read')");
+            table.HasCheckConstraint("CK_BackupPoolDestinations_Role", "\"Role\" IN ('primary', 'fallback', 'secondary')");
+            table.HasCheckConstraint("CK_BackupPoolDestinations_Draining", "NOT \"Draining\" OR NOT \"Enabled\"");
+        });
+
+        var backupCopy = builder.Entity<BackupCopy>();
+        backupCopy.HasIndex(x => new { x.BackupRunId, x.BackupDestinationId }).IsUnique();
+        backupCopy.HasIndex(x => new { x.State, x.LastAttemptAt });
+        backupCopy.HasIndex(x => new { x.BackupDestinationId, x.VerifiedAt });
+        backupCopy.Property(x => x.ContentSha256).HasMaxLength(64);
+        backupCopy.Property(x => x.State).HasMaxLength(32);
+        backupCopy.Property(x => x.NativeLocator).HasMaxLength(1024);
+        backupCopy.Property(x => x.NativeVersion).HasMaxLength(512);
+        backupCopy.Property(x => x.NativeChecksum).HasMaxLength(256);
+        backupCopy.Property(x => x.LastErrorCode).HasMaxLength(64);
+        backupCopy.HasOne(x => x.BackupRun).WithMany(x => x.Copies)
+            .HasForeignKey(x => x.BackupRunId).OnDelete(DeleteBehavior.Restrict);
+        backupCopy.HasOne(x => x.BackupDestination).WithMany(x => x.Copies)
+            .HasForeignKey(x => x.BackupDestinationId).OnDelete(DeleteBehavior.Restrict);
+        backupCopy.ToTable(table =>
+        {
+            table.HasCheckConstraint("CK_BackupCopies_State", "\"State\" IN ('planned', 'uploading', 'verifying', 'verified', 'retryable_failed', 'permanent_failed', 'unknown', 'reconciling', 'manual_review', 'missing', 'quarantined')");
+            table.HasCheckConstraint("CK_BackupCopies_Content", "\"SizeBytes\" >= 0 AND \"ContentSha256\" ~ '^[0-9a-f]{64}$' AND \"AttemptCount\" >= 0 AND \"PolicyVersion\" >= 1");
+            table.HasCheckConstraint("CK_BackupCopies_Verified", "\"State\" <> 'verified' OR (\"VerifiedAt\" IS NOT NULL AND \"NativeLocator\" IS NOT NULL)");
+            table.HasCheckConstraint("CK_BackupCopies_Unknown", "(\"State\" <> 'unknown' OR \"UnknownSince\" IS NOT NULL) AND (\"UnknownSince\" IS NULL OR \"State\" IN ('unknown', 'reconciling', 'manual_review'))");
+        });
+
+        var backupDeliveryJob = builder.Entity<BackupDeliveryJob>();
+        backupDeliveryJob.HasIndex(x => x.IdempotencyKey).IsUnique();
+        backupDeliveryJob.HasIndex(x => new { x.State, x.NotBefore, x.LeaseUntil });
+        backupDeliveryJob.Property(x => x.IdempotencyKey).HasMaxLength(160);
+        backupDeliveryJob.Property(x => x.State).HasMaxLength(32);
+        backupDeliveryJob.Property(x => x.LastErrorCode).HasMaxLength(64);
+        backupDeliveryJob.HasOne(x => x.BackupCopy).WithMany(x => x.Jobs)
+            .HasForeignKey(x => x.BackupCopyId).OnDelete(DeleteBehavior.Cascade);
+        backupDeliveryJob.ToTable(table =>
+        {
+            table.HasCheckConstraint("CK_BackupDeliveryJobs_State", "\"State\" IN ('pending', 'processing', 'completed', 'failed', 'reconciling', 'manual_review')");
+            table.HasCheckConstraint("CK_BackupDeliveryJobs_Attempt", "\"Attempt\" >= 0");
+            table.HasCheckConstraint("CK_BackupDeliveryJobs_Lease", "(\"LeaseId\" IS NULL) = (\"LeaseUntil\" IS NULL) AND (\"State\" = 'processing' OR \"LeaseId\" IS NULL)");
+            table.HasCheckConstraint("CK_BackupDeliveryJobs_Timeline", "\"UpdatedAt\" >= \"CreatedAt\"");
+        });
+
+        var backupRestoreVerification = builder.Entity<BackupRestoreVerification>();
+        backupRestoreVerification.HasIndex(x => new { x.Result, x.FinishedAt });
+        backupRestoreVerification.HasIndex(x => new { x.BackupRunId, x.StartedAt });
+        backupRestoreVerification.Property(x => x.Environment).HasMaxLength(16);
+        backupRestoreVerification.Property(x => x.Result).HasMaxLength(16);
+        backupRestoreVerification.Property(x => x.ApplicationRevision).HasMaxLength(128);
+        backupRestoreVerification.HasOne(x => x.BackupRun).WithMany(x => x.RestoreVerifications)
+            .HasForeignKey(x => x.BackupRunId).OnDelete(DeleteBehavior.Restrict);
+        backupRestoreVerification.HasOne(x => x.BackupCopy).WithMany(x => x.RestoreVerifications)
+            .HasForeignKey(x => x.BackupCopyId).OnDelete(DeleteBehavior.Restrict);
+        backupRestoreVerification.ToTable(table =>
+        {
+            table.HasCheckConstraint("CK_BackupRestoreVerifications_Environment", "\"Environment\" IN ('local', 'ci', 'isolated', 'staging', 'production')");
+            table.HasCheckConstraint("CK_BackupRestoreVerifications_Result", "\"Result\" IN ('running', 'passed', 'failed') AND ((\"Result\" = 'running') = (\"FinishedAt\" IS NULL))");
+            table.HasCheckConstraint("CK_BackupRestoreVerifications_Timeline", "\"FinishedAt\" IS NULL OR \"FinishedAt\" >= \"StartedAt\"");
         });
     }
 }

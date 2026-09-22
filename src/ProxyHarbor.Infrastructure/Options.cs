@@ -134,6 +134,18 @@ public sealed class CollectorOptions
 /// <summary>Проверенный HTTPS-адрес контрольной пробы.</summary>
 public sealed record ProbeControlEndpoint(string Host, int Port, string Path);
 
+/// <summary>
+/// Kill switch новой destination-based маршрутизации. До завершения совместимого
+/// projection и worker rollout остаётся выключенным и не создаёт delivery jobs.
+/// </summary>
+public sealed class BackupRoutingOptions
+{
+    /// <summary>Имя configuration-секции.</summary>
+    public const string Section = "BackupRouting";
+    /// <summary>Разрешить новую destination-based маршрутизацию.</summary>
+    public bool Enabled { get; set; }
+}
+
 /// <summary>Параметры шифрованного резервного копирования.</summary>
 public sealed class BackupOptions
 {
