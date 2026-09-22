@@ -60,6 +60,15 @@ public sealed record BackupDestinationFailure(
     BackupDestinationErrorCode Code,
     BackupDestinationFailureDisposition Disposition);
 
+/// <summary>Provider failure с безопасным typed-кодом без исходного response/URI.</summary>
+public sealed class BackupDestinationOperationException(
+    BackupDestinationFailure failure,
+    string message) : InvalidOperationException(message)
+{
+    /// <summary>Machine-readable retry/reconcile contract.</summary>
+    public BackupDestinationFailure Failure { get; } = failure;
+}
+
 /// <summary>Возможности одной операции adapter.</summary>
 public sealed record BackupDestinationOperationCapability(
     bool Supported,
@@ -218,7 +227,7 @@ public sealed class BackupDestinationRegistry
         string message) => new(rejection, message);
 }
 
-/// <summary>Консервативные capabilities существующей S3 PUT+HEAD реализации.</summary>
+/// <summary>Консервативные capabilities существующей S3 PUT+HEAD+GET реализации.</summary>
 public sealed class S3BackupDestinationAdapter : IBackupDestinationAdapter
 {
     /// <inheritdoc />
@@ -227,7 +236,7 @@ public sealed class S3BackupDestinationAdapter : IBackupDestinationAdapter
     public BackupDestinationCapabilities Capabilities { get; } = new(
         Put: new(true),
         Verify: new(true),
-        Materialize: new(false),
+        Materialize: new(true),
         SupportsConditionalCreate: false,
         ProvidesNativeVersion: false,
         ProvidesNativeChecksum: false);

@@ -857,12 +857,14 @@ internal sealed record BackupSettingsSnapshot(
     }
 }
 
-/// <summary>Потоково создаёт по одной временной части и гарантированно удаляет её после отправки.</summary>
-internal static class BackupFileSplitter
+/// <summary>Потоково создаёт bounded temporary parts для native Telegram transport.</summary>
+public static class BackupFileSplitter
 {
-    internal sealed record Part(string Path, int Number, int Total);
+    /// <summary>Одна temporary часть и её позиция в наборе.</summary>
+    public sealed record Part(string Path, int Number, int Total);
 
-    internal static async IAsyncEnumerable<Part> SplitAsync(
+    /// <summary>Создаёт и удаляет по завершении перечисления не более maximumParts частей.</summary>
+    public static async IAsyncEnumerable<Part> SplitAsync(
         string path,
         long partLimit,
         int maximumParts,
@@ -901,8 +903,8 @@ internal static class BackupFileSplitter
         }
     }
 
-    /// <summary>Точно и без floating-point вычисляет bounded число частей до filesystem writes.</summary>
-    internal static int RequiredPartCount(long length, long partLimit, int maximumParts)
+    /// <summary>Вычисляет число частей без filesystem writes и отклоняет превышение policy.</summary>
+    public static int RequiredPartCount(long length, long partLimit, int maximumParts)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(length);
         ArgumentOutOfRangeException.ThrowIfLessThan(partLimit, 1);
@@ -916,8 +918,8 @@ internal static class BackupFileSplitter
     }
 }
 
-/// <summary>Постоянный operational отказ доставки, который не исправится быстрым retry.</summary>
-internal sealed class BackupDeliveryPolicyException(string message) : InvalidOperationException(message);
+/// <summary>Постоянный bounded-policy отказ до либо во время provider delivery.</summary>
+public sealed class BackupDeliveryPolicyException(string message) : InvalidOperationException(message);
 
 /// <summary>Запускает резервное копирование по расписанию только при явном включении.</summary>
 public sealed class BackupWorker(

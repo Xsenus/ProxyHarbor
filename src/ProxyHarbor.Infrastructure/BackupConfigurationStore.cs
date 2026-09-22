@@ -175,4 +175,54 @@ public interface IBackupObjectStorageTransport
 {
     /// <summary>Возвращает безопасный object key только после успешной проверки метаданных.</summary>
     Task<string> UploadAndVerifyAsync(string path, BackupOptions options, CancellationToken token);
+
+    /// <summary>Возвращает доступные provider evidence после PUT+HEAD.</summary>
+    Task<BackupObjectStorageWriteResult> UploadAndVerifyDetailedAsync(
+        string path,
+        BackupOptions options,
+        CancellationToken token) => throw new NotSupportedException();
+
+    /// <summary>Повторно проверяет существующий locator без загрузки body.</summary>
+    Task<BackupObjectStorageVerificationResult> VerifyAsync(
+        string objectKey,
+        long expectedSize,
+        string expectedSha256,
+        BackupOptions options,
+        CancellationToken token) => throw new NotSupportedException();
+
+    /// <summary>Потоково публикует локальный файл только после size/hash verification.</summary>
+    Task<BackupObjectStorageMaterializationResult> MaterializeAndVerifyAsync(
+        string objectKey,
+        string finalPath,
+        long expectedSize,
+        string expectedSha256,
+        BackupOptions options,
+        CancellationToken token) => throw new NotSupportedException();
 }
+
+/// <summary>Подтверждённый результат S3 PUT+HEAD.</summary>
+public sealed record BackupObjectStorageWriteResult(
+    string ObjectKey,
+    long SizeBytes,
+    string Sha256,
+    string? VersionId,
+    string? NativeChecksum,
+    string? EntityTag);
+
+/// <summary>Подтверждённые metadata существующего объекта.</summary>
+public sealed record BackupObjectStorageVerificationResult(
+    string ObjectKey,
+    long SizeBytes,
+    string Sha256,
+    string? VersionId,
+    string? NativeChecksum,
+    string? EntityTag);
+
+/// <summary>Локально опубликованный и проверенный materialized ciphertext.</summary>
+public sealed record BackupObjectStorageMaterializationResult(
+    string Path,
+    long SizeBytes,
+    string Sha256,
+    string? VersionId,
+    string? NativeChecksum,
+    string? EntityTag);

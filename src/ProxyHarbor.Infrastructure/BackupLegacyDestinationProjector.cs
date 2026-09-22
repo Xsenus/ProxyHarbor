@@ -130,7 +130,7 @@ public sealed class BackupLegacyDestinationProjector(
             telegramSecrets);
 
         await UpsertRouteAsync(
-            db, s3, priority: 10, role: "primary", enabled: s3Configured, "put,verify", token);
+            db, s3, priority: 10, role: "primary", enabled: s3Configured, "put,verify,read", token);
         await UpsertRouteAsync(
             db,
             telegram,
