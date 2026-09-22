@@ -26,9 +26,9 @@ Manifest v9 содержит согласованный repeatable-read snapshot
 
 ## Создание и доставка
 
-Snapshot сериализуется в ZIP-поток и сразу шифруется в PHB3: plaintext ZIP не записывается в backup volume. Результат проверяется, атомарно публикуется и затем сначала загружается в настроенный S3-совместимый bucket. После `PUT` выполняется `HEAD`, сверяются размер и сохранённый SHA-256. Дополнительно архив может отправляться Telegram document; файлы крупнее настроенного лимита делятся максимум на 20 частей.
+Snapshot сериализуется в ZIP-поток и сразу шифруется в PHB3: plaintext ZIP не записывается в backup volume. Результат проверяется и атомарно публикуется. При выключенном routing сохраняется прежняя последовательная S3/Telegram-доставка. При включённом routing completed snapshot и отдельные destination copies/jobs фиксируются одной PostgreSQL-транзакцией, а bounded worker повторно использует те же immutable bytes. S3 становится `verified` только после `PUT`+`HEAD` с совпавшими размером/SHA-256; Telegram delivery без independent verify не удовлетворяет protection quorum.
 
-Production запуск требует backup key и хотя бы один внешний канал: S3-совместимое хранилище либо активного получателя из CRM основного Telegram-бота. Для больших архивов S3 является основным каналом. Endpoint обязан быть HTTPS; bucket должен быть непубличным, с versioning и по возможности Object Lock. Access/secret key защищаются ASP.NET Core Data Protection и никогда не возвращаются в браузер. Ошибка любого включённого канала завершает audit неуспешно, но уже созданный локальный шифротекст и подтверждение успешно доставленного канала сохраняются.
+Production запуск требует backup key и хотя бы один внешний канал: S3-совместимое хранилище либо активного получателя из CRM основного Telegram-бота. Для больших архивов S3 является основным каналом. Endpoint обязан быть HTTPS; bucket должен быть непубличным, с versioning и по возможности Object Lock. Access/secret key защищаются ASP.NET Core Data Protection и никогда не возвращаются в браузер. В legacy-режиме ошибка любого включённого канала завершает audit неуспешно. В routing-режиме отказ одного destination не блокирует jobs остальных; protection определяется verified independent copies, а не успехом всех каналов.
 
 ### Настройка S3-совместимого хранилища
 
@@ -47,6 +47,8 @@ curl --fail --request POST \
 ```
 
 По умолчанию destination routing выключен, поэтому ручной запуск сохраняет прежний `200`-контракт. После контролируемого включения `BackupRouting__Enabled=true` код ответа означает доказанную защиту: `200` только для `protected` или `degraded` (required quorum достигнут), `202` для durable `pending`, `503` для `unavailable`. Локальный staging не является внешней копией и сам по себе не делает backup защищённым. Поля `backupRunId`, `protectionState`, verified/required/desired и copy debt позволяют автоматизации отличить созданный ciphertext от подтверждённой внешней защиты.
+
+Worker арендует due jobs через PostgreSQL `FOR UPDATE SKIP LOCKED`, выполняет одну потоковую delivery за раз, применяет bounded exponential backoff с jitter и ограничивает provider call меньшим из policy deadline и остатка lease. Истёкший `processing` lease переводится в `UNKNOWN/reconciling` без слепого повторного PUT. Staging старше `BackupRouting__StagingTtlHours` и переполнение `BackupRouting__MaximumStagingBytes` завершаются fail-closed. Автоматический reconcile UNKNOWN добавляется отдельным этапом; до него такие jobs требуют operator visibility и не считаются verified.
 
 Проверка полного production-контракта:
 

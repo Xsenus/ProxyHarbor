@@ -456,6 +456,33 @@ public sealed class AdminController(
         {
             return Conflict(new ProblemDetails { Title = exception.Message, Status = 409 });
         }
+        catch (BackupStagingCapacityException exception)
+        {
+            await using var failureDb = await dbFactory.CreateDbContextAsync(token);
+            var failed = await failureDb.BackupRuns.AsNoTracking()
+                .Where(item => item.FileName == exception.FileName)
+                .OrderByDescending(item => item.StartedAt)
+                .Select(item => new
+                {
+                    item.Id,
+                    item.RequiredVerifiedCopies,
+                    item.DesiredVerifiedCopies
+                })
+                .FirstOrDefaultAsync(token);
+            return StatusCode(
+                StatusCodes.Status503ServiceUnavailable,
+                new BackupTriggerResponse(
+                    exception.FileName,
+                    SentToTelegram: false,
+                    BackupRunId: failed?.Id,
+                    ProtectionState: "unavailable",
+                    Degraded: false,
+                    VerifiedIndependentCopies: 0,
+                    RequiredVerifiedCopies: failed?.RequiredVerifiedCopies,
+                    DesiredVerifiedCopies: failed?.DesiredVerifiedCopies,
+                    RequiredCopyDebt: failed?.RequiredVerifiedCopies,
+                    DesiredCopyDebt: failed?.DesiredVerifiedCopies));
+        }
         var current = await GetBackupOptionsAsync(token);
         var sent = current.TelegramRecipientId.HasValue ||
             !string.IsNullOrWhiteSpace(current.TelegramBotToken) &&

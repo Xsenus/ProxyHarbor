@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using ProxyHarbor.Api;
@@ -155,6 +156,35 @@ public sealed class BackupDestinationRegistryTests
         Assert.Equal(BackupDestinationFailureDisposition.UnknownOutcome, failure.Disposition);
     }
 
+    [Fact]
+    public async Task S3AdapterUsesProtectedProjectionAndReturnsVerifiedEvidence()
+    {
+        var protection = new EphemeralDataProtectionProvider();
+        var protectedSecrets = protection.CreateProtector("ProxyHarbor.BackupDestination.Secrets.v1")
+            .Protect("{\"accessKey\":\"access\",\"secretKey\":\"secret\"}");
+        var transport = new CapturingObjectStorageTransport();
+        var adapter = new S3BackupDestinationAdapter(transport, protection);
+        var destination = new BackupDestination
+        {
+            Kind = "s3",
+            SettingsJson = "{\"endpoint\":\"https://storage.example.test\",\"region\":\"eu-1\",\"bucket\":\"backup\",\"prefix\":\"safe\",\"usePathStyle\":true}",
+            ProtectedSecrets = protectedSecrets
+        };
+
+        var result = await adapter.PutAsync(
+            destination,
+            "snapshot.phbackup",
+            new string('a', 64),
+            123,
+            CancellationToken.None);
+
+        Assert.True(result.IndependentlyVerified);
+        Assert.Equal("safe/snapshot.phbackup", result.NativeLocator);
+        Assert.Equal("access", transport.Options!.ObjectStorageAccessKey);
+        Assert.Equal("secret", transport.Options.ObjectStorageSecretKey);
+        Assert.Equal("https://storage.example.test", transport.Options.ObjectStorageEndpoint);
+    }
+
     private static BackupDestinationRegistry CreateRegistry() => new([
         new S3BackupDestinationAdapter(),
         new TelegramBackupDestinationAdapter()
@@ -191,5 +221,30 @@ public sealed class BackupDestinationRegistryTests
         public string Kind { get; } = kind;
         public BackupDestinationCapabilities Capabilities { get; } = new(
             new(false), new(false), new(false), false, false, false);
+    }
+
+    private sealed class CapturingObjectStorageTransport : IBackupObjectStorageTransport
+    {
+        public BackupOptions? Options { get; private set; }
+
+        public Task<string> UploadAndVerifyAsync(
+            string path,
+            BackupOptions options,
+            CancellationToken token) => throw new NotSupportedException();
+
+        public Task<BackupObjectStorageWriteResult> UploadAndVerifyDetailedAsync(
+            string path,
+            BackupOptions options,
+            CancellationToken token)
+        {
+            Options = options;
+            return Task.FromResult(new BackupObjectStorageWriteResult(
+                "safe/snapshot.phbackup",
+                123,
+                new string('a', 64),
+                "version-1",
+                "checksum",
+                "etag"));
+        }
     }
 }

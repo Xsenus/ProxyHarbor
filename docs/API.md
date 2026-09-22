@@ -494,6 +494,8 @@ Host должен быть публичным IP. Пароль не сохран
 
 Локальный файл не считается внешней копией. Две copies в одном failure domain дают один независимый голос; Telegram без independent verify не увеличивает quorum. Оценка всегда использует policy snapshot самого run и точный SHA-256 ciphertext, а не более новую или ослабленную текущую policy.
 
+В routing-режиме создание PHB3 и постановка per-destination jobs разделены: API атомарно фиксирует completed snapshot и durable jobs, после чего фоновый worker арендует их через PostgreSQL. Отказ одного destination не блокирует остальные. Истёкший lease становится `UNKNOWN/reconciling` и не получает слепой повторный PUT; превышение configured staging budget возвращает `503 unavailable` с audit-id.
+
 Повторный локальный/cluster-wide запуск даёт `409`. Ошибка включённого Telegram или S3-канала не возвращает ложный success; локальный encrypted file, failed audit и уже подтверждённые доставки сохраняются.
 
 ## Публичные разделы, cookies и аналитика

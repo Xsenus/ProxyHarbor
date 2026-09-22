@@ -1,3 +1,6 @@
+using System.Security.Cryptography;
+using System.Text.Json;
+using Microsoft.AspNetCore.DataProtection;
 using ProxyHarbor.Domain;
 
 namespace ProxyHarbor.Infrastructure;
@@ -94,7 +97,27 @@ public interface IBackupDestinationAdapter
     string Kind { get; }
     /// <summary>Только доказанные operation-specific capabilities.</summary>
     BackupDestinationCapabilities Capabilities { get; }
+
+    /// <summary>Записывает immutable ciphertext и возвращает только безопасные provider evidence.</summary>
+    Task<BackupDestinationWriteResult> PutAsync(
+        BackupDestination destination,
+        string path,
+        string expectedSha256,
+        long expectedSize,
+        CancellationToken token) => Task.FromException<BackupDestinationWriteResult>(
+            new BackupDestinationOperationException(
+                new BackupDestinationFailure(
+                    BackupDestinationErrorCode.UnsupportedOperation,
+                    BackupDestinationFailureDisposition.Permanent),
+                "Backup adapter не реализует запись."));
 }
+
+/// <summary>Безопасный результат provider write, пригодный для durable copy audit.</summary>
+public sealed record BackupDestinationWriteResult(
+    string? NativeLocator,
+    string? NativeVersion,
+    string? NativeChecksum,
+    bool IndependentlyVerified);
 
 /// <summary>Причина отказа control-plane routing до provider I/O.</summary>
 public enum BackupDestinationRouteRejection
@@ -230,6 +253,22 @@ public sealed class BackupDestinationRegistry
 /// <summary>Консервативные capabilities существующей S3 PUT+HEAD+GET реализации.</summary>
 public sealed class S3BackupDestinationAdapter : IBackupDestinationAdapter
 {
+    private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
+    private readonly IBackupObjectStorageTransport? transport;
+    private readonly IDataProtector? protector;
+
+    /// <summary>Metadata-only constructor для tooling/tests без provider I/O.</summary>
+    public S3BackupDestinationAdapter() { }
+
+    /// <summary>Production adapter использует проверенный legacy S3 transport.</summary>
+    public S3BackupDestinationAdapter(
+        IBackupObjectStorageTransport transport,
+        IDataProtectionProvider protectionProvider)
+    {
+        this.transport = transport;
+        protector = protectionProvider.CreateProtector("ProxyHarbor.BackupDestination.Secrets.v1");
+    }
+
     /// <inheritdoc />
     public string Kind => "s3";
     /// <inheritdoc />
@@ -240,4 +279,64 @@ public sealed class S3BackupDestinationAdapter : IBackupDestinationAdapter
         SupportsConditionalCreate: false,
         ProvidesNativeVersion: false,
         ProvidesNativeChecksum: false);
+
+    /// <inheritdoc />
+    public async Task<BackupDestinationWriteResult> PutAsync(
+        BackupDestination destination,
+        string path,
+        string expectedSha256,
+        long expectedSize,
+        CancellationToken token)
+    {
+        ArgumentNullException.ThrowIfNull(destination);
+        if (transport is null || protector is null || !string.Equals(destination.Kind, Kind, StringComparison.Ordinal))
+            throw Failure(BackupDestinationErrorCode.InvalidConfiguration);
+        S3Settings settings;
+        S3Secrets secrets;
+        try
+        {
+            settings = JsonSerializer.Deserialize<S3Settings>(destination.SettingsJson, Json)
+                ?? throw new JsonException();
+            secrets = JsonSerializer.Deserialize<S3Secrets>(protector.Unprotect(destination.ProtectedSecrets), Json)
+                ?? throw new JsonException();
+        }
+        catch (Exception exception) when (exception is JsonException or CryptographicException)
+        {
+            throw Failure(BackupDestinationErrorCode.InvalidConfiguration);
+        }
+
+        var options = new BackupOptions
+        {
+            SendToObjectStorage = true,
+            ObjectStorageEndpoint = settings.Endpoint ?? string.Empty,
+            ObjectStorageRegion = settings.Region ?? string.Empty,
+            ObjectStorageBucket = settings.Bucket ?? string.Empty,
+            ObjectStoragePrefix = settings.Prefix ?? string.Empty,
+            ObjectStorageUsePathStyle = settings.UsePathStyle,
+            ObjectStorageAccessKey = secrets.AccessKey ?? string.Empty,
+            ObjectStorageSecretKey = secrets.SecretKey ?? string.Empty
+        };
+        var result = await transport.UploadAndVerifyDetailedAsync(path, options, token);
+        if (result.SizeBytes != expectedSize ||
+            !string.Equals(result.Sha256, expectedSha256, StringComparison.Ordinal))
+            throw Failure(BackupDestinationErrorCode.IntegrityMismatch);
+        return new BackupDestinationWriteResult(
+            result.ObjectKey,
+            result.VersionId,
+            result.NativeChecksum ?? result.EntityTag,
+            IndependentlyVerified: true);
+    }
+
+    private static BackupDestinationOperationException Failure(BackupDestinationErrorCode code) => new(
+        new BackupDestinationFailure(code, BackupDestinationFailureDisposition.Permanent),
+        $"S3 backup destination завершился ошибкой '{code}'.");
+
+    private sealed record S3Settings(
+        string? Endpoint,
+        string? Region,
+        string? Bucket,
+        string? Prefix,
+        bool UsePathStyle);
+
+    private sealed record S3Secrets(string? AccessKey, string? SecretKey);
 }

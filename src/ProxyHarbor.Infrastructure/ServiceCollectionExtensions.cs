@@ -93,7 +93,12 @@ public static class ServiceCollectionExtensions
         // Схема destinations/copies/jobs разворачивается заранее. Сам новый маршрут
         // остаётся fail-closed до отдельного совместимого rollout.
         services.AddOptions<BackupRoutingOptions>()
-            .Bind(configuration.GetSection(BackupRoutingOptions.Section));
+            .Bind(configuration.GetSection(BackupRoutingOptions.Section))
+            .Validate(options => options.MaximumStagingBytes is >= 104_857_600L and <= 10_995_116_277_760L,
+                "BackupRouting MaximumStagingBytes: 100 MiB..10 TiB")
+            .Validate(options => options.StagingTtlHours is >= 1 and <= 720,
+                "BackupRouting StagingTtlHours: 1..720")
+            .ValidateOnStart();
         services.AddOptions<GeoIpOptions>().Bind(configuration.GetSection(GeoIpOptions.Section))
             .Validate(x => x.RefreshHours is >= 1 and <= 720, "RefreshHours: 1..720")
             .Validate(x => x.BackfillBatchSize is >= 1 and <= 100_000, "BackfillBatchSize: 1..100000")
@@ -175,6 +180,8 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IBackupConfigurationStore, BackupConfigurationStore>();
         services.AddSingleton<BackupLegacyDestinationProjector>();
         services.AddSingleton<BackupProtectionEvaluator>();
+        services.AddSingleton<BackupDeliveryPlanner>();
+        services.AddSingleton<BackupDeliveryProcessor>();
         services.AddSingleton<BackupService>();
         services.AddSingleton<IBackupObjectStorageTransport, S3BackupObjectStorageTransport>();
         services.AddSingleton<IBackupDestinationAdapter, S3BackupDestinationAdapter>();
@@ -187,6 +194,7 @@ public static class ServiceCollectionExtensions
         services.AddHostedService<VpnCollectorWorker>();
         services.AddHostedService<VpnValidatorWorker>();
         services.AddHostedService<BackupWorker>();
+        services.AddHostedService<BackupDeliveryWorker>();
         services.AddHostedService<OperationalMaintenanceWorker>();
         services.AddHostedService<ProxyCountryWorker>();
         return services;
