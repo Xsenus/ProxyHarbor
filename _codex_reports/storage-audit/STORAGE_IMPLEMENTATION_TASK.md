@@ -1,6 +1,6 @@
 # Техническое задание: надёжное хранение и восстановление ProxyHarbor
 
-Версия: 1.5, 2026-09-22. Статус: `IMPLEMENTATION IN PROGRESS`; STG-00/01 и TASK-020–024 прошли CI и слиты в `main`, маршрутизация остаётся выключенной по умолчанию. Следующий локальный этап — TASK-030 protection evaluator. Evidence: [STORAGE_EVIDENCE.md](STORAGE_EVIDENCE.md), риски: [STORAGE_RISK_REGISTER.md](STORAGE_RISK_REGISTER.md), порядок: [STORAGE_IMPLEMENTATION_ROADMAP.md](STORAGE_IMPLEMENTATION_ROADMAP.md).
+Версия: 1.5, 2026-09-22. Статус: `IMPLEMENTATION IN PROGRESS`; STG-00/01, TASK-020–024 и TASK-030 прошли CI и слиты в `main`, маршрутизация остаётся выключенной по умолчанию. Текущий локальный этап — TASK-031 durable planner/worker. Evidence: [STORAGE_EVIDENCE.md](STORAGE_EVIDENCE.md), риски: [STORAGE_RISK_REGISTER.md](STORAGE_RISK_REGISTER.md), порядок: [STORAGE_IMPLEMENTATION_ROADMAP.md](STORAGE_IMPLEMENTATION_ROADMAP.md).
 
 ## 1. Scope и требования
 

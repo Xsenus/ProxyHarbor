@@ -130,6 +130,26 @@ public sealed class TelegramBackupDestinationAdapter : IBackupDestinationAdapter
         }
     }
 
+    /// <inheritdoc />
+    public async Task<BackupDestinationWriteResult> PutAsync(
+        BackupDestination destination,
+        string path,
+        string expectedSha256,
+        long expectedSize,
+        CancellationToken token)
+    {
+        var file = new FileInfo(path);
+        if (!file.Exists || file.Length != expectedSize)
+            throw Failure(
+                BackupDestinationErrorCode.IntegrityMismatch,
+                BackupDestinationFailureDisposition.Permanent);
+        _ = expectedSha256;
+        _ = await PutAsync(destination, path, token);
+        // Текущий Bot API transport не возвращает устойчивый file/message locator и
+        // не умеет independent verify: доставка успешна, но copy не становится verified.
+        return new BackupDestinationWriteResult(null, null, null, IndependentlyVerified: false);
+    }
+
     internal static BackupDestinationFailure ClassifyProviderFailure(Exception exception)
     {
         if (exception is BackupDeliveryPolicyException)

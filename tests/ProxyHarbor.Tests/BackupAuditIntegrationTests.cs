@@ -7,6 +7,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Npgsql;
+using ProxyHarbor.Api;
 using ProxyHarbor.Domain;
 using ProxyHarbor.Infrastructure;
 
@@ -50,8 +51,28 @@ public sealed class BackupAuditIntegrationTests
                     DesiredVerifiedCopies = 3,
                     PolicyVersion = 7
                 });
+                var destination = new BackupDestination
+                {
+                    Name = "planned-s3",
+                    Kind = "s3",
+                    Enabled = true,
+                    FailureDomain = "planned-domain"
+                };
+                migrationDb.BackupDestinations.Add(destination);
+                migrationDb.BackupPoolDestinations.Add(new BackupPoolDestination
+                {
+                    BackupPoolId = BackupLegacyDestinationProjector.LegacyPoolId,
+                    BackupDestinationId = destination.Id,
+                    AllowedOperations = "put,verify,read",
+                    Enabled = true
+                });
                 await migrationDb.SaveChangesAsync();
             }
+
+            var registry = new BackupDestinationRegistry([
+                new S3BackupDestinationAdapter(),
+                new TelegramBackupDestinationAdapter()
+            ]);
 
             using var service = new BackupService(
                 factory,
@@ -65,7 +86,8 @@ public sealed class BackupAuditIntegrationTests
                 new ConfigurationBuilder().Build(),
                 new ThrowingLogger<BackupService>(),
                 snapshotDbFactory: snapshotFactory,
-                routingOptions: Options.Create(new BackupRoutingOptions { Enabled = true }));
+                routingOptions: Options.Create(new BackupRoutingOptions { Enabled = true }),
+                deliveryPlanner: new BackupDeliveryPlanner(registry));
 
             var path = await service.CreateAndSendAsync(CancellationToken.None);
 
@@ -83,6 +105,11 @@ public sealed class BackupAuditIntegrationTests
             Assert.Equal(7, audit.ProtectionPolicyVersion);
             Assert.Equal(2, audit.RequiredVerifiedCopies);
             Assert.Equal(3, audit.DesiredVerifiedCopies);
+            var copy = await verificationDb.BackupCopies.Include(item => item.Jobs).SingleAsync();
+            Assert.Equal(audit.ContentSha256, copy.ContentSha256);
+            Assert.Equal(audit.SizeBytes, copy.SizeBytes);
+            Assert.Equal("planned", copy.State);
+            Assert.Equal("pending", Assert.Single(copy.Jobs).State);
             Assert.True(snapshotFactory.WasCalled);
         }
         finally

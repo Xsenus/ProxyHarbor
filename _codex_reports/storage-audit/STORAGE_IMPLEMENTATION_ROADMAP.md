@@ -164,14 +164,14 @@ Purpose: fulfill owner requirement without false success. Covers REQ-004–006/0
 
 #### TASK-030 — Protection evaluator and acknowledgement contract
 
-- Status: `LOCAL VERIFIED; PR/CI PENDING`; Codex.
+- Status: `DONE / merged`; Codex. PR #267, commit `fdc88c6`.
 - Changes: `BackupProtectionEvaluator`, policy snapshot on run, states `protected/degraded/pending/unavailable`; modify Admin trigger DTO/status semantics. Required vs desired copies and independent failure domains explicit.
 - Checks: table-driven TEST-007; one physical copy cannot count twice; local staging excluded from external; Telegram capability mismatch excluded; no policy downgrade.
 - Done: AC-005/007; API contract/OpenAPI/docs updated.
 
 #### TASK-031 — Delivery planner, jobs and worker
 
-- Status: `BLOCKED: TASK-030`; Codex.
+- Status: `LOCAL VERIFIED; PR/CI PENDING`; Codex.
 - Changes: `BackupService` creates/verifies one PHB3 and enqueues jobs; `BackupDeliveryWorker` leases due rows with PostgreSQL concurrency, retry/backoff/jitter/deadline. `BackupWorker` only schedules new snapshots. Preserve existing advisory/runtime gates.
 - Resource budgets: bounded concurrency, no full-file buffering, local staging capacity/TTL, newest unprotected priority without starvation, graceful cancellation.
 - Multi-instance tests: two workers, lease expiry/steal, crash after state transitions, restart/resume, policy version changes/draining.
@@ -412,8 +412,9 @@ No dates are invented. STG-00–05 may proceed without these decisions using iso
 | 2026-09-22 | implementation checkpoint 4 | Added S3 detailed PUT/HEAD/streaming GET evidence and safe failure map; Telegram adapter now wraps existing resolver/runtime multipart transport and preserves legacy protected credentials. | EVID-047–048 |
 | 2026-09-22 | merged checkpoint 4 | PR #265 merged to `main`; verify/container smoke, PostgreSQL/API smoke, C#/JS analysis and CodeQL all succeeded. | EVID-049 |
 | 2026-09-22 | implementation checkpoint 5 | Added immutable run policy/content snapshot, fail-closed protection evaluator and `200/202/503` acknowledgement contract; local PostgreSQL 17 and restore coverage are green. | EVID-050–051 |
+| 2026-09-22 | implementation checkpoint 6 | Added atomic per-destination planner and leased delivery worker with bounded retry/deadline, crash-to-UNKNOWN semantics, independent fallback, staging byte/TTL budgets and routing disabled by default. | EVID-054–055 |
 
-Current checkpoint: STG-00–02 and TASK-020–024 are merged in `main` with green CI. TASK-030 is implemented and locally verified on its feature branch; PR/CI are still pending. Routing remains disabled, legacy behavior remains authoritative, and no destination jobs are created. Existing S3 object keys and Telegram resolver/transport contracts are preserved. Docker and real providers remain unavailable locally. No production/provider access or deployment occurred. Next after TASK-030 merge: TASK-031 durable planner/worker.
+Current checkpoint: STG-00–02 and TASK-020–030 are merged in `main` with green CI. TASK-031 durable planner/worker is locally verified and awaits PR CI. Routing remains disabled by default, so legacy behavior is still authoritative until a separately approved canary. Existing S3 object keys and Telegram resolver/transport contracts are preserved. Docker and real providers remain unavailable locally. No production/provider access or deployment occurred.
 
 ## 16. Регламент продолжения в новой сессии
 

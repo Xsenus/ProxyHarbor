@@ -79,4 +79,68 @@ public sealed class BackupRetentionTests
         }
         finally { Directory.Delete(directory, recursive: true); }
     }
+
+    [Fact]
+    public void ReplayableJobSourceSurvivesAgeAndCountRetention()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"proxyharbor-retention-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            const string protectedName = "proxyharbor-20260801-120000-0000.phbackup";
+            var protectedPath = Path.Combine(directory, protectedName);
+            File.WriteAllBytes(protectedPath, [1]);
+            File.SetLastWriteTimeUtc(protectedPath, DateTime.UtcNow.AddDays(-30));
+            for (var index = 0; index < 8; index++)
+                File.WriteAllBytes(
+                    Path.Combine(directory, $"proxyharbor-20260810-130000-{index:D4}.phbackup"), [2]);
+
+            BackupService.ApplyRetention(
+                directory,
+                retentionDays: 1,
+                intervalHours: 24,
+                new HashSet<string>([protectedName], StringComparer.Ordinal));
+
+            Assert.True(File.Exists(protectedPath));
+            Assert.Equal(3, Directory.GetFiles(directory, "*.phbackup").Length);
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    [Fact]
+    public void StagingCapacityRejectsOverflowAndIdentifiesCurrentBackup()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"proxyharbor-capacity-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            const string currentName = "proxyharbor-20260810-140000-0000.phbackup";
+            File.WriteAllBytes(Path.Combine(directory, currentName), new byte[6]);
+            File.WriteAllBytes(
+                Path.Combine(directory, "proxyharbor-20260810-130000-0000.phbackup"),
+                new byte[5]);
+
+            var exception = Assert.Throws<BackupStagingCapacityException>(() =>
+                BackupService.EnsureStagingCapacity(directory, maximumBytes: 10, currentName));
+
+            Assert.Equal(currentName, exception.FileName);
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    [Fact]
+    public void StagingCapacityIgnoresUnownedNeighborArchives()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"proxyharbor-capacity-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            const string currentName = "proxyharbor-20260810-140000-0000.phbackup";
+            File.WriteAllBytes(Path.Combine(directory, currentName), new byte[6]);
+            File.WriteAllBytes(Path.Combine(directory, "manual.phbackup"), new byte[100]);
+
+            BackupService.EnsureStagingCapacity(directory, maximumBytes: 6, currentName);
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
 }

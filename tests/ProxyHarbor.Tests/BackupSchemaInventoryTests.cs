@@ -9,7 +9,10 @@ public sealed class BackupSchemaInventoryTests
     [Fact]
     public void DestinationRoutingIsDisabledByDefault()
     {
-        Assert.False(new BackupRoutingOptions().Enabled);
+        var options = new BackupRoutingOptions();
+        Assert.False(options.Enabled);
+        Assert.Equal(10L * 1024 * 1024 * 1024, options.MaximumStagingBytes);
+        Assert.Equal(72, options.StagingTtlHours);
     }
 
     [Fact]

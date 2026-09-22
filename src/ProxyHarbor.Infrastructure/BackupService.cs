@@ -26,7 +26,8 @@ public sealed class BackupService(
     ITelegramBackupTransport? telegramTransport = null,
     IBackupObjectStorageTransport? objectStorageTransport = null,
     IProxyExportDbContextFactory? snapshotDbFactory = null,
-    IOptions<BackupRoutingOptions>? routingOptions = null) : IDisposable
+    IOptions<BackupRoutingOptions>? routingOptions = null,
+    BackupDeliveryPlanner? deliveryPlanner = null) : IDisposable
 {
     internal const string PipeCompletionFailureDataKey = "ProxyHarbor.BackupPipeCompletionFailure";
     private const string PublishedBackupPrefix = "proxyharbor-";
@@ -153,10 +154,25 @@ public sealed class BackupService(
                 // Локальная retention-политика не зависит от доступности Telegram. Иначе
                 // продолжительный внешний сбой оставлял бы новый архив на каждом цикле,
                 // никогда не удаляя старые файлы и в итоге мог исчерпать backup volume.
-                ApplyRetention(options.Directory, options.RetentionDays, options.IntervalHours);
+                HashSet<string>? replayableStaging = null;
+                if (routingOptions?.Value.Enabled == true)
+                {
+                    replayableStaging = await ReadReplayableStagingNamesAsync(cancellationToken);
+                    replayableStaging.Add(Path.GetFileName(encryptedPath));
+                }
+                ApplyRetention(
+                    options.Directory,
+                    options.RetentionDays,
+                    options.IntervalHours,
+                    replayableStaging);
+                if (routingOptions?.Value.Enabled == true)
+                    EnsureStagingCapacity(
+                        options.Directory,
+                        routingOptions.Value.MaximumStagingBytes,
+                        Path.GetFileName(encryptedPath));
                 var sentToObjectStorage = false;
                 string? objectStorageKey = null;
-                if (objectStorageConfigured)
+                if (objectStorageConfigured && routingOptions?.Value.Enabled != true)
                 {
                     if (objectStorageTransport is null)
                         throw new InvalidOperationException("S3-транспорт резервных копий недоступен.");
@@ -168,7 +184,7 @@ public sealed class BackupService(
                 }
 
                 var sentToTelegram = false;
-                if (telegramConfigured)
+                if (telegramConfigured && routingOptions?.Value.Enabled != true)
                 {
                     await SendToTelegramAsync(
                         encryptedPath,
@@ -216,7 +232,49 @@ public sealed class BackupService(
     {
         using var timeout = new CancellationTokenSource(AuditWriteTimeout);
         var token = timeout.Token;
+        if (routingOptions?.Value.Enabled == true)
+        {
+            await using var strategyDb = await dbFactory.CreateDbContextAsync(token);
+            var strategy = strategyDb.Database.CreateExecutionStrategy();
+            await strategy.ExecuteAsync(() => CompleteAuditCoreAsync(
+                id,
+                path,
+                contentSha256,
+                sentToTelegram,
+                sentToObjectStorage,
+                objectStorageKey,
+                historyRetentionDays,
+                transactional: true,
+                token));
+            return;
+        }
+        await CompleteAuditCoreAsync(
+            id,
+            path,
+            contentSha256,
+            sentToTelegram,
+            sentToObjectStorage,
+            objectStorageKey,
+            historyRetentionDays,
+            transactional: false,
+            token);
+    }
+
+    private async Task CompleteAuditCoreAsync(
+        Guid id,
+        string path,
+        string contentSha256,
+        bool sentToTelegram,
+        bool sentToObjectStorage,
+        string? objectStorageKey,
+        int historyRetentionDays,
+        bool transactional,
+        CancellationToken token)
+    {
         await using var db = await dbFactory.CreateDbContextAsync(token);
+        await using var transaction = transactional
+            ? await db.Database.BeginTransactionAsync(token)
+            : null;
         var finishedAt = DateTimeOffset.UtcNow;
         var file = new FileInfo(path);
         // История очищается до completed transition: сбой retention тогда корректно
@@ -242,6 +300,14 @@ public sealed class BackupService(
             throw new InvalidOperationException(
                 "Backup-аудит потерял ownership своей running-строки.");
 
+        if (transactional)
+        {
+            if (deliveryPlanner is null)
+                throw new InvalidOperationException("Backup delivery planner не зарегистрирован.");
+            _ = await deliveryPlanner.PlanAsync(db, id, contentSha256, file.Length, token);
+            await transaction!.CommitAsync(token);
+        }
+
     }
 
     private static async Task<string> ComputeSha256Async(string path, CancellationToken token)
@@ -255,6 +321,29 @@ public sealed class BackupService(
             FileOptions.Asynchronous | FileOptions.SequentialScan);
         var hash = await SHA256.HashDataAsync(stream, token);
         return Convert.ToHexStringLower(hash);
+    }
+
+    internal static void EnsureStagingCapacity(string directory, long maximumBytes, string fileName)
+    {
+        long total = 0;
+        foreach (var path in Directory.EnumerateFiles(directory, $"{PublishedBackupPrefix}*{PublishedBackupSuffix}"))
+        {
+            total = checked(total + new FileInfo(path).Length);
+            if (total > maximumBytes)
+                throw new BackupStagingCapacityException(fileName);
+        }
+    }
+
+    private async Task<HashSet<string>> ReadReplayableStagingNamesAsync(CancellationToken token)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(token);
+        var names = await db.BackupDeliveryJobs.AsNoTracking()
+            .Where(job => job.State == "pending" || job.State == "processing" || job.State == "reconciling")
+            .Select(job => job.BackupCopy.BackupRun.FileName)
+            .Where(name => name != null)
+            .Distinct()
+            .ToArrayAsync(token);
+        return names.Select(name => name!).ToHashSet(StringComparer.Ordinal);
     }
 
     private async Task RecordDeliveryAsync(
@@ -637,7 +726,11 @@ public sealed class BackupService(
     }
 
     /// <summary>Ограничивает backup volume одновременно возрастом и ожидаемым числом плановых снимков.</summary>
-    internal static void ApplyRetention(string directory, int retentionDays, int intervalHours)
+    internal static void ApplyRetention(
+        string directory,
+        int retentionDays,
+        int intervalHours,
+        IReadOnlySet<string>? replayableStaging = null)
     {
         var cutoff = DateTime.UtcNow.AddDays(-Math.Max(1, retentionDays));
         // Совместно смонтированный volume может содержать ручные либо чужие архивы.
@@ -649,15 +742,23 @@ public sealed class BackupService(
             .OrderByDescending(file => file.LastWriteTimeUtc)
             .ThenByDescending(file => file.Name, StringComparer.Ordinal)
             .ToList();
-        var retained = files.Where(file => file.LastWriteTimeUtc >= cutoff).ToList();
-        foreach (var expired in files.Where(file => file.LastWriteTimeUtc < cutoff)) expired.Delete();
+        var protectedFiles = files.Where(file => replayableStaging?.Contains(file.Name) == true).ToList();
+        var retained = files.Where(file => file.LastWriteTimeUtc >= cutoff ||
+            replayableStaging?.Contains(file.Name) == true).ToList();
+        foreach (var expired in files.Where(file => file.LastWriteTimeUtc < cutoff &&
+            replayableStaging?.Contains(file.Name) != true))
+            expired.Delete();
 
         // Два дополнительных файла допускают текущий и recovery-снимок, но длительный
         // Telegram outage не превращает 15-минутные повторы в неограниченный рост volume.
         var scheduledCapacity = (int)Math.Ceiling(
             Math.Max(1, retentionDays) * 24d / Math.Max(1, intervalHours));
         var maxFiles = checked(scheduledCapacity + 2);
-        foreach (var overflow in retained.Skip(maxFiles)) overflow.Delete();
+        var unprotectedCapacity = Math.Max(0, maxFiles - protectedFiles.Count);
+        foreach (var overflow in retained
+            .Where(file => replayableStaging?.Contains(file.Name) != true)
+            .Skip(unprotectedCapacity))
+            overflow.Delete();
     }
 
     /// <summary>Отличает опубликованный сервисом timestamped backup от соседних файлов volume.</summary>
@@ -950,6 +1051,14 @@ public static class BackupFileSplitter
 
 /// <summary>Постоянный bounded-policy отказ до либо во время provider delivery.</summary>
 public sealed class BackupDeliveryPolicyException(string message) : InvalidOperationException(message);
+
+/// <summary>Local replayable staging исчерпал настроенный byte budget.</summary>
+public sealed class BackupStagingCapacityException(string fileName)
+    : IOException("Backup staging capacity исчерпана; delivery jobs не запланированы.")
+{
+    /// <summary>Безопасное имя уже опубликованного ciphertext.</summary>
+    public string FileName { get; } = fileName;
+}
 
 /// <summary>Запускает резервное копирование по расписанию только при явном включении.</summary>
 public sealed class BackupWorker(
