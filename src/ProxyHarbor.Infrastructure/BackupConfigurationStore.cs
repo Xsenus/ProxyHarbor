@@ -40,6 +40,8 @@ public sealed class BackupConfigurationStore(
         {
             var settings = JsonSerializer.Deserialize<StoredBackupSettings>(entity.SettingsJson, Json)
                 ?? throw new InvalidOperationException("Настройки резервного копирования пусты.");
+            if (settings.SchemaVersion is < 1 or > 2)
+                throw new InvalidDataException("Версия сохранённых настроек резервного копирования не поддерживается.");
             var secrets = JsonSerializer.Deserialize<StoredBackupSecrets>(
                 protector.Unprotect(entity.ProtectedSecrets), Json)
                 ?? new StoredBackupSecrets(null, null);
@@ -65,7 +67,8 @@ public sealed class BackupConfigurationStore(
                 ObjectStorageSecretKey = secrets.ObjectStorageSecretKey
             };
         }
-        catch (Exception exception) when (exception is JsonException or System.Security.Cryptography.CryptographicException)
+        catch (Exception exception) when (exception is JsonException or InvalidDataException or
+            System.Security.Cryptography.CryptographicException)
         {
             throw new InvalidOperationException(
                 "Сохранённые настройки резервного копирования повреждены или больше не расшифровываются.", exception);
@@ -89,7 +92,7 @@ public sealed class BackupConfigurationStore(
             options.TelegramRecipientId, options.SendToObjectStorage,
             options.ObjectStorageEndpoint, options.ObjectStorageRegion,
             options.ObjectStorageBucket, options.ObjectStoragePrefix,
-            options.ObjectStorageUsePathStyle), Json);
+            options.ObjectStorageUsePathStyle, SchemaVersion: 2), Json);
         entity.ProtectedSecrets = protector.Protect(JsonSerializer.Serialize(new StoredBackupSecrets(
             options.TelegramBotToken, options.TelegramChatId,
             options.ObjectStorageAccessKey, options.ObjectStorageSecretKey), Json));
@@ -128,7 +131,8 @@ public sealed class BackupConfigurationStore(
         string? ObjectStorageRegion = null,
         string? ObjectStorageBucket = null,
         string? ObjectStoragePrefix = null,
-        bool ObjectStorageUsePathStyle = true);
+        bool ObjectStorageUsePathStyle = true,
+        int SchemaVersion = 1);
     private sealed record StoredBackupSecrets(
         string? TelegramBotToken,
         string? TelegramChatId,

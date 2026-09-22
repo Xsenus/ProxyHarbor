@@ -76,6 +76,7 @@ services:
       Collector__VpnPublicFreshnessMinutes: ${VPN_PUBLIC_FRESHNESS_MINUTES:-15}
       Collector__ValidationRunRetentionHours: ${VALIDATION_RUN_RETENTION_HOURS:-24}
       Backup__Enabled: ${BACKUP_ENABLED:-false}
+      BackupRouting__Enabled: ${BACKUP_ROUTING_ENABLED:-false}
       Backup__Directory: /app/backups
       Backup__HistoryRetentionDays: ${BACKUP_HISTORY_RETENTION_DAYS:-365}
       Payments__Enabled: ${PAYMENTS_ENABLED:-false}

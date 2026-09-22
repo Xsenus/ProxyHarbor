@@ -173,8 +173,11 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<DistributedProxyValidationService>();
         services.AddSingleton<VpnCatalogService>();
         services.AddSingleton<IBackupConfigurationStore, BackupConfigurationStore>();
+        services.AddSingleton<BackupLegacyDestinationProjector>();
         services.AddSingleton<BackupService>();
         services.AddSingleton<IBackupObjectStorageTransport, S3BackupObjectStorageTransport>();
+        services.AddSingleton<IBackupDestinationAdapter, S3BackupDestinationAdapter>();
+        services.AddSingleton<BackupDestinationRegistry>();
         services.AddSingleton<DatabaseReadinessProbe>();
         services.AddSingleton<OperationalMaintenanceService>();
         services.AddSingleton<ProxyCountryResolver>();

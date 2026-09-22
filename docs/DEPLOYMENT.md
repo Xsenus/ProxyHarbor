@@ -61,6 +61,8 @@ curl --fail https://proxy.example.com/api/v1/stats
 
 Проверьте отдельно admin-аутентификацию, создание зашифрованного backup, подтверждённую внешнюю доставку, расшифровку и пробное восстановление в отдельную БД. Команда `./tools/Audit-Backup.ps1 -ApiBaseUrl https://proxy.example.com -AdminKey $ADMIN_KEY -ReportPath artifacts/backup-audit.json` запускает конкретный backup и fail-closed требует канонический непустой PHB3, завершённый persisted audit и подтверждение хотя бы одного внешнего канала (`sentToObjectStorage` либо `sentToTelegram`); `-AllowLocalOnly` предназначен только для явно выбранного локального canary. Настройте внешний мониторинг `/health/ready`, срока TLS-сертификата, свободного диска, PostgreSQL и ключевых Prometheus-метрик.
 
+Оставляйте `BACKUP_ROUTING_ENABLED=false` до отдельного canary новой orchestration. В этом режиме startup только идемпотентно проецирует legacy S3/Telegram-настройки в destination schema; текущая доставка остаётся неизменной и новые delivery jobs не создаются.
+
 До аварийной замены данных извлеките безопасную конфигурацию из backup v9 без подключения к БД и сохраните её вне временного restore-контейнера:
 
 ```bash

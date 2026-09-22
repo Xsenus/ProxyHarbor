@@ -47,7 +47,7 @@ flowchart LR
 |---|---|---|---|---|
 | STG-00 | DONE locally | Characterization + model coverage guard | clean scoped branch | TEST-001 and legacy integration fixtures green |
 | STG-01 | DONE / merged | Manifest v8/full restore | coverage inventory agreed | PR #262 merged after verify, PostgreSQL, analysis and CodeQL gates |
-| STG-02 | IN PROGRESS | schema, registry, legacy projection | v8 stable | TASK-020 local gates green; registry/projection pending; routing flag off |
+| STG-02 | IN PROGRESS | schema, registry, legacy projection | v8 stable | TASK-020 merged; TASK-021/022 implemented locally; routing flag off |
 | STG-03 | BLOCKED | durable jobs/fallback/reconcile/repair | schema/adapters | TEST-004–008 local fault matrix |
 | STG-04 | BLOCKED | independent catalog/materializer/restore | copies stable | local two-provider fixtures + isolated restore |
 | STG-05 | BLOCKED | API/UI/metrics/runbooks | state contracts stable | UI/a11y + alert contracts + no secrets |
@@ -117,7 +117,7 @@ Purpose: introduce model with routing disabled. Covers REQ-003/006/011/012/015.
 
 #### TASK-020 — Add durable destination/copy/job schema
 
-- Status: `IMPLEMENTED locally / CI pending`; Codex.
+- Status: `DONE / merged in PR #263`; Codex.
 - Changes: entities and EF mappings from TЗ §5.2; migration in `Persistence/Migrations`; readiness invariant updated. Constraints/indexes for state/verified evidence/due jobs/concurrency. `BackupRun` keeps compatibility fields.
 - Backfill: migration creates no remote traffic. Seed/projection from singleton config via app startup task or explicit migration service, not SQL-decrypting Data Protection. Use idempotent marker/version.
 - Checks: `dotnet ef migrations has-pending-model-changes`, PostgreSQL constraints/index tests, downgrade/forward on disposable DB, concurrent uniqueness.
@@ -128,7 +128,7 @@ Compatibility note discovered during STG-01: destination/copy/job entities add d
 
 #### TASK-021 — Adapter/capability contracts and registry
 
-- Status: `READY after TASK-020 checkpoint`; Codex.
+- Status: `IMPLEMENTED locally / CI pending`; Codex.
 - Changes: new `IBackupDestinationAdapter`, `BackupDestinationRegistry`, typed capabilities/error codes. Register S3 and Telegram in `ServiceCollectionExtensions`/API DI. Capability is operation-specific (`put`, `verify`, `materialize`, maximum bytes, conditional create, native version/checksum); unsupported is explicit.
 - Security: registry resolves allowlisted kind only; protected secrets stay provider-specific; health probe never needs delete/public ACL/list unless required.
 - Tests: duplicate/missing adapter, forbidden route, read-only/quota/capability mismatch, no fallback across disallowed pool/failure domain.
@@ -136,7 +136,7 @@ Compatibility note discovered during STG-01: destination/copy/job entities add d
 
 #### TASK-022 — Legacy configuration projection and API compatibility
 
-- Status: `BLOCKED: TASK-021`; Codex.
+- Status: `IMPLEMENTED locally / CI pending`; Codex.
 - Changes: `BackupConfigurationStore`, `BackupOptions`, Admin DTO/controller and frontend types derive legacy single S3/Telegram into destination model. Existing fields remain; credentials never returned. Add schema version to stored settings.
 - Cases: disabled, S3-only, Telegram-only, mixed, legacy bot token/chat fallback, CRM recipient, cleared credentials.
 - Tests: TEST-009; upgrade twice idempotent; old config unchanged when routing flag off.
@@ -406,8 +406,10 @@ No dates are invented. STG-00–05 may proceed without these decisions using iso
 | 2026-09-22 | implementation checkpoint 1 | Added exhaustive 39-table classification, strict PHB3 v8 inventory, full v8 writer/transactional restore, S3 audit fields, legacy characterization and exhaustive sentinels for previously omitted tables. | EVID-031–035 |
 | 2026-09-22 | merged checkpoint 1 | PR #262 merged to `main` after verify, PostgreSQL integration, C#/JS analysis and CodeQL succeeded. | EVID-036 |
 | 2026-09-22 | implementation checkpoint 2 | Added additive destination/pool/copy/job/restore-verification schema, routing kill switch off, strict PHB3 v9 while preserving frozen v8, and real PostgreSQL constraint/round-trip coverage. | EVID-037–039 |
+| 2026-09-22 | merged checkpoint 2 | PR #263 merged to `main` after verify, PostgreSQL integration, C#/JS analysis and CodeQL succeeded. | EVID-041 |
+| 2026-09-22 | implementation checkpoint 3 | Added allowlisted S3/Telegram adapter registry, typed capabilities/errors and idempotent legacy configuration projection; routing remains off and no jobs are created. | EVID-042–044 |
 
-Current checkpoint: STG-00/01 are merged in `main` with green CI. TASK-020 is implemented on `feature/storage-destination-schema`; focused and full local PostgreSQL gates are green, routing remains disabled, and no destination jobs are created automatically. Docker is unavailable locally and checkpoint-2 CI has not yet run. No production/provider access or deployment occurred. Next: complete final local gates, publish TASK-020, then implement TASK-021 registry/adapters.
+Current checkpoint: STG-00/01 and TASK-020 are merged in `main` with green CI. TASK-021/022 are implemented on `feature/storage-adapter-registry`; routing remains disabled, legacy behavior remains authoritative, projection is idempotent/concurrency-safe, and no destination jobs are created. Docker is unavailable locally and checkpoint-3 CI has not yet run. No production/provider access or deployment occurred. Next: complete final local/PostgreSQL gates, publish TASK-021/022, then adapt S3/Telegram operations without changing native contracts.
 
 ## 16. Регламент продолжения в новой сессии
 

@@ -220,6 +220,8 @@ Backup содержит:
 
 В архив никогда не входят admin password/API key, открытые API-секреты, data-protection keys, PostgreSQL connection string/password, credentials Telegram/S3-доставки backup и encryption key. Token commerce-бота и ключ платного proxy-провайдера входят только как Data Protection ciphertext; без независимо сохранённых Data Protection keys после переноса их нужно ввести заново.
 
+Новая destination-модель разворачивается совместимо: legacy S3/Telegram-настройки проецируются в PostgreSQL без изменения текущего пути доставки и без создания jobs. Переключатель `BACKUP_ROUTING_ENABLED`/`BackupRouting__Enabled` по умолчанию равен `false`; включать его до завершения orchestration rollout нельзя.
+
 Ручной backup:
 
 ```powershell
