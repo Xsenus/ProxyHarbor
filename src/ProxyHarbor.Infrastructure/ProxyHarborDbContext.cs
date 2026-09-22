@@ -549,12 +549,15 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
         backupRun.HasIndex(x => new { x.Status, x.FinishedAt });
         backupRun.Property(x => x.Status).HasMaxLength(32);
         backupRun.Property(x => x.FileName).HasMaxLength(255);
+        backupRun.Property(x => x.ContentSha256).HasMaxLength(64);
         backupRun.Property(x => x.ObjectStorageKey).HasMaxLength(768);
         backupRun.Property(x => x.Error).HasMaxLength(2000);
         backupRun.ToTable(table =>
         {
             table.HasCheckConstraint("CK_BackupRuns_State", "\"Status\" IN ('running', 'completed', 'failed') AND ((\"Status\" = 'running') = (\"FinishedAt\" IS NULL)) AND (\"FinishedAt\" IS NULL OR \"FinishedAt\" >= \"StartedAt\")");
             table.HasCheckConstraint("CK_BackupRuns_Result", "\"SizeBytes\" >= 0 AND (NOT \"SentToTelegram\" OR \"TelegramConfigured\") AND (NOT \"SentToObjectStorage\" OR \"ObjectStorageConfigured\") AND (\"ObjectStorageKey\" IS NULL OR \"SentToObjectStorage\") AND (\"Status\" <> 'completed' OR NOT \"TelegramConfigured\" OR \"SentToTelegram\") AND (\"Status\" <> 'completed' OR NOT \"ObjectStorageConfigured\" OR \"SentToObjectStorage\")");
+            table.HasCheckConstraint("CK_BackupRuns_Content", "\"ContentSha256\" IS NULL OR \"ContentSha256\" ~ '^[0-9a-f]{64}$'");
+            table.HasCheckConstraint("CK_BackupRuns_ProtectionPolicy", "(\"BackupPoolId\" IS NULL AND \"ProtectionPolicyVersion\" IS NULL AND \"RequiredVerifiedCopies\" IS NULL AND \"DesiredVerifiedCopies\" IS NULL) OR (\"BackupPoolId\" IS NOT NULL AND \"ProtectionPolicyVersion\" IS NOT NULL AND \"RequiredVerifiedCopies\" IS NOT NULL AND \"DesiredVerifiedCopies\" IS NOT NULL AND \"ProtectionPolicyVersion\" >= 1 AND \"RequiredVerifiedCopies\" BETWEEN 1 AND 16 AND \"DesiredVerifiedCopies\" BETWEEN \"RequiredVerifiedCopies\" AND 16)");
         });
 
         var backupDestination = builder.Entity<BackupDestination>();

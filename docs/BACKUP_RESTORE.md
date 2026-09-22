@@ -46,6 +46,8 @@ curl --fail --request POST \
   https://proxy.example.com/api/v1/admin/backup
 ```
 
+По умолчанию destination routing выключен, поэтому ручной запуск сохраняет прежний `200`-контракт. После контролируемого включения `BackupRouting__Enabled=true` код ответа означает доказанную защиту: `200` только для `protected` или `degraded` (required quorum достигнут), `202` для durable `pending`, `503` для `unavailable`. Локальный staging не является внешней копией и сам по себе не делает backup защищённым. Поля `backupRunId`, `protectionState`, verified/required/desired и copy debt позволяют автоматизации отличить созданный ciphertext от подтверждённой внешней защиты.
+
 Проверка полного production-контракта:
 
 ```powershell

@@ -40,6 +40,8 @@ public sealed class DatabaseInvariantIntegrationTests
         "CK_AspNetUsers_ActiveTimeline",
         "CK_AspNetUsers_PreferredLanguage",
         "CK_BackupConfigurations_Singleton",
+        "CK_BackupRuns_Content",
+        "CK_BackupRuns_ProtectionPolicy",
         "CK_BackupCopies_Content",
         "CK_BackupCopies_State",
         "CK_BackupCopies_Unknown",

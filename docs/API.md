@@ -476,7 +476,7 @@ Host должен быть публичным IP. Пароль не сохран
 
 ## POST `/api/v1/admin/backup`
 
-Создаёт и отправляет один backup:
+Создаёт и отправляет один backup. Пока `BackupRouting__Enabled=false` (значение по умолчанию), сохраняется совместимый legacy-ответ:
 
 ```json
 {
@@ -484,6 +484,15 @@ Host должен быть публичным IP. Пароль не сохран
   "sentToTelegram": true
 }
 ```
+
+При отдельно включённом destination routing ответ дополнительно содержит стабильный `backupRunId`, `protectionState`, `degraded`, фактическое/обязательное/желаемое число независимых verified-копий и `requiredCopyDebt`/`desiredCopyDebt`. Статусы имеют строгую семантику:
+
+- `200 protected` — достигнуты required и desired;
+- `200 degraded` — required достигнут, desired ещё нет;
+- `202 pending` — required не достигнут, но есть durable local staging и durable job;
+- `503 unavailable` — required не достигнут и доказанного durable пути завершения нет.
+
+Локальный файл не считается внешней копией. Две copies в одном failure domain дают один независимый голос; Telegram без independent verify не увеличивает quorum. Оценка всегда использует policy snapshot самого run и точный SHA-256 ciphertext, а не более новую или ослабленную текущую policy.
 
 Повторный локальный/cluster-wide запуск даёт `409`. Ошибка включённого Telegram или S3-канала не возвращает ложный success; локальный encrypted file, failed audit и уже подтверждённые доставки сохраняются.
 

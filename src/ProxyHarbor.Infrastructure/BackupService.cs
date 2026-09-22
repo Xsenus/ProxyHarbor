@@ -2,6 +2,7 @@ using System.Globalization;
 using System.IO.Compression;
 using System.IO.Pipelines;
 using System.Runtime.CompilerServices;
+using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
@@ -24,7 +25,8 @@ public sealed class BackupService(
     ITelegramBackupDeliveryResolver? telegramDeliveryResolver = null,
     ITelegramBackupTransport? telegramTransport = null,
     IBackupObjectStorageTransport? objectStorageTransport = null,
-    IProxyExportDbContextFactory? snapshotDbFactory = null) : IDisposable
+    IProxyExportDbContextFactory? snapshotDbFactory = null,
+    IOptions<BackupRoutingOptions>? routingOptions = null) : IDisposable
 {
     internal const string PipeCompletionFailureDataKey = "ProxyHarbor.BackupPipeCompletionFailure";
     private const string PublishedBackupPrefix = "proxyharbor-";
@@ -108,6 +110,18 @@ public sealed class BackupService(
                         .SetProperty(x => x.Status, "failed")
                         .SetProperty(x => x.Error, "Backup был прерван аварийным завершением предыдущего процесса."),
                         cancellationToken);
+                if (routingOptions?.Value.Enabled == true)
+                {
+                    var pool = await auditDb.BackupPools.AsNoTracking().SingleOrDefaultAsync(
+                        x => x.Id == BackupLegacyDestinationProjector.LegacyPoolId,
+                        cancellationToken)
+                        ?? throw new InvalidOperationException(
+                            "Backup routing включён, но legacy protection pool не спроецирован.");
+                    backupRun.BackupPoolId = pool.Id;
+                    backupRun.ProtectionPolicyVersion = pool.PolicyVersion;
+                    backupRun.RequiredVerifiedCopies = pool.RequiredVerifiedCopies;
+                    backupRun.DesiredVerifiedCopies = pool.DesiredVerifiedCopies;
+                }
                 auditDb.BackupRuns.Add(backupRun);
                 await auditDb.SaveChangesAsync(cancellationToken);
             }
@@ -134,6 +148,7 @@ public sealed class BackupService(
                 // никогда не увидят усечённую либо повреждённую резервную копию.
                 await VerifyAndPublishAsync(
                     partialEncryptedPath, encryptedPath, options.EncryptionKey!, cancellationToken);
+                var contentSha256 = await ComputeSha256Async(encryptedPath, cancellationToken);
 
                 // Локальная retention-политика не зависит от доступности Telegram. Иначе
                 // продолжительный внешний сбой оставлял бы новый архив на каждом цикле,
@@ -168,7 +183,7 @@ public sealed class BackupService(
                         sentToObjectStorage: null, objectStorageKey: null);
                 }
 
-                await CompleteAuditAsync(backupRun.Id, encryptedPath, sentToTelegram,
+                await CompleteAuditAsync(backupRun.Id, encryptedPath, contentSha256, sentToTelegram,
                     sentToObjectStorage, objectStorageKey, options.HistoryRetentionDays);
                 OperationalLogBoundary.Write(() => BackupCreated(logger, encryptedPath, null));
                 return encryptedPath;
@@ -193,6 +208,7 @@ public sealed class BackupService(
     private async Task CompleteAuditAsync(
         Guid id,
         string path,
+        string contentSha256,
         bool sentToTelegram,
         bool sentToObjectStorage,
         string? objectStorageKey,
@@ -216,6 +232,7 @@ public sealed class BackupService(
             .SetProperty(x => x.Status, "completed")
             .SetProperty(x => x.FileName, file.Name)
             .SetProperty(x => x.SizeBytes, file.Length)
+            .SetProperty(x => x.ContentSha256, contentSha256)
             .SetProperty(x => x.SentToTelegram, sentToTelegram)
             .SetProperty(x => x.SentToObjectStorage, sentToObjectStorage)
             .SetProperty(x => x.ObjectStorageKey, objectStorageKey)
@@ -225,6 +242,19 @@ public sealed class BackupService(
             throw new InvalidOperationException(
                 "Backup-аудит потерял ownership своей running-строки.");
 
+    }
+
+    private static async Task<string> ComputeSha256Async(string path, CancellationToken token)
+    {
+        await using var stream = new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            bufferSize: 128 * 1024,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+        var hash = await SHA256.HashDataAsync(stream, token);
+        return Convert.ToHexStringLower(hash);
     }
 
     private async Task RecordDeliveryAsync(

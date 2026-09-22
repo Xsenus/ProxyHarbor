@@ -27,7 +27,9 @@ public sealed class AdminController(
     ITelegramBackupDeliveryResolver? telegramBackupDeliveryResolver = null,
     ProxyMetricsSnapshotCache? proxySnapshotCache = null,
     VpnMetricsSnapshotCache? vpnSnapshotCache = null,
-    IDataProtectionProvider? credentialProtectionProvider = null) : ControllerBase
+    IDataProtectionProvider? credentialProtectionProvider = null,
+    IOptions<BackupRoutingOptions>? backupRoutingOptions = null,
+    BackupProtectionEvaluator? backupProtectionEvaluator = null) : ControllerBase
 {
     /// <summary>Возвращает стабильную bounded-страницу источников и их runtime-состояние.</summary>
     [HttpGet("sources")]
@@ -443,6 +445,8 @@ public sealed class AdminController(
     /// <summary>Создаёт, self-verify шифрует и доставляет администратору один backup.</summary>
     [HttpPost("backup")]
     [ProducesResponseType<BackupTriggerResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType<BackupTriggerResponse>(StatusCodes.Status202Accepted)]
+    [ProducesResponseType<BackupTriggerResponse>(StatusCodes.Status503ServiceUnavailable)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]
     public async Task<IActionResult> Backup(CancellationToken token)
     {
@@ -456,7 +460,28 @@ public sealed class AdminController(
         var sent = current.TelegramRecipientId.HasValue ||
             !string.IsNullOrWhiteSpace(current.TelegramBotToken) &&
             !string.IsNullOrWhiteSpace(current.TelegramChatId);
-        return Ok(new BackupTriggerResponse(Path.GetFileName(path), sent));
+        var fileName = Path.GetFileName(path);
+        if (backupRoutingOptions?.Value.Enabled != true)
+            return Ok(new BackupTriggerResponse(fileName, sent));
+        if (backupProtectionEvaluator is null)
+            throw new InvalidOperationException("Backup protection evaluator не зарегистрирован.");
+
+        await using var db = await dbFactory.CreateDbContextAsync(token);
+        var run = await db.BackupRuns.AsNoTracking()
+            .Where(item => item.FileName == fileName)
+            .OrderByDescending(item => item.StartedAt)
+            .Select(item => new { item.Id, item.SentToTelegram })
+            .FirstOrDefaultAsync(token)
+            ?? throw new InvalidOperationException("Завершённый backup run не найден.");
+        var evaluation = await backupProtectionEvaluator.EvaluateAsync(
+            run.Id,
+            hasDurableLocalStaging: System.IO.File.Exists(path),
+            token);
+        var response = BackupTriggerResponse.From(fileName, run.SentToTelegram, evaluation);
+        var statusCode = BackupTriggerResponse.StatusCodeFor(evaluation.State);
+        return statusCode == StatusCodes.Status200OK
+            ? Ok(response)
+            : StatusCode(statusCode, response);
     }
 
     /// <summary>Возвращает управляемое расписание без раскрытия bot token и PHB3-ключа.</summary>
@@ -685,8 +710,44 @@ public sealed class AdminController(
 /// <summary>Результат одного ручного validation batch.</summary>
 public sealed record ValidationTriggerResponse(int Checked, int Alive, int Deferred);
 
-/// <summary>Результат ручного создания и опциональной Telegram-доставки backup.</summary>
-public sealed record BackupTriggerResponse(string Created, bool SentToTelegram);
+/// <summary>Результат ручного создания и доказанная защита backup.</summary>
+public sealed record BackupTriggerResponse(
+    string Created,
+    bool SentToTelegram,
+    Guid? BackupRunId = null,
+    string ProtectionState = "legacy",
+    bool Degraded = false,
+    int? VerifiedIndependentCopies = null,
+    int? RequiredVerifiedCopies = null,
+    int? DesiredVerifiedCopies = null,
+    int? RequiredCopyDebt = null,
+    int? DesiredCopyDebt = null)
+{
+    /// <summary>Создаёт API acknowledgement из fail-closed результата evaluator.</summary>
+    public static BackupTriggerResponse From(
+        string created,
+        bool sentToTelegram,
+        BackupProtectionEvaluation evaluation) => new(
+            created,
+            sentToTelegram,
+            evaluation.BackupRunId,
+            evaluation.State.ToString().ToLowerInvariant(),
+            evaluation.Degraded,
+            evaluation.VerifiedIndependentCopies,
+            evaluation.RequiredVerifiedCopies,
+            evaluation.DesiredVerifiedCopies,
+            evaluation.RequiredCopyDebt,
+            evaluation.DesiredCopyDebt);
+
+    /// <summary>HTTP acknowledgement: success только после обязательной защиты.</summary>
+    public static int StatusCodeFor(BackupProtectionState state) => state switch
+    {
+        BackupProtectionState.Protected or BackupProtectionState.Degraded => StatusCodes.Status200OK,
+        BackupProtectionState.Pending => StatusCodes.Status202Accepted,
+        BackupProtectionState.Unavailable => StatusCodes.Status503ServiceUnavailable,
+        _ => throw new ArgumentOutOfRangeException(nameof(state))
+    };
+}
 
 /// <summary>Редактируемые поля backup; пустой token сохраняет уже защищённое значение.</summary>
 public sealed record BackupSettingsRequest(

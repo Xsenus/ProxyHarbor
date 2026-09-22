@@ -55,6 +55,43 @@ public sealed class BackupDestinationSchemaIntegrationTests
             db.AddRange(run, destination);
             await db.SaveChangesAsync();
 
+            db.BackupRuns.Add(new BackupRun
+            {
+                StartedAt = now,
+                Status = "running",
+                ContentSha256 = "not-a-sha256"
+            });
+            await Assert.ThrowsAsync<DbUpdateException>(() => db.SaveChangesAsync());
+            db.ChangeTracker.Clear();
+
+            db.BackupRuns.Add(new BackupRun
+            {
+                StartedAt = now,
+                Status = "running",
+                BackupPoolId = Guid.NewGuid(),
+                ProtectionPolicyVersion = 2,
+                RequiredVerifiedCopies = 2
+            });
+            await Assert.ThrowsAsync<DbUpdateException>(() => db.SaveChangesAsync());
+            db.ChangeTracker.Clear();
+
+            var protectedRun = new BackupRun
+            {
+                StartedAt = now,
+                Status = "running",
+                ContentSha256 = new string('c', 64),
+                BackupPoolId = Guid.NewGuid(),
+                ProtectionPolicyVersion = 2,
+                RequiredVerifiedCopies = 2,
+                DesiredVerifiedCopies = 3
+            };
+            db.BackupRuns.Add(protectedRun);
+            await db.SaveChangesAsync();
+            db.ChangeTracker.Clear();
+            var persistedRun = await db.BackupRuns.SingleAsync(item => item.Id == protectedRun.Id);
+            Assert.Equal(2, persistedRun.RequiredVerifiedCopies);
+            Assert.Equal(3, persistedRun.DesiredVerifiedCopies);
+
             db.BackupCopies.Add(new BackupCopy
             {
                 BackupRunId = run.Id,
