@@ -54,7 +54,9 @@ public sealed class BackupLegacyDestinationProjectionIntegrationTests
         try
         {
             var dbOptions = new DbContextOptionsBuilder<ProxyHarborDbContext>()
-                .UseNpgsql(connectionBuilder.ConnectionString)
+                .UseNpgsql(
+                    connectionBuilder.ConnectionString,
+                    postgres => postgres.EnableRetryOnFailure(3, TimeSpan.FromMilliseconds(100), null))
                 .Options;
             var factory = new TestDbFactory(dbOptions);
             await using (var migrationDb = new ProxyHarborDbContext(dbOptions))

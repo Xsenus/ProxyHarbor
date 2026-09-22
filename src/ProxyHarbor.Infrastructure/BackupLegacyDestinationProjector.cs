@@ -48,6 +48,16 @@ public sealed class BackupLegacyDestinationProjector(
             ProjectionSkipped(logger, exception);
             return;
         }
+        // Production enables NpgsqlRetryingExecutionStrategy. The complete transaction,
+        // including the transaction-scoped advisory lock, must run inside its execution
+        // scope and every retry must receive a fresh DbContext.
+        await using var strategyDb = await dbFactory.CreateDbContextAsync(token);
+        var strategy = strategyDb.Database.CreateExecutionStrategy();
+        await strategy.ExecuteAsync(() => ProjectTransactionAsync(options, token));
+    }
+
+    private async Task ProjectTransactionAsync(BackupOptions options, CancellationToken token)
+    {
         await using var db = await dbFactory.CreateDbContextAsync(token);
         await using var transaction = await db.Database.BeginTransactionAsync(token);
         await db.Database.ExecuteSqlRawAsync(ProjectionLockStatement, token);
