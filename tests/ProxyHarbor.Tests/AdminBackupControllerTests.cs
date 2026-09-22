@@ -184,6 +184,7 @@ public sealed class AdminBackupControllerTests
             var download = Assert.IsType<FileStreamResult>(
                 await controller.DownloadBackup(run.Id, CancellationToken.None));
             Assert.Equal(fileName, download.FileDownloadName);
+            Assert.True(download.EnableRangeProcessing);
             await using (download.FileStream)
             {
                 var downloaded = new byte[payload.Length];

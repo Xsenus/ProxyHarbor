@@ -16,6 +16,7 @@ public sealed class RestoreSettingsInspectionTests
     [InlineData(5)]
     [InlineData(6)]
     [InlineData(7)]
+    [InlineData(8)]
     public void ReadsValidatedCurrentSettingsWithoutSecrets(int version)
     {
         using var archive = CreateArchive(version);
@@ -45,7 +46,7 @@ public sealed class RestoreSettingsInspectionTests
         var exception = Assert.Throws<InvalidDataException>(
             () => RestoreApplication.ReadSettingsInspection(archive));
 
-        Assert.Contains("только для backup manifest v5, v6 или v7", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("только для backup manifest v5-v8", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -119,7 +120,21 @@ public sealed class RestoreSettingsInspectionTests
         var stream = new MemoryStream();
         using (var writer = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true))
         {
-            if (version is 5 or 6 or 7)
+            if (version == 8)
+                AddJson(writer, "manifest.json",
+                    new
+                    {
+                        version,
+                        settingsSchemaVersion = 1,
+                        createdAt = DateTimeOffset.UtcNow,
+                        secretsIncluded = false,
+                        databaseEntries = BackupSchemaInventory.Tables
+                            .Where(item => item.Disposition == BackupTableDisposition.Included)
+                            .Select(item => item.ArchiveEntry!)
+                            .Order(StringComparer.Ordinal)
+                            .ToArray()
+                    });
+            else if (version is 5 or 6 or 7)
                 AddJson(writer, "manifest.json",
                     new { version, settingsSchemaVersion = 1, createdAt = DateTimeOffset.UtcNow, secretsIncluded = false });
             else
@@ -139,6 +154,28 @@ public sealed class RestoreSettingsInspectionTests
             }
             if (version >= 7)
                 AddJson(writer, "database/checker-nodes.json", Array.Empty<object>());
+            if (version >= 8)
+            {
+                var existingEntries = new HashSet<string>(
+                    [
+                        "database/proxies.json",
+                        "database/sources.json",
+                        "database/runs.json",
+                        "database/validation-runs.json",
+                        "database/backup-runs.json",
+                        "database/users.json",
+                        "database/roles.json",
+                        "database/user-roles.json",
+                        "database/subscriptions.json",
+                        "database/checker-nodes.json"
+                    ],
+                    StringComparer.Ordinal);
+                foreach (var entry in BackupSchemaInventory.Tables
+                             .Where(item => item.Disposition == BackupTableDisposition.Included)
+                             .Select(item => item.ArchiveEntry!)
+                             .Where(entry => !existingEntries.Contains(entry)))
+                    AddJson(writer, entry, Array.Empty<object>());
+            }
             AddJson(writer, "settings/collector.json", collector);
             AddJson(writer, "settings/backup.json", backup);
             AddJson(writer, "settings/runtime.json", runtime);

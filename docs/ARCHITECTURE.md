@@ -159,7 +159,7 @@ API lease удерживается owning PostgreSQL session от startup до s
 
 ## Backup architecture
 
-Под одной repeatable-read транзакцией девять таблиц (proxy/audit и Identity/subscription) и safe settings сериализуются в ZIP, который сразу передаётся через bounded pipe в PHB3 encryptor. Plaintext ZIP на backup volume не создаётся. Ciphertext полностью self-verifies, durable flush выполняется до atomic rename. Только после этого запускаются retention и Telegram delivery.
+Под одной repeatable-read транзакцией все durable-таблицы EF-модели и safe settings сериализуются в ZIP, который сразу передаётся через bounded pipe в PHB3 encryptor. Единственная исключённая таблица — эфемерные `ProxyValidationLeases`; legacy lease-поля proxy очищаются при restore. Plaintext ZIP на backup volume не создаётся. Ciphertext полностью self-verifies, durable flush выполняется до atomic rename. Только после этого запускаются retention и внешняя доставка.
 
 Подробности и schema: [BACKUP_RESTORE.md](BACKUP_RESTORE.md).
 

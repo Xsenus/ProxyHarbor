@@ -114,40 +114,16 @@ public sealed class BackupPipelineTests
             BackupArchiveValidator.Validate(archive);
             var names = archive.Entries.Select(entry => entry.FullName).Order(StringComparer.Ordinal).ToArray();
             Assert.Equal(
-                [
-                    "database/access-block-rules.json",
-                    "database/backup-configuration.json",
-                    "database/backup-runs.json",
-                    "database/checker-nodes.json",
-                    "database/free-proxy-export-grants.json",
-                    "database/payment-configuration.json",
-                    "database/payment-orders.json",
-                    "database/proxies.json",
-                    "database/proxy-access-buckets.json",
-                    "database/roles.json",
-                    "database/runs.json",
-                    "database/site-configuration.json",
-                    "database/site-visit-logs.json",
-                    "database/sources.json",
-                    "database/subscription-admin-actions.json",
-                    "database/subscriptions.json",
-                    "database/telegram-bot-configuration.json",
-                    "database/telegram-chats.json",
-                    "database/telegram-conversation-messages.json",
-                    "database/telegram-outbound-messages.json",
-                    "database/telegram-update-receipts.json",
-                    "database/user-notifications.json",
-                    "database/user-roles.json",
-                    "database/users.json",
-                    "database/validation-runs.json",
-                    "database/vpn-endpoint-sources.json",
-                    "database/vpn-endpoints.json",
-                    "database/vpn-sources.json",
-                    "manifest.json",
-                    "settings/backup.json",
-                    "settings/collector.json",
-                    "settings/runtime.json"
-                ],
+                BackupSchemaInventory.Tables
+                    .Where(item => item.Disposition == BackupTableDisposition.Included)
+                    .Select(item => item.ArchiveEntry!)
+                    .Concat([
+                        "manifest.json",
+                        "settings/backup.json",
+                        "settings/collector.json",
+                        "settings/runtime.json"
+                    ])
+                    .Order(StringComparer.Ordinal),
                 names);
             var sourcesEntry = Assert.Single(archive.Entries, entry => entry.FullName == "database/sources.json");
             await using var sourcesStream = sourcesEntry.Open();
@@ -156,8 +132,15 @@ public sealed class BackupPipelineTests
             Assert.True(sources.RootElement[0].GetProperty("lastResultTruncated").GetBoolean());
             using var manifestStream = BackupArchiveValidator.RequiredEntry(archive, "manifest.json").Open();
             using var manifest = await JsonDocument.ParseAsync(manifestStream);
-            Assert.Equal(7, manifest.RootElement.GetProperty("version").GetInt32());
+            Assert.Equal(8, manifest.RootElement.GetProperty("version").GetInt32());
             Assert.Equal(1, manifest.RootElement.GetProperty("settingsSchemaVersion").GetInt32());
+            Assert.Equal(
+                BackupSchemaInventory.Tables
+                    .Where(item => item.Disposition == BackupTableDisposition.Included)
+                    .Select(item => item.ArchiveEntry!)
+                    .Order(StringComparer.Ordinal),
+                manifest.RootElement.GetProperty("databaseEntries")
+                    .EnumerateArray().Select(item => item.GetString()));
         }
         finally
         {

@@ -83,6 +83,35 @@ public sealed class BackupArchiveValidatorTests
     }
 
     [Fact]
+    public void VersionEightRequiresAndAcceptsEveryIncludedTable()
+    {
+        using var archive = CreateVersionEightArchive();
+
+        BackupArchiveValidator.Validate(archive);
+    }
+
+    [Fact]
+    public void VersionEightRejectsAnyMissingIncludedTable()
+    {
+        using var archive = CreateVersionEightArchive("database/user-api-tokens.json");
+
+        var exception = Assert.Throws<InvalidDataException>(() => BackupArchiveValidator.Validate(archive));
+
+        Assert.Contains("database/user-api-tokens.json", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void VersionEightRejectsManifestInventoryThatOmitsDurableTable()
+    {
+        using var archive = CreateVersionEightArchive(
+            manifestOmittedEntry: "database/user-api-tokens.json");
+
+        var exception = Assert.Throws<InvalidDataException>(() => BackupArchiveValidator.Validate(archive));
+
+        Assert.Contains("inventory durable-таблиц", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void VersionFiveRejectsIdentitySnapshotFromNewerSchema()
     {
         var settings = CurrentSettings();
@@ -323,6 +352,41 @@ public sealed class BackupArchiveValidatorTests
                 if (omittedEntry != "settings/runtime.json") AddEntry(writer, "settings/runtime.json", runtimeSettings);
             }
             if (unexpectedEntry is not null) AddEntry(writer, unexpectedEntry, "top-secret");
+        }
+        stream.Position = 0;
+        return new ZipArchive(stream, ZipArchiveMode.Read);
+    }
+
+    private static ZipArchive CreateVersionEightArchive(
+        string? omittedEntry = null,
+        string? manifestOmittedEntry = null)
+    {
+        var settings = CurrentSettings();
+        var stream = new MemoryStream();
+        using (var writer = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true))
+        {
+            AddEntry(writer, "manifest.json",
+                JsonSerializer.Serialize(new
+                {
+                    version = 8,
+                    settingsSchemaVersion = 1,
+                    createdAt = "2026-09-22T10:00:00Z",
+                    secretsIncluded = false,
+                    databaseEntries = BackupSchemaInventory.Tables
+                        .Where(item => item.Disposition == BackupTableDisposition.Included)
+                        .Select(item => item.ArchiveEntry!)
+                        .Where(entry => !string.Equals(entry, manifestOmittedEntry, StringComparison.Ordinal))
+                        .Order(StringComparer.Ordinal)
+                        .ToArray()
+                }));
+            foreach (var entry in BackupSchemaInventory.Tables
+                         .Where(item => item.Disposition == BackupTableDisposition.Included)
+                         .Select(item => item.ArchiveEntry!))
+                if (!string.Equals(entry, omittedEntry, StringComparison.Ordinal))
+                    AddEntry(writer, entry, "[]");
+            AddEntry(writer, "settings/collector.json", settings.Collector);
+            AddEntry(writer, "settings/backup.json", settings.Backup);
+            AddEntry(writer, "settings/runtime.json", settings.Runtime);
         }
         stream.Position = 0;
         return new ZipArchive(stream, ZipArchiveMode.Read);

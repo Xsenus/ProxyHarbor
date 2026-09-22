@@ -361,6 +361,8 @@ public sealed class BackupService(
             {
                 await WriteJsonAsync(archive, "database/proxies.json", db.Proxies.AsNoTracking().AsAsyncEnumerable(), token);
                 await WriteJsonAsync(archive, "database/sources.json", db.Sources.AsNoTracking().AsAsyncEnumerable(), token);
+                await WriteJsonAsync(archive, "database/proxy-source-credentials.json",
+                    db.ProxySourceCredentials.AsNoTracking().AsAsyncEnumerable(), token);
                 await WriteJsonAsync(archive, "database/vpn-sources.json", db.VpnSources.AsNoTracking().AsAsyncEnumerable(), token);
                 await WriteJsonAsync(archive, "database/vpn-endpoints.json", db.VpnEndpoints.AsNoTracking().AsAsyncEnumerable(), token);
                 await WriteJsonAsync(archive, "database/vpn-endpoint-sources.json", db.VpnEndpointSources.AsNoTracking().AsAsyncEnumerable(), token);
@@ -379,9 +381,25 @@ public sealed class BackupService(
                 // и reset token в этих таблицах нет; password hash защищён шифрованием PHB3.
                 await WriteJsonAsync(archive, "database/users.json", db.Users.AsNoTracking().AsAsyncEnumerable(), token);
                 await WriteJsonAsync(archive, "database/roles.json", db.Roles.AsNoTracking().AsAsyncEnumerable(), token);
+                await WriteJsonAsync(archive, "database/role-claims.json",
+                    db.RoleClaims.AsNoTracking().AsAsyncEnumerable(), token);
+                await WriteJsonAsync(archive, "database/user-claims.json",
+                    db.UserClaims.AsNoTracking().AsAsyncEnumerable(), token);
+                await WriteJsonAsync(archive, "database/user-logins.json",
+                    db.UserLogins.AsNoTracking().AsAsyncEnumerable(), token);
                 await WriteJsonAsync(archive, "database/user-roles.json", db.UserRoles.AsNoTracking().AsAsyncEnumerable(), token);
+                await WriteJsonAsync(archive, "database/user-identity-tokens.json",
+                    db.UserTokens.AsNoTracking().AsAsyncEnumerable(), token);
                 await WriteJsonAsync(archive, "database/subscriptions.json", db.Subscriptions.AsNoTracking().AsAsyncEnumerable(), token);
+                await WriteJsonAsync(archive, "database/user-api-tokens.json",
+                    db.UserApiTokens.AsNoTracking().AsAsyncEnumerable(), token);
+                await WriteJsonAsync(archive, "database/user-api-token-requests.json",
+                    db.UserApiTokenRequests.AsNoTracking().AsAsyncEnumerable(), token);
                 await WriteJsonAsync(archive, "database/payment-orders.json", db.PaymentOrders.AsNoTracking().AsAsyncEnumerable(), token);
+                await WriteJsonAsync(archive, "database/referral-relationships.json",
+                    db.ReferralRelationships.AsNoTracking().AsAsyncEnumerable(), token);
+                await WriteJsonAsync(archive, "database/referral-rewards.json",
+                    db.ReferralRewards.AsNoTracking().AsAsyncEnumerable(), token);
                 await WriteJsonAsync(archive, "database/user-notifications.json", db.UserNotifications.AsNoTracking().AsAsyncEnumerable(), token);
                 await WriteJsonAsync(archive, "database/subscription-admin-actions.json", db.SubscriptionAdminActions.AsNoTracking().AsAsyncEnumerable(), token);
                 await WriteJsonAsync(archive, "database/proxy-access-buckets.json", db.ProxyAccessBuckets.AsNoTracking().AsAsyncEnumerable(), token);
@@ -396,6 +414,8 @@ public sealed class BackupService(
                 // являются runtime-конфигурацией и должны переживать восстановление.
                 await WriteJsonAsync(archive, "database/site-configuration.json",
                     db.SiteConfigurations.AsNoTracking().AsAsyncEnumerable(), token);
+                await WriteJsonAsync(archive, "database/metrics-snapshot-states.json",
+                    db.MetricsSnapshotStates.AsNoTracking().AsAsyncEnumerable(), token);
                 // Telegram token и webhook secret уже защищены Data Protection. Сохраняем
                 // также CRM, дедупликацию update и очередь, чтобы восстановление не вызвало
                 // повторных оплат, рассылок или потери истории переписки.
@@ -421,12 +441,17 @@ public sealed class BackupService(
                 await WriteJsonAsync(archive, "manifest.json",
                     new
                     {
-                        // v7 фиксирует checker-nodes как обязательную часть полного снимка.
-                        // Архивы v2-v6 остаются совместимыми с restore.
-                        version = 7,
+                        // v8 фиксирует полное покрытие durable EF-модели. Архивы
+                        // v2-v7 остаются совместимыми с restore.
+                        version = 8,
                         settingsSchemaVersion = 1,
                         createdAt = DateTimeOffset.UtcNow,
-                        secretsIncluded = false
+                        secretsIncluded = false,
+                        databaseEntries = BackupSchemaInventory.Tables
+                            .Where(item => item.Disposition == BackupTableDisposition.Included)
+                            .Select(item => item.ArchiveEntry!)
+                            .Order(StringComparer.Ordinal)
+                            .ToArray()
                     }, token);
             }
             await output.FlushAsync(token);
