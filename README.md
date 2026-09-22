@@ -216,7 +216,7 @@ Backup содержит:
 - Telegram CRM, обработанные update, транспортную очередь и зашифрованную runtime-конфигурацию commerce-бота;
 - публикацию правовых разделов, публичные реквизиты, cookie-тексты и идентификаторы метрик;
 - полные безопасные `Collector`/`Backup`/runtime-настройки;
-- manifest версии 8 с явным `secretsIncluded=false` и полным покрытием durable-таблиц EF-модели.
+- manifest версии 9 с явным `secretsIncluded=false`, полным покрытием durable-таблиц EF-модели и destination/copy/job metadata. Строгий reader v8 сохранён без изменения.
 
 В архив никогда не входят admin password/API key, открытые API-секреты, data-protection keys, PostgreSQL connection string/password, credentials Telegram/S3-доставки backup и encryption key. Token commerce-бота и ключ платного proxy-провайдера входят только как Data Protection ciphertext; без независимо сохранённых Data Protection keys после переноса их нужно ввести заново.
 

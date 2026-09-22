@@ -187,13 +187,13 @@ internal static class RestoreApplication
         await Console.Out.WriteLineAsync();
     }
 
-    /// <summary>Читает настройки из v5-v8, чья точная схема уже проверена валидатором.</summary>
+    /// <summary>Читает настройки из v5-v9, чья точная схема уже проверена валидатором.</summary>
     internal static RestoreSettingsInspection ReadSettingsInspection(ZipArchive archive)
     {
         var manifest = ReadJsonObject(archive, "manifest.json");
-        if (manifest.GetProperty("version").GetInt32() is not (5 or 6 or 7 or 8))
+        if (manifest.GetProperty("version").GetInt32() is not (5 or 6 or 7 or 8 or 9))
             throw new InvalidDataException(
-                "Полный снимок настроек доступен только для backup manifest v5-v8.");
+                "Полный снимок настроек доступен только для backup manifest v5-v9.");
 
         return new RestoreSettingsInspection(
             manifest,
@@ -228,6 +228,7 @@ internal static class RestoreApplication
         var backupVersion = ReadJsonObject(archive, "manifest.json")
             .GetProperty("version").GetInt32();
         var hasCompleteVersionEightSnapshot = backupVersion >= 8;
+        var hasDestinationOrchestrationSnapshot = backupVersion >= 9;
         if (hasCompleteVersionEightSnapshot)
             await Console.Error.WriteLineAsync(
                 "Предупреждение: v8 восстанавливает Data Protection ciphertext и Identity credential state. " +
@@ -253,6 +254,15 @@ internal static class RestoreApplication
             await using var transaction = await db.Database.BeginTransactionAsync(token);
 
             // Замена выполняется в одной транзакции: при любой ошибке старая БД остаётся целой.
+            if (hasDestinationOrchestrationSnapshot)
+            {
+                await db.BackupDeliveryJobs.ExecuteDeleteAsync(token);
+                await db.BackupRestoreVerifications.ExecuteDeleteAsync(token);
+                await db.BackupCopies.ExecuteDeleteAsync(token);
+                await db.BackupPoolDestinations.ExecuteDeleteAsync(token);
+                await db.BackupPools.ExecuteDeleteAsync(token);
+                await db.BackupDestinations.ExecuteDeleteAsync(token);
+            }
             await db.BackupRuns.ExecuteDeleteAsync(token);
             await db.ValidationRuns.ExecuteDeleteAsync(token);
             await db.CheckerNodes.ExecuteDeleteAsync(token);
@@ -386,6 +396,21 @@ internal static class RestoreApplication
                     WriteBackupRunAsync,
                     hooks,
                     token);
+            if (hasDestinationOrchestrationSnapshot)
+            {
+                _ = await ImportIdentityAsync<BackupDestination>(
+                    archive, "database/backup-destinations.json", db, token);
+                _ = await ImportIdentityAsync<BackupPool>(
+                    archive, "database/backup-pools.json", db, token);
+                _ = await ImportIdentityAsync<BackupPoolDestination>(
+                    archive, "database/backup-pool-destinations.json", db, token);
+                _ = await ImportIdentityAsync<BackupCopy>(
+                    archive, "database/backup-copies.json", db, token);
+                _ = await ImportIdentityAsync<BackupDeliveryJob>(
+                    archive, "database/backup-delivery-jobs.json", db, token);
+                _ = await ImportIdentityAsync<BackupRestoreVerification>(
+                    archive, "database/backup-restore-verifications.json", db, token);
+            }
             var userCount = 0;
             if (hasIdentitySnapshot)
             {
@@ -910,7 +935,7 @@ internal sealed record RestoreOptions(
         dotnet run --project src/ProxyHarbor.Restore -- \
           --input ./proxyharbor.phbackup --replace-existing-data
 
-        Без подключения к БД вывести безопасные настройки manifest v5-v8 в JSON:
+        Без подключения к БД вывести безопасные настройки manifest v5-v9 в JSON:
           --input ./proxyharbor.phbackup --inspect-settings
 
         По умолчанию строка БД читается из ConnectionStrings__Postgres,

@@ -90,6 +90,10 @@ public static class ServiceCollectionExtensions
             .Validate(x => !x.SendToObjectStorage || BackupOptions.IsObjectStorageConfigurationValid(x),
                 "Для S3 backup нужны безопасный HTTPS endpoint, region, bucket, prefix и оба ключа")
             .ValidateOnStart();
+        // Схема destinations/copies/jobs разворачивается заранее. Сам новый маршрут
+        // остаётся fail-closed до отдельного совместимого rollout.
+        services.AddOptions<BackupRoutingOptions>()
+            .Bind(configuration.GetSection(BackupRoutingOptions.Section));
         services.AddOptions<GeoIpOptions>().Bind(configuration.GetSection(GeoIpOptions.Section))
             .Validate(x => x.RefreshHours is >= 1 and <= 720, "RefreshHours: 1..720")
             .Validate(x => x.BackfillBatchSize is >= 1 and <= 100_000, "BackfillBatchSize: 1..100000")

@@ -46,6 +46,15 @@ public static class BackupArchiveValidator
         "database/referral-rewards.json",
         "database/metrics-snapshot-states.json"
     ];
+    private static readonly string[] VersionNineEntries =
+    [
+        "database/backup-destinations.json",
+        "database/backup-pools.json",
+        "database/backup-pool-destinations.json",
+        "database/backup-copies.json",
+        "database/backup-delivery-jobs.json",
+        "database/backup-restore-verifications.json"
+    ];
     private static readonly HashSet<string> AllowedEntries = new(
         RequiredDatabaseEntries
             .Concat(["database/backup-runs.json", "database/validation-runs.json", "database/checker-nodes.json"])
@@ -68,6 +77,7 @@ public static class BackupArchiveValidator
             .Append("database/telegram-outbound-messages.json")
             .Append("database/telegram-conversation-messages.json")
             .Concat(VersionEightEntries)
+            .Concat(VersionNineEntries)
             .Append("manifest.json"),
         StringComparer.Ordinal);
 
@@ -101,7 +111,7 @@ public static class BackupArchiveValidator
         if (!root.TryGetProperty("version", out var version) ||
             version.ValueKind != JsonValueKind.Number ||
             !version.TryGetInt32(out var versionNumber) ||
-            versionNumber is < 2 or > 8)
+            versionNumber is < 2 or > 9)
             throw new InvalidDataException("Версия manifest backup не поддерживается.");
         if (!root.TryGetProperty("secretsIncluded", out var secretsIncluded) ||
             secretsIncluded.ValueKind is not (JsonValueKind.True or JsonValueKind.False) ||
@@ -127,7 +137,7 @@ public static class BackupArchiveValidator
             RequireExactProperties(root,
                 ["version", "settingsSchemaVersion", "createdAt", "secretsIncluded", "databaseEntries"],
                 "manifest.json");
-            ValidateDatabaseEntryInventory(root);
+            ValidateDatabaseEntryInventory(root, versionNumber);
         }
 
         if (versionNumber < 6 &&
@@ -136,6 +146,9 @@ public static class BackupArchiveValidator
         if (versionNumber < 8 &&
             archive.Entries.Any(entry => VersionEightEntries.Contains(entry.FullName, StringComparer.Ordinal)))
             throw new InvalidDataException("Расширенный полный snapshot поддерживается только backup schema версии 8.");
+        if (versionNumber < 9 &&
+            archive.Entries.Any(entry => VersionNineEntries.Contains(entry.FullName, StringComparer.Ordinal)))
+            throw new InvalidDataException("Destination snapshot поддерживается только backup schema версии 9.");
 
         foreach (var name in RequiredDatabaseEntries)
             _ = RequiredEntry(archive, name);
@@ -153,7 +166,8 @@ public static class BackupArchiveValidator
             _ = RequiredEntry(archive, "database/checker-nodes.json");
         if (versionNumber >= 8)
             foreach (var name in BackupSchemaInventory.Tables
-                         .Where(item => item.Disposition == BackupTableDisposition.Included)
+                         .Where(item => item.Disposition == BackupTableDisposition.Included &&
+                             item.IntroducedInManifestVersion <= versionNumber)
                          .Select(item => item.ArchiveEntry!))
                 _ = RequiredEntry(archive, name);
 
@@ -238,7 +252,7 @@ public static class BackupArchiveValidator
             throw new InvalidDataException($"Файл настроек {entryName} нарушает политику исключения секретов.");
     }
 
-    private static void ValidateDatabaseEntryInventory(JsonElement manifest)
+    private static void ValidateDatabaseEntryInventory(JsonElement manifest, int versionNumber)
     {
         if (!manifest.TryGetProperty("databaseEntries", out var entries) ||
             entries.ValueKind != JsonValueKind.Array)
@@ -254,7 +268,8 @@ public static class BackupArchiveValidator
         }
 
         var expected = BackupSchemaInventory.Tables
-            .Where(item => item.Disposition == BackupTableDisposition.Included)
+            .Where(item => item.Disposition == BackupTableDisposition.Included &&
+                item.IntroducedInManifestVersion <= versionNumber)
             .Select(item => item.ArchiveEntry!)
             .ToHashSet(StringComparer.Ordinal);
         if (!actual.SetEquals(expected))

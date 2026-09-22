@@ -14,6 +14,7 @@ public sealed record BackupTableClassification(
     string TableName,
     BackupTableDisposition Disposition,
     string? ArchiveEntry,
+    int IntroducedInManifestVersion,
     string Rationale);
 
 /// <summary>
@@ -33,7 +34,13 @@ public static class BackupSchemaInventory
         Included("AspNetUserRoles", "database/user-roles.json", "Identity role assignments."),
         Included("AspNetUsers", "database/users.json", "User accounts and password hashes."),
         Included("AspNetUserTokens", "database/user-identity-tokens.json", "Identity token state."),
+        IncludedV9("BackupCopies", "database/backup-copies.json", "Durable physical-copy evidence."),
         Included("BackupConfigurations", "database/backup-configuration.json", "Persistent runtime backup settings."),
+        IncludedV9("BackupDeliveryJobs", "database/backup-delivery-jobs.json", "Durable delivery and reconciliation queue."),
+        IncludedV9("BackupDestinations", "database/backup-destinations.json", "Protected destination configuration."),
+        IncludedV9("BackupPoolDestinations", "database/backup-pool-destinations.json", "Allowed routing graph."),
+        IncludedV9("BackupPools", "database/backup-pools.json", "Backup protection policies."),
+        IncludedV9("BackupRestoreVerifications", "database/backup-restore-verifications.json", "Restore-drill evidence."),
         Included("BackupRuns", "database/backup-runs.json", "Backup audit and delivery evidence."),
         Included("CheckerNodes", "database/checker-nodes.json", "Registered checker topology without plaintext credentials."),
         Included("FreeProxyExportGrants", "database/free-proxy-export-grants.json", "Durable export grants."),
@@ -70,8 +77,14 @@ public static class BackupSchemaInventory
         string tableName,
         string archiveEntry,
         string rationale) =>
-        new(tableName, BackupTableDisposition.Included, archiveEntry, rationale);
+        new(tableName, BackupTableDisposition.Included, archiveEntry, 8, rationale);
+
+    private static BackupTableClassification IncludedV9(
+        string tableName,
+        string archiveEntry,
+        string rationale) =>
+        new(tableName, BackupTableDisposition.Included, archiveEntry, 9, rationale);
 
     private static BackupTableClassification Ephemeral(string tableName, string rationale) =>
-        new(tableName, BackupTableDisposition.Ephemeral, ArchiveEntry: null, rationale);
+        new(tableName, BackupTableDisposition.Ephemeral, ArchiveEntry: null, 8, rationale);
 }

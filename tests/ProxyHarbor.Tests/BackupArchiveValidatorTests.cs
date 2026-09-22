@@ -112,6 +112,36 @@ public sealed class BackupArchiveValidatorTests
     }
 
     [Fact]
+    public void VersionNineRequiresAndAcceptsDestinationOrchestrationTables()
+    {
+        using var archive = CreateCurrentArchive(version: 9);
+
+        BackupArchiveValidator.Validate(archive);
+    }
+
+    [Fact]
+    public void VersionNineRejectsMissingDestinationOrchestrationTable()
+    {
+        using var archive = CreateCurrentArchive(
+            version: 9, omittedEntry: "database/backup-delivery-jobs.json");
+
+        var exception = Assert.Throws<InvalidDataException>(() => BackupArchiveValidator.Validate(archive));
+
+        Assert.Contains("database/backup-delivery-jobs.json", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void VersionEightRejectsVersionNineTable()
+    {
+        using var archive = CreateVersionEightArchive(
+            unexpectedEntry: "database/backup-destinations.json");
+
+        var exception = Assert.Throws<InvalidDataException>(() => BackupArchiveValidator.Validate(archive));
+
+        Assert.Contains("версии 9", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void VersionFiveRejectsIdentitySnapshotFromNewerSchema()
     {
         var settings = CurrentSettings();
@@ -359,7 +389,15 @@ public sealed class BackupArchiveValidatorTests
 
     private static ZipArchive CreateVersionEightArchive(
         string? omittedEntry = null,
-        string? manifestOmittedEntry = null)
+        string? manifestOmittedEntry = null,
+        string? unexpectedEntry = null) =>
+        CreateCurrentArchive(8, omittedEntry, manifestOmittedEntry, unexpectedEntry);
+
+    private static ZipArchive CreateCurrentArchive(
+        int version,
+        string? omittedEntry = null,
+        string? manifestOmittedEntry = null,
+        string? unexpectedEntry = null)
     {
         var settings = CurrentSettings();
         var stream = new MemoryStream();
@@ -368,22 +406,25 @@ public sealed class BackupArchiveValidatorTests
             AddEntry(writer, "manifest.json",
                 JsonSerializer.Serialize(new
                 {
-                    version = 8,
+                    version,
                     settingsSchemaVersion = 1,
                     createdAt = "2026-09-22T10:00:00Z",
                     secretsIncluded = false,
                     databaseEntries = BackupSchemaInventory.Tables
-                        .Where(item => item.Disposition == BackupTableDisposition.Included)
+                        .Where(item => item.Disposition == BackupTableDisposition.Included &&
+                            item.IntroducedInManifestVersion <= version)
                         .Select(item => item.ArchiveEntry!)
                         .Where(entry => !string.Equals(entry, manifestOmittedEntry, StringComparison.Ordinal))
                         .Order(StringComparer.Ordinal)
                         .ToArray()
                 }));
             foreach (var entry in BackupSchemaInventory.Tables
-                         .Where(item => item.Disposition == BackupTableDisposition.Included)
+                         .Where(item => item.Disposition == BackupTableDisposition.Included &&
+                             item.IntroducedInManifestVersion <= version)
                          .Select(item => item.ArchiveEntry!))
                 if (!string.Equals(entry, omittedEntry, StringComparison.Ordinal))
                     AddEntry(writer, entry, "[]");
+            if (unexpectedEntry is not null) AddEntry(writer, unexpectedEntry, "[]");
             AddEntry(writer, "settings/collector.json", settings.Collector);
             AddEntry(writer, "settings/backup.json", settings.Backup);
             AddEntry(writer, "settings/runtime.json", settings.Runtime);

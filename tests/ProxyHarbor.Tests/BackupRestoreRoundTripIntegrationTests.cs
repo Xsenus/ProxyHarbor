@@ -354,6 +354,12 @@ public sealed class BackupRestoreRoundTripIntegrationTests
         db.Runs.Add(ExpectedCollectionRun());
         db.ValidationRuns.Add(ExpectedValidationRun());
         db.BackupRuns.Add(ExpectedBackupRun());
+        db.BackupDestinations.Add(ExpectedBackupDestination());
+        db.BackupPools.Add(ExpectedBackupPool());
+        db.BackupPoolDestinations.Add(ExpectedBackupPoolDestination());
+        db.BackupCopies.Add(ExpectedBackupCopy());
+        db.BackupDeliveryJobs.Add(ExpectedBackupDeliveryJob());
+        db.BackupRestoreVerifications.Add(ExpectedBackupRestoreVerification());
         db.Users.AddRange(ExpectedReferrer(), ExpectedReferredUser());
         db.Roles.Add(ExpectedRole());
         db.Set<IdentityUserRole<Guid>>().Add(ExpectedUserRole());
@@ -417,6 +423,27 @@ public sealed class BackupRestoreRoundTripIntegrationTests
 
         var backupRun = await db.BackupRuns.AsNoTracking().SingleAsync();
         Assert.Equivalent(ExpectedBackupRun(), backupRun, strict: true);
+        var destination = await db.BackupDestinations.AsNoTracking().SingleAsync();
+        Assert.Equal(ExpectedBackupDestination().Name, destination.Name);
+        Assert.Equal(ExpectedBackupDestination().Kind, destination.Kind);
+        Assert.Equal(ExpectedBackupDestination().FailureDomain, destination.FailureDomain);
+        using (var expectedCapabilities = JsonDocument.Parse(ExpectedBackupDestination().CapabilitiesJson))
+        using (var actualCapabilities = JsonDocument.Parse(destination.CapabilitiesJson))
+            Assert.True(JsonElement.DeepEquals(expectedCapabilities.RootElement, actualCapabilities.RootElement));
+        using (var expectedSettings = JsonDocument.Parse(ExpectedBackupDestination().SettingsJson))
+        using (var actualSettings = JsonDocument.Parse(destination.SettingsJson))
+            Assert.True(JsonElement.DeepEquals(expectedSettings.RootElement, actualSettings.RootElement));
+        Assert.Equal(ExpectedBackupDestination().ProtectedSecrets, destination.ProtectedSecrets);
+        var pool = await db.BackupPools.AsNoTracking().SingleAsync();
+        Assert.Equivalent(ExpectedBackupPool(), pool, strict: true);
+        var poolDestination = await db.BackupPoolDestinations.AsNoTracking().SingleAsync();
+        Assert.Equivalent(ExpectedBackupPoolDestination(), poolDestination, strict: true);
+        var copy = await db.BackupCopies.AsNoTracking().SingleAsync();
+        Assert.Equivalent(ExpectedBackupCopy(), copy, strict: true);
+        var deliveryJob = await db.BackupDeliveryJobs.AsNoTracking().SingleAsync();
+        Assert.Equivalent(ExpectedBackupDeliveryJob(), deliveryJob, strict: true);
+        var restoreVerification = await db.BackupRestoreVerifications.AsNoTracking().SingleAsync();
+        Assert.Equivalent(ExpectedBackupRestoreVerification(), restoreVerification, strict: true);
 
         AssertUser(ExpectedReferrer(), await db.Users.AsNoTracking()
             .SingleAsync(user => user.Id == SnapshotIds.ReferrerUser));
@@ -632,6 +659,84 @@ public sealed class BackupRestoreRoundTripIntegrationTests
         Error = "representative backup detail"
     };
 
+    private static BackupDestination ExpectedBackupDestination() => new()
+    {
+        Id = SnapshotIds.BackupDestination,
+        Name = "round-trip-s3",
+        Kind = "s3",
+        Enabled = true,
+        FailureDomain = "eu-central-independent-a",
+        Priority = 10,
+        CapabilitiesJson = "{\"operations\":[\"put\",\"verify\",\"read\"]}",
+        SettingsJson = "{\"bucket\":\"round-trip\"}",
+        ProtectedSecrets = "protected-round-trip-destination-secret",
+        CreatedAt = SnapshotTime.AddDays(-2),
+        UpdatedAt = SnapshotTime.AddDays(-1)
+    };
+
+    private static BackupPool ExpectedBackupPool() => new()
+    {
+        Id = SnapshotIds.BackupPool,
+        Name = "critical-backups",
+        RequiredVerifiedCopies = 1,
+        DesiredVerifiedCopies = 2,
+        MaxAttemptsPerCycle = 4,
+        OverallDeadlineSeconds = 900,
+        FailbackHealthyForSeconds = 1_800,
+        PolicyVersion = 3
+    };
+
+    private static BackupPoolDestination ExpectedBackupPoolDestination() => new()
+    {
+        BackupPoolId = SnapshotIds.BackupPool,
+        BackupDestinationId = SnapshotIds.BackupDestination,
+        Priority = 10,
+        AllowedOperations = "put,verify,read",
+        Role = "primary",
+        Enabled = true
+    };
+
+    private static BackupCopy ExpectedBackupCopy() => new()
+    {
+        Id = SnapshotIds.BackupCopy,
+        BackupRunId = SnapshotIds.BackupRun,
+        BackupDestinationId = SnapshotIds.BackupDestination,
+        ContentSha256 = new string('a', 64),
+        SizeBytes = 98_765,
+        State = "verified",
+        NativeLocator = "round-trip/proxyharbor-previous.phbackup",
+        NativeVersion = "version-1",
+        NativeChecksum = "sha256:" + new string('a', 64),
+        AttemptCount = 1,
+        LastAttemptAt = SnapshotTime.AddDays(-1).AddMinutes(2),
+        VerifiedAt = SnapshotTime.AddDays(-1).AddMinutes(3),
+        PolicyVersion = 3
+    };
+
+    private static BackupDeliveryJob ExpectedBackupDeliveryJob() => new()
+    {
+        Id = SnapshotIds.BackupDeliveryJob,
+        BackupCopyId = SnapshotIds.BackupCopy,
+        IdempotencyKey = "round-trip:backup-copy:put:v1",
+        State = "completed",
+        NotBefore = SnapshotTime.AddDays(-1),
+        Attempt = 1,
+        CreatedAt = SnapshotTime.AddDays(-1),
+        UpdatedAt = SnapshotTime.AddDays(-1).AddMinutes(3)
+    };
+
+    private static BackupRestoreVerification ExpectedBackupRestoreVerification() => new()
+    {
+        Id = SnapshotIds.BackupRestoreVerification,
+        BackupRunId = SnapshotIds.BackupRun,
+        BackupCopyId = SnapshotIds.BackupCopy,
+        Environment = "isolated",
+        StartedAt = SnapshotTime.AddHours(-2),
+        FinishedAt = SnapshotTime.AddHours(-1),
+        Result = "passed",
+        ApplicationRevision = "round-trip-revision"
+    };
+
     private static ApplicationUser ExpectedReferrer() => new()
     {
         Id = SnapshotIds.ReferrerUser,
@@ -833,6 +938,11 @@ public sealed class BackupRestoreRoundTripIntegrationTests
         internal static readonly Guid ApiToken = Guid.Parse("10000000-0000-0000-0000-000000000012");
         internal static readonly Guid ReferralRelationship = Guid.Parse("10000000-0000-0000-0000-000000000013");
         internal static readonly Guid ReferralReward = Guid.Parse("10000000-0000-0000-0000-000000000014");
+        internal static readonly Guid BackupDestination = Guid.Parse("10000000-0000-0000-0000-000000000015");
+        internal static readonly Guid BackupPool = Guid.Parse("10000000-0000-0000-0000-000000000016");
+        internal static readonly Guid BackupCopy = Guid.Parse("10000000-0000-0000-0000-000000000017");
+        internal static readonly Guid BackupDeliveryJob = Guid.Parse("10000000-0000-0000-0000-000000000018");
+        internal static readonly Guid BackupRestoreVerification = Guid.Parse("10000000-0000-0000-0000-000000000019");
         internal const long ApiTokenRequest = 10_001;
     }
 }

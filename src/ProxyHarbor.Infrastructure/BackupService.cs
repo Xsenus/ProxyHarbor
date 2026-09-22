@@ -377,6 +377,18 @@ public sealed class BackupService(
                 // поэтому в снимок входят лишь полностью определённые предыдущие попытки.
                 await WriteJsonAsync(archive, "database/backup-runs.json",
                     db.BackupRuns.AsNoTracking().Where(x => x.Id != backupRunId).AsAsyncEnumerable(), token);
+                await WriteJsonAsync(archive, "database/backup-destinations.json",
+                    db.BackupDestinations.AsNoTracking().AsAsyncEnumerable(), token);
+                await WriteJsonAsync(archive, "database/backup-pools.json",
+                    db.BackupPools.AsNoTracking().AsAsyncEnumerable(), token);
+                await WriteJsonAsync(archive, "database/backup-pool-destinations.json",
+                    db.BackupPoolDestinations.AsNoTracking().AsAsyncEnumerable(), token);
+                await WriteJsonAsync(archive, "database/backup-copies.json",
+                    db.BackupCopies.AsNoTracking().AsAsyncEnumerable(), token);
+                await WriteJsonAsync(archive, "database/backup-delivery-jobs.json",
+                    db.BackupDeliveryJobs.AsNoTracking().AsAsyncEnumerable(), token);
+                await WriteJsonAsync(archive, "database/backup-restore-verifications.json",
+                    db.BackupRestoreVerifications.AsNoTracking().AsAsyncEnumerable(), token);
                 // Identity rows входят в тот же repeatable-read snapshot. Исходных паролей
                 // и reset token в этих таблицах нет; password hash защищён шифрованием PHB3.
                 await WriteJsonAsync(archive, "database/users.json", db.Users.AsNoTracking().AsAsyncEnumerable(), token);
@@ -441,9 +453,9 @@ public sealed class BackupService(
                 await WriteJsonAsync(archive, "manifest.json",
                     new
                     {
-                        // v8 фиксирует полное покрытие durable EF-модели. Архивы
-                        // v2-v7 остаются совместимыми с restore.
-                        version = 8,
+                        // v9 добавляет destination/copy/job model, не меняя строгую
+                        // схему уже выпущенного v8. Архивы v2-v8 остаются совместимыми.
+                        version = 9,
                         settingsSchemaVersion = 1,
                         createdAt = DateTimeOffset.UtcNow,
                         secretsIncluded = false,
