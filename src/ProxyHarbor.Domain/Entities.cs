@@ -633,6 +633,23 @@ public sealed class BackupDeliveryJob
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 
+/// <summary>Durable outcome of one destination VERIFY probe for replica-safe health decisions.</summary>
+public sealed class BackupDestinationHealthOutcome
+{
+    /// <summary>Unique observation identity.</summary>
+    public Guid Id { get; set; } = Guid.NewGuid();
+    /// <summary>Destination whose provider operation was attempted.</summary>
+    public Guid BackupDestinationId { get; set; }
+    /// <summary>Operation name; initially only verify is persisted.</summary>
+    public string Operation { get; set; } = "verify";
+    /// <summary>Whether provider responded with a conclusive probe result.</summary>
+    public bool Succeeded { get; set; }
+    /// <summary>Typed provider error for failed probes, never raw response text.</summary>
+    public string? ErrorCode { get; set; }
+    /// <summary>UTC time of the probe outcome.</summary>
+    public DateTimeOffset ObservedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
 /// <summary>Аудит доказанного restore drill без connection strings и credentials.</summary>
 public sealed class BackupRestoreVerification
 {

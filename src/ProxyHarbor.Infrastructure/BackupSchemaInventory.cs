@@ -38,6 +38,7 @@ public static class BackupSchemaInventory
         Included("BackupConfigurations", "database/backup-configuration.json", "Persistent runtime backup settings."),
         IncludedV9("BackupDeliveryJobs", "database/backup-delivery-jobs.json", "Durable delivery and reconciliation queue."),
         IncludedV9("BackupDestinations", "database/backup-destinations.json", "Protected destination configuration."),
+        Ephemeral("BackupDestinationHealthOutcomes", "Short-lived provider VERIFY health is rebuilt from new probes after restore.", 9),
         IncludedV9("BackupPoolDestinations", "database/backup-pool-destinations.json", "Allowed routing graph."),
         IncludedV9("BackupPools", "database/backup-pools.json", "Backup protection policies."),
         IncludedV9("BackupRestoreVerifications", "database/backup-restore-verifications.json", "Restore-drill evidence."),
@@ -85,6 +86,8 @@ public static class BackupSchemaInventory
         string rationale) =>
         new(tableName, BackupTableDisposition.Included, archiveEntry, 9, rationale);
 
-    private static BackupTableClassification Ephemeral(string tableName, string rationale) =>
-        new(tableName, BackupTableDisposition.Ephemeral, ArchiveEntry: null, 8, rationale);
+    private static BackupTableClassification Ephemeral(
+        string tableName, string rationale, int introducedInManifestVersion = 8) =>
+        new(tableName, BackupTableDisposition.Ephemeral, ArchiveEntry: null,
+            introducedInManifestVersion, rationale);
 }

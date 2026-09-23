@@ -398,6 +398,7 @@ public sealed class BackupDeliveryProcessor(
         var destination = copy.BackupDestination;
         BackupDestinationProbeResult result;
         var attemptedProbe = false;
+        BackupDestinationErrorCode? probeFailureCode = null;
         try
         {
             var route = await db.BackupPoolDestinations.AsNoTracking().SingleOrDefaultAsync(
@@ -433,22 +434,32 @@ public sealed class BackupDeliveryProcessor(
         {
             result = new BackupDestinationProbeResult(BackupDestinationProbeOutcome.Unsupported);
         }
-        catch (BackupDestinationOperationException)
+        catch (BackupDestinationOperationException exception)
         {
+            probeFailureCode = exception.Failure.Code;
             result = new BackupDestinationProbeResult(BackupDestinationProbeOutcome.Inconclusive);
         }
         catch (OperationCanceledException) when (!hostToken.IsCancellationRequested)
         {
+            probeFailureCode = BackupDestinationErrorCode.Timeout;
             result = new BackupDestinationProbeResult(BackupDestinationProbeOutcome.Inconclusive);
         }
 
-        if (result.Outcome is BackupDestinationProbeOutcome.Matching or
-            BackupDestinationProbeOutcome.Missing or BackupDestinationProbeOutcome.Mismatching)
-            health.RecordSuccess(destination.Id, BackupDestinationOperation.Verify);
-        else if (result.Outcome == BackupDestinationProbeOutcome.Unsupported)
-            health.ReleaseWithoutOutcome(destination.Id, BackupDestinationOperation.Verify);
-
         var now = DateTimeOffset.UtcNow;
+        var conclusive = result.Outcome is BackupDestinationProbeOutcome.Matching or
+            BackupDestinationProbeOutcome.Missing or BackupDestinationProbeOutcome.Mismatching;
+        if (attemptedProbe && (conclusive || result.Outcome == BackupDestinationProbeOutcome.Inconclusive))
+        {
+            db.BackupDestinationHealthOutcomes.Add(new BackupDestinationHealthOutcome
+            {
+                BackupDestinationId = destination.Id,
+                Succeeded = conclusive,
+                ErrorCode = conclusive ? null :
+                    (probeFailureCode ?? BackupDestinationErrorCode.Unavailable).ToString(),
+                ObservedAt = now
+            });
+        }
+
         switch (result.Outcome)
         {
             case BackupDestinationProbeOutcome.Matching when !string.IsNullOrWhiteSpace(result.NativeLocator):
@@ -476,24 +487,11 @@ public sealed class BackupDeliveryProcessor(
                 break;
             case BackupDestinationProbeOutcome.Inconclusive
                 when now - copy.UnknownSince < ReconciliationWindow:
-                if (attemptedProbe)
-                    health.RecordFailure(destination.Id, BackupDestinationOperation.Verify,
-                        BackupDestinationErrorCode.Unavailable);
-                else
-                    health.ReleaseWithoutOutcome(destination.Id, BackupDestinationOperation.Verify);
                 copy.State = "unknown";
                 job.State = "reconciling";
                 job.NotBefore = now.Add(RetryDelay(job.Id, Math.Max(1, job.Attempt)));
                 break;
             default:
-                if (result.Outcome == BackupDestinationProbeOutcome.Inconclusive)
-                {
-                    if (attemptedProbe)
-                        health.RecordFailure(destination.Id, BackupDestinationOperation.Verify,
-                            BackupDestinationErrorCode.Unavailable);
-                    else
-                        health.ReleaseWithoutOutcome(destination.Id, BackupDestinationOperation.Verify);
-                }
                 // Missing даже после HEAD не доказывает безопасность повторного PUT на
                 // произвольном S3-compatible backend. Оператор решает дальнейший retry.
                 copy.State = "manual_review";
@@ -505,7 +503,25 @@ public sealed class BackupDeliveryProcessor(
                 break;
         }
         ClearLease(job, now);
-        await SaveLeaseOutcomeAsync(db, job, CancellationToken.None);
+        if (!await SaveLeaseOutcomeAsync(db, job, CancellationToken.None))
+        {
+            health.ReleaseWithoutOutcome(destination.Id, BackupDestinationOperation.Verify);
+            return;
+        }
+        if (conclusive)
+            health.RecordSuccess(destination.Id, BackupDestinationOperation.Verify);
+        else if (attemptedProbe && result.Outcome == BackupDestinationProbeOutcome.Inconclusive)
+            health.RecordFailure(destination.Id, BackupDestinationOperation.Verify,
+                probeFailureCode ?? BackupDestinationErrorCode.Unavailable);
+        else
+            health.ReleaseWithoutOutcome(destination.Id, BackupDestinationOperation.Verify);
+    }
+
+    /// <summary>Prunes old durable health observations without touching jobs or backup copies.</summary>
+    public async Task<int> PruneHealthOutcomesAsync(CancellationToken token)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(token);
+        return await BackupDestinationHealth.PruneOldOutcomesAsync(db, token);
     }
 
     internal static TimeSpan RetryDelay(Guid jobId, int attempt)
@@ -700,6 +716,7 @@ public sealed class BackupDeliveryWorker(
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         var cycles = 0;
+        var nextHealthPruneAt = DateTimeOffset.UtcNow;
         while (!stoppingToken.IsCancellationRequested)
         {
             try
@@ -708,6 +725,11 @@ public sealed class BackupDeliveryWorker(
                 {
                     await Task.Delay(IdleDelay, stoppingToken);
                     continue;
+                }
+                if (DateTimeOffset.UtcNow >= nextHealthPruneAt)
+                {
+                    nextHealthPruneAt = DateTimeOffset.UtcNow.AddHours(1);
+                    _ = await processor.PruneHealthOutcomesAsync(stoppingToken);
                 }
                 cycles = cycles == int.MaxValue ? 1 : cycles + 1;
                 if (cycles % 10 == 0)

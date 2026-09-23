@@ -67,11 +67,12 @@ public sealed class BackupSchemaInventoryTests
             included.Select(item => item.ArchiveEntry).Distinct(StringComparer.Ordinal).Count());
         Assert.All(ephemeral, item =>
         {
-            Assert.Equal(8, item.IntroducedInManifestVersion);
+            Assert.True(item.IntroducedInManifestVersion is 8 or 9);
             Assert.Null(item.ArchiveEntry);
             Assert.False(string.IsNullOrWhiteSpace(item.Rationale));
         });
-        Assert.Equal(["ProxyValidationLeases"], ephemeral.Select(item => item.TableName));
+        Assert.Equal(["BackupDestinationHealthOutcomes", "ProxyValidationLeases"],
+            ephemeral.Select(item => item.TableName));
         Assert.Equal(6, included.Count(item => item.IntroducedInManifestVersion == 9));
     }
 }

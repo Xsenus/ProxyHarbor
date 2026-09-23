@@ -7,12 +7,13 @@ public sealed record BackupDestinationHealthDecision(bool Allowed, DateTimeOffse
 
 /// <summary>
 /// Не делает optional destination частью глобальной readiness. Локальные решения
-/// дополняются недавними durable PUT outcomes, чтобы новая replica не начинала с нуля.
+/// дополняются недавними durable PUT и VERIFY outcomes, чтобы новая replica не начинала с нуля.
 /// </summary>
 public sealed class BackupDestinationHealth(TimeProvider? timeProvider = null)
 {
     private static readonly TimeSpan ObservationWindow = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan DurableLookback = TimeSpan.FromMinutes(20);
+    private static readonly TimeSpan OutcomeRetention = TimeSpan.FromDays(1);
     private static readonly TimeSpan TransientCooldown = TimeSpan.FromMinutes(1);
     private static readonly TimeSpan ConfigurationCooldown = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan HalfOpenLease = TimeSpan.FromMinutes(15);
@@ -29,20 +30,37 @@ public sealed class BackupDestinationHealth(TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(db);
         var now = clock.GetUtcNow();
-        var recentJobs = operation == BackupDestinationOperation.Put
-            ? await db.BackupDeliveryJobs.AsNoTracking()
+        RecentOutcome[] durable;
+        if (operation == BackupDestinationOperation.Put)
+        {
+            var recentJobs = await db.BackupDeliveryJobs.AsNoTracking()
                 .Where(job => job.BackupCopy.BackupDestinationId == destinationId &&
                     job.BackupCopy.LastAttemptAt >= now.Subtract(DurableLookback) &&
                     job.State != "processing")
                 .OrderByDescending(job => job.BackupCopy.LastAttemptAt)
                 .Take(12)
-                .Select(job => new RecentOutcome(
+                .Select(job => new RecentPutOutcome(
                     job.BackupCopyId, job.State, job.LastErrorCode,
                     job.BackupCopy.LastAttemptAt!.Value))
-                .ToArrayAsync(token)
-            : [];
-        var durable = recentJobs.GroupBy(item => item.CopyId)
-            .Select(group => group.First()).Take(3).ToArray();
+                .ToArrayAsync(token);
+            durable = recentJobs.GroupBy(item => item.CopyId)
+                .Select(group => group.First()).Take(3)
+                .Select(item => new RecentOutcome(
+                    item.State == "completed" && item.ErrorCode is null,
+                    item.ErrorCode, item.ObservedAt)).ToArray();
+        }
+        else if (operation == BackupDestinationOperation.Verify)
+        {
+            durable = await db.BackupDestinationHealthOutcomes.AsNoTracking()
+                .Where(item => item.BackupDestinationId == destinationId &&
+                    item.Operation == "verify" && item.ObservedAt >= now.Subtract(DurableLookback))
+                .OrderByDescending(item => item.ObservedAt)
+                .ThenByDescending(item => item.Id)
+                .Take(3)
+                .Select(item => new RecentOutcome(item.Succeeded, item.ErrorCode, item.ObservedAt))
+                .ToArrayAsync(token);
+        }
+        else durable = [];
 
         lock (sync)
         {
@@ -64,6 +82,15 @@ public sealed class BackupDestinationHealth(TimeProvider? timeProvider = null)
             }
             return new BackupDestinationHealthDecision(true, now);
         }
+    }
+
+    /// <summary>Удаляет только наблюдения старше health window; вызывается не чаще часа на worker.</summary>
+    public static Task<int> PruneOldOutcomesAsync(ProxyHarborDbContext db, CancellationToken token)
+    {
+        var cutoff = DateTimeOffset.UtcNow.Subtract(OutcomeRetention);
+        return db.BackupDestinationHealthOutcomes
+            .Where(item => item.ObservedAt < cutoff)
+            .ExecuteDeleteAsync(token);
     }
 
     /// <summary>Успех операции закрывает только breaker той же destination и операции.</summary>
@@ -125,7 +152,7 @@ public sealed class BackupDestinationHealth(TimeProvider? timeProvider = null)
         if (durable.Length == 0 || durable[0].ObservedAt <= entry.LastLocalOutcomeAt)
             return;
         var latest = durable[0];
-        if (latest.State == "completed" && latest.ErrorCode is null)
+        if (latest.Succeeded)
         {
             entry.Failures = 0;
             entry.OpenUntil = default;
@@ -186,6 +213,8 @@ public sealed class BackupDestinationHealth(TimeProvider? timeProvider = null)
         public int Failures { get; set; }
     }
 
-    private sealed record RecentOutcome(
+    private sealed record RecentPutOutcome(
         Guid CopyId, string State, string? ErrorCode, DateTimeOffset ObservedAt);
+
+    private sealed record RecentOutcome(bool Succeeded, string? ErrorCode, DateTimeOffset ObservedAt);
 }
