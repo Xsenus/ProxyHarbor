@@ -23,7 +23,8 @@ public sealed class BackupLegacyDestinationProjector(
 {
     /// <summary>Зарезервированный pool, который startup-проекция обновляет из legacy settings.</summary>
     public static readonly Guid LegacyPoolId = Guid.Parse("bba00000-0000-0000-0000-000000000001");
-    internal static readonly Guid LegacyS3DestinationId = Guid.Parse("bba00000-0000-0000-0000-000000000002");
+    /// <summary>Зарезервированное S3 назначение, которое обновляет legacy projection.</summary>
+    public static readonly Guid LegacyS3DestinationId = Guid.Parse("bba00000-0000-0000-0000-000000000002");
     internal static readonly Guid LegacyTelegramDestinationId = Guid.Parse("bba00000-0000-0000-0000-000000000003");
     private const string ProjectionLockStatement = "SELECT pg_advisory_xact_lock(5787767920693105153)";
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);

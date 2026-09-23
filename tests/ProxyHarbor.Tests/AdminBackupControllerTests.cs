@@ -13,6 +13,89 @@ namespace ProxyHarbor.Tests;
 public sealed class AdminBackupControllerTests
 {
     [Fact]
+    public async Task CreatePoolRequiresIndependentS3DomainsAndActivatesOnlyChosenRoutes()
+    {
+        var factory = Factory($"admin-create-pool-{Guid.NewGuid():N}");
+        var controller = new AdminController(factory, null!, null!, null!, null!,
+            Options.Create(new BackupOptions()), Options.Create(new CollectorOptions()),
+            credentialProtectionProvider: new EphemeralDataProtectionProvider());
+        async Task<Guid> CreateDestination(string name, string endpoint, string bucket)
+        {
+            var request = new CreateS3BackupDestinationRequest(name, endpoint, "eu-west-1",
+                bucket, "backup", true, "test-access-key", "test-secret-key", 10);
+            return Assert.IsType<BackupDestinationOverviewResponse>(Assert.IsType<ObjectResult>(
+                (await controller.CreateS3BackupDestination(request, CancellationToken.None)).Result).Value).Id;
+        }
+        var first = await CreateDestination("first", "https://s3.example.test", "first-bucket");
+        var sameDomain = await CreateDestination("same-domain", "https://s3.example.test", "other-bucket");
+        var second = await CreateDestination("second", "https://s3.other.test", "second-bucket");
+        static CreateBackupPoolRouteRequest Route(Guid id) => new(id, 10, "primary", true);
+        var impossible = new CreateBackupPoolRequest("durable", 1, 2, 3, 600, 900,
+            [Route(first), Route(sameDomain)]);
+
+        Assert.Equal(409, Assert.IsType<ObjectResult>((await controller.CreateBackupPool(
+            impossible, CancellationToken.None)).Result).StatusCode);
+        await using (var verify = await factory.CreateDbContextAsync())
+        {
+            Assert.Empty(await verify.BackupPools.ToArrayAsync());
+            Assert.All(await verify.BackupDestinations.ToArrayAsync(), item => Assert.False(item.Enabled));
+        }
+
+        var valid = impossible with
+        {
+            Routes = [Route(first), new CreateBackupPoolRouteRequest(second, 20, "fallback", true)]
+        };
+        var response = Assert.IsType<BackupPoolCreationResponse>(Assert.IsType<ObjectResult>(
+            (await controller.CreateBackupPool(valid, CancellationToken.None)).Result).Value);
+        Assert.Equal(2, response.DesiredVerifiedCopies);
+        Assert.Equal(2, response.RouteCount);
+        Assert.Equal(1, response.PolicyVersion);
+        await using (var verify = await factory.CreateDbContextAsync())
+        {
+            Assert.Equal(2, await verify.BackupPoolDestinations.CountAsync());
+            Assert.False((await verify.BackupDestinations.SingleAsync(item => item.Id == sameDomain)).Enabled);
+            Assert.True((await verify.BackupDestinations.SingleAsync(item => item.Id == first)).Enabled);
+            Assert.True((await verify.BackupDestinations.SingleAsync(item => item.Id == second)).Enabled);
+        }
+        Assert.Equal(409, Assert.IsType<ConflictObjectResult>((await controller.CreateBackupPool(
+            valid, CancellationToken.None)).Result).StatusCode);
+    }
+
+    [Fact]
+    public async Task CreatePoolRejectsCredentialsFromDifferentKeyRingWithoutActivatingDestination()
+    {
+        var factory = Factory($"admin-pool-wrong-key-{Guid.NewGuid():N}");
+        var creator = new AdminController(factory, null!, null!, null!, null!,
+            Options.Create(new BackupOptions()), Options.Create(new CollectorOptions()),
+            credentialProtectionProvider: new EphemeralDataProtectionProvider());
+        var destination = Assert.IsType<BackupDestinationOverviewResponse>(Assert.IsType<ObjectResult>(
+            (await creator.CreateS3BackupDestination(new CreateS3BackupDestinationRequest(
+                "wrong-key", "https://s3.example.test", "eu-west-1", "private-backups",
+                "backup", true, "test-access-key", "test-secret-key", 10), CancellationToken.None)).Result).Value);
+        var otherKeyRing = new AdminController(factory, null!, null!, null!, null!,
+            Options.Create(new BackupOptions()), Options.Create(new CollectorOptions()),
+            credentialProtectionProvider: new EphemeralDataProtectionProvider());
+        var request = new CreateBackupPoolRequest("wrong-key-pool", 1, 1, 3, 600, 900,
+            [new CreateBackupPoolRouteRequest(destination.Id, 10, "primary", true)]);
+
+        Assert.Equal(409, Assert.IsType<ObjectResult>((await otherKeyRing.CreateBackupPool(
+            request, CancellationToken.None)).Result).StatusCode);
+        await using (var db = await factory.CreateDbContextAsync())
+        {
+            Assert.Empty(await db.BackupPools.ToArrayAsync());
+            var saved = await db.BackupDestinations.SingleAsync();
+            Assert.False(saved.Enabled);
+            saved.FailureDomain = "s3:forged-independent-domain:eu-west-1";
+            await db.SaveChangesAsync();
+        }
+        Assert.Equal(409, Assert.IsType<ObjectResult>((await creator.CreateBackupPool(
+            request, CancellationToken.None)).Result).StatusCode);
+        await using var verify = await factory.CreateDbContextAsync();
+        Assert.Empty(await verify.BackupPools.ToArrayAsync());
+        Assert.False((await verify.BackupDestinations.SingleAsync()).Enabled);
+    }
+
+    [Fact]
     public async Task CreateS3DestinationEncryptsCredentialsAndLeavesRoutingDisabled()
     {
         var factory = Factory($"admin-create-s3-{Guid.NewGuid():N}");
