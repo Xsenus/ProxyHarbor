@@ -70,6 +70,129 @@ public sealed class BackupDeliveryWorkerIntegrationTests
     }
 
     [Fact]
+    public async Task PlannerLimitsCatchUpToOneNewCopyPerPass()
+    {
+        var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+            .UseInMemoryDatabase($"delivery-limit-{Guid.NewGuid():N}").Options;
+        await using var db = new ProxyHarborDbContext(options);
+        var pool = Pool();
+        var run = Run(pool.Id, new string('a', 64), "limit.phbackup");
+        var first = Destination("limit-first", "domain-a", 10);
+        var second = Destination("limit-second", "domain-b", 20);
+        db.AddRange(pool, run, first, second,
+            Route(pool.Id, first.Id, 10), Route(pool.Id, second.Id, 20));
+        await db.SaveChangesAsync();
+        var planner = new BackupDeliveryPlanner(Registry(
+            new SuccessfulAdapter("s3"), new SuccessfulAdapter("telegram")));
+
+        Assert.Equal(1, await planner.PlanAsync(
+            db, run.Id, run.ContentSha256!, run.SizeBytes, CancellationToken.None, maxNewCopies: 1));
+        Assert.Equal(1, await planner.PlanAsync(
+            db, run.Id, run.ContentSha256!, run.SizeBytes, CancellationToken.None, maxNewCopies: 1));
+        Assert.Equal(0, await planner.PlanAsync(
+            db, run.Id, run.ContentSha256!, run.SizeBytes, CancellationToken.None, maxNewCopies: 1));
+        Assert.Equal(2, await db.BackupDeliveryJobs.CountAsync());
+    }
+
+    [Fact]
+    public async Task PlannerRejectsChangedPoolPolicyBeforeCreatingCopies()
+    {
+        var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+            .UseInMemoryDatabase($"delivery-stale-policy-{Guid.NewGuid():N}").Options;
+        await using var db = new ProxyHarborDbContext(options);
+        var pool = Pool();
+        pool.PolicyVersion++;
+        var run = Run(pool.Id, new string('a', 64), "stale.phbackup");
+        var destination = Destination("stale-destination", "domain-a", 10);
+        db.AddRange(pool, run, destination, Route(pool.Id, destination.Id, 10));
+        await db.SaveChangesAsync();
+        var planner = new BackupDeliveryPlanner(Registry(
+            new SuccessfulAdapter("s3"), new SuccessfulAdapter("telegram")));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => planner.PlanAsync(
+            db, run.Id, run.ContentSha256!, run.SizeBytes, CancellationToken.None));
+        Assert.Empty(db.BackupCopies);
+    }
+
+    [Theory]
+    [InlineData("running", true)]
+    [InlineData("completed", false)]
+    public async Task PlannerRequiresCompletedRunAndExistingPool(string status, bool includePool)
+    {
+        var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+            .UseInMemoryDatabase($"delivery-incomplete-{Guid.NewGuid():N}").Options;
+        await using var db = new ProxyHarborDbContext(options);
+        var pool = Pool();
+        var run = Run(pool.Id, new string('a', 64), "incomplete.phbackup");
+        run.Status = status;
+        db.BackupRuns.Add(run);
+        if (includePool) db.BackupPools.Add(pool);
+        await db.SaveChangesAsync();
+        var planner = new BackupDeliveryPlanner(Registry(
+            new SuccessfulAdapter("s3"), new SuccessfulAdapter("telegram")));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => planner.PlanAsync(
+            db, run.Id, run.ContentSha256!, run.SizeBytes, CancellationToken.None));
+        Assert.Empty(db.BackupDeliveryJobs);
+    }
+
+    [Fact]
+    public async Task PlannerRejectsNonPositivePerPassLimit()
+    {
+        var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+            .UseInMemoryDatabase($"delivery-invalid-limit-{Guid.NewGuid():N}").Options;
+        await using var db = new ProxyHarborDbContext(options);
+        var planner = new BackupDeliveryPlanner(Registry(
+            new SuccessfulAdapter("s3"), new SuccessfulAdapter("telegram")));
+
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => planner.PlanAsync(
+            db, Guid.NewGuid(), new string('a', 64), 5, CancellationToken.None, maxNewCopies: 0));
+    }
+
+    [Theory]
+    [InlineData("valid", true)]
+    [InlineData("not-verified", false)]
+    [InlineData("no-verified-at", false)]
+    [InlineData("no-locator", false)]
+    [InlineData("wrong-policy", false)]
+    [InlineData("wrong-hash", false)]
+    [InlineData("wrong-size", false)]
+    [InlineData("no-route", false)]
+    [InlineData("no-read", false)]
+    [InlineData("disabled-destination", false)]
+    public void CatchUpRequiresExactReadableVerifiedSource(string scenario, bool expected)
+    {
+        var pool = Pool();
+        var run = Run(pool.Id, new string('a', 64), "source.phbackup");
+        var destination = Destination("read-source", "domain-a", 10);
+        var copy = Copy(run.Id, destination.Id, run.ContentSha256!);
+        copy.BackupDestination = destination;
+        copy.State = "verified";
+        copy.VerifiedAt = DateTimeOffset.UtcNow;
+        copy.NativeLocator = "source/source.phbackup";
+        var routes = new Dictionary<Guid, BackupPoolDestination>
+        {
+            [destination.Id] = Route(pool.Id, destination.Id, 10)
+        };
+        switch (scenario)
+        {
+            case "not-verified": copy.State = "quarantined"; break;
+            case "no-verified-at": copy.VerifiedAt = null; break;
+            case "no-locator": copy.NativeLocator = null; break;
+            case "wrong-policy": copy.PolicyVersion++; break;
+            case "wrong-hash": copy.ContentSha256 = new string('b', 64); break;
+            case "wrong-size": copy.SizeBytes++; break;
+            case "no-route": routes.Clear(); break;
+            case "no-read": routes[destination.Id].AllowedOperations = "put,verify"; break;
+            case "disabled-destination": destination.Enabled = false; break;
+        }
+
+        Assert.Equal(expected, BackupCatchUpPlanner.HasReadableSource(
+            run, [copy], routes,
+            Registry(new SuccessfulAdapter("s3"), new SuccessfulAdapter("telegram"))));
+    }
+
+    [Fact]
     public async Task PolicyVersionChangeFencesAlreadyPlannedJob()
     {
         var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
@@ -573,6 +696,154 @@ public sealed class BackupDeliveryWorkerIntegrationTests
 
     [Fact]
     [Trait("Category", "PostgresIntegration")]
+    public async Task CatchUpPlansOneMissingCopyOnceAndFencesDrainingPolicyAndUnreadableSource()
+    {
+        var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
+        if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
+
+        var schema = $"proxyharbor_catchup_{Guid.NewGuid():N}";
+        var directory = Path.Combine(Path.GetTempPath(), $"proxyharbor-catchup-{Guid.NewGuid():N}");
+        var builder = new NpgsqlConnectionStringBuilder(baseConnectionString) { SearchPath = schema };
+        await using var admin = new NpgsqlConnection(baseConnectionString);
+        await admin.OpenAsync();
+        await using (var create = new NpgsqlCommand($"CREATE SCHEMA \"{schema}\"", admin))
+            await create.ExecuteNonQueryAsync();
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var factory = await CreateFactoryAsync(builder.ConnectionString);
+            byte[] bytes = [1, 2, 3, 4, 5];
+            var hash = Convert.ToHexStringLower(SHA256.HashData(bytes));
+            var adapter = new RepairAdapter(
+                bytes, "catchup-source", "catchup-target", "catchup.phbackup");
+            var registry = Registry(adapter, new SuccessfulAdapter("telegram"));
+            var planner = new BackupCatchUpPlanner(factory, registry, new BackupDeliveryPlanner(registry));
+            Guid poolId;
+            Guid sourceRouteId;
+            Guid targetRouteId;
+            Guid runId;
+            await using (var db = await factory.CreateDbContextAsync())
+            {
+                var pool = Pool();
+                var run = Run(pool.Id, hash, "catchup.phbackup");
+                run.StartedAt = DateTimeOffset.UtcNow.AddDays(-2);
+                var source = Destination("catchup-source", "domain-a", 10);
+                var target = Destination("catchup-target", "domain-b", 20);
+                var verified = Copy(run.Id, source.Id, run.ContentSha256!);
+                verified.State = "verified";
+                verified.VerifiedAt = DateTimeOffset.UtcNow;
+                verified.NativeLocator = "source/catchup.phbackup";
+                db.AddRange(pool, run, source, target,
+                    Route(pool.Id, source.Id, 10), Route(pool.Id, target.Id, 20), verified);
+                await db.SaveChangesAsync();
+                poolId = pool.Id;
+                sourceRouteId = source.Id;
+                targetRouteId = target.Id;
+                runId = run.Id;
+            }
+
+            var concurrent = await Task.WhenAll(
+                planner.TryPlanAsync(false, CancellationToken.None),
+                planner.TryPlanAsync(false, CancellationToken.None));
+            Assert.Equal(1, concurrent.Sum());
+            await using (var verify = await factory.CreateDbContextAsync())
+            {
+                Assert.Equal(2, await verify.BackupCopies.CountAsync(item => item.BackupRunId == runId));
+                Assert.Single(await verify.BackupDeliveryJobs.ToArrayAsync());
+            }
+            Assert.Equal(0, await planner.TryPlanAsync(false, CancellationToken.None));
+            var health = new BackupDestinationHealth();
+            var processor = new BackupDeliveryProcessor(
+                factory, registry,
+                Options.Create(new BackupOptions { Directory = directory, EncryptionKey = new string('k', 32) }),
+                Options.Create(new BackupRoutingOptions { Enabled = true }),
+                destinationHealth: health,
+                copyMaterializer: new BackupCopyMaterializer(factory, registry, health));
+            var lease = await processor.TryClaimAsync(CancellationToken.None);
+            Assert.NotNull(lease);
+            await processor.ProcessAsync(lease, CancellationToken.None);
+            Assert.Equal(1, adapter.ReadCalls);
+            Assert.Equal(1, adapter.PutCalls);
+            Assert.Empty(Directory.GetFileSystemEntries(directory));
+            await using (var verify = await factory.CreateDbContextAsync())
+                Assert.Equal("verified", (await verify.BackupCopies.SingleAsync(item =>
+                    item.BackupRunId == runId && item.BackupDestinationId == targetRouteId)).State);
+
+            await using (var db = await factory.CreateDbContextAsync())
+            {
+                var targetRoute = await db.BackupPoolDestinations.SingleAsync(item =>
+                    item.BackupPoolId == poolId && item.BackupDestinationId == targetRouteId);
+                targetRoute.Draining = true;
+                targetRoute.Enabled = false;
+                var second = Run(poolId, new string('b', 64), "draining.phbackup");
+                var sourceCopy = Copy(second.Id, sourceRouteId, second.ContentSha256!);
+                sourceCopy.State = "verified";
+                sourceCopy.VerifiedAt = DateTimeOffset.UtcNow;
+                sourceCopy.NativeLocator = "source/draining.phbackup";
+                db.AddRange(second, sourceCopy);
+                await db.SaveChangesAsync();
+            }
+            Assert.Equal(0, await planner.TryPlanAsync(false, CancellationToken.None));
+
+            await using (var db = await factory.CreateDbContextAsync())
+            {
+                var targetRoute = await db.BackupPoolDestinations.SingleAsync(item =>
+                    item.BackupPoolId == poolId && item.BackupDestinationId == targetRouteId);
+                targetRoute.Draining = false;
+                targetRoute.Enabled = true;
+                var pool = await db.BackupPools.SingleAsync(item => item.Id == poolId);
+                pool.PolicyVersion++;
+                await db.SaveChangesAsync();
+            }
+            Assert.Equal(0, await planner.TryPlanAsync(false, CancellationToken.None));
+
+            await using (var db = await factory.CreateDbContextAsync())
+            {
+                var pool = await db.BackupPools.SingleAsync(item => item.Id == poolId);
+                pool.PolicyVersion--;
+                var sourceRoute = await db.BackupPoolDestinations.SingleAsync(item =>
+                    item.BackupPoolId == poolId && item.BackupDestinationId == sourceRouteId);
+                sourceRoute.AllowedOperations = "put,verify";
+                await db.SaveChangesAsync();
+            }
+            Assert.Equal(0, await planner.TryPlanAsync(false, CancellationToken.None));
+
+            await using (var db = await factory.CreateDbContextAsync())
+            {
+                var sourceRoute = await db.BackupPoolDestinations.SingleAsync(item =>
+                    item.BackupPoolId == poolId && item.BackupDestinationId == sourceRouteId);
+                sourceRoute.AllowedOperations = "put,verify,read";
+                await db.SaveChangesAsync();
+            }
+            Assert.Equal(1, await planner.TryPlanAsync(false, CancellationToken.None));
+
+            await using (var db = await factory.CreateDbContextAsync())
+            {
+                var third = Run(poolId, new string('c', 64), "unknown.phbackup");
+                var sourceCopy = Copy(third.Id, sourceRouteId, third.ContentSha256!);
+                sourceCopy.State = "verified";
+                sourceCopy.VerifiedAt = DateTimeOffset.UtcNow;
+                sourceCopy.NativeLocator = "source/unknown.phbackup";
+                var unknownTarget = Copy(third.Id, targetRouteId, third.ContentSha256!);
+                unknownTarget.State = "unknown";
+                unknownTarget.UnknownSince = DateTimeOffset.UtcNow;
+                var unknownJob = Job(unknownTarget.Id, "unknown-catchup-job");
+                unknownJob.State = "reconciling";
+                db.AddRange(third, sourceCopy, unknownTarget, unknownJob);
+                await db.SaveChangesAsync();
+            }
+            Assert.Equal(0, await planner.TryPlanAsync(false, CancellationToken.None));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+            await using var drop = new NpgsqlCommand($"DROP SCHEMA IF EXISTS \"{schema}\" CASCADE", admin);
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
     public async Task NewReplicasObserveDurableDestinationAuthenticationFailure()
     {
         var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
@@ -855,7 +1126,11 @@ public sealed class BackupDeliveryWorkerIntegrationTests
                 $"{destination.Name}/{Path.GetFileName(path)}", null, expectedSha256, true));
     }
 
-    private sealed class RepairAdapter(byte[] bytes) : IBackupDestinationAdapter
+    private sealed class RepairAdapter(
+        byte[] bytes,
+        string sourceName = "source",
+        string targetName = "target",
+        string fileName = "expired-staging.phbackup") : IBackupDestinationAdapter
     {
         public string Kind => "s3";
         public BackupDestinationCapabilities Capabilities { get; } = new(
@@ -868,7 +1143,7 @@ public sealed class BackupDeliveryWorkerIntegrationTests
             string path, string expectedSha256, long expectedSize, CancellationToken token)
         {
             ReadCalls++;
-            Assert.Equal("source", destination.Name);
+            Assert.Equal(sourceName, destination.Name);
             await File.WriteAllBytesAsync(path, bytes, token);
             return new BackupDestinationMaterializationResult(
                 path, bytes.Length, expectedSha256, null, null);
@@ -879,8 +1154,8 @@ public sealed class BackupDeliveryWorkerIntegrationTests
             long expectedSize, CancellationToken token)
         {
             PutCalls++;
-            Assert.Equal("target", destination.Name);
-            Assert.Equal("expired-staging.phbackup", Path.GetFileName(path));
+            Assert.Equal(targetName, destination.Name);
+            Assert.Equal(fileName, Path.GetFileName(path));
             Assert.Equal(bytes, await File.ReadAllBytesAsync(path, token));
             return new BackupDestinationWriteResult(
                 $"target/{Path.GetFileName(path)}", null, expectedSha256, true);

@@ -686,6 +686,7 @@ public sealed record BackupDeliveryLease(Guid JobId, Guid LeaseId);
 /// <summary>Фоново дренирует durable backup jobs только при включённом routing flag.</summary>
 public sealed class BackupDeliveryWorker(
     BackupDeliveryProcessor processor,
+    BackupCatchUpPlanner catchUpPlanner,
     IOptions<BackupRoutingOptions> routingOptions,
     ILogger<BackupDeliveryWorker> logger) : BackgroundService
 {
@@ -698,6 +699,7 @@ public sealed class BackupDeliveryWorker(
     /// <inheritdoc />
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        var cycles = 0;
         while (!stoppingToken.IsCancellationRequested)
         {
             try
@@ -707,6 +709,9 @@ public sealed class BackupDeliveryWorker(
                     await Task.Delay(IdleDelay, stoppingToken);
                     continue;
                 }
+                cycles = cycles == int.MaxValue ? 1 : cycles + 1;
+                if (cycles % 10 == 0)
+                    _ = await catchUpPlanner.TryPlanAsync(oldestFirst: cycles % 100 == 0, stoppingToken);
                 _ = await processor.ReconcileExpiredLeasesAsync(stoppingToken);
                 var reconciliation = await processor.TryClaimReconciliationAsync(stoppingToken);
                 if (reconciliation is not null)
