@@ -4,6 +4,7 @@ param(
     [string]$Endpoint = 'https://s3-nl.hostkey.com',
     [string]$Region = 'nl',
     [string]$CredentialPath,
+    [switch]$PromptForCredential,
     [string]$ConfirmBucket,
     [switch]$Execute
 )
@@ -32,24 +33,34 @@ if (-not $Execute) {
     Write-Host "Dry run: $Endpoint / $Region / $Bucket / $prefix/; no provider I/O."
     return
 }
-if (-not [OperatingSystem]::IsWindows()) {
-    throw 'Этот canary требует Windows DPAPI Export-Clixml для временного credential-файла.'
-}
 if ($ConfirmBucket -cne $Bucket) {
     throw 'Для -Execute повторно укажите точное имя bucket в -ConfirmBucket.'
 }
-if ([string]::IsNullOrWhiteSpace($CredentialPath) -or
-    -not (Test-Path -LiteralPath $CredentialPath -PathType Leaf)) {
-    throw 'Для -Execute нужен локальный DPAPI Export-Clixml PSCredential вне репозитория.'
+if ($PromptForCredential -and -not [string]::IsNullOrWhiteSpace($CredentialPath)) {
+    throw 'Выберите только один способ: -PromptForCredential или -CredentialPath.'
 }
-$credentialFullPath = [IO.Path]::GetFullPath($CredentialPath)
-if ($credentialFullPath.StartsWith($repoRoot + [IO.Path]::DirectorySeparatorChar,
-        [StringComparison]::OrdinalIgnoreCase)) {
-    throw 'CredentialPath должен находиться вне репозитория.'
-}
-$credential = Import-Clixml -LiteralPath $credentialFullPath
-if ($credential -isnot [pscredential]) {
-    throw 'CredentialPath не содержит DPAPI Export-Clixml PSCredential.'
+if ($PromptForCredential) {
+    $credential = Get-Credential -Message 'Введите S3 Access Key как имя пользователя и Secret Key как пароль.'
+    if ($credential -isnot [pscredential]) {
+        throw 'Ввод S3 credentials отменён.'
+    }
+} else {
+    if (-not [OperatingSystem]::IsWindows()) {
+        throw 'Файл Export-Clixml с DPAPI credentials можно использовать только на Windows; выберите -PromptForCredential.'
+    }
+    if ([string]::IsNullOrWhiteSpace($CredentialPath) -or
+        -not (Test-Path -LiteralPath $CredentialPath -PathType Leaf)) {
+        throw 'Для -Execute нужен -PromptForCredential или локальный DPAPI PSCredential вне репозитория.'
+    }
+    $credentialFullPath = [IO.Path]::GetFullPath($CredentialPath)
+    if ($credentialFullPath.StartsWith($repoRoot + [IO.Path]::DirectorySeparatorChar,
+            [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'CredentialPath должен находиться вне репозитория.'
+    }
+    $credential = Import-Clixml -LiteralPath $credentialFullPath
+    if ($credential -isnot [pscredential]) {
+        throw 'CredentialPath не содержит DPAPI Export-Clixml PSCredential.'
+    }
 }
 
 $options = [ProxyHarbor.Infrastructure.BackupOptions]::new()

@@ -187,7 +187,7 @@ Purpose: fulfill owner requirement without false success. Covers REQ-004–006/0
 
 #### TASK-033 — Operation-scoped health, budgets and automatic fallback
 
-- Status: `IN PROGRESS / partial checkpoint merged`; Codex. PR #270 (`f39f7b9`) merged with green CI; verified-copy READ is wired into materialization and delivery via PR #281. PR #283 persists recent VERIFY outcomes across replicas; PR #286 orders pending jobs by pool-route priority. PR #287–290 retain exact typed VERIFY and durable PUT evidence, plus periodic read-only S3 probes. Local EVID-079 applies `FailbackHealthyForSeconds` to pending-job priority after unsafe outcomes, pending full gate/merge. Parallel replicas may begin different routes at once; real provider-health proof is absent.
+- Status: `IN PROGRESS / partial checkpoint merged`; Codex. PR #270 (`f39f7b9`) merged with green CI; verified-copy READ is wired into materialization and delivery via PR #281. PR #283 persists recent VERIFY outcomes across replicas; PR #286 orders pending jobs by pool-route priority. PR #287–291 retain exact typed VERIFY and durable PUT evidence, periodic read-only S3 probes and `FailbackHealthyForSeconds` scheduling hysteresis after unsafe outcomes. Parallel replicas may begin different routes at once; real provider-health proof is absent.
 - Changes: health/breaker per destination+operation, short-lived local state backed by durable recent outcomes; planner enforces overall deadline and allowlisted graph. Optional storage does not fail global readiness.
 - Tests: A down/B healthy; A slow leaves budget for B; auth/quota/capability; all down; cross-pool route rejected; breaker half-open; multi-instance eventual consistency.
 - Numeric budgets: begin conservative test defaults, measure canary, label production values `PROPOSED` until owner accepts.
@@ -420,7 +420,7 @@ Current merged checkpoint: `main@f2c1e46` contains STG-00–02 and TASK-020–03
 
 Merged checkpoint `main@aa3d687`: PR #286 passed CI and put pool-route priority before job creation time for pending claims of one run (EVID-074). This is scheduling order only, not automatic failback or serialized cross-replica delivery.
 
-Merged checkpoint `main@fb8c1c1`: PR #287–290 passed CI, store exact typed VERIFY and per-attempt PUT outcomes, and add bounded read-only S3 recovery probes (EVID-075–078). Local EVID-079 adds failback scheduling hysteresis requiring post-failure verified PUT and matching probe series across `FailbackHealthyForSeconds`; full gate/merge is pending. `missing`, `mismatching`, inconclusive, a legacy null result, or elapsed time alone cannot prove recovery. Real-provider canary, historical repair and isolated restore remain open gates.
+Merged checkpoint `main@0c45511`: PR #287–291 passed CI, store exact typed VERIFY and per-attempt PUT outcomes, add bounded read-only S3 recovery probes, and gate primary scheduling priority on post-failure PUT plus a matching probe window (EVID-075–079). `missing`, `mismatching`, inconclusive, a legacy null result, or elapsed time alone cannot prove recovery. Local EVID-080 simplifies the isolated S3 canary with interactive credential entry; real-provider canary, historical repair and isolated restore remain open gates.
 
 ## 16. Регламент продолжения в новой сессии
 
