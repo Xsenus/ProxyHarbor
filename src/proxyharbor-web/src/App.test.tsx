@@ -703,13 +703,21 @@ describe('ProxyHarbor UI', () => {
     window.history.replaceState({}, '', '/admin/backups')
     const backup = { id:'backup-1',startedAt:new Date().toISOString(),finishedAt:new Date().toISOString(),status:'completed',fileName:'proxyharbor-20260826-123456-1234.phbackup',sizeBytes:1024,telegramConfigured:true,sentToTelegram:true,objectStorageConfigured:true,sentToObjectStorage:true,objectStorageKey:'production/backups/proxyharbor.phbackup',available:true }
     let deleted = false
+    let drained = false
+    let drainAttempts = 0
     vi.mocked(fetch).mockImplementation(async (input, options) => {
       const url = String(input)
       if (url.includes('/api/v1/admin/sources')) return jsonResponse({items:[],page:1,pageSize:10,total:0})
       if (url.includes('/api/v1/admin/diagnostics')) return jsonResponse({serverTime:new Date().toISOString(),databaseBytes:2048,validationQueue:{total:0,due:0},recentRuns:[],recentValidationRuns:[],recentBackups:[backup]})
       if (url.endsWith('/api/v1/admin/backups/settings')) return jsonResponse({enabled:false,intervalHours:24,retentionDays:7,historyRetentionDays:365,maxTelegramFileSizeMb:49,sendToTelegram:true,telegramBotConfigured:true,telegramRecipientId:'chat-1',telegramRecipientDisplayName:'Илья Телятников',telegramRecipientUsername:'Xsenus',sendToObjectStorage:true,objectStorageEndpoint:'https://storage.yandexcloud.net',objectStorageRegion:'ru-central1',objectStorageBucket:'proxyharbor-backups',objectStoragePrefix:'production/backups',objectStorageUsePathStyle:true,objectStorageCredentialsConfigured:true,encryptionConfigured:true,format:'PHB3 (.phbackup)'})
       if (url.endsWith('/api/v1/admin/backups/telegram-recipients')) return jsonResponse([{id:'chat-1',displayName:'Илья Телятников',username:'Xsenus',lastInteractionAt:new Date().toISOString(),isDefault:true}])
-      if (url.includes('/api/v1/admin/backups/destinations?')) return jsonResponse({items:[{id:'destination-1',name:'S3 Нидерланды',kind:'s3',enabled:true,priority:1,credentialsConfigured:true,failureDomainConfigured:true,routes:[{poolId:'pool-1',poolName:'durable',policyVersion:2,requiredVerifiedCopies:1,desiredVerifiedCopies:2,role:'primary',allowedOperations:'put,verify,read',priority:1,enabled:true,draining:false}],lastOutcome:{operation:'verify',succeeded:false,probeOutcome:'missing',errorCode:'NotFound',observedAt:new Date().toISOString()}}],page:1,pageSize:10,total:1})
+      if (url.includes('/api/v1/admin/backups/destinations?')) return jsonResponse({items:[{id:'destination-1',name:'S3 Нидерланды',kind:'s3',enabled:true,priority:1,credentialsConfigured:true,failureDomainConfigured:true,routes:[{poolId:'pool-1',poolName:'durable',policyVersion:2,requiredVerifiedCopies:1,desiredVerifiedCopies:2,role:'primary',allowedOperations:'put,verify,read',priority:1,enabled:!drained,draining:drained},{poolId:'bba00000-0000-0000-0000-000000000001',poolName:'legacy-default',policyVersion:1,requiredVerifiedCopies:1,desiredVerifiedCopies:1,role:'secondary',allowedOperations:'put,verify,read',priority:2,enabled:true,draining:false}],lastOutcome:{operation:'verify',succeeded:false,probeOutcome:'missing',errorCode:'NotFound',observedAt:new Date().toISOString()}}],page:1,pageSize:10,total:1})
+      if (url.endsWith('/api/v1/admin/backups/pools/pool-1/routes/destination-1/drain') && options?.method === 'POST') {
+        drainAttempts++
+        if (drainAttempts === 1) return jsonResponse({title:'Protection policy изменилась'},409)
+        drained = true
+        return new Response(null,{status:204})
+      }
       if (url.includes('/api/v1/admin/backups?')) return jsonResponse({items:deleted?[]:[backup],page:1,pageSize:10,total:deleted?0:1})
       if (url.endsWith('/api/v1/admin/backups/backup-1/protection')) return jsonResponse({assessment:'evaluated',state:'degraded',verifiedIndependentCopies:1,requiredVerifiedCopies:1,desiredVerifiedCopies:2,requiredCopyDebt:0,desiredCopyDebt:1,copies:[{id:'copy-1',destinationName:'S3 Нидерланды',destinationKind:'s3',state:'verified',verifiedAt:new Date().toISOString(),hasNativeLocator:true,routeRole:'primary',routeEnabled:true,routeDraining:false}]})
       if (url.endsWith('/api/v1/admin/backups/backup-1') && options?.method === 'DELETE') { deleted = true; return new Response(null,{status:204}) }
@@ -727,6 +735,25 @@ describe('ProxyHarbor UI', () => {
     expect(screen.getByText(/VERIFY: missing/)).toBeInTheDocument()
     expect(screen.getByText(/v2 · quorum 1\/2/)).toBeInTheDocument()
     expect(screen.getByText(/граница отказа задана/)).toBeInTheDocument()
+    expect(screen.queryByRole('button',{name:'Перевести в draining: legacy-default'})).not.toBeInTheDocument()
+    const drainButton=screen.getByRole('button',{name:'Перевести в draining: durable'})
+    fireEvent.click(drainButton)
+    const confirmation=screen.getByRole('group',{name:'Остановить новые записи в durable?'})
+    expect(drainButton).toHaveAttribute('aria-expanded','true')
+    expect(within(confirmation).getByRole('button',{name:'Отмена'})).toHaveFocus()
+    fireEvent.keyDown(confirmation,{key:'Escape'})
+    expect(screen.queryByRole('group',{name:'Остановить новые записи в durable?'})).not.toBeInTheDocument()
+    expect(drainButton).toHaveFocus()
+    fireEvent.click(drainButton)
+    fireEvent.click(within(screen.getByRole('group',{name:'Остановить новые записи в durable?'})).getByRole('button',{name:'Подтвердить draining'}))
+    expect(await screen.findByText('Protection policy изменилась')).toBeInTheDocument()
+    const drainCall=vi.mocked(fetch).mock.calls.find(([input,options])=>String(input).endsWith('/drain')&&options?.method==='POST')
+    expect(JSON.parse(String(drainCall?.[1]?.body))).toEqual({expectedPolicyVersion:2})
+    fireEvent.click(within(screen.getByRole('group',{name:'Остановить новые записи в durable?'})).getByRole('button',{name:'Подтвердить draining'}))
+    await waitFor(()=>expect(screen.getByText(/v2 · quorum 1\/2.*draining/)).toBeInTheDocument())
+    expect(screen.queryByRole('button',{name:'Перевести в draining: durable'})).not.toBeInTheDocument()
+    expect(screen.getByText('S3 Нидерланды',{selector:'b'})).toHaveFocus()
+    expect(drainAttempts).toBe(2)
     fireEvent.click(screen.getByRole('button',{name:'Обновить назначения резервных копий'}))
     await waitFor(()=>expect(vi.mocked(fetch).mock.calls.filter(([input])=>String(input).includes('/api/v1/admin/backups/destinations?')).length).toBeGreaterThan(1))
     expect(screen.getAllByText('доставлен: S3 + Telegram').length).toBeGreaterThan(0)

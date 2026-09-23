@@ -25,6 +25,7 @@ type BackupSettings = { enabled:boolean;intervalHours:number;retentionDays:numbe
 type BackupDestinationRoute = { poolId:string;poolName:string;policyVersion:number;requiredVerifiedCopies:number;desiredVerifiedCopies:number;role:string;allowedOperations:string;priority:number;enabled:boolean;draining:boolean }
 type BackupDestinationOutcome = { operation:string;succeeded:boolean;probeOutcome?:string;errorCode?:string;observedAt:string }
 type BackupDestinationOverview = { id:string;name:string;kind:string;enabled:boolean;priority:number;credentialsConfigured:boolean;failureDomainConfigured:boolean;routes:BackupDestinationRoute[];lastOutcome?:BackupDestinationOutcome }
+const LEGACY_BACKUP_POOL_ID = 'bba00000-0000-0000-0000-000000000001'
 type TelegramBackupRecipient = { id:string;displayName:string;username?:string;lastInteractionAt:string;isDefault:boolean }
 type SourceCatalogSnapshot = { lastAuditedOn: string; expectedSources: number; presentSources: number; enabledSources: number; healthySources: number; failingSources: number; neverAuditedSources: number; staleSources: number; truncatedSources: number; expectedProviders: number; presentProviders: number; enabledProviders: number; isComplete: boolean; isHealthy: boolean }
 type Diagnostics = {
@@ -999,6 +1000,32 @@ function AdminBackupDestinations(){
   const [data,setData]=useState<PagedResult<BackupDestinationOverview>|null>(null)
   const [loading,setLoading]=useState(true)
   const [error,setError]=useState('')
+  const [drainTarget,setDrainTarget]=useState<{destination:BackupDestinationOverview;route:BackupDestinationRoute}|null>(null)
+  const [drainBusy,setDrainBusy]=useState(false)
+  const [drainError,setDrainError]=useState('')
+  const drainTrigger=useRef<HTMLButtonElement|null>(null)
+  const drainCancel=useRef<HTMLButtonElement|null>(null)
+  useEffect(()=>{if(drainTarget)drainCancel.current?.focus()},[drainTarget])
+  const closeDrain=()=>{
+    setDrainTarget(null)
+    setDrainError('')
+    drainTrigger.current?.focus()
+  }
+  const drain=async()=>{
+    if(!drainTarget)return
+    setDrainBusy(true)
+    setDrainError('')
+    const {destination,route}=drainTarget
+    try{
+      const response=await fetch(`${API}/api/v1/admin/backups/pools/${route.poolId}/routes/${destination.id}/drain`,{method:'POST',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({expectedPolicyVersion:route.policyVersion})})
+      if(!response.ok)throw new Error(await responseMessage(response,'Не удалось перевести маршрут в draining'))
+      setData(current=>current&&({...current,items:current.items.map(item=>item.id===destination.id?{...item,routes:item.routes.map(value=>value.poolId===route.poolId?{...value,enabled:false,draining:true}:value)}:item)}))
+      setDrainTarget(null)
+      document.getElementById(`backup-destination-${destination.id}`)?.focus()
+      setRefresh(value=>value+1)
+    }catch(reason){setDrainError(reason instanceof Error?reason.message:'Не удалось перевести маршрут в draining')}
+    finally{setDrainBusy(false)}
+  }
   useEffect(()=>{
     const controller=new AbortController()
     const load=async()=>{
@@ -1025,9 +1052,10 @@ function AdminBackupDestinations(){
     <div className="card-heading"><div><span className="kicker">ВНЕШНИЕ КОПИИ</span><h2 id="backup-destinations-title">Назначения и маршруты <em>{data?.total??'—'}</em></h2><p>Состояние из БД без обращения к provider. Последняя успешная операция не доказывает доступность сейчас.</p></div><button className="icon-button" type="button" aria-label="Обновить назначения резервных копий" disabled={loading} onClick={()=>setRefresh(value=>value+1)}><RefreshCw className={loading?'spin':undefined} width={18} height={18}/></button></div>
     {error&&<p className="backup-destination-error" role="alert">{error}</p>}
     {loading&&!data?<p className="empty-state">Загружаем назначения…</p>:data?.items.length===0?<p className="empty-state">Назначения пока не настроены. Это не подтверждает внешнюю защиту backup.</p>:<div className="backup-destination-list">{data?.items.map(destination=><article key={destination.id}>
-      <div className="backup-destination-heading"><div><b>{destination.name}</b><small>{destination.kind==='s3'?'S3':destination.kind==='telegram'?'Telegram':'Неизвестный тип'} · приоритет {destination.priority} · {destination.failureDomainConfigured?'граница отказа задана':'граница отказа не задана'} · {destination.credentialsConfigured?'ключи сохранены':'ключи не сохранены'}</small></div><span className={destination.enabled?'state-pill active':'state-pill'}>{destination.enabled?'Включено':'Выключено'}</span></div>
+      <div className="backup-destination-heading"><div><b id={`backup-destination-${destination.id}`} tabIndex={-1}>{destination.name}</b><small>{destination.kind==='s3'?'S3':destination.kind==='telegram'?'Telegram':'Неизвестный тип'} · приоритет {destination.priority} · {destination.failureDomainConfigured?'граница отказа задана':'граница отказа не задана'} · {destination.credentialsConfigured?'ключи сохранены':'ключи не сохранены'}</small></div><span className={destination.enabled?'state-pill active':'state-pill'}>{destination.enabled?'Включено':'Выключено'}</span></div>
       <p>Последний исход: {outcomeText(destination.lastOutcome)}{destination.lastOutcome&&<> · <time dateTime={destination.lastOutcome.observedAt}>{formatDateTime(destination.lastOutcome.observedAt)}</time></>}</p>
-      {destination.routes.length===0?<p>Не входит ни в один pool.</p>:<ul>{destination.routes.map(route=><li key={route.poolId}><b>{route.poolName}</b><span>v{route.policyVersion} · quorum {route.requiredVerifiedCopies}/{route.desiredVerifiedCopies} · {route.role} · {route.allowedOperations} · {route.draining?'draining':route.enabled?'маршрут включён':'маршрут выключен'}</span></li>)}</ul>}
+      {destination.routes.length===0?<p>Не входит ни в один pool.</p>:<ul>{destination.routes.map(route=><li key={route.poolId}><b>{route.poolName}</b><span>v{route.policyVersion} · quorum {route.requiredVerifiedCopies}/{route.desiredVerifiedCopies} · {route.role} · {route.allowedOperations} · {route.draining?'draining':route.enabled?'маршрут включён':'маршрут выключен'}</span>{route.enabled&&!route.draining&&route.poolId!==LEGACY_BACKUP_POOL_ID&&<button type="button" className="table-action danger" aria-expanded={drainTarget?.destination.id===destination.id&&drainTarget.route.poolId===route.poolId} aria-controls={drainTarget?.destination.id===destination.id&&drainTarget.route.poolId===route.poolId?'backup-drain-confirm':undefined} onClick={event=>{drainTrigger.current=event.currentTarget;setDrainError('');setDrainTarget({destination,route})}}><ShieldOff width={15} height={15}/>Перевести в draining: {route.poolName}</button>}</li>)}</ul>}
+      {drainTarget?.destination.id===destination.id&&<div id="backup-drain-confirm" className="source-delete-confirm backup-drain-confirm" role="group" aria-labelledby="backup-drain-title" onKeyDown={event=>{if(event.key==='Escape'&&!drainBusy){event.preventDefault();closeDrain()}}}><div><b id="backup-drain-title">Остановить новые записи в {drainTarget.route.poolName}?</b><p>Маршрут перейдёт в draining. Чтение уже существующих копий сохранится, но начатая загрузка может завершиться. Перед действием проверьте остальные маршруты и quorum.</p>{drainError&&<p className="backup-destination-error" role="alert">{drainError}</p>}</div><button ref={drainCancel} type="button" className="secondary-admin-button" disabled={drainBusy} onClick={closeDrain}>Отмена</button><button type="button" className="danger" disabled={drainBusy} onClick={()=>void drain()}>{drainBusy?'Переводим…':'Подтвердить draining'}</button></div>}
     </article>)}</div>}
     {data&&data.total>data.pageSize&&<ProxyPagination page={page} pageSize={pageSize} total={data.total} totalPages={Math.max(1,Math.ceil(data.total/pageSize))} onPageChange={setPage} onPageSizeChange={size=>{setPageSize(size);setPage(1)}}/>}
   </section>
