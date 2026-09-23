@@ -580,6 +580,24 @@ public sealed class BackupCopy
     public DateTimeOffset? UnknownSince { get; set; }
     /// <summary>Версия policy на момент планирования.</summary>
     public int PolicyVersion { get; set; } = 1;
+    /// <summary>null/pending/processing/published/manual_review для sidecar catalog.</summary>
+    public string? CatalogState { get; set; }
+    /// <summary>Не начинать следующий bounded publication attempt раньше этого момента.</summary>
+    public DateTimeOffset? CatalogNotBefore { get; set; }
+    /// <summary>Fencing token текущей попытки публикации.</summary>
+    public Guid? CatalogLeaseId { get; set; }
+    /// <summary>Истечение публикационной аренды.</summary>
+    public DateTimeOffset? CatalogLeaseUntil { get; set; }
+    /// <summary>Число начатых попыток публикации.</summary>
+    public int CatalogAttempt { get; set; }
+    /// <summary>Несекретный key reference, зафиксированный первой попыткой.</summary>
+    public string? CatalogKeyReference { get; set; }
+    /// <summary>Подтверждённый provider object key sidecar.</summary>
+    public string? CatalogObjectKey { get; set; }
+    /// <summary>Момент подтверждённой публикации.</summary>
+    public DateTimeOffset? CatalogPublishedAt { get; set; }
+    /// <summary>Bounded machine-readable причина последнего отказа.</summary>
+    public string? CatalogLastErrorCode { get; set; }
     /// <summary>Durable delivery/reconcile jobs.</summary>
     public ICollection<BackupDeliveryJob> Jobs { get; set; } = [];
     /// <summary>Проверки restore, выполненные с этой копии.</summary>

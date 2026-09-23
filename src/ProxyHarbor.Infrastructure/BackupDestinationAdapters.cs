@@ -134,6 +134,18 @@ public interface IBackupDestinationAdapter
                     BackupDestinationErrorCode.UnsupportedOperation,
                     BackupDestinationFailureDisposition.Permanent),
                 "Backup adapter не реализует чтение."));
+
+    /// <summary>Публикует подписанный catalog рядом с уже verified PHB3-копией.</summary>
+    Task<BackupObjectStorageVerificationResult> PublishCatalogAsync(
+        BackupDestination destination,
+        string backupObjectKey,
+        ReadOnlyMemory<byte> signedCatalog,
+        CancellationToken token) => Task.FromException<BackupObjectStorageVerificationResult>(
+            new BackupDestinationOperationException(
+                new BackupDestinationFailure(
+                    BackupDestinationErrorCode.UnsupportedOperation,
+                    BackupDestinationFailureDisposition.Permanent),
+                "Backup adapter не реализует публикацию catalog."));
 }
 
 /// <summary>Безопасный результат provider write, пригодный для durable copy audit.</summary>
@@ -430,6 +442,21 @@ public sealed class S3BackupDestinationAdapter : IBackupDestinationAdapter
             result.Sha256,
             result.VersionId,
             result.NativeChecksum ?? result.EntityTag);
+    }
+
+    /// <inheritdoc />
+    public Task<BackupObjectStorageVerificationResult> PublishCatalogAsync(
+        BackupDestination destination,
+        string backupObjectKey,
+        ReadOnlyMemory<byte> signedCatalog,
+        CancellationToken token)
+    {
+        ArgumentNullException.ThrowIfNull(destination);
+        if (transport is null || protector is null ||
+            !string.Equals(destination.Kind, Kind, StringComparison.Ordinal))
+            throw Failure(BackupDestinationErrorCode.InvalidConfiguration);
+        var options = ReadOptions(destination);
+        return transport.PublishCatalogAsync(backupObjectKey, signedCatalog, options, token);
     }
 
     private static bool IsSafeFileName(string? fileName) =>

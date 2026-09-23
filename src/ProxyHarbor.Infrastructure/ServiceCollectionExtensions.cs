@@ -189,6 +189,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<BackupDestinationHealth>();
         services.AddSingleton<BackupCopyMaterializer>();
         services.AddSingleton<BackupDeliveryProcessor>();
+        services.AddSingleton<BackupCatalogPublicationProcessor>();
         services.AddSingleton<BackupService>();
         services.AddSingleton<IBackupObjectStorageTransport, S3BackupObjectStorageTransport>();
         services.AddSingleton<IBackupDestinationAdapter, S3BackupDestinationAdapter>();
@@ -202,6 +203,7 @@ public static class ServiceCollectionExtensions
         services.AddHostedService<VpnValidatorWorker>();
         services.AddHostedService<BackupWorker>();
         services.AddHostedService<BackupDeliveryWorker>();
+        services.AddHostedService<BackupCatalogPublicationWorker>();
         services.AddHostedService<OperationalMaintenanceWorker>();
         services.AddHostedService<ProxyCountryWorker>();
         return services;

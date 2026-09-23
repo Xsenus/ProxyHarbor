@@ -611,6 +611,11 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
         backupCopy.Property(x => x.NativeVersion).HasMaxLength(512);
         backupCopy.Property(x => x.NativeChecksum).HasMaxLength(256);
         backupCopy.Property(x => x.LastErrorCode).HasMaxLength(64);
+        backupCopy.Property(x => x.CatalogState).HasMaxLength(32);
+        backupCopy.Property(x => x.CatalogKeyReference).HasMaxLength(64);
+        backupCopy.Property(x => x.CatalogObjectKey).HasMaxLength(1024);
+        backupCopy.Property(x => x.CatalogLastErrorCode).HasMaxLength(64);
+        backupCopy.HasIndex(x => new { x.State, x.CatalogState, x.CatalogNotBefore, x.CatalogLeaseUntil });
         backupCopy.HasOne(x => x.BackupRun).WithMany(x => x.Copies)
             .HasForeignKey(x => x.BackupRunId).OnDelete(DeleteBehavior.Restrict);
         backupCopy.HasOne(x => x.BackupDestination).WithMany(x => x.Copies)
@@ -621,6 +626,10 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
             table.HasCheckConstraint("CK_BackupCopies_Content", "\"SizeBytes\" >= 0 AND \"ContentSha256\" ~ '^[0-9a-f]{64}$' AND \"AttemptCount\" >= 0 AND \"PolicyVersion\" >= 1");
             table.HasCheckConstraint("CK_BackupCopies_Verified", "\"State\" <> 'verified' OR (\"VerifiedAt\" IS NOT NULL AND \"NativeLocator\" IS NOT NULL)");
             table.HasCheckConstraint("CK_BackupCopies_Unknown", "(\"State\" <> 'unknown' OR \"UnknownSince\" IS NOT NULL) AND (\"UnknownSince\" IS NULL OR \"State\" IN ('unknown', 'reconciling', 'manual_review'))");
+            table.HasCheckConstraint("CK_BackupCopies_CatalogState", "\"CatalogState\" IS NULL OR \"CatalogState\" IN ('pending', 'processing', 'published', 'manual_review')");
+            table.HasCheckConstraint("CK_BackupCopies_CatalogLease", "(\"CatalogLeaseId\" IS NULL) = (\"CatalogLeaseUntil\" IS NULL) AND (\"CatalogState\" = 'processing' OR \"CatalogLeaseId\" IS NULL)");
+            table.HasCheckConstraint("CK_BackupCopies_CatalogPublished", "\"CatalogState\" <> 'published' OR (\"CatalogPublishedAt\" IS NOT NULL AND \"CatalogObjectKey\" IS NOT NULL)");
+            table.HasCheckConstraint("CK_BackupCopies_CatalogAttempt", "\"CatalogAttempt\" >= 0");
         });
 
         var backupDeliveryJob = builder.Entity<BackupDeliveryJob>();
