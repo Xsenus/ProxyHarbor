@@ -207,7 +207,7 @@ Purpose: remove production-DB/VPS circular dependency. Covers REQ-007/008/014, R
 
 #### TASK-040 — Non-secret backup catalog and locator inventory
 
-- Status: `IN PROGRESS / offline catalog and sidecar transport prework`; Codex. Strict signed schema, manual export/offline inspect, отдельный signing key и условный S3 sidecar PUT+HEAD/GET подготовлены; durable auto-publication, provider canary и real recovery drill remain blocked by STG-03/operator gates.
+- Status: `IN PROGRESS / local implementation merged`; Codex. Strict signed schema, manual export/offline inspect, отдельный signing key, условный S3 sidecar PUT+HEAD/GET и выключенный по умолчанию durable auto-publication worker слиты в `main` через PR #274–277. Real-provider canary, независимое сохранение catalog/ключей и полный recovery drill остаются operator gates; TASK-040 пока не DONE.
 - Changes: `BackupCatalogService`, strict versioned sidecar schema, export command/admin endpoint with authorized safe fields. Store alongside S3 copy; local copy; Telegram mapping only as supported. Sign/authenticate catalog or bind entries to PHB3 SHA-256; no credentials/endpoints with embedded secrets.
 - Offline: operator can preserve latest inventory outside production DB and discover BackupId/locator/key version reference.
 - Tests: tamper/duplicate/stale catalog, missing provider, secret scanning, DB unavailable use.
@@ -215,7 +215,7 @@ Purpose: remove production-DB/VPS circular dependency. Covers REQ-007/008/014, R
 
 #### TASK-041 — Remote materialization and isolated restore workflow
 
-- Status: `IN PROGRESS / offline retrieval prework`; Codex. Подписанный catalog и отдельный provider config уже позволяют локально проверить failover без production БД/key ring; автоматическая публикация catalog, реальный provider и полный isolated restore drill остаются открытыми.
+- Status: `IN PROGRESS / offline retrieval prework`; Codex. Подписанный catalog, отдельный provider config и выключенная по умолчанию автоматическая публикация уже позволяют локально проверить failover без production БД/key ring; реальный provider и полный isolated restore drill остаются открытыми.
 - Changes: extend Restore CLI or add explicit Infrastructure materializer invoked before existing restore. Accept configuration/secret references, not inline secrets; private temp partial, size/hash/native checksum, PHB3 verification then current restore. Keep local `--input` unchanged.
 - Failover: try actual verified copies in read policy within total deadline; quarantine mismatch; never merge bytes/versions.
 - Local checks: two isolated S3 fixtures, A unavailable/B valid, corrupted newest/B valid, all failed, cancellation/cleanup, bounded memory.
