@@ -119,6 +119,21 @@ public interface IBackupDestinationAdapter
         long expectedSize,
         CancellationToken token) => Task.FromResult(
             new BackupDestinationProbeResult(BackupDestinationProbeOutcome.Unsupported));
+
+    /// <summary>Читает подтверждённую copy в новый локальный файл с проверкой ciphertext.</summary>
+    Task<BackupDestinationMaterializationResult> MaterializeAsync(
+        BackupDestination destination,
+        string fileName,
+        string nativeLocator,
+        string finalPath,
+        string expectedSha256,
+        long expectedSize,
+        CancellationToken token) => Task.FromException<BackupDestinationMaterializationResult>(
+            new BackupDestinationOperationException(
+                new BackupDestinationFailure(
+                    BackupDestinationErrorCode.UnsupportedOperation,
+                    BackupDestinationFailureDisposition.Permanent),
+                "Backup adapter не реализует чтение."));
 }
 
 /// <summary>Безопасный результат provider write, пригодный для durable copy audit.</summary>
@@ -149,6 +164,14 @@ public sealed record BackupDestinationProbeResult(
     string? NativeLocator = null,
     string? NativeVersion = null,
     string? NativeChecksum = null);
+
+/// <summary>Проверенный локальный ciphertext и безопасные provider evidence.</summary>
+public sealed record BackupDestinationMaterializationResult(
+    string Path,
+    long SizeBytes,
+    string Sha256,
+    string? NativeVersion,
+    string? NativeChecksum);
 
 /// <summary>Причина отказа control-plane routing до provider I/O.</summary>
 public enum BackupDestinationRouteRejection
@@ -228,7 +251,8 @@ public sealed class BackupDestinationRegistry
         if (!destination.Enabled)
             throw Reject(BackupDestinationRouteRejection.DestinationDisabled,
                 "Backup destination отключён.");
-        if (route.BackupDestinationId != destination.Id || !route.Enabled)
+        if (route.BackupDestinationId != destination.Id ||
+            !route.Enabled && !(route.Draining && operation != BackupDestinationOperation.Put))
             throw Reject(BackupDestinationRouteRejection.RouteForbidden,
                 "Backup destination не разрешён этим pool route.");
         if (operation == BackupDestinationOperation.Put && route.Draining)
@@ -344,7 +368,7 @@ public sealed class S3BackupDestinationAdapter : IBackupDestinationAdapter
     {
         ArgumentNullException.ThrowIfNull(destination);
         if (transport is null || protector is null || !string.Equals(destination.Kind, Kind, StringComparison.Ordinal) ||
-            string.IsNullOrWhiteSpace(fileName) || fileName != Path.GetFileName(fileName))
+            !IsSafeFileName(fileName))
             throw Failure(BackupDestinationErrorCode.InvalidConfiguration);
         var options = ReadOptions(destination);
         var locator = S3BackupObjectStorageTransport.BuildObjectKey(options.ObjectStoragePrefix, fileName);
@@ -374,6 +398,46 @@ public sealed class S3BackupDestinationAdapter : IBackupDestinationAdapter
             return new BackupDestinationProbeResult(BackupDestinationProbeOutcome.Inconclusive, locator);
         }
     }
+
+    /// <inheritdoc />
+    public async Task<BackupDestinationMaterializationResult> MaterializeAsync(
+        BackupDestination destination,
+        string fileName,
+        string nativeLocator,
+        string finalPath,
+        string expectedSha256,
+        long expectedSize,
+        CancellationToken token)
+    {
+        ArgumentNullException.ThrowIfNull(destination);
+        if (transport is null || protector is null || !string.Equals(destination.Kind, Kind, StringComparison.Ordinal) ||
+            !IsSafeFileName(fileName) || string.IsNullOrWhiteSpace(finalPath))
+            throw Failure(BackupDestinationErrorCode.InvalidConfiguration);
+        var options = ReadOptions(destination);
+        var expectedLocator = S3BackupObjectStorageTransport.BuildObjectKey(options.ObjectStoragePrefix, fileName);
+        if (!string.Equals(nativeLocator, expectedLocator, StringComparison.Ordinal))
+            throw Failure(BackupDestinationErrorCode.InvalidConfiguration);
+        var result = await transport.MaterializeAndVerifyAsync(
+            nativeLocator, finalPath, expectedSize, expectedSha256, options, token);
+        if (result.SizeBytes != expectedSize ||
+            !string.Equals(result.Sha256, expectedSha256, StringComparison.Ordinal) ||
+            !string.Equals(Path.GetFullPath(result.Path), Path.GetFullPath(finalPath),
+                StringComparison.OrdinalIgnoreCase))
+            throw Failure(BackupDestinationErrorCode.IntegrityMismatch);
+        return new BackupDestinationMaterializationResult(
+            result.Path,
+            result.SizeBytes,
+            result.Sha256,
+            result.VersionId,
+            result.NativeChecksum ?? result.EntityTag);
+    }
+
+    private static bool IsSafeFileName(string? fileName) =>
+        !string.IsNullOrWhiteSpace(fileName) &&
+        fileName != "." && fileName != ".." &&
+        !fileName.Contains('/') && !fileName.Contains('\\') &&
+        fileName.EndsWith(".phbackup", StringComparison.Ordinal) &&
+        fileName == Path.GetFileName(fileName);
 
     private BackupOptions ReadOptions(BackupDestination destination)
     {

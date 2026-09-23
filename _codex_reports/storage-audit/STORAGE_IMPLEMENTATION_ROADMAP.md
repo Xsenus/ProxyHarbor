@@ -187,7 +187,7 @@ Purpose: fulfill owner requirement without false success. Covers REQ-004–006/0
 
 #### TASK-033 — Operation-scoped health, budgets and automatic fallback
 
-- Status: `IN PROGRESS / local verification`; Codex. TASK-031 is merged.
+- Status: `IN PROGRESS / partial checkpoint merged`; Codex. PR #270 (`f39f7b9`) merged with green CI; VERIFY health remains local-only and READ is not yet wired into an orchestrator.
 - Changes: health/breaker per destination+operation, short-lived local state backed by durable recent outcomes; planner enforces overall deadline and allowlisted graph. Optional storage does not fail global readiness.
 - Tests: A down/B healthy; A slow leaves budget for B; auth/quota/capability; all down; cross-pool route rejected; breaker half-open; multi-instance eventual consistency.
 - Numeric budgets: begin conservative test defaults, measure canary, label production values `PROPOSED` until owner accepts.
@@ -414,7 +414,7 @@ No dates are invented. STG-00–05 may proceed without these decisions using iso
 | 2026-09-22 | implementation checkpoint 5 | Added immutable run policy/content snapshot, fail-closed protection evaluator and `200/202/503` acknowledgement contract; local PostgreSQL 17 and restore coverage are green. | EVID-050–051 |
 | 2026-09-22 | implementation checkpoint 6 | Added atomic per-destination planner and leased delivery worker with bounded retry/deadline, crash-to-UNKNOWN semantics, independent fallback, staging byte/TTL budgets and routing disabled by default. | EVID-054–055 |
 
-Current checkpoint: STG-00–02 and TASK-020–032 are merged in `main` with green CI. TASK-033 operation health and fallback budgets passed local Release build, 1460 backend tests, 65.21% branch coverage and documentation gates; PostgreSQL/container PR CI is pending. Routing remains disabled by default, so legacy behavior is still authoritative until a separately approved canary. Existing S3 object keys and Telegram resolver/transport contracts are preserved. Docker and real providers remain unavailable locally. No production/provider access or deployment occurred.
+Current checkpoint: STG-00–02 and TASK-020–032 are merged in `main` with green CI. TASK-033 operation health and fallback budgets are partially merged via PR #270 with green CI; durable VERIFY history, READ orchestration, repair and restore still remain. Routing remains disabled by default, so legacy behavior is still authoritative until a separately approved canary. Existing S3 object keys and Telegram resolver/transport contracts are preserved. Docker and real providers remain unavailable locally. No production/provider access or deployment occurred.
 
 ## 16. Регламент продолжения в новой сессии
 

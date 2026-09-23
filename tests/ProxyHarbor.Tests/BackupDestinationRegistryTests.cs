@@ -66,6 +66,16 @@ public sealed class BackupDestinationRegistryTests
             BackupDestinationRouteRejection.RouteDraining,
             () => registry.Resolve(destination, route, BackupDestinationOperation.Put, 1));
 
+        route.Enabled = false;
+        AssertRejection(
+            BackupDestinationRouteRejection.RouteForbidden,
+            () => registry.Resolve(destination, route, BackupDestinationOperation.Put, 1));
+        Assert.Same(registry.GetRequired("s3"), registry.Resolve(
+            destination, route, BackupDestinationOperation.Verify, 1));
+        Assert.Same(registry.GetRequired("s3"), registry.Resolve(
+            destination, route, BackupDestinationOperation.Materialize, 1));
+
+        route.Enabled = true;
         route.Draining = false;
         route.AllowedOperations = "read";
         AssertRejection(
@@ -226,6 +236,70 @@ public sealed class BackupDestinationRegistryTests
         Assert.Equal(BackupDestinationErrorCode.InvalidConfiguration, exception.Failure.Code);
     }
 
+    [Fact]
+    public async Task S3MaterializationRequiresExactCopyLocatorAndVerifiedIdentity()
+    {
+        var protection = new EphemeralDataProtectionProvider();
+        var transport = new CapturingObjectStorageTransport();
+        var adapter = new S3BackupDestinationAdapter(transport, protection);
+        var destination = new BackupDestination
+        {
+            Kind = "s3",
+            SettingsJson = "{\"endpoint\":\"https://storage.example.test\",\"region\":\"eu-1\",\"bucket\":\"backup\",\"prefix\":\"safe\",\"usePathStyle\":true}",
+            ProtectedSecrets = protection.CreateProtector("ProxyHarbor.BackupDestination.Secrets.v1")
+                .Protect("{\"accessKey\":\"access\",\"secretKey\":\"secret\"}")
+        };
+        var path = Path.Combine(Path.GetTempPath(), "materialized.phbackup");
+
+        var result = await adapter.MaterializeAsync(
+            destination, "snapshot.phbackup", "safe/snapshot.phbackup", path,
+            new string('a', 64), 123, CancellationToken.None);
+
+        Assert.Equal(path, result.Path);
+        Assert.Equal(new string('a', 64), result.Sha256);
+        Assert.Equal("version-1", result.NativeVersion);
+        Assert.Equal("safe/snapshot.phbackup", transport.MaterializedObjectKey);
+        Assert.Equal(1, transport.MaterializeCalls);
+        Assert.Equal(0, transport.UploadCalls);
+
+        var exception = await Assert.ThrowsAsync<BackupDestinationOperationException>(() =>
+            adapter.MaterializeAsync(
+                destination, "snapshot.phbackup", "foreign/snapshot.phbackup", path,
+                new string('a', 64), 123, CancellationToken.None));
+        Assert.Equal(BackupDestinationErrorCode.InvalidConfiguration, exception.Failure.Code);
+        Assert.Equal(1, transport.MaterializeCalls);
+    }
+
+    [Fact]
+    public async Task S3MaterializationRejectsTraversalAndTransportMismatch()
+    {
+        var protection = new EphemeralDataProtectionProvider();
+        var transport = new CapturingObjectStorageTransport { MaterializedSha256 = new string('b', 64) };
+        var adapter = new S3BackupDestinationAdapter(transport, protection);
+        var destination = new BackupDestination
+        {
+            Kind = "s3",
+            SettingsJson = "{\"endpoint\":\"https://storage.example.test\",\"region\":\"eu-1\",\"bucket\":\"backup\",\"prefix\":\"safe\",\"usePathStyle\":true}",
+            ProtectedSecrets = protection.CreateProtector("ProxyHarbor.BackupDestination.Secrets.v1")
+                .Protect("{\"accessKey\":\"access\",\"secretKey\":\"secret\"}")
+        };
+        var path = Path.Combine(Path.GetTempPath(), "materialized.phbackup");
+
+        var traversal = await Assert.ThrowsAsync<BackupDestinationOperationException>(() =>
+            adapter.MaterializeAsync(
+                destination, "../snapshot.phbackup", "safe/snapshot.phbackup", path,
+                new string('a', 64), 123, CancellationToken.None));
+        Assert.Equal(BackupDestinationErrorCode.InvalidConfiguration, traversal.Failure.Code);
+        Assert.Equal(0, transport.MaterializeCalls);
+
+        var mismatch = await Assert.ThrowsAsync<BackupDestinationOperationException>(() =>
+            adapter.MaterializeAsync(
+                destination, "snapshot.phbackup", "safe/snapshot.phbackup", path,
+                new string('a', 64), 123, CancellationToken.None));
+        Assert.Equal(BackupDestinationErrorCode.IntegrityMismatch, mismatch.Failure.Code);
+        Assert.Equal(1, transport.MaterializeCalls);
+    }
+
     private static BackupDestinationRegistry CreateRegistry() => new([
         new S3BackupDestinationAdapter(),
         new TelegramBackupDestinationAdapter()
@@ -268,6 +342,9 @@ public sealed class BackupDestinationRegistryTests
     {
         public BackupOptions? Options { get; private set; }
         public BackupDestinationErrorCode? VerificationFailure { get; init; }
+        public string? MaterializedSha256 { get; init; }
+        public string? MaterializedObjectKey { get; private set; }
+        public int MaterializeCalls { get; private set; }
         public int UploadCalls { get; private set; }
 
         public Task<string> UploadAndVerifyAsync(
@@ -302,6 +379,18 @@ public sealed class BackupDestinationRegistryTests
                     "synthetic HEAD failure");
             return Task.FromResult(new BackupObjectStorageVerificationResult(
                 objectKey, expectedSize, expectedSha256, "version-1", "checksum", "etag"));
+        }
+
+        public Task<BackupObjectStorageMaterializationResult> MaterializeAndVerifyAsync(
+            string objectKey, string finalPath, long expectedSize, string expectedSha256,
+            BackupOptions options, CancellationToken token)
+        {
+            MaterializeCalls++;
+            MaterializedObjectKey = objectKey;
+            Options = options;
+            return Task.FromResult(new BackupObjectStorageMaterializationResult(
+                finalPath, expectedSize, MaterializedSha256 ?? expectedSha256,
+                "version-1", "checksum", "etag"));
         }
     }
 }

@@ -52,6 +52,8 @@ Worker арендует due jobs через PostgreSQL `FOR UPDATE SKIP LOCKED`,
 
 При включённом routing бюджет одной PUT-попытки не превышает оставшееся время от создания durable job до `OverallDeadlineSeconds` и равную долю для пригодных PUT-маршрутов pool. Это оставляет время следующему назначению, если preferred route завис. Отмена начавшегося PUT считается `UNKNOWN`, а не основанием для немедленной повторной загрузки. Локальный breaker разделён по destination и операции; его короткие cooldown (1 минута для повторных временных ошибок, 5 минут для auth/quota) и half-open окно — предлагаемые значения для тестов, не подтверждённые production canary. Недавние PUT outcomes читаются из durable jobs новой replica; VERIFY пока имеет только локальную короткоживущую историю. Отказ optional destination не меняет глобальную readiness и не расширяет pool allowlist.
 
+Внутренний S3 adapter умеет читать существующий object key в новый локальный файл через private partial и проверяет размер и SHA-256 до атомарной публикации. Adapter требует точного совпадения locator с настроенным prefix и именем backup; route должен явно разрешать `read`. Draining route запрещает новый `put`, но сохраняет разрешённые `verify/read` для уже созданных copies. Это только низкоуровневый контракт: автоматический выбор verified-копии, failover, каталог вне production БД и пользовательский remote restore пока не реализованы. Локальный `--input` restore не меняется.
+
 Проверка полного production-контракта:
 
 ```powershell
