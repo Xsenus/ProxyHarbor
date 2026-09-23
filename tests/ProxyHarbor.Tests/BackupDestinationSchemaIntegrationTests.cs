@@ -129,6 +129,29 @@ public sealed class BackupDestinationSchemaIntegrationTests
             Assert.Contains("test-secret-key", protector.CreateProtector(
                 "ProxyHarbor.BackupDestination.Secrets.v1").Unprotect(created.ProtectedSecrets),
                 StringComparison.Ordinal);
+            var secondRequest = request with
+            {
+                Name = "new-s3-secondary",
+                Endpoint = "https://s3.other.test",
+                Bucket = "secondary-backups"
+            };
+            var second = Assert.IsType<BackupDestinationOverviewResponse>(Assert.IsType<ObjectResult>(
+                (await createController.CreateS3BackupDestination(secondRequest,
+                    CancellationToken.None)).Result).Value);
+            var poolRequest = new CreateBackupPoolRequest("new-durable", 1, 2, 3, 600, 900,
+            [
+                new CreateBackupPoolRouteRequest(created.Id, 10, "primary", true),
+                new CreateBackupPoolRouteRequest(second.Id, 20, "fallback", true)
+            ]);
+            Assert.Equal(201, Assert.IsType<ObjectResult>((await createController.CreateBackupPool(
+                poolRequest, CancellationToken.None)).Result).StatusCode);
+            await using var verifyPool = new ProxyHarborDbContext(options);
+            var newPool = await verifyPool.BackupPools.SingleAsync(item => item.Name == "new-durable");
+            Assert.Equal(2, newPool.DesiredVerifiedCopies);
+            Assert.Equal(2, await verifyPool.BackupPoolDestinations.CountAsync(item =>
+                item.BackupPoolId == newPool.Id && item.Enabled && !item.Draining));
+            Assert.True((await verifyPool.BackupDestinations.SingleAsync(item => item.Id == created.Id)).Enabled);
+            Assert.True((await verifyPool.BackupDestinations.SingleAsync(item => item.Id == second.Id)).Enabled);
         }
         finally
         {

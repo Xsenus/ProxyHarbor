@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.DataProtection;
@@ -749,6 +750,137 @@ public sealed class AdminController(
             Routes: [], LastOutcome: null));
     }
 
+    /// <summary>Атомарно создаёт пользовательский protection pool и валидированные S3 routes без provider I/O.</summary>
+    [HttpPost("backups/pools")]
+    [ProducesResponseType<BackupPoolCreationResponse>(StatusCodes.Status201Created)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]
+    public async Task<ActionResult<BackupPoolCreationResponse>> CreateBackupPool(
+        [FromBody] CreateBackupPoolRequest request, CancellationToken token)
+    {
+        var name = request.Name?.Trim();
+        var routes = request.Routes;
+        if (string.IsNullOrWhiteSpace(name) || name.Length > 120 ||
+            name == "legacy-default" ||
+            request.RequiredVerifiedCopies is < 1 or > 16 ||
+            request.DesiredVerifiedCopies < request.RequiredVerifiedCopies ||
+            request.DesiredVerifiedCopies > 16 ||
+            request.MaxAttemptsPerCycle is < 1 or > 20 ||
+            request.OverallDeadlineSeconds is < 30 or > 86400 ||
+            request.FailbackHealthyForSeconds is < 0 or > 604800 ||
+            routes is not { Length: >= 1 and <= 16 } ||
+            routes.Any(route => route.DestinationId == Guid.Empty || route.Priority < 0 ||
+                route.Role is not ("primary" or "fallback" or "secondary")) ||
+            routes.Select(route => route.DestinationId).Distinct().Count() != routes.Length)
+            return Problem("Некорректная backup protection policy или набор маршрутов.", statusCode: 400);
+        if (credentialProtectionProvider is null)
+            return Problem("Проверка зашифрованных credentials недоступна.", statusCode: 503);
+
+        await using var db = await dbFactory.CreateDbContextAsync(token);
+        if (await db.BackupPools.AnyAsync(item => item.Name == name, token))
+            return Conflict(new ProblemDetails { Title = "Backup pool с таким именем уже существует", Status = 409 });
+        var ids = routes.Select(route => route.DestinationId).ToArray();
+        var destinations = await db.BackupDestinations
+            .Where(item => ids.Contains(item.Id)).ToDictionaryAsync(item => item.Id, token);
+        if (destinations.Count != routes.Length)
+            return Problem("Один из S3 destinations не найден.", statusCode: 409);
+        var failureDomains = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var route in routes)
+        {
+            var destination = destinations[route.DestinationId];
+            var failureDomain = ReadValidatedS3FailureDomain(destination, credentialProtectionProvider);
+            if (destination.Kind != "s3" ||
+                failureDomain is null ||
+                !string.Equals(destination.FailureDomain, failureDomain, StringComparison.Ordinal))
+                return Problem("S3 destination не готов к маршрутизации.", statusCode: 409);
+            if (!destination.Enabled)
+            {
+                if (!route.ActivateDestination ||
+                    destination.Id == BackupLegacyDestinationProjector.LegacyS3DestinationId ||
+                    await db.BackupPoolDestinations.AnyAsync(item =>
+                        item.BackupDestinationId == destination.Id, token) ||
+                    await db.BackupCopies.AnyAsync(item =>
+                        item.BackupDestinationId == destination.Id, token))
+                    return Problem("Отключённый destination требует явной активации и не должен иметь другие маршруты или копии.",
+                        statusCode: 409);
+                destination.Enabled = true;
+                destination.UpdatedAt = DateTimeOffset.UtcNow;
+            }
+            failureDomains.Add(failureDomain);
+        }
+        if (failureDomains.Count < request.DesiredVerifiedCopies)
+            return Problem("Число независимых S3 failure domains меньше желаемого числа копий.", statusCode: 409);
+
+        var pool = new BackupPool
+        {
+            Name = name,
+            RequiredVerifiedCopies = request.RequiredVerifiedCopies,
+            DesiredVerifiedCopies = request.DesiredVerifiedCopies,
+            MaxAttemptsPerCycle = request.MaxAttemptsPerCycle,
+            OverallDeadlineSeconds = request.OverallDeadlineSeconds,
+            FailbackHealthyForSeconds = request.FailbackHealthyForSeconds,
+            PolicyVersion = 1
+        };
+        db.BackupPools.Add(pool);
+        foreach (var route in routes)
+        {
+            db.BackupPoolDestinations.Add(new BackupPoolDestination
+            {
+                BackupPoolId = pool.Id,
+                BackupDestinationId = route.DestinationId,
+                Priority = route.Priority,
+                Role = route.Role!,
+                AllowedOperations = "put,verify,read",
+                Enabled = true
+            });
+        }
+        try { await db.SaveChangesAsync(token); }
+        catch (DbUpdateConcurrencyException)
+        {
+            return Conflict(new ProblemDetails { Title = "S3 destination изменился; обновите конфигурацию", Status = 409 });
+        }
+        catch (DbUpdateException exception) when (exception.InnerException is PostgresException
+        { SqlState: PostgresErrorCodes.UniqueViolation })
+        {
+            return Conflict(new ProblemDetails { Title = "Backup pool или маршрут уже существует", Status = 409 });
+        }
+        return StatusCode(StatusCodes.Status201Created, new BackupPoolCreationResponse(
+            pool.Id, pool.Name, pool.PolicyVersion, pool.RequiredVerifiedCopies,
+            pool.DesiredVerifiedCopies, routes.Length));
+    }
+
+    private static string? ReadValidatedS3FailureDomain(
+        BackupDestination destination, IDataProtectionProvider provider)
+    {
+        try
+        {
+            var json = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+            var settings = JsonSerializer.Deserialize<BackupS3Settings>(destination.SettingsJson, json);
+            var secrets = JsonSerializer.Deserialize<BackupS3Secrets>(provider.CreateProtector(
+                "ProxyHarbor.BackupDestination.Secrets.v1").Unprotect(destination.ProtectedSecrets), json);
+            if (settings is null || secrets is null ||
+                !BackupOptions.IsObjectStorageConfigurationValid(new BackupOptions
+                {
+                    ObjectStorageEndpoint = settings.Endpoint,
+                    ObjectStorageRegion = settings.Region ?? string.Empty,
+                    ObjectStorageBucket = settings.Bucket,
+                    ObjectStoragePrefix = settings.Prefix ?? string.Empty,
+                    ObjectStorageUsePathStyle = settings.UsePathStyle,
+                    ObjectStorageAccessKey = secrets.AccessKey,
+                    ObjectStorageSecretKey = secrets.SecretKey
+                })) return null;
+            return BackupLegacyDestinationProjector.S3FailureDomain(settings.Endpoint, settings.Region);
+        }
+        catch (Exception exception) when (exception is JsonException or CryptographicException)
+        {
+            return null;
+        }
+    }
+
+    private sealed record BackupS3Settings(
+        string? Endpoint, string? Region, string? Bucket, string? Prefix, bool UsePathStyle);
+    private sealed record BackupS3Secrets(string? AccessKey, string? SecretKey);
+
     /// <summary>Останавливает новые PUT в пользовательский route, сохраняя разрешённое чтение существующих копий.</summary>
     [HttpPost("backups/pools/{poolId:guid}/routes/{destinationId:guid}/drain")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
@@ -1185,6 +1317,21 @@ public sealed record DrainBackupRouteRequest(int ExpectedPolicyVersion);
 public sealed record CreateS3BackupDestinationRequest(
     string? Name, string? Endpoint, string? Region, string? Bucket, string? Prefix,
     bool UsePathStyle, string? AccessKey, string? SecretKey, int Priority);
+
+/// <summary>Явный allowlist маршрутов для нового пользовательского protection pool.</summary>
+public sealed record CreateBackupPoolRouteRequest(
+    Guid DestinationId, int Priority, string? Role, bool ActivateDestination);
+
+/// <summary>Атомарная policy нового pool; маршруты поддерживают PUT/VERIFY/READ.</summary>
+public sealed record CreateBackupPoolRequest(
+    string? Name, int RequiredVerifiedCopies, int DesiredVerifiedCopies,
+    int MaxAttemptsPerCycle, int OverallDeadlineSeconds, int FailbackHealthyForSeconds,
+    CreateBackupPoolRouteRequest[]? Routes);
+
+/// <summary>Несекретное подтверждение создания пользовательского protection pool.</summary>
+public sealed record BackupPoolCreationResponse(
+    Guid Id, string Name, int PolicyVersion, int RequiredVerifiedCopies,
+    int DesiredVerifiedCopies, int RouteCount);
 
 /// <summary>Последняя типизированная provider-операция; сырой ответ не возвращается.</summary>
 public sealed record BackupDestinationOutcomeResponse(
