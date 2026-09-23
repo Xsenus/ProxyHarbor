@@ -249,7 +249,7 @@ Purpose: remove production-DB/VPS circular dependency. Covers REQ-007/008/014, R
 
 #### TASK-051 — Metrics, alerts and diagnostics
 
-- Status: `IN PROGRESS: latest-run quorum/debt, fail-closed last protected age, copy/job backlog, isolated-restore, aggregate and per-destination durable PUT/VERIFY outcome metrics plus bounded alerts implemented; live destination health, staging and drill SLO gates remain`; Codex.
+- Status: `IN PROGRESS: latest-run quorum/debt, fail-closed last protected age, copy/job backlog, isolated-restore, aggregate and per-destination durable PUT/VERIFY outcomes, plus bounded staging usage/readability metrics and alerts implemented; live destination health and drill SLO gates remain`; Codex. PR #309 merged with green CI (EVID-090).
 - Changes: `MetricsController`, `DiagnosticsDatabaseSnapshot`, `deploy/prometheus/alerts.yml` and tests, `MONITORING.md`. Metrics from TЗ §10 with bounded labels. Add protection age/debt/UNKNOWN/all-failed/staging/drill overdue; retain current alerts during transition.
 - Health: optional destination not global readiness failure; required pool exhaustion visible separately.
 - Checks: promtool contracts, metrics tests, sanitization, restored DB compatibility.
@@ -425,6 +425,8 @@ Merged checkpoint `main@900ef46`: PR #287–292 passed CI, store exact typed VER
 Merged checkpoint `main@73be7d1` (2026-09-24): PR #304–306 passed CI and added write-only disabled S3 registration plus atomic custom pool/route provisioning in the API and admin UI (EVID-087). An isolated HOSTKEY NL synthetic PHB3/catalog protocol canary passed, including addressed cleanup (EVID-086); this does not prove recovery of a real archive or an independent second provider.
 
 Read-only VPS checkpoint against `main@c0895a5` (2026-09-24): the dedicated SSH key restored access. Five containers are healthy, but checkout `981c1ca02` is 50 commits behind `main`, and current API environment has no `BackupRouting__*` variables. Seven local PHB3 files and one DP XML exist; they are not restore evidence. API logs show one controlled lifetime-lock shutdown and five EF transaction errors in 24 hours; PostgreSQL had no matching ERROR/FATAL/PANIC in sampled windows (EVID-088). Local predeploy dump retention leaves eight legacy-name files outside its dry-run scope (EVID-089). No production write or deletion was performed. Next gates: owner approval for transferring real encrypted archive/key material to an isolated PostgreSQL target, independent escrow and key rotation after chat disclosure, then complete offline DR; production rollout needs a separate deployment decision.
+
+Merged monitoring checkpoint `main@b343984` (2026-09-24): PR #309 passed verify/container smoke, PostgreSQL integration and CodeQL after its smoke assertion was updated from 34 to 36 alert rules. It reports only service-owned published PHB3 staging bytes, a separate readability bit, the configured cap and two bounded alerts (EVID-090). This improves local staging visibility but does not prove offsite recovery, live provider health, drill SLO or production deployment. The owner approval and isolated target for real-archive DR remain outstanding.
 
 ## 16. Регламент продолжения в новой сессии
 
