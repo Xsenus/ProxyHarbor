@@ -420,7 +420,7 @@ Current merged checkpoint: `main@f2c1e46` contains STG-00–02 and TASK-020–03
 
 Merged checkpoint `main@aa3d687`: PR #286 passed CI and put pool-route priority before job creation time for pending claims of one run (EVID-074). This is scheduling order only, not automatic failback or serialized cross-replica delivery.
 
-Local checkpoint EVID-075: nullable exact VERIFY probe result and additive migration are under validation. Next local dependency is a bounded, durable probe cadence plus a failback eligibility gate requiring fresh matching evidence and successful PUT after the last destination failure; neither may infer health from `missing`, `mismatching`, a legacy null result, or elapsed time alone. Real-provider canary and isolated restore remain external gates.
+Merged checkpoint `main@620c51d`: PR #287 passed CI and stores nullable exact VERIFY probe results; older conclusive rows remain unclassified (EVID-075). Local checkpoint EVID-076 preserves typed S3 inconclusive failures through the adapter into durable health. Next local dependency is a bounded, durable probe cadence plus a failback eligibility gate requiring fresh matching evidence and successful PUT after the last destination failure; neither may infer health from `missing`, `mismatching`, a legacy null result, or elapsed time alone. Real-provider canary and isolated restore remain external gates.
 
 ## 16. Регламент продолжения в новой сессии
 

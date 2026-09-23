@@ -5,6 +5,7 @@
 
 ## [Unreleased]
 
+- S3 VERIFY probe больше не теряет типизированную причину inconclusive ответа: authentication, authorization, rate limit и timeout проходят через adapter в durable health history и operation-scoped breaker без сырого текста provider. Это не включает автоматический failback.
 - Durable VERIFY history теперь сохраняет точный probe outcome (`matching`, `missing`, `mismatching`, `inconclusive` либо `invalid`) отдельно от признака ответа provider. Старые записи остаются без этой классификации и не могут служить доказательством здорового failback; текущие breaker/маршрутизация не переключаются автоматически.
 - Delivery worker теперь учитывает приоритет pool route и destination при аренде pending jobs одного backup run; возрастная защита очереди сохраняется. Это упорядочивает preferred/fallback, но параллельные replicas и healthy-window failback требуют отдельных проверок.
 - Catch-up научился ограниченно перепланировать failed copy только при durable-доказательстве, что PUT ни разу не начинался: один новый job за проход, минимум 15 минут между раундами, не более двух rearm, PostgreSQL row lock против конкурирующих replicas. UNKNOWN, начатые PUT и неоднозначные ошибки остаются без автоматического повтора; полное failback healthy-window ещё не включено.

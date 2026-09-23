@@ -462,7 +462,7 @@ public sealed class BackupDeliveryProcessor(
                 BackupDestinationId = destination.Id,
                 Succeeded = conclusive,
                 ErrorCode = conclusive ? null :
-                    (probeFailureCode ?? BackupDestinationErrorCode.Unavailable).ToString(),
+                    (probeFailureCode ?? result.FailureCode ?? BackupDestinationErrorCode.Unavailable).ToString(),
                 ProbeOutcome = result.Outcome switch
                 {
                     BackupDestinationProbeOutcome.Matching when
@@ -528,7 +528,7 @@ public sealed class BackupDeliveryProcessor(
             health.RecordSuccess(destination.Id, BackupDestinationOperation.Verify);
         else if (attemptedProbe && result.Outcome == BackupDestinationProbeOutcome.Inconclusive)
             health.RecordFailure(destination.Id, BackupDestinationOperation.Verify,
-                probeFailureCode ?? BackupDestinationErrorCode.Unavailable);
+                probeFailureCode ?? result.FailureCode ?? BackupDestinationErrorCode.Unavailable);
         else
             health.ReleaseWithoutOutcome(destination.Id, BackupDestinationOperation.Verify);
     }
