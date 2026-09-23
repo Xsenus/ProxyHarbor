@@ -278,7 +278,7 @@ Requires separate owner authorization for external writes/production. Covers REQ
 
 #### TASK-061 — Real-provider contract and canary
 
-- Status: `BLOCKED: TASK-060, owner authorization`; operator + Codex analysis.
+- Status: `PARTIAL: isolated HOSTKEY NL synthetic PHB3/catalog canary passed 2026-09-24; second independent resource, failure paths, and production-approved archive remain NOT VERIFIED`; operator + Codex analysis. See [canary evidence](PROVIDER_CANARY_2026-09-24.md).
 - Setup: isolated bucket/prefix/account, synthetic archive, least-privilege secret refs; second resource must be independent, not alias same bucket. Capture provider docs/config evidence for checksum/versioning/conditional write/Object Lock; do not infer.
 - Scenarios: put/verify/get, lost response if safely simulated locally only, quota/auth, A down/B healthy without production fault injection, catalog retrieval, no secret logs.
 - Rollout: enable flag for manual canary only; stop on checksum mismatch, false success, unbounded retry, secret exposure, unexpected overwrite/cost.
