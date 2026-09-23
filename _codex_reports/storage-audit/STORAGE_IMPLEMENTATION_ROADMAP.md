@@ -286,16 +286,16 @@ Requires separate owner authorization for external writes/production. Covers REQ
 
 #### TASK-062 — Isolated full restore drill and SLO measurement
 
-- Status: `BLOCKED: independent escrow of real catalog/PHB3 and keys, isolated PostgreSQL target, and explicit approval before transferring production material`; owner/operator. Synthetic TASK-061 protocol canary alone does not clear this gate.
-- Steps: take latest canary/prod-approved copy; start isolated DB/app; retrieve without production DB catalog; restore v8; provide DP keys/secret refs through approved channel; assert every sentinel/invariant; login/API token/payment/Telegram config behavior; create a new protected backup; destroy isolated environment per approved procedure.
+- Status: `BLOCKED: production still writes incomplete PHB3 v7 (EVID-091); first an owner-approved additive flag-off deployment must produce a new v9 archive, then independent escrow of that archive/catalog/keys, isolated PostgreSQL target and explicit approval for transfer are needed`; owner/operator. Synthetic TASK-061 protocol canary alone does not clear this gate.
+- Steps: take latest complete v9 prod-approved copy; start isolated DB/app; retrieve without production DB catalog; restore; provide DP keys/secret refs through approved channel; assert every sentinel/invariant; login/API token/payment/Telegram config behavior; create a new protected backup; destroy isolated environment per approved procedure.
 - Measure: snapshot completion→verified copy (RPO evidence), retrieval+restore+smoke (RTO), copy lag, resource usage. No customer notification/payment calls.
 - Stop: missing data/key, decrypt failure, stale copy, business invariant, cleanup incident.
 - Done: AC-009/012; owner accepts or adjusts SLO.
 
 #### TASK-063 — Production rollout and observation
 
-- Status: `BLOCKED: TASK-062, explicit approval`; operator.
-- Order: additive deploy flag off → health/readiness → shadow → manual backup → required policy canary → scheduler small scope → observe ≥2 normal intervals `PROPOSED` → enable desired second copy → keep legacy path/objects.
+- Status: `BLOCKED: the additive flag-off writer upgrade needs owner approval and a verified predeploy rollback point; routing cutover remains blocked by TASK-062 and separate approval`; operator.
+- Order: additive deploy flag off → health/readiness → new v9 manual backup → isolated TASK-062 restore from independently held bytes/keys → shadow inventory → required policy canary → scheduler small scope → observe ≥2 normal intervals `PROPOSED` → enable desired second copy → keep legacy path/objects. Production v7 cannot serve as the full-restore proof for this gate (EVID-091).
 - Stop/rollback: flag off for planner; no schema/data deletion; old path only if current BackupId remains accessible. If B-only data exists, keep compatibility reader and roll forward repair. Database restore is not rollback.
 - Monitoring: protection/RPO/debt/UNKNOWN/staging/provider costs. No automatic failback until healthy window and catch-up.
 - Done: no unresolved debt beyond accepted budget, two successful cycles, no regressions, owner sign-off.
@@ -328,7 +328,7 @@ Migration failure: transaction rollback for schema; flag-off for app; retain job
 ## 8. Backup/restore gates before dangerous actions
 
 - Before schema migration: create current backup plus verified predeploy dump; because v7 is incomplete, database-level dump is mandatory mitigation until v8 exists. Verify on disposable target where authorized.
-- Before routing cutover: v8 exhaustive round-trip and one remote materialization drill.
+- Before routing cutover: v8/v9 exhaustive round-trip, approved flag-off deployment that creates a new complete archive, and one isolated restore from independently held remote bytes and keys. Existing production v7 files are not sufficient (EVID-091).
 - Before second destination/backfill: inventory/dry-run and capacity/cost approval.
 - Before failback/retirement: no untracked B-only copy, catch-up complete, dual-read proven.
 - Before cleanup: two independent verified restore points, retention proof and explicit owner approval.
@@ -427,6 +427,8 @@ Merged checkpoint `main@73be7d1` (2026-09-24): PR #304–306 passed CI and added
 Read-only VPS checkpoint against `main@c0895a5` (2026-09-24): the dedicated SSH key restored access. Five containers are healthy, but checkout `981c1ca02` is 50 commits behind `main`, and current API environment has no `BackupRouting__*` variables. Seven local PHB3 files and one DP XML exist; they are not restore evidence. API logs show one controlled lifetime-lock shutdown and five EF transaction errors in 24 hours; PostgreSQL had no matching ERROR/FATAL/PANIC in sampled windows (EVID-088). Local predeploy dump retention leaves eight legacy-name files outside its dry-run scope (EVID-089). No production write or deletion was performed. Next gates: owner approval for transferring real encrypted archive/key material to an isolated PostgreSQL target, independent escrow and key rotation after chat disclosure, then complete offline DR; production rollout needs a separate deployment decision.
 
 Merged monitoring checkpoint `main@b343984` (2026-09-24): PR #309 passed verify/container smoke, PostgreSQL integration and CodeQL after its smoke assertion was updated from 34 to 36 alert rules. It reports only service-owned published PHB3 staging bytes, a separate readability bit, the configured cap and two bounded alerts (EVID-090). This improves local staging visibility but does not prove offsite recovery, live provider health, drill SLO or production deployment. The owner approval and isolated target for real-archive DR remain outstanding.
+
+Read-only production inventory checkpoint against `main@e0d531b` (2026-09-24): the same VPS checkout is now 53 commits behind. Seven recent local PHB3 match their completed DB runs by filename and byte count, but all were created by v7 writer, delivered only to Telegram, and no S3 destination was configured. Eighteen current rows occupy tables excluded from v7, so today's PHB3 cannot satisfy a complete restore. The newest predeploy dump is from 2026-09-21 on the same VPS. This changes rollout order: an approved flag-off writer upgrade and fresh v9 backup must precede the real isolated drill; no automatic routing cutover or deletion is justified (EVID-091).
 
 ## 16. Регламент продолжения в новой сессии
 
