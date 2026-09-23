@@ -5,6 +5,7 @@
 
 ## [Unreleased]
 
+- Добавлен единый runbook изолированного DR-дрилла: отдельные проверки S3 protocol canary и реального offline restore, независимый escrow ключей, PostgreSQL/sentinel acceptance, RPO/RTO и stop-критерии. Сам дрилл на реальном provider пока не выполнен.
 - Prometheus теперь ищет последнюю routed-копию с доказанным обязательным quorum, даже если более новый backup ещё не защищён; неоценимая история явно отделена от доказанного отсутствия копии. Добавлены alarms для просроченной защиты и подтверждённого несовпадения S3-копии.
 - Prometheus теперь показывает агрегированные durable PUT/VERIFY outcomes внешних backup destinations за последний час без динамических или чувствительных labels. Эти диагностические наблюдения не считаются доказательством здоровья всех провайдеров.
 - Prometheus получил fail-closed метрики quorum/debt последнего routed backup, UNKNOWN/manual-review copies, backlog доставки и последней успешной изолированной restore-проверки. Новые alarms показывают неоценённую защиту, недостающий обязательный quorum, UNKNOWN и задержку очереди; legacy Telegram alarm больше не срабатывает при destination routing.
