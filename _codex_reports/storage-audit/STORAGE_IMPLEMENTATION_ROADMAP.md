@@ -232,7 +232,7 @@ Purpose: remove production-DB/VPS circular dependency. Covers REQ-007/008/014, R
 
 #### TASK-043 — Classify predeploy dumps
 
-- Status: `READY`; Codex/operator.
+- Status: `PARTIAL / production read-only inventory 2026-09-24`: all 15 local dumps are mode `0600`; the retention timer is active and its last result succeeded, but the dry-run recognizes only 7 canonical files and leaves 8 legacy-name dumps outside its scope (EVID-089). No dump was removed or restored; owner review is required before targeted cleanup.
 - Changes: docs and audit tooling distinguish local rollback dump from DR. Evaluate short-lived encryption/offsite delivery only after threat/restore needs; do not silently feed it into PHB3 catalog. Verify timer installation separately in approved environment.
 - Tests: existing predeploy creation/retention contracts; secret/publication scanner; recovery exercise on disposable DB if changed.
 - Done: REQ-014; no misleading independent-copy count.
@@ -422,7 +422,9 @@ Merged checkpoint `main@aa3d687`: PR #286 passed CI and put pool-route priority 
 
 Merged checkpoint `main@900ef46`: PR #287–292 passed CI, store exact typed VERIFY and per-attempt PUT outcomes, add bounded read-only S3 recovery probes, gate primary scheduling priority on post-failure PUT plus a matching probe window, and support secure interactive credential entry in the isolated S3 canary (EVID-075–080). `missing`, `mismatching`, inconclusive, a legacy null result, or elapsed time alone cannot prove recovery. Local per-run admin protection/copy detail is the next partial STG-05 slice; real-provider canary, historical repair and isolated restore remain open gates.
 
-Current merged checkpoint `main@73be7d1` (2026-09-24): PR #304–306 passed CI and added write-only disabled S3 registration plus atomic custom pool/route provisioning in the API and admin UI (EVID-087). An isolated HOSTKEY NL synthetic PHB3/catalog protocol canary passed, including addressed cleanup (EVID-086); this does not prove recovery of a real archive or an independent second provider. The last read-only VPS observation found production 40 commits behind an earlier local `main`; a fresh noninteractive SSH attempt was denied, so current deployment state is **NOT VERIFIED** (EVID-088). The next external gates are key rotation after chat disclosure, independent escrow, an isolated PostgreSQL target and owner approval for transferring production material; only then perform the complete offline DR drill and consider rollout. `BackupRouting__Enabled` remains disabled by default in repository configuration; actual VPS flag state is not reverified.
+Merged checkpoint `main@73be7d1` (2026-09-24): PR #304–306 passed CI and added write-only disabled S3 registration plus atomic custom pool/route provisioning in the API and admin UI (EVID-087). An isolated HOSTKEY NL synthetic PHB3/catalog protocol canary passed, including addressed cleanup (EVID-086); this does not prove recovery of a real archive or an independent second provider.
+
+Read-only VPS checkpoint against `main@c0895a5` (2026-09-24): the dedicated SSH key restored access. Five containers are healthy, but checkout `981c1ca02` is 50 commits behind `main`, and current API environment has no `BackupRouting__*` variables. Seven local PHB3 files and one DP XML exist; they are not restore evidence. API logs show one controlled lifetime-lock shutdown and five EF transaction errors in 24 hours; PostgreSQL had no matching ERROR/FATAL/PANIC in sampled windows (EVID-088). Local predeploy dump retention leaves eight legacy-name files outside its dry-run scope (EVID-089). No production write or deletion was performed. Next gates: owner approval for transferring real encrypted archive/key material to an isolated PostgreSQL target, independent escrow and key rotation after chat disclosure, then complete offline DR; production rollout needs a separate deployment decision.
 
 ## 16. Регламент продолжения в новой сессии
 
