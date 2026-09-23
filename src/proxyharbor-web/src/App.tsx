@@ -5,6 +5,7 @@ import { StyledSelect } from './components/StyledSelect'
 import { Toggle } from './components/Toggle'
 import { ToastSignal } from './components/Toasts'
 import { BackupProtectionDetail } from './BackupProtectionDetail'
+import { AdminBackupProvisioning, type BackupProvisioningResult } from './AdminBackupProvisioning'
 import { PublicPricingSection } from './PublicPricingSection'
 import { publicInfoPaths } from './publicInfoRoutes'
 import { useSiteSettings } from './siteSettingsContext'
@@ -1003,6 +1004,9 @@ function AdminBackupDestinations(){
   const [drainTarget,setDrainTarget]=useState<{destination:BackupDestinationOverview;route:BackupDestinationRoute}|null>(null)
   const [drainBusy,setDrainBusy]=useState(false)
   const [drainError,setDrainError]=useState('')
+  const [provisionMode,setProvisionMode]=useState<'destination'|'pool'|null>(null)
+  const [provisionResult,setProvisionResult]=useState<BackupProvisioningResult|null>(null)
+  const provisionTrigger=useRef<HTMLButtonElement|null>(null)
   const drainTrigger=useRef<HTMLButtonElement|null>(null)
   const drainCancel=useRef<HTMLButtonElement|null>(null)
   useEffect(()=>{if(drainTarget)drainCancel.current?.focus()},[drainTarget])
@@ -1010,6 +1014,14 @@ function AdminBackupDestinations(){
     setDrainTarget(null)
     setDrainError('')
     drainTrigger.current?.focus()
+  }
+  const closeProvision=()=>{setProvisionMode(null);provisionTrigger.current?.focus()}
+  const savedProvision=(result:BackupProvisioningResult)=>{
+    setProvisionResult(result)
+    setProvisionMode(null)
+    setPage(1)
+    setRefresh(value=>value+1)
+    provisionTrigger.current?.focus()
   }
   const drain=async()=>{
     if(!drainTarget)return
@@ -1049,7 +1061,8 @@ function AdminBackupDestinations(){
     return `${operation}: ${result}`
   }
   return <section className="admin-card backup-destinations" aria-labelledby="backup-destinations-title" aria-busy={loading}>
-    <div className="card-heading"><div><span className="kicker">ВНЕШНИЕ КОПИИ</span><h2 id="backup-destinations-title">Назначения и маршруты <em>{data?.total??'—'}</em></h2><p>Состояние из БД без обращения к provider. Последняя успешная операция не доказывает доступность сейчас.</p></div><button className="icon-button" type="button" aria-label="Обновить назначения резервных копий" disabled={loading} onClick={()=>setRefresh(value=>value+1)}><RefreshCw className={loading?'spin':undefined} width={18} height={18}/></button></div>
+    <div className="card-heading"><div><span className="kicker">ВНЕШНИЕ КОПИИ</span><h2 id="backup-destinations-title">Назначения и маршруты <em>{data?.total??'—'}</em></h2><p>Состояние из БД без обращения к provider. Последняя успешная операция не доказывает доступность сейчас.</p></div><div className="backup-destination-toolbar"><button type="button" className="secondary-admin-button" onClick={event=>{provisionTrigger.current=event.currentTarget;setProvisionMode('destination')}}><Plus width={15} height={15}/>Добавить S3</button><button type="button" className="primary-admin-button" onClick={event=>{provisionTrigger.current=event.currentTarget;setProvisionMode('pool')}}><ShieldCheck width={15} height={15}/>Создать pool</button><button className="icon-button" type="button" aria-label="Обновить назначения резервных копий" disabled={loading} onClick={()=>setRefresh(value=>value+1)}><RefreshCw className={loading?'spin':undefined} width={18} height={18}/></button></div></div>
+    {provisionResult&&<p className="backup-provision-success" role="status">{provisionResult.kind==='destination'?`S3 «${provisionResult.name}» добавлен выключенным. Перед активацией проверьте provider.`:<>Pool «{provisionResult.name}» создан. ID для <code>BackupRouting__PoolId</code>: <code>{provisionResult.id}</code>. Production routing не переключён.</>}</p>}
     {error&&<p className="backup-destination-error" role="alert">{error}</p>}
     {loading&&!data?<p className="empty-state">Загружаем назначения…</p>:data?.items.length===0?<p className="empty-state">Назначения пока не настроены. Это не подтверждает внешнюю защиту backup.</p>:<div className="backup-destination-list">{data?.items.map(destination=><article key={destination.id}>
       <div className="backup-destination-heading"><div><b id={`backup-destination-${destination.id}`} tabIndex={-1}>{destination.name}</b><small>{destination.kind==='s3'?'S3':destination.kind==='telegram'?'Telegram':'Неизвестный тип'} · приоритет {destination.priority} · {destination.failureDomainConfigured?'граница отказа задана':'граница отказа не задана'} · {destination.credentialsConfigured?'ключи сохранены':'ключи не сохранены'}</small></div><span className={destination.enabled?'state-pill active':'state-pill'}>{destination.enabled?'Включено':'Выключено'}</span></div>
@@ -1058,6 +1071,7 @@ function AdminBackupDestinations(){
       {drainTarget?.destination.id===destination.id&&<div id="backup-drain-confirm" className="source-delete-confirm backup-drain-confirm" role="group" aria-labelledby="backup-drain-title" onKeyDown={event=>{if(event.key==='Escape'&&!drainBusy){event.preventDefault();closeDrain()}}}><div><b id="backup-drain-title">Остановить новые записи в {drainTarget.route.poolName}?</b><p>Маршрут перейдёт в draining. Чтение уже существующих копий сохранится, но начатая загрузка может завершиться. Перед действием проверьте остальные маршруты и quorum.</p>{drainError&&<p className="backup-destination-error" role="alert">{drainError}</p>}</div><button ref={drainCancel} type="button" className="secondary-admin-button" disabled={drainBusy} onClick={closeDrain}>Отмена</button><button type="button" className="danger" disabled={drainBusy} onClick={()=>void drain()}>{drainBusy?'Переводим…':'Подтвердить draining'}</button></div>}
     </article>)}</div>}
     {data&&data.total>data.pageSize&&<ProxyPagination page={page} pageSize={pageSize} total={data.total} totalPages={Math.max(1,Math.ceil(data.total/pageSize))} onPageChange={setPage} onPageSizeChange={size=>{setPageSize(size);setPage(1)}}/>}
+    {provisionMode&&<AdminBackupProvisioning mode={provisionMode} apiBase={API} onClose={closeProvision} onSaved={savedProvision}/>}
   </section>
 }
 

@@ -3,7 +3,24 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { StyledSelect } from './StyledSelect'
 
 describe('StyledSelect', () => {
-  afterEach(cleanup)
+  afterEach(() => { cleanup(); vi.restoreAllMocks() })
+
+  it('opens upward when a scroll container clips the space below', () => {
+    const original=HTMLElement.prototype.getBoundingClientRect
+    const rect=(top:number,bottom:number):DOMRect => ({top,bottom,left:0,right:300,width:300,height:bottom-top,x:0,y:top,toJSON:()=>({})})
+    vi.spyOn(HTMLElement.prototype,'getBoundingClientRect').mockImplementation(function(this:HTMLElement){
+      if(this.classList.contains('styled-select'))return rect(170,210)
+      if(this.classList.contains('styled-select-menu'))return rect(217,357)
+      if(this.dataset.scrollContainer)return rect(0,240)
+      return original.call(this)
+    })
+    const {container}=render(<div data-scroll-container="true" style={{overflowY:'auto'}}>
+      <StyledSelect ariaLabel="Обрезаемый список" value="one" onChange={()=>undefined}
+        options={[["one","Первый"],["two","Второй"],["three","Третий"]]}/>
+    </div>)
+    fireEvent.click(screen.getByRole('button',{name:'Обрезаемый список'}))
+    expect(container.querySelector('.styled-select')).toHaveClass('open-up')
+  })
 
   it('opens and moves focus through options with the keyboard', async () => {
     const onChange=vi.fn()
