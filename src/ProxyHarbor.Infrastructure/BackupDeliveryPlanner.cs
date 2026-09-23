@@ -15,15 +15,20 @@ public sealed class BackupDeliveryPlanner(BackupDestinationRegistry registry)
         Guid backupRunId,
         string contentSha256,
         long sizeBytes,
-        CancellationToken token)
+        CancellationToken token,
+        int maxNewCopies = int.MaxValue)
     {
         ArgumentNullException.ThrowIfNull(db);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxNewCopies);
         var run = await db.BackupRuns.SingleAsync(item => item.Id == backupRunId, token);
         if (run.BackupPoolId is not { } poolId || run.ProtectionPolicyVersion is not { } policyVersion)
             throw new InvalidOperationException("Backup run не содержит protection policy snapshot.");
         if (!string.Equals(run.ContentSha256, contentSha256, StringComparison.Ordinal) ||
             run.SizeBytes != sizeBytes)
             throw new InvalidOperationException("Backup run content identity не совпадает с planner input.");
+        var pool = await db.BackupPools.AsNoTracking().SingleOrDefaultAsync(item => item.Id == poolId, token);
+        if (run.Status != "completed" || pool is null || pool.PolicyVersion != policyVersion)
+            throw new InvalidOperationException("Backup run не соответствует текущей версии policy.");
 
         var routes = await db.BackupPoolDestinations
             .Include(route => route.BackupDestination)
@@ -39,6 +44,7 @@ public sealed class BackupDeliveryPlanner(BackupDestinationRegistry registry)
         var planned = 0;
         foreach (var route in routes)
         {
+            if (planned >= maxNewCopies) break;
             if (existingDestinationIds.Contains(route.BackupDestinationId)) continue;
             try
             {

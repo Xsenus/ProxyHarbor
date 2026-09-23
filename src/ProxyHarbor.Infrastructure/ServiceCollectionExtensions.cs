@@ -186,6 +186,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<BackupLegacyDestinationProjector>();
         services.AddSingleton<BackupProtectionEvaluator>();
         services.AddSingleton<BackupDeliveryPlanner>();
+        services.AddSingleton<BackupCatchUpPlanner>();
         services.AddSingleton<BackupDestinationHealth>();
         services.AddSingleton<BackupCopyMaterializer>();
         services.AddSingleton<BackupDeliveryProcessor>();

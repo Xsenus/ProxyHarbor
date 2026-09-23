@@ -38,7 +38,7 @@ docker compose up -d --build
 | `BACKUP_ENCRYPTION_KEY` | Ключ новых PHB3, 32–1024 символа без control characters |
 | `BACKUP_ROUTING_ENABLED` | Destination planner/worker; по умолчанию `false`, включать только для отдельного canary |
 | `BACKUP_ROUTING_MAXIMUM_STAGING_BYTES` | Суммарный лимит replayable PHB3 staging, 100 MiB..10 TiB; default 10 GiB |
-| `BACKUP_ROUTING_STAGING_TTL_HOURS` | Максимальный возраст local source для автоматической delivery, `1..720`; default 72 часа |
+| `BACKUP_ROUTING_STAGING_TTL_HOURS` | Максимальный возраст локального staging-источника, `1..720`; default 72 часа. Более старый run может доставляться только из разрешённой verified-копии того же immutable архива. |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | Обязательная пара для включённого backup |
 | `ALERTMANAGER_WEBHOOK_TOKEN` | Отдельный случайный secret 32–256 ASCII-символов для внутреннего Alertmanager → API webhook; это не Telegram token |
 | `TELEGRAM_MARKETING_BROADCASTS_ENABLED` | Deploy-блокировка массовой рекламной рассылки; по умолчанию `false`, включать только после отдельной правовой проверки |

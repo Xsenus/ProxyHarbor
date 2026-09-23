@@ -187,7 +187,7 @@ Purpose: fulfill owner requirement without false success. Covers REQ-004–006/0
 
 #### TASK-033 — Operation-scoped health, budgets and automatic fallback
 
-- Status: `IN PROGRESS / partial checkpoint merged`; Codex. PR #270 (`f39f7b9`) merged with green CI; VERIFY health remains local-only and READ is not yet wired into an orchestrator.
+- Status: `IN PROGRESS / partial checkpoint merged`; Codex. PR #270 (`f39f7b9`) merged with green CI; verified-copy READ is wired into materialization and delivery via PR #281. VERIFY health remains local-only; durable cross-replica health and failback hysteresis are not proven.
 - Changes: health/breaker per destination+operation, short-lived local state backed by durable recent outcomes; planner enforces overall deadline and allowlisted graph. Optional storage does not fail global readiness.
 - Tests: A down/B healthy; A slow leaves budget for B; auth/quota/capability; all down; cross-pool route rejected; breaker half-open; multi-instance eventual consistency.
 - Numeric budgets: begin conservative test defaults, measure canary, label production values `PROPOSED` until owner accepts.
@@ -195,7 +195,7 @@ Purpose: fulfill owner requirement without false success. Covers REQ-004–006/0
 
 #### TASK-034 — Catch-up, repair and failback
 
-- Status: `BLOCKED: TASK-032,TASK-033`; Codex.
+- Status: `IN PROGRESS / local repair path`; Codex. PR #281 merged the bounded verified-copy source path for a delivery job after staging expires. A one-copy-per-pass catch-up planner for missing routes is under local validation. Existing failed/UNKNOWN jobs are never blindly rearmed. Durable queue fairness, failback healthy window, interrupted backfill, restart/flapping matrix and real-provider proof remain open; this is not AC-008 completion.
 - Changes: reconciler scans copy debt, chooses verified same-hash source, materializes/streams to destination, verifies, rate limits. Quarantine corruption. Healthy window/hysteresis before destination eligibility; no automatic delete.
 - Historical behavior: B-only copies remain locatable; backfill coverage checkpoint blocks retirement/cleanup. Policy changes cancel/replan only safe jobs with version fencing.
 - Tests: TEST-008: recovery, flapping, stale/corrupt source, concurrent repair, destination draining, restart.
@@ -414,7 +414,7 @@ No dates are invented. STG-00–05 may proceed without these decisions using iso
 | 2026-09-22 | implementation checkpoint 5 | Added immutable run policy/content snapshot, fail-closed protection evaluator and `200/202/503` acknowledgement contract; local PostgreSQL 17 and restore coverage are green. | EVID-050–051 |
 | 2026-09-22 | implementation checkpoint 6 | Added atomic per-destination planner and leased delivery worker with bounded retry/deadline, crash-to-UNKNOWN semantics, independent fallback, staging byte/TTL budgets and routing disabled by default. | EVID-054–055 |
 
-Current checkpoint: STG-00–02 and TASK-020–032 are merged in `main` with green CI. TASK-033 operation health and fallback budgets are partially merged via PR #270 with green CI; S3 materialization adapter, verified-copy read failover, DB-backed materialization CLI, signed manual catalog and offline catalog materialization are merged via PR #271–275. Отдельный signing key и conditional sidecar transport находятся на локальной проверке. Durable VERIFY history, repair, automatically published independent catalog and full remote restore remain. Routing remains disabled by default, so legacy behavior is still authoritative until a separately approved canary. Existing S3 object keys and Telegram resolver/transport contracts are preserved. Docker and real providers remain unavailable locally. No production/provider access or deployment occurred.
+Current checkpoint: STG-00–02 and TASK-020–032 are merged in `main` with green CI. TASK-033 operation health and fallback budgets are partially merged via PR #270; S3 materialization, verified-copy read failover, DB-backed materialization, signed catalog, conditional sidecar and offline restore proof were merged via PR #271–280. PR #281 merged remote-source delivery when local staging is unavailable (1565 local PostgreSQL tests and CI green). Missing-route catch-up is in local validation, not yet a complete TASK-034 repair/failback solution. Durable VERIFY history, failed-job reconciliation policy, healthy-window failback, independent key escrow and real-provider restore remain. Routing remains disabled by default; production/provider access or deployment has not occurred.
 
 ## 16. Регламент продолжения в новой сессии
 

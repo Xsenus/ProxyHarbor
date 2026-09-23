@@ -573,6 +573,154 @@ public sealed class BackupDeliveryWorkerIntegrationTests
 
     [Fact]
     [Trait("Category", "PostgresIntegration")]
+    public async Task CatchUpPlansOneMissingCopyOnceAndFencesDrainingPolicyAndUnreadableSource()
+    {
+        var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
+        if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
+
+        var schema = $"proxyharbor_catchup_{Guid.NewGuid():N}";
+        var directory = Path.Combine(Path.GetTempPath(), $"proxyharbor-catchup-{Guid.NewGuid():N}");
+        var builder = new NpgsqlConnectionStringBuilder(baseConnectionString) { SearchPath = schema };
+        await using var admin = new NpgsqlConnection(baseConnectionString);
+        await admin.OpenAsync();
+        await using (var create = new NpgsqlCommand($"CREATE SCHEMA \"{schema}\"", admin))
+            await create.ExecuteNonQueryAsync();
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var factory = await CreateFactoryAsync(builder.ConnectionString);
+            byte[] bytes = [1, 2, 3, 4, 5];
+            var hash = Convert.ToHexStringLower(SHA256.HashData(bytes));
+            var adapter = new RepairAdapter(
+                bytes, "catchup-source", "catchup-target", "catchup.phbackup");
+            var registry = Registry(adapter, new SuccessfulAdapter("telegram"));
+            var planner = new BackupCatchUpPlanner(factory, registry, new BackupDeliveryPlanner(registry));
+            Guid poolId;
+            Guid sourceRouteId;
+            Guid targetRouteId;
+            Guid runId;
+            await using (var db = await factory.CreateDbContextAsync())
+            {
+                var pool = Pool();
+                var run = Run(pool.Id, hash, "catchup.phbackup");
+                run.StartedAt = DateTimeOffset.UtcNow.AddDays(-2);
+                var source = Destination("catchup-source", "domain-a", 10);
+                var target = Destination("catchup-target", "domain-b", 20);
+                var verified = Copy(run.Id, source.Id, run.ContentSha256!);
+                verified.State = "verified";
+                verified.VerifiedAt = DateTimeOffset.UtcNow;
+                verified.NativeLocator = "source/catchup.phbackup";
+                db.AddRange(pool, run, source, target,
+                    Route(pool.Id, source.Id, 10), Route(pool.Id, target.Id, 20), verified);
+                await db.SaveChangesAsync();
+                poolId = pool.Id;
+                sourceRouteId = source.Id;
+                targetRouteId = target.Id;
+                runId = run.Id;
+            }
+
+            var concurrent = await Task.WhenAll(
+                planner.TryPlanAsync(false, CancellationToken.None),
+                planner.TryPlanAsync(false, CancellationToken.None));
+            Assert.Equal(1, concurrent.Sum());
+            await using (var verify = await factory.CreateDbContextAsync())
+            {
+                Assert.Equal(2, await verify.BackupCopies.CountAsync(item => item.BackupRunId == runId));
+                Assert.Single(await verify.BackupDeliveryJobs.ToArrayAsync());
+            }
+            Assert.Equal(0, await planner.TryPlanAsync(false, CancellationToken.None));
+            var health = new BackupDestinationHealth();
+            var processor = new BackupDeliveryProcessor(
+                factory, registry,
+                Options.Create(new BackupOptions { Directory = directory, EncryptionKey = new string('k', 32) }),
+                Options.Create(new BackupRoutingOptions { Enabled = true }),
+                destinationHealth: health,
+                copyMaterializer: new BackupCopyMaterializer(factory, registry, health));
+            var lease = await processor.TryClaimAsync(CancellationToken.None);
+            Assert.NotNull(lease);
+            await processor.ProcessAsync(lease, CancellationToken.None);
+            Assert.Equal(1, adapter.ReadCalls);
+            Assert.Equal(1, adapter.PutCalls);
+            Assert.Empty(Directory.GetFileSystemEntries(directory));
+            await using (var verify = await factory.CreateDbContextAsync())
+                Assert.Equal("verified", (await verify.BackupCopies.SingleAsync(item =>
+                    item.BackupRunId == runId && item.BackupDestinationId == targetRouteId)).State);
+
+            await using (var db = await factory.CreateDbContextAsync())
+            {
+                var targetRoute = await db.BackupPoolDestinations.SingleAsync(item =>
+                    item.BackupPoolId == poolId && item.BackupDestinationId == targetRouteId);
+                targetRoute.Draining = true;
+                targetRoute.Enabled = false;
+                var second = Run(poolId, new string('b', 64), "draining.phbackup");
+                var sourceCopy = Copy(second.Id, sourceRouteId, second.ContentSha256!);
+                sourceCopy.State = "verified";
+                sourceCopy.VerifiedAt = DateTimeOffset.UtcNow;
+                sourceCopy.NativeLocator = "source/draining.phbackup";
+                db.AddRange(second, sourceCopy);
+                await db.SaveChangesAsync();
+            }
+            Assert.Equal(0, await planner.TryPlanAsync(false, CancellationToken.None));
+
+            await using (var db = await factory.CreateDbContextAsync())
+            {
+                var targetRoute = await db.BackupPoolDestinations.SingleAsync(item =>
+                    item.BackupPoolId == poolId && item.BackupDestinationId == targetRouteId);
+                targetRoute.Draining = false;
+                targetRoute.Enabled = true;
+                var pool = await db.BackupPools.SingleAsync(item => item.Id == poolId);
+                pool.PolicyVersion++;
+                await db.SaveChangesAsync();
+            }
+            Assert.Equal(0, await planner.TryPlanAsync(false, CancellationToken.None));
+
+            await using (var db = await factory.CreateDbContextAsync())
+            {
+                var pool = await db.BackupPools.SingleAsync(item => item.Id == poolId);
+                pool.PolicyVersion--;
+                var sourceRoute = await db.BackupPoolDestinations.SingleAsync(item =>
+                    item.BackupPoolId == poolId && item.BackupDestinationId == sourceRouteId);
+                sourceRoute.AllowedOperations = "put,verify";
+                await db.SaveChangesAsync();
+            }
+            Assert.Equal(0, await planner.TryPlanAsync(false, CancellationToken.None));
+
+            await using (var db = await factory.CreateDbContextAsync())
+            {
+                var sourceRoute = await db.BackupPoolDestinations.SingleAsync(item =>
+                    item.BackupPoolId == poolId && item.BackupDestinationId == sourceRouteId);
+                sourceRoute.AllowedOperations = "put,verify,read";
+                await db.SaveChangesAsync();
+            }
+            Assert.Equal(1, await planner.TryPlanAsync(false, CancellationToken.None));
+
+            await using (var db = await factory.CreateDbContextAsync())
+            {
+                var third = Run(poolId, new string('c', 64), "unknown.phbackup");
+                var sourceCopy = Copy(third.Id, sourceRouteId, third.ContentSha256!);
+                sourceCopy.State = "verified";
+                sourceCopy.VerifiedAt = DateTimeOffset.UtcNow;
+                sourceCopy.NativeLocator = "source/unknown.phbackup";
+                var unknownTarget = Copy(third.Id, targetRouteId, third.ContentSha256!);
+                unknownTarget.State = "unknown";
+                unknownTarget.UnknownSince = DateTimeOffset.UtcNow;
+                var unknownJob = Job(unknownTarget.Id, "unknown-catchup-job");
+                unknownJob.State = "reconciling";
+                db.AddRange(third, sourceCopy, unknownTarget, unknownJob);
+                await db.SaveChangesAsync();
+            }
+            Assert.Equal(0, await planner.TryPlanAsync(false, CancellationToken.None));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+            await using var drop = new NpgsqlCommand($"DROP SCHEMA IF EXISTS \"{schema}\" CASCADE", admin);
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
     public async Task NewReplicasObserveDurableDestinationAuthenticationFailure()
     {
         var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
@@ -855,7 +1003,11 @@ public sealed class BackupDeliveryWorkerIntegrationTests
                 $"{destination.Name}/{Path.GetFileName(path)}", null, expectedSha256, true));
     }
 
-    private sealed class RepairAdapter(byte[] bytes) : IBackupDestinationAdapter
+    private sealed class RepairAdapter(
+        byte[] bytes,
+        string sourceName = "source",
+        string targetName = "target",
+        string fileName = "expired-staging.phbackup") : IBackupDestinationAdapter
     {
         public string Kind => "s3";
         public BackupDestinationCapabilities Capabilities { get; } = new(
@@ -868,7 +1020,7 @@ public sealed class BackupDeliveryWorkerIntegrationTests
             string path, string expectedSha256, long expectedSize, CancellationToken token)
         {
             ReadCalls++;
-            Assert.Equal("source", destination.Name);
+            Assert.Equal(sourceName, destination.Name);
             await File.WriteAllBytesAsync(path, bytes, token);
             return new BackupDestinationMaterializationResult(
                 path, bytes.Length, expectedSha256, null, null);
@@ -879,8 +1031,8 @@ public sealed class BackupDeliveryWorkerIntegrationTests
             long expectedSize, CancellationToken token)
         {
             PutCalls++;
-            Assert.Equal("target", destination.Name);
-            Assert.Equal("expired-staging.phbackup", Path.GetFileName(path));
+            Assert.Equal(targetName, destination.Name);
+            Assert.Equal(fileName, Path.GetFileName(path));
             Assert.Equal(bytes, await File.ReadAllBytesAsync(path, token));
             return new BackupDestinationWriteResult(
                 $"target/{Path.GetFileName(path)}", null, expectedSha256, true);
