@@ -153,4 +153,65 @@ public sealed class BackupDestinationHealthPersistenceIntegrationTests
             await drop.ExecuteNonQueryAsync();
         }
     }
+
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
+    public async Task PruningRetainsLastUnsafeMarkerBeyondEightDays()
+    {
+        var baseConnection = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
+        if (string.IsNullOrWhiteSpace(baseConnection)) return;
+
+        var schema = $"proxyharbor_health_marker_{Guid.NewGuid():N}";
+        await using var admin = new NpgsqlConnection(baseConnection);
+        await admin.OpenAsync();
+        await using (var create = new NpgsqlCommand($"CREATE SCHEMA \"{schema}\"", admin))
+            await create.ExecuteNonQueryAsync();
+        try
+        {
+            var connection = new NpgsqlConnectionStringBuilder(baseConnection) { SearchPath = schema };
+            var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+                .UseNpgsql(connection.ConnectionString).Options;
+            await using var db = new ProxyHarborDbContext(options);
+            await db.Database.MigrateAsync();
+            var destination = new BackupDestination
+            {
+                Name = "persistent-marker",
+                Kind = "s3",
+                Enabled = true,
+                FailureDomain = "marker-test"
+            };
+            db.BackupDestinations.Add(destination);
+            var oldest = new BackupDestinationHealthOutcome
+            {
+                BackupDestinationId = destination.Id,
+                Operation = "put",
+                Succeeded = false,
+                ErrorCode = BackupDestinationErrorCode.Unavailable.ToString(),
+                ObservedAt = DateTimeOffset.UtcNow.AddDays(-12)
+            };
+            db.BackupDestinationHealthOutcomes.Add(oldest);
+            await db.SaveChangesAsync();
+
+            Assert.Equal(0, await BackupDestinationHealth.PruneOldOutcomesAsync(db, CancellationToken.None));
+            Assert.Equal(oldest.Id, (await db.BackupDestinationHealthOutcomes.SingleAsync()).Id);
+
+            var newer = new BackupDestinationHealthOutcome
+            {
+                BackupDestinationId = destination.Id,
+                Operation = "put",
+                Succeeded = false,
+                ErrorCode = BackupDestinationErrorCode.AuthenticationFailed.ToString(),
+                ObservedAt = DateTimeOffset.UtcNow.AddDays(-10)
+            };
+            db.BackupDestinationHealthOutcomes.Add(newer);
+            await db.SaveChangesAsync();
+            Assert.Equal(1, await BackupDestinationHealth.PruneOldOutcomesAsync(db, CancellationToken.None));
+            Assert.Equal(newer.Id, (await db.BackupDestinationHealthOutcomes.AsNoTracking().SingleAsync()).Id);
+        }
+        finally
+        {
+            await using var drop = new NpgsqlCommand($"DROP SCHEMA \"{schema}\" CASCADE", admin);
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
 }

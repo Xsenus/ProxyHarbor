@@ -97,12 +97,27 @@ public sealed class BackupDestinationHealth(TimeProvider? timeProvider = null)
         }
     }
 
-    /// <summary>Удаляет наблюдения старше максимального policy window с запасом; не чаще часа.</summary>
+    /// <summary>
+    /// Удаляет старые наблюдения, но оставляет последний unsafe marker каждой операции,
+    /// чтобы длительная авария не была ошибочно забыта по истечении retention.
+    /// </summary>
     public static Task<int> PruneOldOutcomesAsync(ProxyHarborDbContext db, CancellationToken token)
     {
         var cutoff = DateTimeOffset.UtcNow.Subtract(OutcomeRetention);
         return db.BackupDestinationHealthOutcomes
             .Where(item => item.ObservedAt < cutoff)
+            .Where(item =>
+                !((item.Operation == "put" && !item.Succeeded) ||
+                  (item.Operation == "verify" &&
+                   (!item.Succeeded || item.ProbeOutcome == null || item.ProbeOutcome != "matching"))) ||
+                db.BackupDestinationHealthOutcomes.Any(newer =>
+                    newer.BackupDestinationId == item.BackupDestinationId &&
+                    newer.Operation == item.Operation &&
+                    newer.ObservedAt > item.ObservedAt &&
+                    ((newer.Operation == "put" && !newer.Succeeded) ||
+                     (newer.Operation == "verify" &&
+                      (!newer.Succeeded || newer.ProbeOutcome == null ||
+                       newer.ProbeOutcome != "matching")))))
             .ExecuteDeleteAsync(token);
     }
 
