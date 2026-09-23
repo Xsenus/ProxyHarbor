@@ -241,7 +241,7 @@ Purpose: remove production-DB/VPS circular dependency. Covers REQ-007/008/014, R
 
 #### TASK-050 — Admin API and UI for destinations/copies
 
-- Status: `BLOCKED: STG-03`; Codex.
+- Status: `PARTIAL: read-only per-run protection/copy detail implemented locally; destination/pool management and final gates remain`; Codex.
 - Changes: `AdminController`, DTO/OpenAPI; React backup settings/history. Show pool policy, destination state, verified copies, pending/degraded/UNKNOWN, safe locator summary. Credentials write-only. Preserve old response fields.
 - UI rules: use `StyledSelect`, shared Toggle/button/checkbox/table/modal patterns; explicit Lucide sizes; keyboard/focus/mobile tests per `AGENTS.md`.
 - Checks: controller auth/validation, frontend interaction/a11y, desktop/mobile visual verification; full frontend lint/test/build final gate.
@@ -420,7 +420,7 @@ Current merged checkpoint: `main@f2c1e46` contains STG-00–02 and TASK-020–03
 
 Merged checkpoint `main@aa3d687`: PR #286 passed CI and put pool-route priority before job creation time for pending claims of one run (EVID-074). This is scheduling order only, not automatic failback or serialized cross-replica delivery.
 
-Merged checkpoint `main@0c45511`: PR #287–291 passed CI, store exact typed VERIFY and per-attempt PUT outcomes, add bounded read-only S3 recovery probes, and gate primary scheduling priority on post-failure PUT plus a matching probe window (EVID-075–079). `missing`, `mismatching`, inconclusive, a legacy null result, or elapsed time alone cannot prove recovery. Local EVID-080 simplifies the isolated S3 canary with interactive credential entry; real-provider canary, historical repair and isolated restore remain open gates.
+Merged checkpoint `main@900ef46`: PR #287–292 passed CI, store exact typed VERIFY and per-attempt PUT outcomes, add bounded read-only S3 recovery probes, gate primary scheduling priority on post-failure PUT plus a matching probe window, and support secure interactive credential entry in the isolated S3 canary (EVID-075–080). `missing`, `mismatching`, inconclusive, a legacy null result, or elapsed time alone cannot prove recovery. Local per-run admin protection/copy detail is the next partial STG-05 slice; real-provider canary, historical repair and isolated restore remain open gates.
 
 ## 16. Регламент продолжения в новой сессии
 

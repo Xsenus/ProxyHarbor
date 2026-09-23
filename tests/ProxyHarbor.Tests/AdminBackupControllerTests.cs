@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -11,6 +12,129 @@ namespace ProxyHarbor.Tests;
 /// <summary>Проверяет управляемый из админки жизненный цикл локальных encrypted-backup.</summary>
 public sealed class AdminBackupControllerTests
 {
+    [Fact]
+    public async Task ProtectionDetailIsFailClosedForLegacyOrMissingRuns()
+    {
+        var factory = Factory($"admin-backup-protection-legacy-{Guid.NewGuid():N}");
+        var run = new BackupRun { Status = "completed" };
+        await using (var seed = await factory.CreateDbContextAsync())
+        {
+            seed.BackupRuns.Add(run);
+            await seed.SaveChangesAsync();
+        }
+        var controller = Controller(factory, Path.GetTempPath());
+
+        Assert.IsType<NotFoundResult>((await controller.BackupProtectionDetail(
+            Guid.NewGuid(), CancellationToken.None)).Result);
+        var response = Assert.IsType<BackupProtectionDetailResponse>(
+            Assert.IsType<OkObjectResult>((await controller.BackupProtectionDetail(
+                run.Id, CancellationToken.None)).Result).Value);
+        Assert.Equal("legacy_unassessed", response.Assessment);
+        Assert.Null(response.State);
+        Assert.Null(response.VerifiedIndependentCopies);
+        Assert.Empty(response.Copies);
+    }
+
+    [Fact]
+    public async Task ProtectionDetailShowsDebtWithoutLeakingProviderIdentityOrRawErrors()
+    {
+        var factory = Factory($"admin-backup-protection-{Guid.NewGuid():N}");
+        var evaluator = new BackupProtectionEvaluator(factory, new BackupDestinationRegistry(
+            [new MetadataAdapter("s3", true), new MetadataAdapter("telegram", false)]));
+        var pool = new BackupPool
+        {
+            Name = "admin-detail",
+            RequiredVerifiedCopies = 1,
+            DesiredVerifiedCopies = 2,
+            PolicyVersion = 2
+        };
+        var run = new BackupRun
+        {
+            Status = "completed",
+            BackupPoolId = pool.Id,
+            ProtectionPolicyVersion = 2,
+            RequiredVerifiedCopies = 1,
+            DesiredVerifiedCopies = 2,
+            ContentSha256 = new string('a', 64),
+            SizeBytes = 5
+        };
+        var destination = new BackupDestination
+        {
+            Kind = "s3",
+            Name = "S3 Netherlands",
+            Enabled = true,
+            FailureDomain = "domain-a",
+            SettingsJson = "secret-setting-sentinel",
+            ProtectedSecrets = "encrypted-secret-sentinel"
+        };
+        var copy = new BackupCopy
+        {
+            BackupRunId = run.Id,
+            BackupDestinationId = destination.Id,
+            State = "verified",
+            ContentSha256 = run.ContentSha256,
+            SizeBytes = run.SizeBytes,
+            PolicyVersion = 2,
+            VerifiedAt = DateTimeOffset.UtcNow,
+            NativeLocator = "private-account-sentinel/object.phbackup",
+            LastErrorCode = "raw-provider-secret-sentinel"
+        };
+        await using (var seed = await factory.CreateDbContextAsync())
+        {
+            seed.AddRange(pool, run, destination, copy,
+                new BackupPoolDestination
+                {
+                    BackupPoolId = pool.Id,
+                    BackupDestinationId = destination.Id,
+                    Role = "primary",
+                    AllowedOperations = "put,verify,read"
+                });
+            await seed.SaveChangesAsync();
+        }
+        var controller = Controller(factory, Path.GetTempPath(), evaluator);
+
+        var response = Assert.IsType<BackupProtectionDetailResponse>(
+            Assert.IsType<OkObjectResult>((await controller.BackupProtectionDetail(
+                run.Id, CancellationToken.None)).Result).Value);
+        Assert.Equal("evaluated", response.Assessment);
+        Assert.Equal("degraded", response.State);
+        Assert.Equal(1, response.VerifiedIndependentCopies);
+        Assert.Equal(0, response.RequiredCopyDebt);
+        Assert.Equal(1, response.DesiredCopyDebt);
+        var detail = Assert.Single(response.Copies);
+        Assert.True(detail.HasNativeLocator);
+        Assert.Null(detail.ErrorCode);
+        Assert.Equal("primary", detail.RouteRole);
+        var json = JsonSerializer.Serialize(response);
+        Assert.DoesNotContain("private-account-sentinel", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("encrypted-secret-sentinel", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("secret-setting-sentinel", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("raw-provider-secret-sentinel", json, StringComparison.Ordinal);
+
+        await using (var broken = await factory.CreateDbContextAsync())
+        {
+            (await broken.BackupDestinations.SingleAsync()).Kind = "unregistered";
+            await broken.SaveChangesAsync();
+        }
+        var unknownAdapter = Assert.IsType<BackupProtectionDetailResponse>(
+            Assert.IsType<OkObjectResult>((await controller.BackupProtectionDetail(
+                run.Id, CancellationToken.None)).Result).Value);
+        Assert.Equal("unknown_adapter", unknownAdapter.Assessment);
+        Assert.Null(unknownAdapter.VerifiedIndependentCopies);
+
+        await using (var broken = await factory.CreateDbContextAsync())
+        {
+            (await broken.BackupDestinations.SingleAsync()).Kind = "s3";
+            (await broken.BackupRuns.SingleAsync()).ContentSha256 = "not-a-sha256";
+            await broken.SaveChangesAsync();
+        }
+        var invalidPolicy = Assert.IsType<BackupProtectionDetailResponse>(
+            Assert.IsType<OkObjectResult>((await controller.BackupProtectionDetail(
+                run.Id, CancellationToken.None)).Result).Value);
+        Assert.Equal("invalid_policy", invalidPolicy.Assessment);
+        Assert.Null(invalidPolicy.VerifiedIndependentCopies);
+    }
+
     [Fact]
     public async Task TelegramRecipientsPutXsenusFirstAndExcludeBlockedChats()
     {
@@ -401,9 +525,17 @@ public sealed class AdminBackupControllerTests
         }
     }
 
-    private static AdminController Controller(IDbContextFactory<ProxyHarborDbContext> factory, string directory) =>
+    private static AdminController Controller(IDbContextFactory<ProxyHarborDbContext> factory,
+        string directory, BackupProtectionEvaluator? evaluator = null) =>
         new(factory, null!, null!, null!, null!, Options.Create(new BackupOptions { Directory = directory }),
-            Options.Create(new CollectorOptions()));
+            Options.Create(new CollectorOptions()), backupProtectionEvaluator: evaluator);
+
+    private sealed class MetadataAdapter(string kind, bool canVerify) : IBackupDestinationAdapter
+    {
+        public string Kind { get; } = kind;
+        public BackupDestinationCapabilities Capabilities { get; } = new(
+            new(true), new(canVerify), new(false), false, false, false);
+    }
 
     private static async Task<TelegramChat> SeedRecipientAsync(InMemoryFactory factory)
     {

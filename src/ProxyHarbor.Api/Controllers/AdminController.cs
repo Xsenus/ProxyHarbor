@@ -652,6 +652,67 @@ public sealed class AdminController(
         return Ok(new PagedResult<BackupFileResponse>(items, page, pageSize, total));
     }
 
+    /// <summary>Показывает защиту и состояния копий одного backup без provider I/O и locator.</summary>
+    [HttpGet("backups/{id:guid}/protection")]
+    [ProducesResponseType<BackupProtectionDetailResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<BackupProtectionDetailResponse>> BackupProtectionDetail(
+        Guid id, CancellationToken token)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(token);
+        var run = await db.BackupRuns.AsNoTracking()
+            .Include(item => item.Copies).ThenInclude(copy => copy.BackupDestination)
+            .Include(item => item.Copies).ThenInclude(copy => copy.Jobs)
+            .AsSplitQuery()
+            .SingleOrDefaultAsync(item => item.Id == id, token);
+        if (run is null) return NotFound();
+
+        var routes = run.BackupPoolId is { } poolId
+            ? await db.BackupPoolDestinations.AsNoTracking()
+                .Where(route => route.BackupPoolId == poolId)
+                .ToDictionaryAsync(route => route.BackupDestinationId, token)
+            : new Dictionary<Guid, BackupPoolDestination>();
+        var copies = run.Copies
+            .OrderBy(copy => routes.TryGetValue(copy.BackupDestinationId, out var route)
+                ? route.Priority : int.MaxValue)
+            .ThenBy(copy => copy.BackupDestination.Name, StringComparer.Ordinal)
+            .Select(copy => BackupCopyStatusResponse.From(
+                copy, routes.GetValueOrDefault(copy.BackupDestinationId)))
+            .ToArray();
+
+        if (run.BackupPoolId is null || run.ProtectionPolicyVersion is null ||
+            run.RequiredVerifiedCopies is null || run.DesiredVerifiedCopies is null ||
+            string.IsNullOrWhiteSpace(run.ContentSha256))
+            return Ok(new BackupProtectionDetailResponse(run.Id, "legacy_unassessed", null,
+                null, null, null, null, null, copies));
+
+        if (backupProtectionEvaluator is null)
+            throw new InvalidOperationException("Backup protection evaluator не зарегистрирован.");
+        var current = await GetBackupOptionsAsync(token);
+        var hasStaging = TryGetBackupPath(run, current.Directory, out var path) &&
+            System.IO.File.Exists(path);
+        try
+        {
+            var evaluation = backupProtectionEvaluator.EvaluateLoaded(run, routes, hasStaging);
+            return Ok(new BackupProtectionDetailResponse(
+                run.Id, "evaluated", evaluation.State.ToString().ToLowerInvariant(),
+                evaluation.VerifiedIndependentCopies, evaluation.RequiredVerifiedCopies,
+                evaluation.DesiredVerifiedCopies, evaluation.RequiredCopyDebt,
+                evaluation.DesiredCopyDebt,
+                copies));
+        }
+        catch (BackupDestinationRouteException)
+        {
+            return Ok(new BackupProtectionDetailResponse(run.Id, "unknown_adapter", null,
+                null, null, null, null, null, copies));
+        }
+        catch (ArgumentException)
+        {
+            return Ok(new BackupProtectionDetailResponse(run.Id, "invalid_policy", null,
+                null, null, null, null, null, copies));
+        }
+    }
+
     /// <summary>Скачивает зашифрованный PHB3-файл; расшифровка на сервере не выполняется.</summary>
     [HttpGet("backups/{id:guid}/download")]
     [ProducesResponseType<FileStreamResult>(StatusCodes.Status200OK)]
@@ -874,6 +935,56 @@ public sealed record BackupFileResponse(
         run.Id, run.StartedAt, run.FinishedAt, run.Status, run.FileName, run.SizeBytes,
         run.TelegramConfigured, run.SentToTelegram, run.ObjectStorageConfigured,
         run.SentToObjectStorage, run.ObjectStorageKey, run.Error, available);
+}
+
+/// <summary>Read-only assessment; null counts mean protection was not proven.</summary>
+public sealed record BackupProtectionDetailResponse(
+    Guid BackupRunId,
+    string Assessment,
+    string? State,
+    int? VerifiedIndependentCopies,
+    int? RequiredVerifiedCopies,
+    int? DesiredVerifiedCopies,
+    int? RequiredCopyDebt,
+    int? DesiredCopyDebt,
+    BackupCopyStatusResponse[] Copies);
+
+/// <summary>Состояние физической копии без credentials, provider locator или сырых ошибок.</summary>
+public sealed record BackupCopyStatusResponse(
+    Guid Id,
+    Guid DestinationId,
+    string DestinationName,
+    string DestinationKind,
+    string State,
+    string? ErrorCode,
+    DateTimeOffset? VerifiedAt,
+    bool HasNativeLocator,
+    string? RouteRole,
+    bool RouteEnabled,
+    bool RouteDraining,
+    string? LatestJobState,
+    string? CatalogState)
+{
+    /// <summary>Проецирует только ограниченные поля для защищённой админки.</summary>
+    public static BackupCopyStatusResponse From(BackupCopy copy, BackupPoolDestination? route)
+    {
+        var error = Enum.TryParse<BackupDestinationErrorCode>(copy.LastErrorCode, out var code) &&
+            Enum.IsDefined(code) ? code.ToString() : null;
+        return new BackupCopyStatusResponse(
+            copy.Id,
+            copy.BackupDestinationId,
+            copy.BackupDestination.Name,
+            copy.BackupDestination.Kind,
+            copy.State,
+            error,
+            copy.VerifiedAt,
+            !string.IsNullOrWhiteSpace(copy.NativeLocator),
+            route?.Role,
+            route?.Enabled == true,
+            route?.Draining == true,
+            copy.Jobs.OrderByDescending(job => job.UpdatedAt).FirstOrDefault()?.State,
+            copy.CatalogState);
+    }
 }
 
 /// <summary>Текущий backlog без уже арендованных строк и rolling validation telemetry.</summary>

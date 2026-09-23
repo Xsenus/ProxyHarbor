@@ -498,6 +498,10 @@ Host должен быть публичным IP. Пароль не сохран
 
 Повторный локальный/cluster-wide запуск даёт `409`. Ошибка включённого Telegram или S3-канала не возвращает ложный success; локальный encrypted file, failed audit и уже подтверждённые доставки сохраняются.
 
+## GET `/api/v1/admin/backups/{id}/protection`
+
+Администратор получает read-only оценку защиты конкретного backup run и состояния его внешних копий. Ответ содержит `assessment` (`evaluated`, `legacy_unassessed`, `unknown_adapter` или `invalid_policy`), `state` и счётчики verified/required/desired copies и copy debt. Для записей без достоверной оценки `state` и счётчики равны `null` — это не считается защитой. Массив `copies` показывает destination, состояние, типизированный код ошибки, время независимой проверки и наличие native locator. Endpoint не выполняет provider I/O и не возвращает credentials, сам locator, object key или сырой текст ошибки. Отсутствующий run даёт `404`.
+
 ## Публичные разделы, cookies и аналитика
 
 `GET /api/v1/site-settings` возвращает runtime-настройки публикации, реквизитов, cookie-диалога и типизированных метрик. Значения скрытых необязательных строк и банковского блока сервер редактирует до сериализации; ответ имеет `Cache-Control: no-store`. Секреты и произвольный код этот контракт не поддерживает.
