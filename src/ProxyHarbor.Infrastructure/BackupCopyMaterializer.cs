@@ -103,11 +103,7 @@ public sealed class BackupCopyMaterializer(
                         OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal) ||
                     materialized.SizeBytes != run.SizeBytes ||
                     !string.Equals(materialized.Sha256, run.ContentSha256, StringComparison.Ordinal))
-                    throw new BackupDestinationOperationException(
-                        new BackupDestinationFailure(
-                            BackupDestinationErrorCode.IntegrityMismatch,
-                            BackupDestinationFailureDisposition.Permanent),
-                        "Результат чтения не совпадает с immutable backup identity.");
+                    throw new IOException("Adapter вернул локальный файл с другой backup identity.");
                 await using (var stream = new FileStream(
                     materialized.Path, FileMode.Open, FileAccess.Read, FileShare.Read,
                     128 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan))
@@ -115,11 +111,7 @@ public sealed class BackupCopyMaterializer(
                     var actualHash = Convert.ToHexStringLower(await SHA256.HashDataAsync(stream, attempt.Token));
                     if (stream.Length != run.SizeBytes ||
                         !string.Equals(actualHash, run.ContentSha256, StringComparison.Ordinal))
-                        throw new BackupDestinationOperationException(
-                            new BackupDestinationFailure(
-                                BackupDestinationErrorCode.IntegrityMismatch,
-                                BackupDestinationFailureDisposition.Permanent),
-                            "Материализованный файл не совпадает с immutable backup identity.");
+                        throw new IOException("Локальный candidate не совпадает с immutable backup identity.");
                 }
                 attempt.Token.ThrowIfCancellationRequested();
                 File.Move(candidatePath, fullFinalPath);
