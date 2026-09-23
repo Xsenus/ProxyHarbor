@@ -25,7 +25,9 @@ public sealed class MetricsController(
     CheckerNodeCredentialCache? checkerCredentialCache = null,
     VpnMetricsSnapshotCache? vpnSnapshotCache = null,
     IBackupConfigurationStore? backupConfigurationStore = null,
-    ILogger<MetricsController>? logger = null) : ControllerBase
+    ILogger<MetricsController>? logger = null,
+    IOptions<BackupRoutingOptions>? backupRoutingOptions = null,
+    BackupProtectionEvaluator? backupProtectionEvaluator = null) : ControllerBase
 {
     private static readonly Action<ILogger, Exception?> BackupConfigurationReadFailed =
         LoggerMessage.Define(LogLevel.Error, new EventId(1701, "BackupConfigurationReadFailed"),
@@ -138,6 +140,7 @@ public sealed class MetricsController(
         // Текущий running-цикл не должен обнулять показатели последнего действительно завершённого запуска.
         // На PostgreSQL шесть прежних point-read запросов объединены в один statement и один MVCC snapshot.
         var runMetrics = await ReadRunMetricsAsync(db, token);
+        var protectionMetrics = await ReadBackupProtectionMetricsAsync(db, runMetrics, now, token);
 
         var output = new StringBuilder(16_384);
         (httpTelemetry ?? new HttpRequestTelemetry()).AppendPrometheus(output);
@@ -392,12 +395,139 @@ public sealed class MetricsController(
             runMetrics.LastSuccessfulBackupSizeBytes);
         Gauge(output, "proxyharbor_last_backup_timestamp_seconds", "Unix timestamp of the latest successful backup completion.",
             runMetrics.LastSuccessfulBackupFinishedAt?.ToUnixTimeSeconds() ?? 0);
+        Gauge(output, "proxyharbor_backup_routing_enabled", "Whether destination-based backup routing is enabled.",
+            backupRoutingOptions?.Value.Enabled == true ? 1 : 0);
+        Gauge(output, "proxyharbor_backup_latest_routed_run_exists", "Whether a completed routed backup run exists.",
+            protectionMetrics.LatestRunExists ? 1 : 0);
+        Gauge(output, "proxyharbor_backup_latest_routed_run_assessed", "Whether the latest completed routed backup has a valid fail-closed protection assessment.",
+            protectionMetrics.LatestRunAssessed ? 1 : 0);
+        Gauge(output, "proxyharbor_backup_latest_routed_run_timestamp_seconds", "Completion time of the latest routed backup; zero when absent.",
+            protectionMetrics.LatestRunFinishedAt?.ToUnixTimeSeconds() ?? 0);
+        Gauge(output, "proxyharbor_backup_latest_verified_independent_copies", "Independent verified external copies of the latest routed backup; meaningful only when assessed.",
+            protectionMetrics.VerifiedIndependentCopies);
+        Gauge(output, "proxyharbor_backup_latest_required_copies", "Required independent verified copies in the latest routed backup policy snapshot; meaningful only when assessed.",
+            protectionMetrics.RequiredCopies);
+        Gauge(output, "proxyharbor_backup_latest_desired_copies", "Desired independent verified copies in the latest routed backup policy snapshot; meaningful only when assessed.",
+            protectionMetrics.DesiredCopies);
+        Gauge(output, "proxyharbor_backup_latest_required_copy_debt", "Missing required independent verified copies of the latest routed backup; meaningful only when assessed.",
+            protectionMetrics.RequiredCopyDebt);
+        Gauge(output, "proxyharbor_backup_latest_desired_copy_debt", "Missing desired independent verified copies of the latest routed backup; meaningful only when assessed.",
+            protectionMetrics.DesiredCopyDebt);
+        Gauge(output, "proxyharbor_backup_copies_unknown", "Backup copies with an unknown write outcome requiring reconciliation.",
+            protectionMetrics.UnknownCopies);
+        Gauge(output, "proxyharbor_backup_copies_manual_review", "Backup copies requiring manual review.",
+            protectionMetrics.ManualReviewCopies);
+        Gauge(output, "proxyharbor_backup_delivery_jobs_pending", "Pending backup destination delivery jobs.",
+            protectionMetrics.PendingJobs);
+        Gauge(output, "proxyharbor_backup_delivery_jobs_reconciling", "Backup delivery jobs reconciling an uncertain outcome.",
+            protectionMetrics.ReconcilingJobs);
+        Gauge(output, "proxyharbor_backup_oldest_due_pending_job_age_seconds", "Age of the oldest due pending backup delivery job; zero when none.",
+            protectionMetrics.OldestDuePendingJobAt is { } oldestDuePendingJobAt
+                ? Math.Max(0, (long)(now - oldestDuePendingJobAt).TotalSeconds) : 0);
+        Gauge(output, "proxyharbor_backup_last_isolated_restore_pass_timestamp_seconds", "Latest passed isolated restore verification; zero when none.",
+            protectionMetrics.LastIsolatedRestorePassedAt?.ToUnixTimeSeconds() ?? 0);
         var content = output.ToString();
         // Prometheus text exposition требует LF. AppendLine использует CRLF на Windows,
         // поэтому локальный promtool/Prometheus иначе отклоняет TYPE как `counter\r`.
         if (Environment.NewLine.Length != 1)
             content = content.Replace(Environment.NewLine, "\n", StringComparison.Ordinal);
         return Content(content, "text/plain; version=0.0.4; charset=utf-8", Encoding.UTF8);
+    }
+
+    private async Task<BackupProtectionOperationalMetrics> ReadBackupProtectionMetricsAsync(
+        ProxyHarborDbContext db, OperationalRunMetrics runMetrics, DateTimeOffset now,
+        CancellationToken token)
+    {
+        var copyCounts = await db.BackupCopies.AsNoTracking().GroupBy(_ => 1).Select(group => new
+        {
+            Unknown = group.Count(copy => copy.State == "unknown"),
+            ManualReview = group.Count(copy => copy.State == "manual_review")
+        }).SingleOrDefaultAsync(token);
+        var jobCounts = await db.BackupDeliveryJobs.AsNoTracking().GroupBy(_ => 1).Select(group => new
+        {
+            Pending = group.Count(job => job.State == "pending"),
+            Reconciling = group.Count(job => job.State == "reconciling")
+        }).SingleOrDefaultAsync(token);
+        var oldestDuePendingJobAt = await db.BackupDeliveryJobs.AsNoTracking()
+            .Where(job => job.State == "pending" && job.NotBefore <= now)
+            .OrderBy(job => job.NotBefore)
+            .Select(job => (DateTimeOffset?)job.NotBefore)
+            .FirstOrDefaultAsync(token);
+        var lastIsolatedRestorePassedAt = await db.BackupRestoreVerifications.AsNoTracking()
+            .Where(verification => verification.Environment == "isolated" &&
+                verification.Result == "passed" && verification.FinishedAt != null)
+            .OrderByDescending(verification => verification.FinishedAt)
+            .Select(verification => verification.FinishedAt)
+            .FirstOrDefaultAsync(token);
+        var result = new BackupProtectionOperationalMetrics
+        {
+            LatestRunExists = runMetrics.LatestRoutedRunId.HasValue,
+            LatestRunFinishedAt = runMetrics.LatestRoutedRunFinishedAt,
+            UnknownCopies = copyCounts?.Unknown ?? 0,
+            ManualReviewCopies = copyCounts?.ManualReview ?? 0,
+            PendingJobs = jobCounts?.Pending ?? 0,
+            ReconcilingJobs = jobCounts?.Reconciling ?? 0,
+            OldestDuePendingJobAt = oldestDuePendingJobAt,
+            LastIsolatedRestorePassedAt = lastIsolatedRestorePassedAt
+        };
+        if (runMetrics.LatestRoutedRunId is not { } runId || backupProtectionEvaluator is null ||
+            runMetrics.LatestRoutedRunPoolId is not { } poolId ||
+            runMetrics.LatestRoutedRunPolicyVersion is null ||
+            runMetrics.LatestRoutedRunRequiredCopies is null ||
+            runMetrics.LatestRoutedRunDesiredCopies is null ||
+            string.IsNullOrWhiteSpace(runMetrics.LatestRoutedRunContentSha256))
+            return result;
+
+        var copies = await db.BackupCopies.AsNoTracking()
+            .Where(copy => copy.BackupRunId == runId)
+            .Include(copy => copy.BackupDestination)
+            .ToListAsync(token);
+        var routes = await db.BackupPoolDestinations.AsNoTracking()
+            .Where(route => route.BackupPoolId == poolId)
+            .ToDictionaryAsync(route => route.BackupDestinationId, token);
+        var latestRun = new BackupRun
+        {
+            Id = runId,
+            BackupPoolId = poolId,
+            ProtectionPolicyVersion = runMetrics.LatestRoutedRunPolicyVersion,
+            RequiredVerifiedCopies = runMetrics.LatestRoutedRunRequiredCopies,
+            DesiredVerifiedCopies = runMetrics.LatestRoutedRunDesiredCopies,
+            ContentSha256 = runMetrics.LatestRoutedRunContentSha256,
+            SizeBytes = runMetrics.LatestRoutedRunSizeBytes,
+            Copies = copies
+        };
+        try
+        {
+            // Staging affects pending/unavailable only. We export quorum and debt, never an inferred state.
+            var assessment = backupProtectionEvaluator.EvaluateLoaded(latestRun, routes, false);
+            result.LatestRunAssessed = true;
+            result.VerifiedIndependentCopies = assessment.VerifiedIndependentCopies;
+            result.RequiredCopies = assessment.RequiredVerifiedCopies;
+            result.DesiredCopies = assessment.DesiredVerifiedCopies;
+            result.RequiredCopyDebt = assessment.RequiredCopyDebt;
+            result.DesiredCopyDebt = assessment.DesiredCopyDebt;
+        }
+        catch (BackupDestinationRouteException) { }
+        catch (ArgumentException) { }
+        return result;
+    }
+
+    private sealed class BackupProtectionOperationalMetrics
+    {
+        public bool LatestRunExists { get; init; }
+        public bool LatestRunAssessed { get; set; }
+        public DateTimeOffset? LatestRunFinishedAt { get; init; }
+        public int VerifiedIndependentCopies { get; set; }
+        public int RequiredCopies { get; set; }
+        public int DesiredCopies { get; set; }
+        public int RequiredCopyDebt { get; set; }
+        public int DesiredCopyDebt { get; set; }
+        public int UnknownCopies { get; init; }
+        public int ManualReviewCopies { get; init; }
+        public int PendingJobs { get; init; }
+        public int ReconcilingJobs { get; init; }
+        public DateTimeOffset? OldestDuePendingJobAt { get; init; }
+        public DateTimeOffset? LastIsolatedRestorePassedAt { get; init; }
     }
 
     /// <summary>
@@ -427,7 +557,15 @@ public sealed class MetricsController(
                     COALESCE(backup_success."TelegramConfigured", FALSE) AS "LastSuccessfulBackupTelegramConfigured",
                     COALESCE(backup_success."SentToTelegram", FALSE) AS "LastSuccessfulBackupSentToTelegram",
                     COALESCE(backup_success."SizeBytes", 0)::bigint AS "LastSuccessfulBackupSizeBytes",
-                    backup_success."FinishedAt" AS "LastSuccessfulBackupFinishedAt"
+                    backup_success."FinishedAt" AS "LastSuccessfulBackupFinishedAt",
+                    backup_routed."Id" AS "LatestRoutedRunId",
+                    backup_routed."BackupPoolId" AS "LatestRoutedRunPoolId",
+                    backup_routed."ProtectionPolicyVersion" AS "LatestRoutedRunPolicyVersion",
+                    backup_routed."RequiredVerifiedCopies" AS "LatestRoutedRunRequiredCopies",
+                    backup_routed."DesiredVerifiedCopies" AS "LatestRoutedRunDesiredCopies",
+                    backup_routed."ContentSha256" AS "LatestRoutedRunContentSha256",
+                    COALESCE(backup_routed."SizeBytes", 0)::bigint AS "LatestRoutedRunSizeBytes",
+                    backup_routed."FinishedAt" AS "LatestRoutedRunFinishedAt"
                 FROM
                     (SELECT COUNT(*)::int AS "Value"
                      FROM "Runs"
@@ -461,6 +599,14 @@ public sealed class MetricsController(
                      WHERE "Status" = {"completed"} AND "FinishedAt" IS NOT NULL
                      ORDER BY "FinishedAt" DESC, "Id" DESC
                      LIMIT 1) AS backup_success ON TRUE
+                LEFT JOIN LATERAL
+                    (SELECT "Id", "BackupPoolId", "ProtectionPolicyVersion", "RequiredVerifiedCopies",
+                            "DesiredVerifiedCopies", "ContentSha256", "SizeBytes", "FinishedAt"
+                     FROM "BackupRuns"
+                     WHERE "Status" = {"completed"} AND "FinishedAt" IS NOT NULL
+                           AND "BackupPoolId" IS NOT NULL
+                     ORDER BY "FinishedAt" DESC, "Id" DESC
+                     LIMIT 1) AS backup_routed ON TRUE
                 """).SingleAsync(token);
         }
 
@@ -477,6 +623,9 @@ public sealed class MetricsController(
             .OrderByDescending(x => x.FinishedAt).ThenByDescending(x => x.Id).FirstOrDefaultAsync(token);
         var lastSuccessfulBackup = await db.BackupRuns.AsNoTracking()
             .Where(x => x.Status == "completed" && x.FinishedAt != null)
+            .OrderByDescending(x => x.FinishedAt).ThenByDescending(x => x.Id).FirstOrDefaultAsync(token);
+        var lastRoutedBackup = await db.BackupRuns.AsNoTracking()
+            .Where(x => x.Status == "completed" && x.FinishedAt != null && x.BackupPoolId != null)
             .OrderByDescending(x => x.FinishedAt).ThenByDescending(x => x.Id).FirstOrDefaultAsync(token);
         var activeBackups = await db.BackupRuns.AsNoTracking()
             .CountAsync(x => x.Status == "running" && x.FinishedAt == null, token);
@@ -497,7 +646,15 @@ public sealed class MetricsController(
             LastSuccessfulBackupTelegramConfigured = lastSuccessfulBackup?.TelegramConfigured == true,
             LastSuccessfulBackupSentToTelegram = lastSuccessfulBackup?.SentToTelegram == true,
             LastSuccessfulBackupSizeBytes = lastSuccessfulBackup?.SizeBytes ?? 0,
-            LastSuccessfulBackupFinishedAt = lastSuccessfulBackup?.FinishedAt
+            LastSuccessfulBackupFinishedAt = lastSuccessfulBackup?.FinishedAt,
+            LatestRoutedRunId = lastRoutedBackup?.Id,
+            LatestRoutedRunPoolId = lastRoutedBackup?.BackupPoolId,
+            LatestRoutedRunPolicyVersion = lastRoutedBackup?.ProtectionPolicyVersion,
+            LatestRoutedRunRequiredCopies = lastRoutedBackup?.RequiredVerifiedCopies,
+            LatestRoutedRunDesiredCopies = lastRoutedBackup?.DesiredVerifiedCopies,
+            LatestRoutedRunContentSha256 = lastRoutedBackup?.ContentSha256,
+            LatestRoutedRunSizeBytes = lastRoutedBackup?.SizeBytes ?? 0,
+            LatestRoutedRunFinishedAt = lastRoutedBackup?.FinishedAt
         };
     }
 
@@ -541,4 +698,12 @@ internal sealed class OperationalRunMetrics
     public bool LastSuccessfulBackupSentToTelegram { get; set; }
     public long LastSuccessfulBackupSizeBytes { get; set; }
     public DateTimeOffset? LastSuccessfulBackupFinishedAt { get; set; }
+    public Guid? LatestRoutedRunId { get; set; }
+    public Guid? LatestRoutedRunPoolId { get; set; }
+    public int? LatestRoutedRunPolicyVersion { get; set; }
+    public int? LatestRoutedRunRequiredCopies { get; set; }
+    public int? LatestRoutedRunDesiredCopies { get; set; }
+    public string? LatestRoutedRunContentSha256 { get; set; }
+    public long LatestRoutedRunSizeBytes { get; set; }
+    public DateTimeOffset? LatestRoutedRunFinishedAt { get; set; }
 }

@@ -5,6 +5,7 @@
 
 ## [Unreleased]
 
+- Prometheus получил fail-closed метрики quorum/debt последнего routed backup, UNKNOWN/manual-review copies, backlog доставки и последней успешной изолированной restore-проверки. Новые alarms показывают неоценённую защиту, недостающий обязательный quorum, UNKNOWN и задержку очереди; legacy Telegram alarm больше не срабатывает при destination routing.
 - В журнале backup администратор может открыть состояние защиты и внешних копий конкретного run. Новый read-only endpoint показывает quorum/debt и безопасные статусы без credentials, provider locator или сырого текста ошибки; legacy и некорректные записи не выдаются за защищённые.
 - Изолированный S3 canary теперь умеет запрашивать ключи интерактивно через `-PromptForCredential` без временного файла; старый Windows DPAPI-файл остаётся альтернативой. Подтверждение точного тестового bucket, dry-run по умолчанию и ограничения на удаление сохранены. CI проверяет безопасные preflight-ветки без provider I/O; реальный canary не запускался.
 - Primary route после PUT/VERIFY сбоя уступает fallback при выборе новых jobs, пока свежий успешный PUT и непрерывный ряд точных `matching` VERIFY не покроют `FailbackHealthyForSeconds`; новый сбой или пробел в наблюдениях снова снимает приоритет. Последний unsafe-маркер хранится дольше общего восьмидневного retention, чтобы длительная авария не исчезла по таймеру. Это не перезапускает UNKNOWN/failed PUT и не заменяет реальный provider canary.
