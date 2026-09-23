@@ -646,6 +646,11 @@ public sealed class BackupDestinationHealthOutcome
     public bool Succeeded { get; set; }
     /// <summary>Typed provider error for failed probes, never raw response text.</summary>
     public string? ErrorCode { get; set; }
+    /// <summary>
+    /// Exact VERIFY result: matching/missing/mismatching/inconclusive/invalid. Null denotes a
+    /// legacy observation whose content result was not retained and cannot prove recovery.
+    /// </summary>
+    public string? ProbeOutcome { get; set; }
     /// <summary>UTC time of the probe outcome.</summary>
     public DateTimeOffset ObservedAt { get; set; } = DateTimeOffset.UtcNow;
 }

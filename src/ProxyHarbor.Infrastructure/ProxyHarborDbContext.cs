@@ -655,6 +655,7 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
         backupDestinationHealthOutcome.HasIndex(x => x.ObservedAt);
         backupDestinationHealthOutcome.Property(x => x.Operation).HasMaxLength(16);
         backupDestinationHealthOutcome.Property(x => x.ErrorCode).HasMaxLength(64);
+        backupDestinationHealthOutcome.Property(x => x.ProbeOutcome).HasMaxLength(16);
         backupDestinationHealthOutcome.HasOne<BackupDestination>().WithMany()
             .HasForeignKey(x => x.BackupDestinationId).OnDelete(DeleteBehavior.Cascade);
         backupDestinationHealthOutcome.ToTable(table =>
@@ -663,6 +664,8 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
                 "\"Operation\" = 'verify'");
             table.HasCheckConstraint("CK_BackupDestinationHealthOutcomes_Result",
                 "\"Succeeded\" = (\"ErrorCode\" IS NULL)");
+            table.HasCheckConstraint("CK_BackupDestinationHealthOutcomes_ProbeOutcome",
+                "\"ProbeOutcome\" IS NULL OR \"ProbeOutcome\" IN ('matching', 'missing', 'mismatching', 'inconclusive', 'invalid')");
         });
 
         var backupRestoreVerification = builder.Entity<BackupRestoreVerification>();

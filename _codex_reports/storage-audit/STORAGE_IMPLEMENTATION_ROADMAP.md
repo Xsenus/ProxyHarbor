@@ -187,7 +187,7 @@ Purpose: fulfill owner requirement without false success. Covers REQ-004–006/0
 
 #### TASK-033 — Operation-scoped health, budgets and automatic fallback
 
-- Status: `IN PROGRESS / partial checkpoint merged`; Codex. PR #270 (`f39f7b9`) merged with green CI; verified-copy READ is wired into materialization and delivery via PR #281. PR #283 persists recent VERIFY outcomes across replicas. Pending jobs of one run now claim in pool-route priority order (local checkpoint EVID-074), but parallel replicas may begin different routes at once. `FailbackHealthyForSeconds` is stored but not applied to route selection; repeated real provider-health proof and failback hysteresis are not proven.
+- Status: `IN PROGRESS / partial checkpoint merged`; Codex. PR #270 (`f39f7b9`) merged with green CI; verified-copy READ is wired into materialization and delivery via PR #281. PR #283 persists recent VERIFY outcomes across replicas. Pending jobs of one run claim in pool-route priority order (PR #286), but parallel replicas may begin different routes at once. Exact matching/missing/mismatching probe results are under local migration validation (EVID-075); pre-migration conclusive records remain unclassified. `FailbackHealthyForSeconds` is stored but not applied to route selection; repeated real provider-health proof and failback hysteresis are not proven.
 - Changes: health/breaker per destination+operation, short-lived local state backed by durable recent outcomes; planner enforces overall deadline and allowlisted graph. Optional storage does not fail global readiness.
 - Tests: A down/B healthy; A slow leaves budget for B; auth/quota/capability; all down; cross-pool route rejected; breaker half-open; multi-instance eventual consistency.
 - Numeric budgets: begin conservative test defaults, measure canary, label production values `PROPOSED` until owner accepts.
@@ -418,7 +418,9 @@ No dates are invented. STG-00–05 may proceed without these decisions using iso
 
 Current merged checkpoint: `main@f2c1e46` contains STG-00–02 and TASK-020–032 with green CI. TASK-033/034 and STG-04 remain partial. PR #281–284 added remote-source delivery, missing-route catch-up, durable VERIFY outcomes, a dry-run-tested HOSTKEY NL canary, and bounded pre-PUT rearm; PR #285 updated the evidence. `FailbackHealthyForSeconds` is not enforced; no real-provider S3 canary, independent key escrow, isolated real-provider restore, historical backfill, production rollout or two observed scheduled cycles have been proven. Routing remains disabled by default. Next local implementation: design/test a durable healthy-window failback eligibility gate without treating a completed copy or passive wait as fresh provider health. Next external gate: authorized canary in the isolated test bucket after a locally protected credential file is available.
 
-Local checkpoint after `main@f2c1e46`: pending delivery claims now respect preferred route order within a run, with one PostgreSQL regression test and full 1599/1599 local PostgreSQL-backed backend suite green (EVID-074). This is scheduling order only, not automatic failback or serialized cross-replica delivery; it must pass PR CI before being counted as merged.
+Merged checkpoint `main@aa3d687`: PR #286 passed CI and put pool-route priority before job creation time for pending claims of one run (EVID-074). This is scheduling order only, not automatic failback or serialized cross-replica delivery.
+
+Local checkpoint EVID-075: nullable exact VERIFY probe result and additive migration are under validation. Next local dependency is a bounded, durable probe cadence plus a failback eligibility gate requiring fresh matching evidence and successful PUT after the last destination failure; neither may infer health from `missing`, `mismatching`, a legacy null result, or elapsed time alone. Real-provider canary and isolated restore remain external gates.
 
 ## 16. Регламент продолжения в новой сессии
 

@@ -554,13 +554,15 @@ public sealed class BackupDeliveryWorkerIntegrationTests
     }
 
     [Theory]
-    [InlineData(BackupDestinationProbeOutcome.Matching, "completed", "verified")]
-    [InlineData(BackupDestinationProbeOutcome.Missing, "manual_review", "manual_review")]
-    [InlineData(BackupDestinationProbeOutcome.Mismatching, "failed", "quarantined")]
-    [InlineData(BackupDestinationProbeOutcome.Inconclusive, "reconciling", "unknown")]
-    [InlineData(BackupDestinationProbeOutcome.Unsupported, "manual_review", "manual_review")]
+    [InlineData(BackupDestinationProbeOutcome.Matching, true, "completed", "verified")]
+    [InlineData(BackupDestinationProbeOutcome.Matching, false, "manual_review", "manual_review")]
+    [InlineData(BackupDestinationProbeOutcome.Missing, true, "manual_review", "manual_review")]
+    [InlineData(BackupDestinationProbeOutcome.Mismatching, true, "failed", "quarantined")]
+    [InlineData(BackupDestinationProbeOutcome.Inconclusive, true, "reconciling", "unknown")]
+    [InlineData(BackupDestinationProbeOutcome.Unsupported, true, "manual_review", "manual_review")]
     public async Task UnknownOutcomeProbeNeverRepeatsPut(
-        BackupDestinationProbeOutcome outcome, string expectedJobState, string expectedCopyState)
+        BackupDestinationProbeOutcome outcome, bool includeLocator,
+        string expectedJobState, string expectedCopyState)
     {
         var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
             .UseInMemoryDatabase($"delivery-probe-{Guid.NewGuid():N}")
@@ -585,7 +587,7 @@ public sealed class BackupDeliveryWorkerIntegrationTests
             await seed.SaveChangesAsync();
             jobId = job.Id;
         }
-        var adapter = new ProbingAdapter(outcome);
+        var adapter = new ProbingAdapter(outcome, includeLocator: includeLocator);
         var processor = Processor(
             factory, Registry(adapter, new SuccessfulAdapter("telegram")), Path.GetTempPath());
 
@@ -599,9 +601,9 @@ public sealed class BackupDeliveryWorkerIntegrationTests
         Assert.Null(saved.LeaseId);
         Assert.Equal(1, adapter.ProbeCalls);
         Assert.Equal(0, adapter.PutCalls);
-        Assert.Equal(outcome == BackupDestinationProbeOutcome.Matching,
+        Assert.Equal(expectedCopyState == "verified",
             saved.BackupCopy.BackupRun.SentToObjectStorage);
-        Assert.Equal(outcome == BackupDestinationProbeOutcome.Matching,
+        Assert.Equal(expectedCopyState == "verified",
             saved.BackupCopy.VerifiedAt.HasValue);
         var healthOutcomes = await verify.BackupDestinationHealthOutcomes.ToArrayAsync();
         if (outcome == BackupDestinationProbeOutcome.Unsupported)
@@ -614,6 +616,8 @@ public sealed class BackupDeliveryWorkerIntegrationTests
             Assert.Equal(outcome != BackupDestinationProbeOutcome.Inconclusive, healthOutcome.Succeeded);
             Assert.Equal(outcome == BackupDestinationProbeOutcome.Inconclusive
                 ? BackupDestinationErrorCode.Unavailable.ToString() : null, healthOutcome.ErrorCode);
+            Assert.Equal(outcome == BackupDestinationProbeOutcome.Matching && !includeLocator
+                ? "invalid" : outcome.ToString().ToLowerInvariant(), healthOutcome.ProbeOutcome);
         }
         if (outcome == BackupDestinationProbeOutcome.Inconclusive)
             Assert.True(saved.NotBefore > DateTimeOffset.UtcNow);
@@ -699,6 +703,7 @@ public sealed class BackupDeliveryWorkerIntegrationTests
         var outcome = Assert.Single(await replica.BackupDestinationHealthOutcomes.ToArrayAsync());
         Assert.False(outcome.Succeeded);
         Assert.Equal(BackupDestinationErrorCode.AuthenticationFailed.ToString(), outcome.ErrorCode);
+        Assert.Equal("inconclusive", outcome.ProbeOutcome);
         var gate = new BackupDestinationHealth();
         Assert.False((await gate.TryEnterAsync(
             replica, destinationId, BackupDestinationOperation.Verify, CancellationToken.None)).Allowed);
@@ -1513,7 +1518,8 @@ public sealed class BackupDeliveryWorkerIntegrationTests
 
     private sealed class ProbingAdapter(
         BackupDestinationProbeOutcome outcome,
-        BackupDestinationErrorCode? failureCode = null) : IBackupDestinationAdapter
+        BackupDestinationErrorCode? failureCode = null,
+        bool includeLocator = true) : IBackupDestinationAdapter
     {
         public string Kind => "s3";
         public BackupDestinationCapabilities Capabilities { get; } = new(
@@ -1540,7 +1546,8 @@ public sealed class BackupDeliveryWorkerIntegrationTests
                     "synthetic probe failure");
             return Task.FromResult(new BackupDestinationProbeResult(
                 outcome,
-                outcome == BackupDestinationProbeOutcome.Matching ? $"safe/{fileName}" : null,
+                outcome == BackupDestinationProbeOutcome.Matching && includeLocator
+                    ? $"safe/{fileName}" : null,
                 null,
                 outcome == BackupDestinationProbeOutcome.Matching ? expectedSha256 : null));
         }
