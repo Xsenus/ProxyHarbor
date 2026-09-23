@@ -40,15 +40,58 @@ public sealed class BackupDeliveryProcessor(
             FROM "BackupDeliveryJobs" AS job
             JOIN "BackupCopies" AS copy ON copy."Id" = job."BackupCopyId"
             JOIN "BackupRuns" AS run ON run."Id" = copy."BackupRunId"
+            JOIN "BackupPools" AS pool ON pool."Id" = run."BackupPoolId"
             LEFT JOIN "BackupPoolDestinations" AS route
               ON route."BackupPoolId" = run."BackupPoolId"
               AND route."BackupDestinationId" = copy."BackupDestinationId"
             LEFT JOIN "BackupDestinations" AS destination
               ON destination."Id" = copy."BackupDestinationId"
+            LEFT JOIN LATERAL (
+              SELECT MAX(outcome."ObservedAt") AS unsafe_at
+              FROM "BackupDestinationHealthOutcomes" AS outcome
+              WHERE outcome."BackupDestinationId" = destination."Id"
+                AND ((outcome."Operation" = 'put' AND NOT outcome."Succeeded")
+                  OR (outcome."Operation" = 'verify'
+                    AND (NOT outcome."Succeeded"
+                      OR outcome."ProbeOutcome" IS DISTINCT FROM 'matching')))
+            ) AS recovery_failure ON TRUE
+            LEFT JOIN LATERAL (
+              SELECT MIN(outcome."ObservedAt") AS first_put_at
+              FROM "BackupDestinationHealthOutcomes" AS outcome
+              WHERE outcome."BackupDestinationId" = destination."Id"
+                AND outcome."Operation" = 'put' AND outcome."Succeeded"
+                AND outcome."ObservedAt" > recovery_failure.unsafe_at
+            ) AS recovery_put ON TRUE
+            LEFT JOIN LATERAL (
+              SELECT MIN(probe.observed_at) AS first_match_at,
+                     MAX(probe.observed_at) AS last_match_at,
+                     MAX(probe.observed_at - probe.previous_at) AS longest_gap
+              FROM (
+                SELECT outcome."ObservedAt" AS observed_at,
+                       LAG(outcome."ObservedAt") OVER
+                         (ORDER BY outcome."ObservedAt", outcome."Id") AS previous_at
+                FROM "BackupDestinationHealthOutcomes" AS outcome
+                WHERE outcome."BackupDestinationId" = destination."Id"
+                  AND outcome."Operation" = 'verify'
+                  AND outcome."Succeeded"
+                  AND outcome."ProbeOutcome" = 'matching'
+                  AND outcome."ObservedAt" >= recovery_put.first_put_at
+              ) AS probe
+            ) AS recovery_verify ON TRUE
             WHERE job."State" = 'pending' AND job."NotBefore" <= @now
             ORDER BY
                 CASE WHEN job."CreatedAt" <= @starvation THEN 0 ELSE 1 END,
                 run."StartedAt" DESC,
+                CASE WHEN route."Role" = 'primary'
+                  AND recovery_failure.unsafe_at IS NOT NULL
+                  AND (recovery_put.first_put_at IS NULL
+                    OR recovery_verify.first_match_at IS NULL
+                    OR recovery_verify.first_match_at
+                      + pool."FailbackHealthyForSeconds" * INTERVAL '1 second' > @now
+                    OR recovery_verify.last_match_at < @fresh_after
+                    OR COALESCE(recovery_verify.longest_gap, INTERVAL '0')
+                      > INTERVAL '6 minutes')
+                  THEN 1 ELSE 0 END,
                 COALESCE(route."Priority", 2147483647),
                 COALESCE(destination."Priority", 2147483647),
                 job."CreatedAt",
@@ -58,6 +101,7 @@ public sealed class BackupDeliveryProcessor(
             """, connection, (NpgsqlTransaction)transaction.GetDbTransaction());
         command.Parameters.AddWithValue("now", now);
         command.Parameters.AddWithValue("starvation", now.AddHours(-1));
+        command.Parameters.AddWithValue("fresh_after", now.AddMinutes(-6));
         var scalar = await command.ExecuteScalarAsync(token);
         if (scalar is not Guid jobId)
         {

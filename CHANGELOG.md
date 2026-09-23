@@ -5,6 +5,7 @@
 
 ## [Unreleased]
 
+- Primary route после PUT/VERIFY сбоя уступает fallback при выборе новых jobs, пока свежий успешный PUT и непрерывный ряд точных `matching` VERIFY не покроют `FailbackHealthyForSeconds`; новый сбой или пробел в наблюдениях снова снимает приоритет. Последний unsafe-маркер хранится дольше общего восьмидневного retention, чтобы длительная авария не исчезла по таймеру. Это не перезапускает UNKNOWN/failed PUT и не заменяет реальный provider canary.
 - Каждый начатый destination PUT теперь оставляет отдельный типизированный durable health outcome под lease fencing, включая неудачный retry и UNKNOWN; последующий успех job не стирает историю сбоя. PUT breaker предпочитает эти записи legacy job-состоянию. Хранение PUT/VERIFY outcomes увеличено до восьми суток для будущего семидневного failback window; сам failback остаётся выключенным.
 - При включённом destination routing отдельный worker ограниченно проверяет существующую verified S3-копию через read-only HEAD: не более одного probe в минуту на replica и не чаще одного за пять минут на destination. `missing` снимает verified-статус, `mismatching` карантинит копию, inconclusive сохраняет typed failure; PUT/DELETE не выполняются. Это ещё не доказывает право автоматического failback или целостность полного ciphertext.
 - S3 VERIFY probe больше не теряет типизированную причину inconclusive ответа: authentication, authorization, rate limit и timeout проходят через adapter в durable health history и operation-scoped breaker без сырого текста provider. Это не включает автоматический failback.

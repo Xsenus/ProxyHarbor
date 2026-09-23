@@ -840,6 +840,143 @@ public sealed class BackupDeliveryWorkerIntegrationTests
 
     [Fact]
     [Trait("Category", "PostgresIntegration")]
+    public async Task PrimaryFailbackRequiresPutAndUnbrokenMatchingProbeWindow()
+    {
+        var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
+        if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
+
+        var schema = $"proxyharbor_failback_{Guid.NewGuid():N}";
+        var builder = new NpgsqlConnectionStringBuilder(baseConnectionString) { SearchPath = schema };
+        await using var admin = new NpgsqlConnection(baseConnectionString);
+        await admin.OpenAsync();
+        await using (var create = new NpgsqlCommand($"CREATE SCHEMA \"{schema}\"", admin))
+            await create.ExecuteNonQueryAsync();
+        try
+        {
+            var factory = await CreateFactoryAsync(builder.ConnectionString);
+            var processor = Processor(factory,
+                Registry(new SuccessfulAdapter("s3"), new SuccessfulAdapter("telegram")),
+                Path.GetTempPath());
+            var now = DateTimeOffset.UtcNow;
+            Guid primaryJobId;
+            Guid fallbackJobId;
+            Guid primaryId;
+            await using (var seed = await factory.CreateDbContextAsync())
+            {
+                var pool = Pool();
+                pool.FailbackHealthyForSeconds = 900;
+                var run = Run(pool.Id, new string('a', 64), "failback.phbackup");
+                var primary = Destination("primary", "domain-a", 10);
+                var fallback = Destination("fallback", "domain-b", 20);
+                primaryId = primary.Id;
+                var primaryCopy = Copy(run.Id, primary.Id, run.ContentSha256!);
+                var fallbackCopy = Copy(run.Id, fallback.Id, run.ContentSha256!);
+                var primaryJob = Job(primaryCopy.Id, "failback-primary");
+                var fallbackJob = Job(fallbackCopy.Id, "failback-secondary");
+                primaryJobId = primaryJob.Id;
+                fallbackJobId = fallbackJob.Id;
+                var fallbackRoute = Route(pool.Id, fallback.Id, 20);
+                fallbackRoute.Role = "fallback";
+                seed.AddRange(pool, run, primary, fallback,
+                    Route(pool.Id, primary.Id, 10), fallbackRoute,
+                    primaryCopy, fallbackCopy, primaryJob, fallbackJob,
+                    new BackupDestinationHealthOutcome
+                    {
+                        BackupDestinationId = primaryId,
+                        Operation = "put",
+                        Succeeded = false,
+                        ErrorCode = BackupDestinationErrorCode.Unavailable.ToString(),
+                        ObservedAt = now.AddMinutes(-30)
+                    });
+                await seed.SaveChangesAsync();
+            }
+
+            async Task ResetLeasesAsync()
+            {
+                await using var reset = await factory.CreateDbContextAsync();
+                var jobs = await reset.BackupDeliveryJobs.ToArrayAsync();
+                foreach (var job in jobs)
+                {
+                    job.State = "pending";
+                    job.LeaseId = null;
+                    job.LeaseUntil = null;
+                }
+                await reset.SaveChangesAsync();
+            }
+
+            Assert.Equal(fallbackJobId,
+                (await processor.TryClaimAsync(CancellationToken.None))?.JobId);
+            await ResetLeasesAsync();
+            await using (var evidence = await factory.CreateDbContextAsync())
+            {
+                evidence.BackupDestinationHealthOutcomes.Add(new BackupDestinationHealthOutcome
+                {
+                    BackupDestinationId = primaryId,
+                    Operation = "put",
+                    Succeeded = true,
+                    ObservedAt = now.AddMinutes(-20)
+                });
+                await evidence.SaveChangesAsync();
+            }
+            Assert.Equal(fallbackJobId,
+                (await processor.TryClaimAsync(CancellationToken.None))?.JobId);
+            await ResetLeasesAsync();
+            await using (var evidence = await factory.CreateDbContextAsync())
+            {
+                foreach (var minutesAgo in new[] { 20, 1 })
+                    evidence.BackupDestinationHealthOutcomes.Add(new BackupDestinationHealthOutcome
+                    {
+                        BackupDestinationId = primaryId,
+                        Operation = "verify",
+                        ProbeOutcome = "matching",
+                        Succeeded = true,
+                        ObservedAt = now.AddMinutes(-minutesAgo)
+                    });
+                await evidence.SaveChangesAsync();
+            }
+            Assert.Equal(fallbackJobId,
+                (await processor.TryClaimAsync(CancellationToken.None))?.JobId);
+            await ResetLeasesAsync();
+            await using (var evidence = await factory.CreateDbContextAsync())
+            {
+                foreach (var minutesAgo in new[] { 15, 10, 5 })
+                    evidence.BackupDestinationHealthOutcomes.Add(new BackupDestinationHealthOutcome
+                    {
+                        BackupDestinationId = primaryId,
+                        Operation = "verify",
+                        ProbeOutcome = "matching",
+                        Succeeded = true,
+                        ObservedAt = now.AddMinutes(-minutesAgo)
+                    });
+                await evidence.SaveChangesAsync();
+            }
+            Assert.Equal(primaryJobId,
+                (await processor.TryClaimAsync(CancellationToken.None))?.JobId);
+            await ResetLeasesAsync();
+            await using (var evidence = await factory.CreateDbContextAsync())
+            {
+                evidence.BackupDestinationHealthOutcomes.Add(new BackupDestinationHealthOutcome
+                {
+                    BackupDestinationId = primaryId,
+                    Operation = "verify",
+                    ProbeOutcome = "mismatching",
+                    Succeeded = true,
+                    ObservedAt = DateTimeOffset.UtcNow.AddSeconds(-10)
+                });
+                await evidence.SaveChangesAsync();
+            }
+            Assert.Equal(fallbackJobId,
+                (await processor.TryClaimAsync(CancellationToken.None))?.JobId);
+        }
+        finally
+        {
+            await using var drop = new NpgsqlCommand($"DROP SCHEMA IF EXISTS \"{schema}\" CASCADE", admin);
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
     public async Task TwoWorkersLeaseOnceAndExpiredLeaseBecomesUnknown()
     {
         var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
