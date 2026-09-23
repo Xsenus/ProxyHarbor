@@ -12,6 +12,36 @@ namespace ProxyHarbor.Tests;
 public sealed class MetricsControllerTests
 {
     [Fact]
+    public async Task DestinationMetricsAllowlistKindAndNeverRenderProviderSettings()
+    {
+        var factory = new TestDbFactory(new DbContextOptionsBuilder<ProxyHarborDbContext>()
+            .UseInMemoryDatabase($"metrics-destination-labels-{Guid.NewGuid():N}").Options);
+        var destination = new BackupDestination
+        {
+            Name = "private-account-name",
+            Kind = "bad-kind\"} secret-label",
+            SettingsJson = "private-bucket-setting",
+            ProtectedSecrets = "protected-secret-ciphertext"
+        };
+        await using (var seed = await factory.CreateDbContextAsync())
+        {
+            seed.BackupDestinations.Add(destination);
+            await seed.SaveChangesAsync();
+        }
+
+        var controller = new MetricsController(factory, Options.Create(new CollectorOptions()),
+            Options.Create(new BackupOptions()), new ProbeControlHealth());
+        var metrics = Assert.IsType<ContentResult>(await controller.Get(CancellationToken.None)).Content!;
+
+        Assert.Contains($"proxyharbor_backup_destination_put_failed_last_1h{{destination_id=\"{destination.Id:N}\",kind=\"unknown\"}} 0",
+            metrics, StringComparison.Ordinal);
+        Assert.DoesNotContain("private-account-name", metrics, StringComparison.Ordinal);
+        Assert.DoesNotContain("private-bucket-setting", metrics, StringComparison.Ordinal);
+        Assert.DoesNotContain("protected-secret-ciphertext", metrics, StringComparison.Ordinal);
+        Assert.DoesNotContain("secret-label", metrics, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task BackupProtectionMetricsUseIndependentVerifiedCopiesAndBoundedStates()
     {
         var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
@@ -196,6 +226,14 @@ public sealed class MetricsControllerTests
         Assert.Contains("proxyharbor_backup_provider_verify_mismatching_last_1h 1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_backup_provider_verify_inconclusive_last_1h 1", metrics,
             StringComparison.Ordinal);
+        Assert.Contains($"proxyharbor_backup_destination_put_failed_last_1h{{destination_id=\"{fallback.Id:N}\",kind=\"s3\"}} 1",
+            metrics, StringComparison.Ordinal);
+        Assert.Contains($"proxyharbor_backup_destination_verify_unhealthy_last_1h{{destination_id=\"{fallback.Id:N}\",kind=\"s3\"}} 2",
+            metrics, StringComparison.Ordinal);
+        Assert.Contains($"proxyharbor_backup_destination_verify_unhealthy_last_1h{{destination_id=\"{sameDomain.Id:N}\",kind=\"s3\"}} 1",
+            metrics, StringComparison.Ordinal);
+        Assert.Contains($"proxyharbor_backup_destination_put_failed_last_1h{{destination_id=\"{primary.Id:N}\",kind=\"s3\"}} 0",
+            metrics, StringComparison.Ordinal);
         Assert.DoesNotContain("opaque-private-object-key", metrics, StringComparison.Ordinal);
         Assert.DoesNotContain("second-object-in-same-account", metrics, StringComparison.Ordinal);
         Assert.DoesNotContain("account-a", metrics, StringComparison.Ordinal);

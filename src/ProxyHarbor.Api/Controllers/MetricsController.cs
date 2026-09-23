@@ -442,6 +442,12 @@ public sealed class MetricsController(
             protectionMetrics.ProviderVerifyMismatchingLastHour);
         Gauge(output, "proxyharbor_backup_provider_verify_inconclusive_last_1h", "Inconclusive, invalid or legacy provider VERIFY outcomes during the last hour.",
             protectionMetrics.ProviderVerifyInconclusiveLastHour);
+        DestinationGauge(output, "proxyharbor_backup_destination_put_failed_last_1h",
+            "Failed PUT outcomes during the last hour by configured destination.",
+            protectionMetrics.Destinations, destination => destination.PutFailedLastHour);
+        DestinationGauge(output, "proxyharbor_backup_destination_verify_unhealthy_last_1h",
+            "Missing, mismatching or inconclusive VERIFY outcomes during the last hour by configured destination.",
+            protectionMetrics.Destinations, destination => destination.VerifyUnhealthyLastHour);
         var content = output.ToString();
         // Prometheus text exposition требует LF. AppendLine использует CRLF на Windows,
         // поэтому локальный promtool/Prometheus иначе отклоняет TYPE как `counter\r`.
@@ -492,6 +498,20 @@ public sealed class MetricsController(
                     (outcome.ProbeOutcome == null || outcome.ProbeOutcome == "inconclusive" ||
                         outcome.ProbeOutcome == "invalid"))
             }).SingleOrDefaultAsync(token);
+        var destinations = await db.BackupDestinations.AsNoTracking()
+            .OrderBy(destination => destination.Id)
+            .Select(destination => new { destination.Id, destination.Kind })
+            .ToArrayAsync(token);
+        var destinationOutcomes = await db.BackupDestinationHealthOutcomes.AsNoTracking()
+            .Where(outcome => outcome.ObservedAt >= now.AddHours(-1))
+            .GroupBy(outcome => outcome.BackupDestinationId)
+            .Select(group => new
+            {
+                Id = group.Key,
+                PutFailed = group.Count(outcome => outcome.Operation == "put" && !outcome.Succeeded),
+                VerifyUnhealthy = group.Count(outcome => outcome.Operation == "verify" &&
+                    (!outcome.Succeeded || outcome.ProbeOutcome != "matching"))
+            }).ToDictionaryAsync(group => group.Id, token);
         var result = new BackupProtectionOperationalMetrics
         {
             LatestRunExists = runMetrics.LatestRoutedRunId.HasValue,
@@ -507,7 +527,14 @@ public sealed class MetricsController(
             ProviderVerifyMatchingLastHour = providerOutcomes?.VerifyMatching ?? 0,
             ProviderVerifyMissingLastHour = providerOutcomes?.VerifyMissing ?? 0,
             ProviderVerifyMismatchingLastHour = providerOutcomes?.VerifyMismatching ?? 0,
-            ProviderVerifyInconclusiveLastHour = providerOutcomes?.VerifyInconclusive ?? 0
+            ProviderVerifyInconclusiveLastHour = providerOutcomes?.VerifyInconclusive ?? 0,
+            Destinations = destinations.Select(destination =>
+            {
+                destinationOutcomes.TryGetValue(destination.Id, out var outcomes);
+                return new BackupDestinationOperationalMetrics(destination.Id,
+                    destination.Kind is "s3" or "telegram" ? destination.Kind : "unknown",
+                    outcomes?.PutFailed ?? 0, outcomes?.VerifyUnhealthy ?? 0);
+            }).ToArray()
         };
         if (runMetrics.LatestRoutedRunId is not { } runId || backupProtectionEvaluator is null ||
             runMetrics.LatestRoutedRunPoolId is not { } poolId ||
@@ -625,7 +652,11 @@ public sealed class MetricsController(
         public int ProviderVerifyMissingLastHour { get; init; }
         public int ProviderVerifyMismatchingLastHour { get; init; }
         public int ProviderVerifyInconclusiveLastHour { get; init; }
+        public BackupDestinationOperationalMetrics[] Destinations { get; init; } = [];
     }
+
+    private sealed record BackupDestinationOperationalMetrics(
+        Guid Id, string Kind, int PutFailedLastHour, int VerifyUnhealthyLastHour);
 
     /// <summary>
     /// Читает active/latest/successful состояния collection и backup run'ов одним PostgreSQL command.
@@ -760,6 +791,19 @@ public sealed class MetricsController(
         output.Append("# HELP ").Append(name).Append(' ').AppendLine(help);
         output.Append("# TYPE ").Append(name).AppendLine(" gauge");
         output.Append(name).Append(' ').AppendLine(value.ToString(CultureInfo.InvariantCulture));
+    }
+
+    private static void DestinationGauge(
+        StringBuilder output, string name, string help,
+        IReadOnlyList<BackupDestinationOperationalMetrics> destinations,
+        Func<BackupDestinationOperationalMetrics, int> value)
+    {
+        output.Append("# HELP ").Append(name).Append(' ').AppendLine(help);
+        output.Append("# TYPE ").Append(name).AppendLine(" gauge");
+        foreach (var destination in destinations)
+            output.Append(name).Append("{destination_id=\"").Append(destination.Id.ToString("N"))
+                .Append("\",kind=\"").Append(destination.Kind).Append("\"} ")
+                .AppendLine(value(destination).ToString(CultureInfo.InvariantCulture));
     }
 
     private static void GaugeDouble(StringBuilder output, string name, string help, double value)
