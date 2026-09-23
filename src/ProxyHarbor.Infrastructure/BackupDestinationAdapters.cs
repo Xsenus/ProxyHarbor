@@ -422,7 +422,7 @@ public sealed class S3BackupDestinationAdapter : IBackupDestinationAdapter
         if (result.SizeBytes != expectedSize ||
             !string.Equals(result.Sha256, expectedSha256, StringComparison.Ordinal) ||
             !string.Equals(Path.GetFullPath(result.Path), Path.GetFullPath(finalPath),
-                StringComparison.OrdinalIgnoreCase))
+                OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
             throw Failure(BackupDestinationErrorCode.IntegrityMismatch);
         return new BackupDestinationMaterializationResult(
             result.Path,
