@@ -260,12 +260,9 @@ public sealed class BackupDeliveryWorkerIntegrationTests
                 await seed.SaveChangesAsync();
                 jobId = job.Id;
             }
+            var ambiguous = new AmbiguousThenMatchingAdapter();
             var processor = Processor(
-                factory,
-                Registry(
-                    new FailingAdapter("s3", BackupDestinationFailureDisposition.UnknownOutcome),
-                    new SuccessfulAdapter("telegram")),
-                directory);
+                factory, Registry(ambiguous, new SuccessfulAdapter("telegram")), directory);
 
             await processor.ProcessAsync(new BackupDeliveryLease(jobId, leaseId), CancellationToken.None);
 
@@ -275,8 +272,117 @@ public sealed class BackupDeliveryWorkerIntegrationTests
             Assert.Equal("unknown", persistedJob.BackupCopy.State);
             Assert.NotNull(persistedJob.BackupCopy.UnknownSince);
             Assert.Null(persistedJob.LeaseId);
+            var reconcileLease = Guid.NewGuid();
+            persistedJob.State = "processing";
+            persistedJob.LeaseId = reconcileLease;
+            persistedJob.LeaseUntil = DateTimeOffset.UtcNow.AddMinutes(1);
+            await verify.SaveChangesAsync();
+
+            await processor.ProcessReconciliationAsync(
+                new BackupDeliveryLease(jobId, reconcileLease), CancellationToken.None);
+            await using var resolvedDb = await factory.CreateDbContextAsync();
+            var resolved = await resolvedDb.BackupDeliveryJobs.Include(item => item.BackupCopy).SingleAsync();
+            Assert.Equal("completed", resolved.State);
+            Assert.Equal("verified", resolved.BackupCopy.State);
+            Assert.Equal(1, ambiguous.PutCalls);
+            Assert.Equal(1, ambiguous.ProbeCalls);
         }
         finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    [Theory]
+    [InlineData(BackupDestinationProbeOutcome.Matching, "completed", "verified")]
+    [InlineData(BackupDestinationProbeOutcome.Missing, "manual_review", "manual_review")]
+    [InlineData(BackupDestinationProbeOutcome.Mismatching, "failed", "quarantined")]
+    [InlineData(BackupDestinationProbeOutcome.Inconclusive, "reconciling", "unknown")]
+    [InlineData(BackupDestinationProbeOutcome.Unsupported, "manual_review", "manual_review")]
+    public async Task UnknownOutcomeProbeNeverRepeatsPut(
+        BackupDestinationProbeOutcome outcome, string expectedJobState, string expectedCopyState)
+    {
+        var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+            .UseInMemoryDatabase($"delivery-probe-{Guid.NewGuid():N}")
+            .Options;
+        var factory = new TestDbFactory(options);
+        var leaseId = Guid.NewGuid();
+        Guid jobId;
+        await using (var seed = await factory.CreateDbContextAsync())
+        {
+            var pool = Pool();
+            var run = Run(pool.Id, new string('a', 64), "probe.phbackup");
+            var destination = Destination("probe-s3", "domain-a", 10);
+            var copy = Copy(run.Id, destination.Id, run.ContentSha256!);
+            copy.State = "unknown";
+            copy.UnknownSince = DateTimeOffset.UtcNow.AddMinutes(-1);
+            var job = Job(copy.Id, "probe-job");
+            job.State = "processing";
+            job.Attempt = 1;
+            job.LeaseId = leaseId;
+            job.LeaseUntil = DateTimeOffset.UtcNow.AddMinutes(1);
+            seed.AddRange(pool, run, destination, Route(pool.Id, destination.Id, 10), copy, job);
+            await seed.SaveChangesAsync();
+            jobId = job.Id;
+        }
+        var adapter = new ProbingAdapter(outcome);
+        var processor = Processor(
+            factory, Registry(adapter, new SuccessfulAdapter("telegram")), Path.GetTempPath());
+
+        await processor.ProcessReconciliationAsync(new BackupDeliveryLease(jobId, leaseId), CancellationToken.None);
+
+        await using var verify = await factory.CreateDbContextAsync();
+        var saved = await verify.BackupDeliveryJobs
+            .Include(item => item.BackupCopy).ThenInclude(copy => copy.BackupRun).SingleAsync();
+        Assert.Equal(expectedJobState, saved.State);
+        Assert.Equal(expectedCopyState, saved.BackupCopy.State);
+        Assert.Null(saved.LeaseId);
+        Assert.Equal(1, adapter.ProbeCalls);
+        Assert.Equal(0, adapter.PutCalls);
+        Assert.Equal(outcome == BackupDestinationProbeOutcome.Matching,
+            saved.BackupCopy.BackupRun.SentToObjectStorage);
+        Assert.Equal(outcome == BackupDestinationProbeOutcome.Matching,
+            saved.BackupCopy.VerifiedAt.HasValue);
+        if (outcome == BackupDestinationProbeOutcome.Inconclusive)
+            Assert.True(saved.NotBefore > DateTimeOffset.UtcNow);
+    }
+
+    [Fact]
+    public async Task InconclusiveProbeAfterWindowRequiresManualReview()
+    {
+        var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+            .UseInMemoryDatabase($"delivery-probe-expired-{Guid.NewGuid():N}")
+            .Options;
+        var factory = new TestDbFactory(options);
+        var leaseId = Guid.NewGuid();
+        Guid jobId;
+        await using (var seed = await factory.CreateDbContextAsync())
+        {
+            var pool = Pool();
+            var run = Run(pool.Id, new string('a', 64), "expired.phbackup");
+            var destination = Destination("expired-s3", "domain-a", 10);
+            var copy = Copy(run.Id, destination.Id, run.ContentSha256!);
+            copy.State = "unknown";
+            copy.UnknownSince = DateTimeOffset.UtcNow.AddHours(-2);
+            var job = Job(copy.Id, "expired-probe-job");
+            job.State = "processing";
+            job.Attempt = 1;
+            job.LeaseId = leaseId;
+            job.LeaseUntil = DateTimeOffset.UtcNow.AddMinutes(1);
+            seed.AddRange(pool, run, destination, Route(pool.Id, destination.Id, 10), copy, job);
+            await seed.SaveChangesAsync();
+            jobId = job.Id;
+        }
+        var adapter = new ProbingAdapter(BackupDestinationProbeOutcome.Inconclusive);
+        var processor = Processor(
+            factory, Registry(adapter, new SuccessfulAdapter("telegram")), Path.GetTempPath());
+
+        await processor.ProcessReconciliationAsync(new BackupDeliveryLease(jobId, leaseId), CancellationToken.None);
+
+        await using var verify = await factory.CreateDbContextAsync();
+        var saved = await verify.BackupDeliveryJobs.Include(item => item.BackupCopy).SingleAsync();
+        Assert.Equal("manual_review", saved.State);
+        Assert.Equal("manual_review", saved.BackupCopy.State);
+        Assert.NotNull(saved.BackupCopy.UnknownSince);
+        Assert.Null(saved.BackupCopy.VerifiedAt);
+        Assert.Equal(0, adapter.PutCalls);
     }
 
     [Fact]
@@ -319,6 +425,28 @@ public sealed class BackupDeliveryWorkerIntegrationTests
             Assert.Null(job.LeaseId);
             Assert.Equal("unknown", job.BackupCopy.State);
             Assert.NotNull(job.BackupCopy.UnknownSince);
+
+            await verify.BackupDeliveryJobs.Where(item => item.Id == lease.JobId)
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(item => item.NotBefore, DateTimeOffset.UtcNow.AddSeconds(-1)));
+            var probing = new ProbingAdapter(BackupDestinationProbeOutcome.Matching);
+            var reconcileProcessor = Processor(
+                factory, Registry(probing, new SuccessfulAdapter("telegram")), Path.GetTempPath());
+            var reconciliationClaims = await Task.WhenAll(
+                reconcileProcessor.TryClaimReconciliationAsync(CancellationToken.None),
+                reconcileProcessor.TryClaimReconciliationAsync(CancellationToken.None));
+            var reconciliation = Assert.Single(reconciliationClaims, item => item is not null)!;
+            _ = Assert.Single(reconciliationClaims, item => item is null);
+            await reconcileProcessor.ProcessReconciliationAsync(reconciliation, CancellationToken.None);
+
+            await using var confirmed = await factory.CreateDbContextAsync();
+            var resolved = await confirmed.BackupDeliveryJobs
+                .Include(item => item.BackupCopy).SingleAsync();
+            Assert.Equal("completed", resolved.State);
+            Assert.Equal("verified", resolved.BackupCopy.State);
+            Assert.Null(resolved.BackupCopy.UnknownSince);
+            Assert.Equal(1, probing.ProbeCalls);
+            Assert.Equal(0, probing.PutCalls);
         }
         finally
         {
@@ -574,5 +702,64 @@ public sealed class BackupDeliveryWorkerIntegrationTests
                 new BackupDestinationOperationException(
                     new BackupDestinationFailure(BackupDestinationErrorCode.Unavailable, disposition),
                     "synthetic failure"));
+    }
+
+    private sealed class ProbingAdapter(BackupDestinationProbeOutcome outcome) : IBackupDestinationAdapter
+    {
+        public string Kind => "s3";
+        public BackupDestinationCapabilities Capabilities { get; } = new(
+            new(true), new(true), new(true), false, false, false);
+        public int PutCalls { get; private set; }
+        public int ProbeCalls { get; private set; }
+
+        public Task<BackupDestinationWriteResult> PutAsync(
+            BackupDestination destination, string path, string expectedSha256,
+            long expectedSize, CancellationToken token)
+        {
+            PutCalls++;
+            throw new InvalidOperationException("Reconciliation must not call PUT.");
+        }
+
+        public Task<BackupDestinationProbeResult> ProbeWriteOutcomeAsync(
+            BackupDestination destination, string fileName, string expectedSha256,
+            long expectedSize, CancellationToken token)
+        {
+            ProbeCalls++;
+            return Task.FromResult(new BackupDestinationProbeResult(
+                outcome,
+                outcome == BackupDestinationProbeOutcome.Matching ? $"safe/{fileName}" : null,
+                null,
+                outcome == BackupDestinationProbeOutcome.Matching ? expectedSha256 : null));
+        }
+    }
+
+    private sealed class AmbiguousThenMatchingAdapter : IBackupDestinationAdapter
+    {
+        public string Kind => "s3";
+        public BackupDestinationCapabilities Capabilities { get; } = new(
+            new(true), new(true), new(true), false, false, false);
+        public int PutCalls { get; private set; }
+        public int ProbeCalls { get; private set; }
+
+        public Task<BackupDestinationWriteResult> PutAsync(
+            BackupDestination destination, string path, string expectedSha256,
+            long expectedSize, CancellationToken token)
+        {
+            PutCalls++;
+            throw new BackupDestinationOperationException(
+                new BackupDestinationFailure(
+                    BackupDestinationErrorCode.UnknownOutcome,
+                    BackupDestinationFailureDisposition.UnknownOutcome),
+                "synthetic response lost after PUT");
+        }
+
+        public Task<BackupDestinationProbeResult> ProbeWriteOutcomeAsync(
+            BackupDestination destination, string fileName, string expectedSha256,
+            long expectedSize, CancellationToken token)
+        {
+            ProbeCalls++;
+            return Task.FromResult(new BackupDestinationProbeResult(
+                BackupDestinationProbeOutcome.Matching, $"safe/{fileName}", null, expectedSha256));
+        }
     }
 }

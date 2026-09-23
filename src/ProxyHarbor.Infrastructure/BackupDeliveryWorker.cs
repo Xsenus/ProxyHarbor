@@ -20,6 +20,7 @@ public sealed class BackupDeliveryProcessor(
     internal static readonly TimeSpan LeaseDuration = TimeSpan.FromMinutes(15);
     private static readonly TimeSpan MinimumRetryDelay = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan MaximumRetryDelay = TimeSpan.FromMinutes(15);
+    private static readonly TimeSpan ReconciliationWindow = TimeSpan.FromHours(1);
 
     /// <summary>Атомарно арендует одну due job; SKIP LOCKED допускает несколько replicas.</summary>
     public async Task<BackupDeliveryLease?> TryClaimAsync(CancellationToken token)
@@ -67,18 +68,74 @@ public sealed class BackupDeliveryProcessor(
         return new BackupDeliveryLease(jobId, leaseId);
     }
 
+    /// <summary>Арендует проверку UNKNOWN без повторного provider PUT.</summary>
+    public async Task<BackupDeliveryLease?> TryClaimReconciliationAsync(CancellationToken token)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(token);
+        await using var transaction = await db.Database.BeginTransactionAsync(token);
+        var connection = (NpgsqlConnection)db.Database.GetDbConnection();
+        if (connection.State != System.Data.ConnectionState.Open)
+            await connection.OpenAsync(token);
+        var now = DateTimeOffset.UtcNow;
+        await using var command = new NpgsqlCommand("""
+            SELECT "Id" FROM "BackupDeliveryJobs"
+            WHERE "State" = 'reconciling' AND "NotBefore" <= @now
+            ORDER BY "NotBefore", "CreatedAt", "Id"
+            FOR UPDATE SKIP LOCKED
+            LIMIT 1
+            """, connection, (NpgsqlTransaction)transaction.GetDbTransaction());
+        command.Parameters.AddWithValue("now", now);
+        var scalar = await command.ExecuteScalarAsync(token);
+        if (scalar is not Guid jobId)
+        {
+            await transaction.CommitAsync(token);
+            return null;
+        }
+        var leaseId = Guid.NewGuid();
+        var updated = await db.BackupDeliveryJobs
+            .Where(job => job.Id == jobId && job.State == "reconciling")
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(job => job.State, "processing")
+                .SetProperty(job => job.LeaseId, leaseId)
+                .SetProperty(job => job.LeaseUntil, now.Add(LeaseDuration))
+                .SetProperty(job => job.UpdatedAt, now), token);
+        if (updated != 1) throw new InvalidOperationException("Backup reconciliation lease потерян до commit.");
+        await transaction.CommitAsync(token);
+        return new BackupDeliveryLease(jobId, leaseId);
+    }
+
     /// <summary>Не повторяет вслепую PUT после crash: просроченный outcome становится UNKNOWN.</summary>
     public async Task<int> ReconcileExpiredLeasesAsync(CancellationToken token)
     {
         await using var db = await dbFactory.CreateDbContextAsync(token);
         var now = DateTimeOffset.UtcNow;
-        var expired = await db.BackupDeliveryJobs
-            .Include(job => job.BackupCopy)
+        var expiredIds = await db.BackupDeliveryJobs.AsNoTracking()
             .Where(job => job.State == "processing" && job.LeaseUntil < now)
+            .Select(job => job.Id)
             .ToArrayAsync(token);
-        foreach (var job in expired)
+        var reconciled = 0;
+        foreach (var jobId in expiredIds)
         {
+            await using var transaction = await db.Database.BeginTransactionAsync(token);
+            var connection = (NpgsqlConnection)db.Database.GetDbConnection();
+            if (connection.State != System.Data.ConnectionState.Open)
+                await connection.OpenAsync(token);
+            await using var command = new NpgsqlCommand("""
+                SELECT "LeaseId" FROM "BackupDeliveryJobs"
+                WHERE "Id" = @id AND "State" = 'processing' AND "LeaseUntil" < @now
+                FOR UPDATE
+                """, connection, (NpgsqlTransaction)transaction.GetDbTransaction());
+            command.Parameters.AddWithValue("id", jobId);
+            command.Parameters.AddWithValue("now", now);
+            if (await command.ExecuteScalarAsync(token) is not Guid)
+            {
+                await transaction.CommitAsync(token);
+                continue;
+            }
+            var job = await db.BackupDeliveryJobs.Include(item => item.BackupCopy)
+                .SingleAsync(item => item.Id == jobId, token);
             job.State = "reconciling";
+            job.NotBefore = now.Add(MinimumRetryDelay);
             job.LeaseId = null;
             job.LeaseUntil = null;
             job.LastErrorCode = BackupDestinationErrorCode.UnknownOutcome.ToString();
@@ -86,9 +143,12 @@ public sealed class BackupDeliveryProcessor(
             job.BackupCopy.State = "unknown";
             job.BackupCopy.UnknownSince ??= now;
             job.BackupCopy.LastErrorCode = BackupDestinationErrorCode.UnknownOutcome.ToString();
+            await db.SaveChangesAsync(token);
+            await transaction.CommitAsync(token);
+            db.ChangeTracker.Clear();
+            reconciled++;
         }
-        if (expired.Length > 0) await db.SaveChangesAsync(token);
-        return expired.Length;
+        return reconciled;
     }
 
     /// <summary>Выполняет арендованную job и сохраняет typed outcome.</summary>
@@ -176,7 +236,7 @@ public sealed class BackupDeliveryProcessor(
         copy.AttemptCount = job.Attempt;
         copy.LastAttemptAt = DateTimeOffset.UtcNow;
         copy.LastErrorCode = null;
-        await db.SaveChangesAsync(hostToken);
+        if (!await SaveLeaseOutcomeAsync(db, job, hostToken)) return;
         var remainingLease = job.LeaseUntil!.Value - DateTimeOffset.UtcNow - TimeSpan.FromSeconds(5);
         if (remainingLease <= TimeSpan.Zero)
         {
@@ -216,7 +276,7 @@ public sealed class BackupDeliveryProcessor(
             {
                 run.SentToTelegram = true;
             }
-            await db.SaveChangesAsync(CancellationToken.None);
+            await SaveLeaseOutcomeAsync(db, job, CancellationToken.None);
         }
         catch (OperationCanceledException) when (hostToken.IsCancellationRequested)
         {
@@ -225,7 +285,10 @@ public sealed class BackupDeliveryProcessor(
         }
         catch (BackupDestinationOperationException exception)
         {
-            await FinishFailureAsync(db, job, pool.MaxAttemptsPerCycle, exception.Failure, CancellationToken.None);
+            if (exception.Failure.Code == BackupDestinationErrorCode.Collision)
+                await FinishUnknownAsync(db, job, CancellationToken.None);
+            else
+                await FinishFailureAsync(db, job, pool.MaxAttemptsPerCycle, exception.Failure, CancellationToken.None);
         }
         catch (OperationCanceledException)
         {
@@ -238,6 +301,100 @@ public sealed class BackupDeliveryProcessor(
                     BackupDestinationFailureDisposition.Retryable),
                 CancellationToken.None);
         }
+    }
+
+    /// <summary>Разрешает UNKNOWN только независимой проверкой locator; PUT здесь запрещён.</summary>
+    public async Task ProcessReconciliationAsync(BackupDeliveryLease lease, CancellationToken hostToken)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(hostToken);
+        var job = await db.BackupDeliveryJobs
+            .Include(item => item.BackupCopy).ThenInclude(copy => copy.BackupRun)
+            .Include(item => item.BackupCopy).ThenInclude(copy => copy.BackupDestination)
+            .SingleOrDefaultAsync(item => item.Id == lease.JobId, hostToken);
+        if (job is null || job.State != "processing" || job.LeaseId != lease.LeaseId ||
+            job.LeaseUntil <= DateTimeOffset.UtcNow || job.BackupCopy.UnknownSince is null)
+            return;
+        var copy = job.BackupCopy;
+        var destination = copy.BackupDestination;
+        BackupDestinationProbeResult result;
+        try
+        {
+            var route = await db.BackupPoolDestinations.AsNoTracking().SingleOrDefaultAsync(
+                item => item.BackupPoolId == copy.BackupRun.BackupPoolId &&
+                    item.BackupDestinationId == destination.Id, hostToken);
+            if (route is null) throw new BackupDestinationRouteException(
+                BackupDestinationRouteRejection.RouteForbidden, "Backup route отсутствует.");
+            var adapter = registry.Resolve(destination, route, BackupDestinationOperation.Verify, copy.SizeBytes);
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(hostToken);
+            var remaining = job.LeaseUntil.GetValueOrDefault() - DateTimeOffset.UtcNow - TimeSpan.FromSeconds(5);
+            if (remaining <= TimeSpan.Zero)
+                result = new BackupDestinationProbeResult(BackupDestinationProbeOutcome.Inconclusive);
+            else
+            {
+                deadline.CancelAfter(remaining);
+                result = await adapter.ProbeWriteOutcomeAsync(
+                    destination, copy.BackupRun.FileName ?? string.Empty,
+                    copy.ContentSha256, copy.SizeBytes, deadline.Token);
+            }
+        }
+        catch (BackupDestinationRouteException)
+        {
+            result = new BackupDestinationProbeResult(BackupDestinationProbeOutcome.Unsupported);
+        }
+        catch (BackupDestinationOperationException)
+        {
+            result = new BackupDestinationProbeResult(BackupDestinationProbeOutcome.Inconclusive);
+        }
+        catch (OperationCanceledException) when (!hostToken.IsCancellationRequested)
+        {
+            result = new BackupDestinationProbeResult(BackupDestinationProbeOutcome.Inconclusive);
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        switch (result.Outcome)
+        {
+            case BackupDestinationProbeOutcome.Matching when !string.IsNullOrWhiteSpace(result.NativeLocator):
+                copy.State = "verified";
+                copy.NativeLocator = result.NativeLocator;
+                copy.NativeVersion = result.NativeVersion;
+                copy.NativeChecksum = result.NativeChecksum;
+                copy.VerifiedAt = now;
+                copy.UnknownSince = null;
+                copy.LastErrorCode = null;
+                job.State = "completed";
+                job.LastErrorCode = null;
+                if (string.Equals(destination.Kind, "s3", StringComparison.Ordinal))
+                {
+                    copy.BackupRun.SentToObjectStorage = true;
+                    copy.BackupRun.ObjectStorageKey = result.NativeLocator;
+                }
+                break;
+            case BackupDestinationProbeOutcome.Mismatching:
+                copy.State = "quarantined";
+                copy.UnknownSince = null;
+                copy.LastErrorCode = BackupDestinationErrorCode.IntegrityMismatch.ToString();
+                job.State = "failed";
+                job.LastErrorCode = BackupDestinationErrorCode.IntegrityMismatch.ToString();
+                break;
+            case BackupDestinationProbeOutcome.Inconclusive
+                when now - copy.UnknownSince < ReconciliationWindow:
+                copy.State = "unknown";
+                job.State = "reconciling";
+                job.NotBefore = now.Add(RetryDelay(job.Id, Math.Max(1, job.Attempt)));
+                break;
+            default:
+                // Missing даже после HEAD не доказывает безопасность повторного PUT на
+                // произвольном S3-compatible backend. Оператор решает дальнейший retry.
+                copy.State = "manual_review";
+                copy.LastErrorCode = result.Outcome == BackupDestinationProbeOutcome.Missing
+                    ? BackupDestinationErrorCode.NotFound.ToString()
+                    : BackupDestinationErrorCode.UnknownOutcome.ToString();
+                job.State = "manual_review";
+                job.LastErrorCode = copy.LastErrorCode;
+                break;
+        }
+        ClearLease(job, now);
+        await SaveLeaseOutcomeAsync(db, job, CancellationToken.None);
     }
 
     internal static TimeSpan RetryDelay(Guid jobId, int attempt)
@@ -271,7 +428,7 @@ public sealed class BackupDeliveryProcessor(
         job.BackupCopy.State = retry ? "retryable_failed" : "permanent_failed";
         job.BackupCopy.LastErrorCode = failure.Code.ToString();
         ClearLease(job, now);
-        await db.SaveChangesAsync(token);
+        await SaveLeaseOutcomeAsync(db, job, token);
     }
 
     private static async Task FinishUnknownAsync(
@@ -281,12 +438,13 @@ public sealed class BackupDeliveryProcessor(
     {
         var now = DateTimeOffset.UtcNow;
         job.State = "reconciling";
+        job.NotBefore = now.Add(MinimumRetryDelay);
         job.LastErrorCode = BackupDestinationErrorCode.UnknownOutcome.ToString();
         job.BackupCopy.State = "unknown";
         job.BackupCopy.UnknownSince ??= now;
         job.BackupCopy.LastErrorCode = BackupDestinationErrorCode.UnknownOutcome.ToString();
         ClearLease(job, now);
-        await db.SaveChangesAsync(token);
+        await SaveLeaseOutcomeAsync(db, job, token);
     }
 
     private static Task FinishPermanentAsync(
@@ -305,6 +463,39 @@ public sealed class BackupDeliveryProcessor(
         job.LeaseId = null;
         job.LeaseUntil = null;
         job.UpdatedAt = now;
+    }
+
+    private static async Task<bool> SaveLeaseOutcomeAsync(
+        ProxyHarborDbContext db,
+        BackupDeliveryJob job,
+        CancellationToken token)
+    {
+        var expectedLease = db.Entry(job).Property(item => item.LeaseId).OriginalValue;
+        if (expectedLease is null) return false;
+        if (!db.Database.IsRelational())
+        {
+            await db.SaveChangesAsync(token);
+            return true;
+        }
+        await using var transaction = await db.Database.BeginTransactionAsync(token);
+        var connection = (NpgsqlConnection)db.Database.GetDbConnection();
+        if (connection.State != System.Data.ConnectionState.Open)
+            await connection.OpenAsync(token);
+        await using var command = new NpgsqlCommand("""
+            SELECT "LeaseId" FROM "BackupDeliveryJobs"
+            WHERE "Id" = @id AND "State" = 'processing' AND "LeaseUntil" > @now
+            FOR UPDATE
+            """, connection, (NpgsqlTransaction)transaction.GetDbTransaction());
+        command.Parameters.AddWithValue("id", job.Id);
+        command.Parameters.AddWithValue("now", DateTimeOffset.UtcNow);
+        if (await command.ExecuteScalarAsync(token) is not Guid currentLease || currentLease != expectedLease)
+        {
+            await transaction.RollbackAsync(token);
+            return false;
+        }
+        await db.SaveChangesAsync(token);
+        await transaction.CommitAsync(token);
+        return true;
     }
 
     private static string ResolveStagingPath(string directory, string? fileName)
@@ -363,6 +554,12 @@ public sealed class BackupDeliveryWorker(
                     continue;
                 }
                 _ = await processor.ReconcileExpiredLeasesAsync(stoppingToken);
+                var reconciliation = await processor.TryClaimReconciliationAsync(stoppingToken);
+                if (reconciliation is not null)
+                {
+                    await processor.ProcessReconciliationAsync(reconciliation, stoppingToken);
+                    continue;
+                }
                 var lease = await processor.TryClaimAsync(stoppingToken);
                 if (lease is null)
                 {

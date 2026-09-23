@@ -98,11 +98,13 @@ public sealed class S3BackupObjectStorageTransportTests
     [InlineData(HttpStatusCode.Forbidden, "AccessDenied", BackupDestinationErrorCode.AuthorizationFailed,
         BackupDestinationFailureDisposition.Permanent)]
     [InlineData(HttpStatusCode.TooManyRequests, "SlowDown", BackupDestinationErrorCode.RateLimited,
-        BackupDestinationFailureDisposition.Retryable)]
+        BackupDestinationFailureDisposition.UnknownOutcome)]
     [InlineData(HttpStatusCode.PreconditionFailed, "PreconditionFailed", BackupDestinationErrorCode.Collision,
         BackupDestinationFailureDisposition.Permanent)]
-    [InlineData(HttpStatusCode.ServiceUnavailable, "ServiceUnavailable", BackupDestinationErrorCode.Unavailable,
-        BackupDestinationFailureDisposition.Retryable)]
+    [InlineData(HttpStatusCode.Conflict, "ConditionalRequestConflict", BackupDestinationErrorCode.Collision,
+        BackupDestinationFailureDisposition.Permanent)]
+    [InlineData(HttpStatusCode.ServiceUnavailable, "ServiceUnavailable", BackupDestinationErrorCode.UnknownOutcome,
+        BackupDestinationFailureDisposition.UnknownOutcome)]
     public void S3FailuresMapToStableSafeContract(
         HttpStatusCode status,
         string errorCode,
@@ -131,6 +133,19 @@ public sealed class S3BackupObjectStorageTransportTests
         Assert.Equal(BackupDestinationFailureDisposition.UnknownOutcome, put.Disposition);
         Assert.Equal(BackupDestinationErrorCode.Unavailable, read.Code);
         Assert.Equal(BackupDestinationFailureDisposition.Retryable, read.Disposition);
+    }
+
+    [Fact]
+    public void PutRequestUsesConditionalCreateAndContentIdentity()
+    {
+        var hash = new string('a', 64);
+        var request = S3BackupObjectStorageTransport.CreatePutRequest(
+            new FileInfo("snapshot.phbackup"), "safe/snapshot.phbackup", hash, "backup");
+
+        Assert.Equal("*", request.IfNoneMatch);
+        Assert.Equal("safe/snapshot.phbackup", request.Key);
+        Assert.Equal(hash, request.Metadata["sha256"]);
+        Assert.Equal("PHB3", request.Metadata["format"]);
     }
 
     private static BackupOptions ValidOptions() => new()
