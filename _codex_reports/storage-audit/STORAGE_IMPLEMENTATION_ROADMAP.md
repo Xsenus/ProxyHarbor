@@ -215,7 +215,7 @@ Purpose: remove production-DB/VPS circular dependency. Covers REQ-007/008/014, R
 
 #### TASK-041 — Remote materialization and isolated restore workflow
 
-- Status: `BLOCKED: TASK-040,TASK-023`; Codex.
+- Status: `IN PROGRESS / offline retrieval prework`; Codex. Подписанный catalog и отдельный provider config уже позволяют локально проверить failover без production БД/key ring; автоматическая публикация catalog, реальный provider и полный isolated restore drill остаются открытыми.
 - Changes: extend Restore CLI or add explicit Infrastructure materializer invoked before existing restore. Accept configuration/secret references, not inline secrets; private temp partial, size/hash/native checksum, PHB3 verification then current restore. Keep local `--input` unchanged.
 - Failover: try actual verified copies in read policy within total deadline; quarantine mismatch; never merge bytes/versions.
 - Local checks: two isolated S3 fixtures, A unavailable/B valid, corrupted newest/B valid, all failed, cancellation/cleanup, bounded memory.
@@ -414,7 +414,7 @@ No dates are invented. STG-00–05 may proceed without these decisions using iso
 | 2026-09-22 | implementation checkpoint 5 | Added immutable run policy/content snapshot, fail-closed protection evaluator and `200/202/503` acknowledgement contract; local PostgreSQL 17 and restore coverage are green. | EVID-050–051 |
 | 2026-09-22 | implementation checkpoint 6 | Added atomic per-destination planner and leased delivery worker with bounded retry/deadline, crash-to-UNKNOWN semantics, independent fallback, staging byte/TTL budgets and routing disabled by default. | EVID-054–055 |
 
-Current checkpoint: STG-00–02 and TASK-020–032 are merged in `main` with green CI. TASK-033 operation health and fallback budgets are partially merged via PR #270 with green CI; S3 materialization adapter, verified-copy read failover and DB-backed materialization CLI are merged via PR #271–273. Durable VERIFY history, repair, automatically published independent catalog and full remote restore remain. Routing remains disabled by default, so legacy behavior is still authoritative until a separately approved canary. Existing S3 object keys and Telegram resolver/transport contracts are preserved. Docker and real providers remain unavailable locally. No production/provider access or deployment occurred.
+Current checkpoint: STG-00–02 and TASK-020–032 are merged in `main` with green CI. TASK-033 operation health and fallback budgets are partially merged via PR #270 with green CI; S3 materialization adapter, verified-copy read failover, DB-backed materialization CLI and signed manual catalog are merged via PR #271–274. Offline catalog materialization with explicit provider/secret-file references is under local verification. Durable VERIFY history, repair, automatically published independent catalog and full remote restore remain. Routing remains disabled by default, so legacy behavior is still authoritative until a separately approved canary. Existing S3 object keys and Telegram resolver/transport contracts are preserved. Docker and real providers remain unavailable locally. No production/provider access or deployment occurred.
 
 ## 16. Регламент продолжения в новой сессии
 

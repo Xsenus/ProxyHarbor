@@ -165,7 +165,8 @@ public sealed class S3BackupObjectStorageTransport : IBackupObjectStorageTranspo
         }
     }
 
-    internal static string BuildObjectKey(string prefix, string fileName)
+    /// <summary>Строит стабильный object key из заданного prefix и имени PHB3.</summary>
+    public static string BuildObjectKey(string prefix, string fileName)
     {
         var normalized = prefix.Trim('/');
         return string.IsNullOrEmpty(normalized) ? fileName : $"{normalized}/{fileName}";
