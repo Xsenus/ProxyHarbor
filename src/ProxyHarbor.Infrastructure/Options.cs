@@ -155,6 +155,8 @@ public sealed class BackupCatalogSigningOptions
 {
     /// <summary>Имя configuration-секции.</summary>
     public const string Section = "BackupCatalogSigning";
+    /// <summary>Разрешить автоматическую публикацию sidecar для destination-based routing.</summary>
+    public bool Enabled { get; set; }
     /// <summary>Секрет подписи, предоставляемый только через защищённую runtime-конфигурацию.</summary>
     public string? SigningKey { get; set; }
     /// <summary>Несекретная ссылка на внешне сохранённую версию ключа.</summary>
@@ -165,7 +167,8 @@ public sealed class BackupCatalogSigningOptions
         options.KeyReference is { Length: >= 1 and <= 64 } &&
         options.KeyReference.All(character => char.IsAsciiLetterOrDigit(character) ||
             character is '-' or '_' or '.') &&
-        (options.SigningKey is null || BackupOptions.IsNewEncryptionKeyValid(options.SigningKey));
+        (options.SigningKey is null && !options.Enabled ||
+            BackupOptions.IsNewEncryptionKeyValid(options.SigningKey));
 }
 
 /// <summary>Параметры шифрованного резервного копирования.</summary>

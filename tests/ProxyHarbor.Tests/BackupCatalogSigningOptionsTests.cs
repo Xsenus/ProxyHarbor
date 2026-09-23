@@ -12,6 +12,7 @@ public sealed class BackupCatalogSigningOptionsTests
     {
         Assert.True(BackupCatalogSigningOptions.IsValid(new()));
         Assert.False(BackupCatalogSigningOptions.IsValid(new() { KeyReference = "unsafe/ref" }));
+        Assert.False(BackupCatalogSigningOptions.IsValid(new() { Enabled = true }));
     }
 
     [Theory]
