@@ -107,6 +107,69 @@ public sealed class BackupDeliveryWorkerIntegrationTests
         Assert.Equal(BackupDestinationErrorCode.InvalidConfiguration.ToString(), persisted.LastErrorCode);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task MissingStagingOnlyUsesVerifiedCopyAndRemovesTemporaryFile(bool sourceVerified)
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"delivery-repair-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            byte[] bytes = [1, 2, 3, 4, 5];
+            var hash = Convert.ToHexStringLower(SHA256.HashData(bytes));
+            var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+                .UseInMemoryDatabase($"delivery-repair-{Guid.NewGuid():N}").Options;
+            var factory = new TestDbFactory(options);
+            var leaseId = Guid.NewGuid();
+            Guid jobId;
+            await using (var db = await factory.CreateDbContextAsync())
+            {
+                var pool = Pool();
+                var run = Run(pool.Id, hash, "expired-staging.phbackup");
+                run.StartedAt = DateTimeOffset.UtcNow.AddDays(-2);
+                var source = Destination("source", "domain-a", 10);
+                var target = Destination("target", "domain-b", 20);
+                var sourceCopy = Copy(run.Id, source.Id, hash);
+                sourceCopy.State = sourceVerified ? "verified" : "permanent_failed";
+                sourceCopy.VerifiedAt = sourceVerified ? DateTimeOffset.UtcNow : null;
+                sourceCopy.NativeLocator = "source/expired-staging.phbackup";
+                var targetCopy = Copy(run.Id, target.Id, hash);
+                var job = Job(targetCopy.Id, "repair-job");
+                job.State = "processing";
+                job.LeaseId = leaseId;
+                job.LeaseUntil = DateTimeOffset.UtcNow.AddMinutes(1);
+                db.AddRange(pool, run, source, target,
+                    Route(pool.Id, source.Id, 10), Route(pool.Id, target.Id, 20),
+                    sourceCopy, targetCopy, job);
+                await db.SaveChangesAsync();
+                jobId = job.Id;
+            }
+            var adapter = new RepairAdapter(bytes);
+            var registry = Registry(adapter, new SuccessfulAdapter("telegram"));
+            var health = new BackupDestinationHealth();
+            var processor = new BackupDeliveryProcessor(
+                factory, registry,
+                Options.Create(new BackupOptions { Directory = directory, EncryptionKey = new string('k', 32) }),
+                Options.Create(new BackupRoutingOptions { Enabled = true }),
+                destinationHealth: health,
+                copyMaterializer: new BackupCopyMaterializer(factory, registry, health));
+
+            await processor.ProcessAsync(new BackupDeliveryLease(jobId, leaseId), CancellationToken.None);
+
+            Assert.Equal(sourceVerified ? 1 : 0, adapter.ReadCalls);
+            Assert.Equal(sourceVerified ? 1 : 0, adapter.PutCalls);
+            Assert.Empty(Directory.GetFiles(directory));
+            Assert.Empty(Directory.GetDirectories(directory));
+            await using var verify = await factory.CreateDbContextAsync();
+            var persisted = await verify.BackupDeliveryJobs.Include(item => item.BackupCopy).SingleAsync();
+            Assert.Equal(sourceVerified ? "completed" : "pending", persisted.State);
+            Assert.Equal(sourceVerified ? "verified" : "planned", persisted.BackupCopy.State);
+            if (!sourceVerified) Assert.Equal(0, persisted.Attempt);
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
     [Fact]
     public async Task RetryableFailureReturnsToPendingThenExhaustsPolicyBudget()
     {
@@ -790,6 +853,38 @@ public sealed class BackupDeliveryWorkerIntegrationTests
             long expectedSize,
             CancellationToken token) => Task.FromResult(new BackupDestinationWriteResult(
                 $"{destination.Name}/{Path.GetFileName(path)}", null, expectedSha256, true));
+    }
+
+    private sealed class RepairAdapter(byte[] bytes) : IBackupDestinationAdapter
+    {
+        public string Kind => "s3";
+        public BackupDestinationCapabilities Capabilities { get; } = new(
+            new(true), new(true), new(true), false, false, false);
+        public int ReadCalls { get; private set; }
+        public int PutCalls { get; private set; }
+
+        public async Task<BackupDestinationMaterializationResult> MaterializeAsync(
+            BackupDestination destination, string fileName, string nativeLocator,
+            string path, string expectedSha256, long expectedSize, CancellationToken token)
+        {
+            ReadCalls++;
+            Assert.Equal("source", destination.Name);
+            await File.WriteAllBytesAsync(path, bytes, token);
+            return new BackupDestinationMaterializationResult(
+                path, bytes.Length, expectedSha256, null, null);
+        }
+
+        public async Task<BackupDestinationWriteResult> PutAsync(
+            BackupDestination destination, string path, string expectedSha256,
+            long expectedSize, CancellationToken token)
+        {
+            PutCalls++;
+            Assert.Equal("target", destination.Name);
+            Assert.Equal("expired-staging.phbackup", Path.GetFileName(path));
+            Assert.Equal(bytes, await File.ReadAllBytesAsync(path, token));
+            return new BackupDestinationWriteResult(
+                $"target/{Path.GetFileName(path)}", null, expectedSha256, true);
+        }
     }
 
     private sealed class DestinationAwareS3Adapter : IBackupDestinationAdapter
