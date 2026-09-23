@@ -241,7 +241,7 @@ Purpose: remove production-DB/VPS circular dependency. Covers REQ-007/008/014, R
 
 #### TASK-050 — Admin API and UI for destinations/copies
 
-- Status: `PARTIAL: read-only per-run protection/copy detail, paged destination/route overview, route drain, write-only creation of disabled S3 destinations and atomic custom pool/route provisioning implemented; editing existing policy, UI provisioning and provider proof remain`; Codex.
+- Status: `PARTIAL: read-only per-run protection/copy detail, paged destination/route overview, route drain, write-only S3 registration and atomic custom pool/route provisioning now have API and UI; editing existing policy and production provider proof remain`; Codex.
 - Changes: `AdminController`, DTO/OpenAPI; React backup settings/history. Show pool policy, destination state, verified copies, pending/degraded/UNKNOWN, safe locator summary. Credentials write-only. Preserve old response fields.
 - UI rules: use `StyledSelect`, shared Toggle/button/checkbox/table/modal patterns; explicit Lucide sizes; keyboard/focus/mobile tests per `AGENTS.md`.
 - Checks: controller auth/validation, frontend interaction/a11y, desktop/mobile visual verification; full frontend lint/test/build final gate.
@@ -257,7 +257,7 @@ Purpose: remove production-DB/VPS circular dependency. Covers REQ-007/008/014, R
 
 #### TASK-052 — Runbooks and operator commands
 
-- Status: `IN PROGRESS: isolated full DR drill runbook drafted; operator/provider execution, destination management and rollout procedures remain`; Codex.
+- Status: `IN PROGRESS: isolated full DR drill runbook drafted and synthetic HOSTKEY NL protocol canary passed; real archive recovery, independent escrow, isolated PostgreSQL restore and production rollout procedures remain`; Codex/operator.
 - Changes: `BACKUP_RESTORE.md`, `DEPLOYMENT.md`, `CONFIGURATION.md`, `MONITORING.md`, `ARCHITECTURE.md`, API docs. Procedures: add/drain provider, inventory, canary, restore, UNKNOWN manual review, key rotation, all-failed, catch-up, rollback/roll-forward.
 - Rules: commands default dry-run/read-only; destructive cleanup separate explicit approval; never paste secrets.
 - Checks: docs links/contracts/publication gate.
@@ -269,7 +269,7 @@ Requires separate owner authorization for external writes/production. Covers REQ
 
 #### TASK-060 — Inventory and historical backfill dry-run
 
-- Status: `BLOCKED: STG-04, owner test destinations`; Codex/operator.
+- Status: `BLOCKED: STG-04 and access to production inventory; one isolated test S3 bucket exists but is not a second independent destination`; Codex/operator.
 - Inputs: local archive inventory, legacy `BackupRuns`, remote provider inventory only under explicit permission.
 - Steps: scan → map BackupId/hash/locator → classify unknown/orphan/conflict → create shadow copy rows → dry-run copy plan → checkpoint. No delete. Capture changes during backfill via jobs; rerun delta.
 - Verification: counts/bytes/hash by destination, newest retention window protected, B-only catalog, resume after interruption.
@@ -286,7 +286,7 @@ Requires separate owner authorization for external writes/production. Covers REQ
 
 #### TASK-062 — Isolated full restore drill and SLO measurement
 
-- Status: `BLOCKED: TASK-061,TASK-042`; owner/operator.
+- Status: `BLOCKED: independent escrow of real catalog/PHB3 and keys, isolated PostgreSQL target, and explicit approval before transferring production material`; owner/operator. Synthetic TASK-061 protocol canary alone does not clear this gate.
 - Steps: take latest canary/prod-approved copy; start isolated DB/app; retrieve without production DB catalog; restore v8; provide DP keys/secret refs through approved channel; assert every sentinel/invariant; login/API token/payment/Telegram config behavior; create a new protected backup; destroy isolated environment per approved procedure.
 - Measure: snapshot completion→verified copy (RPO evidence), retrieval+restore+smoke (RTO), copy lag, resource usage. No customer notification/payment calls.
 - Stop: missing data/key, decrypt failure, stale copy, business invariant, cleanup incident.
@@ -421,6 +421,8 @@ Current merged checkpoint: `main@f2c1e46` contains STG-00–02 and TASK-020–03
 Merged checkpoint `main@aa3d687`: PR #286 passed CI and put pool-route priority before job creation time for pending claims of one run (EVID-074). This is scheduling order only, not automatic failback or serialized cross-replica delivery.
 
 Merged checkpoint `main@900ef46`: PR #287–292 passed CI, store exact typed VERIFY and per-attempt PUT outcomes, add bounded read-only S3 recovery probes, gate primary scheduling priority on post-failure PUT plus a matching probe window, and support secure interactive credential entry in the isolated S3 canary (EVID-075–080). `missing`, `mismatching`, inconclusive, a legacy null result, or elapsed time alone cannot prove recovery. Local per-run admin protection/copy detail is the next partial STG-05 slice; real-provider canary, historical repair and isolated restore remain open gates.
+
+Current merged checkpoint `main@73be7d1` (2026-09-24): PR #304–306 passed CI and added write-only disabled S3 registration plus atomic custom pool/route provisioning in the API and admin UI (EVID-087). An isolated HOSTKEY NL synthetic PHB3/catalog protocol canary passed, including addressed cleanup (EVID-086); this does not prove recovery of a real archive or an independent second provider. The last read-only VPS observation found production 40 commits behind an earlier local `main`; a fresh noninteractive SSH attempt was denied, so current deployment state is **NOT VERIFIED** (EVID-088). The next external gates are key rotation after chat disclosure, independent escrow, an isolated PostgreSQL target and owner approval for transferring production material; only then perform the complete offline DR drill and consider rollout. `BackupRouting__Enabled` remains disabled by default in repository configuration; actual VPS flag state is not reverified.
 
 ## 16. Регламент продолжения в новой сессии
 
