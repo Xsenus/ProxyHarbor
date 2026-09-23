@@ -661,7 +661,7 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
         backupDestinationHealthOutcome.ToTable(table =>
         {
             table.HasCheckConstraint("CK_BackupDestinationHealthOutcomes_Operation",
-                "\"Operation\" = 'verify'");
+                "\"Operation\" IN ('put', 'verify')");
             table.HasCheckConstraint("CK_BackupDestinationHealthOutcomes_Result",
                 "\"Succeeded\" = (\"ErrorCode\" IS NULL)");
             table.HasCheckConstraint("CK_BackupDestinationHealthOutcomes_ProbeOutcome",

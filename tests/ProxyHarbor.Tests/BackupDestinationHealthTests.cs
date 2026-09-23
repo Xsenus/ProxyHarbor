@@ -129,6 +129,65 @@ public sealed class BackupDestinationHealthTests
     }
 
     [Fact]
+    public async Task DurablePutFailureIsNotHiddenByLaterCompletedJob()
+    {
+        var clock = new AdjustableTimeProvider(DateTimeOffset.UtcNow);
+        var destinationId = Guid.NewGuid();
+        await using var db = EmptyDatabase();
+        var copy = new BackupCopy
+        {
+            BackupDestinationId = destinationId,
+            LastAttemptAt = clock.GetUtcNow(),
+            ContentSha256 = new string('a', 64),
+            SizeBytes = 5
+        };
+        copy.Jobs.Add(new BackupDeliveryJob { State = "completed", IdempotencyKey = "later-success" });
+        db.BackupCopies.Add(copy);
+        db.BackupDestinationHealthOutcomes.Add(new BackupDestinationHealthOutcome
+        {
+            BackupDestinationId = destinationId,
+            Operation = "put",
+            Succeeded = false,
+            ErrorCode = BackupDestinationErrorCode.AuthenticationFailed.ToString(),
+            ObservedAt = clock.GetUtcNow().AddSeconds(-10)
+        });
+        await db.SaveChangesAsync();
+
+        Assert.False((await new BackupDestinationHealth(clock).TryEnterAsync(
+            db, destinationId, BackupDestinationOperation.Put, CancellationToken.None)).Allowed);
+        Assert.True((await new BackupDestinationHealth(clock).TryEnterAsync(
+            db, destinationId, BackupDestinationOperation.Verify, CancellationToken.None)).Allowed);
+    }
+
+    [Fact]
+    public async Task LaterDurablePutSuccessClosesFailureOnNewReplica()
+    {
+        var clock = new AdjustableTimeProvider(DateTimeOffset.UtcNow);
+        var destinationId = Guid.NewGuid();
+        await using var db = EmptyDatabase();
+        db.BackupDestinationHealthOutcomes.AddRange(
+            new BackupDestinationHealthOutcome
+            {
+                BackupDestinationId = destinationId,
+                Operation = "put",
+                Succeeded = false,
+                ErrorCode = BackupDestinationErrorCode.AuthenticationFailed.ToString(),
+                ObservedAt = clock.GetUtcNow().AddSeconds(-20)
+            },
+            new BackupDestinationHealthOutcome
+            {
+                BackupDestinationId = destinationId,
+                Operation = "put",
+                Succeeded = true,
+                ObservedAt = clock.GetUtcNow().AddSeconds(-10)
+            });
+        await db.SaveChangesAsync();
+
+        Assert.True((await new BackupDestinationHealth(clock).TryEnterAsync(
+            db, destinationId, BackupDestinationOperation.Put, CancellationToken.None)).Allowed);
+    }
+
+    [Fact]
     public async Task DurableVerifyAuthenticationFailureOpensOnlyVerifyOnNewReplica()
     {
         var clock = new AdjustableTimeProvider(DateTimeOffset.UtcNow);

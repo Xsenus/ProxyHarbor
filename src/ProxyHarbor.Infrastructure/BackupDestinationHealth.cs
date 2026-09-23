@@ -13,7 +13,8 @@ public sealed class BackupDestinationHealth(TimeProvider? timeProvider = null)
 {
     private static readonly TimeSpan ObservationWindow = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan DurableLookback = TimeSpan.FromMinutes(20);
-    private static readonly TimeSpan OutcomeRetention = TimeSpan.FromDays(1);
+    // Covers the maximum seven-day failback policy window with a day of headroom.
+    private static readonly TimeSpan OutcomeRetention = TimeSpan.FromDays(8);
     private static readonly TimeSpan TransientCooldown = TimeSpan.FromMinutes(1);
     private static readonly TimeSpan ConfigurationCooldown = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan HalfOpenLease = TimeSpan.FromMinutes(15);
@@ -33,21 +34,33 @@ public sealed class BackupDestinationHealth(TimeProvider? timeProvider = null)
         RecentOutcome[] durable;
         if (operation == BackupDestinationOperation.Put)
         {
-            var recentJobs = await db.BackupDeliveryJobs.AsNoTracking()
-                .Where(job => job.BackupCopy.BackupDestinationId == destinationId &&
-                    job.BackupCopy.LastAttemptAt >= now.Subtract(DurableLookback) &&
-                    job.State != "processing")
-                .OrderByDescending(job => job.BackupCopy.LastAttemptAt)
-                .Take(12)
-                .Select(job => new RecentPutOutcome(
-                    job.BackupCopyId, job.State, job.LastErrorCode,
-                    job.BackupCopy.LastAttemptAt!.Value))
+            durable = await db.BackupDestinationHealthOutcomes.AsNoTracking()
+                .Where(item => item.BackupDestinationId == destinationId &&
+                    item.Operation == "put" && item.ObservedAt >= now.Subtract(DurableLookback))
+                .OrderByDescending(item => item.ObservedAt)
+                .ThenByDescending(item => item.Id)
+                .Take(3)
+                .Select(item => new RecentOutcome(item.Succeeded, item.ErrorCode, item.ObservedAt))
                 .ToArrayAsync(token);
-            durable = recentJobs.GroupBy(item => item.CopyId)
-                .Select(group => group.First()).Take(3)
-                .Select(item => new RecentOutcome(
-                    item.State == "completed" && item.ErrorCode is null,
-                    item.ErrorCode, item.ObservedAt)).ToArray();
+            if (durable.Length == 0)
+            {
+                // Existing installations have only mutable job state before this migration.
+                var recentJobs = await db.BackupDeliveryJobs.AsNoTracking()
+                    .Where(job => job.BackupCopy.BackupDestinationId == destinationId &&
+                        job.BackupCopy.LastAttemptAt >= now.Subtract(DurableLookback) &&
+                        job.State != "processing")
+                    .OrderByDescending(job => job.BackupCopy.LastAttemptAt)
+                    .Take(12)
+                    .Select(job => new RecentPutOutcome(
+                        job.BackupCopyId, job.State, job.LastErrorCode,
+                        job.BackupCopy.LastAttemptAt!.Value))
+                    .ToArrayAsync(token);
+                durable = recentJobs.GroupBy(item => item.CopyId)
+                    .Select(group => group.First()).Take(3)
+                    .Select(item => new RecentOutcome(
+                        item.State == "completed" && item.ErrorCode is null,
+                        item.ErrorCode, item.ObservedAt)).ToArray();
+            }
         }
         else if (operation == BackupDestinationOperation.Verify)
         {
@@ -84,7 +97,7 @@ public sealed class BackupDestinationHealth(TimeProvider? timeProvider = null)
         }
     }
 
-    /// <summary>Удаляет только наблюдения старше health window; вызывается не чаще часа на worker.</summary>
+    /// <summary>Удаляет наблюдения старше максимального policy window с запасом; не чаще часа.</summary>
     public static Task<int> PruneOldOutcomesAsync(ProxyHarborDbContext db, CancellationToken token)
     {
         var cutoff = DateTimeOffset.UtcNow.Subtract(OutcomeRetention);

@@ -360,13 +360,24 @@ public sealed class BackupDeliveryProcessor(
             {
                 run.SentToTelegram = true;
             }
-            await SaveLeaseOutcomeAsync(db, job, CancellationToken.None);
-            health.RecordSuccess(destination.Id, BackupDestinationOperation.Put);
+            AddPutHealthOutcome(db, destination.Id, copy.State == "verified",
+                copy.LastErrorCode, finishedAt);
+            if (!await SaveLeaseOutcomeAsync(db, job, CancellationToken.None))
+            {
+                health.ReleaseWithoutOutcome(destination.Id, BackupDestinationOperation.Put);
+                return;
+            }
+            if (copy.State == "verified")
+                health.RecordSuccess(destination.Id, BackupDestinationOperation.Put);
+            else
+                health.ReleaseWithoutOutcome(destination.Id, BackupDestinationOperation.Put);
         }
         catch (OperationCanceledException) when (hostToken.IsCancellationRequested)
         {
             // Host shutdown сохраняет replayable job; provider outcome мог стать UNKNOWN.
             copy.LastAttemptAt = DateTimeOffset.UtcNow;
+            AddPutHealthOutcome(db, destination.Id, false,
+                BackupDestinationErrorCode.UnknownOutcome.ToString(), copy.LastAttemptAt.Value);
             health.RecordFailure(destination.Id, BackupDestinationOperation.Put,
                 BackupDestinationErrorCode.UnknownOutcome);
             await FinishUnknownAsync(db, job, CancellationToken.None);
@@ -374,6 +385,8 @@ public sealed class BackupDeliveryProcessor(
         catch (BackupDestinationOperationException exception)
         {
             copy.LastAttemptAt = DateTimeOffset.UtcNow;
+            AddPutHealthOutcome(db, destination.Id, false,
+                exception.Failure.Code.ToString(), copy.LastAttemptAt.Value);
             health.RecordFailure(destination.Id, BackupDestinationOperation.Put, exception.Failure.Code);
             if (exception.Failure.Code == BackupDestinationErrorCode.Collision)
                 await FinishUnknownAsync(db, job, CancellationToken.None);
@@ -384,6 +397,8 @@ public sealed class BackupDeliveryProcessor(
         {
             // После прерванного PUT нельзя знать, были ли переданы все bytes.
             copy.LastAttemptAt = DateTimeOffset.UtcNow;
+            AddPutHealthOutcome(db, destination.Id, false,
+                BackupDestinationErrorCode.UnknownOutcome.ToString(), copy.LastAttemptAt.Value);
             health.RecordFailure(destination.Id, BackupDestinationOperation.Put,
                 BackupDestinationErrorCode.UnknownOutcome);
             await FinishUnknownAsync(db, job, CancellationToken.None);
@@ -539,6 +554,21 @@ public sealed class BackupDeliveryProcessor(
         await using var db = await dbFactory.CreateDbContextAsync(token);
         return await BackupDestinationHealth.PruneOldOutcomesAsync(db, token);
     }
+
+    private static void AddPutHealthOutcome(
+        ProxyHarborDbContext db,
+        Guid destinationId,
+        bool succeeded,
+        string? errorCode,
+        DateTimeOffset observedAt) => db.BackupDestinationHealthOutcomes.Add(
+            new BackupDestinationHealthOutcome
+            {
+                BackupDestinationId = destinationId,
+                Operation = "put",
+                Succeeded = succeeded,
+                ErrorCode = errorCode,
+                ObservedAt = observedAt
+            });
 
     internal static TimeSpan RetryDelay(Guid jobId, int attempt)
     {
