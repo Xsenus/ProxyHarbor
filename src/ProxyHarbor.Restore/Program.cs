@@ -49,6 +49,8 @@ internal static class RestoreApplication
                 ? await OfflineCatalogMaterializeApplication.RunAsync(args[1..], shutdown.Token)
                 : args.Length > 0 && args[0] == "catalog"
                 ? await BackupCatalogApplication.RunAsync(args[1..], shutdown.Token)
+                : args.Length > 0 && args[0] == "dp-marker"
+                ? await DataProtectionRecoveryMarkerApplication.RunAsync(args[1..], shutdown.Token)
                 : await RunAsync(args, shutdown.Token);
         }
         finally
