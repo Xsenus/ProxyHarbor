@@ -224,7 +224,7 @@ Purpose: remove production-DB/VPS circular dependency. Covers REQ-007/008/014, R
 
 #### TASK-042 — Recovery secrets and key rotation runbook
 
-- Status: `READY after STG-01`; owner/operator gate for external proof.
+- Status: `IN PROGRESS / local key preflight`; Codex + owner/operator gate. PHB3 `--inspect-settings` валидирует архив без БД; офлайн `dp-marker create/verify` проверяет перенос синтетического Data Protection ciphertext между изолированными копиями key ring без генерации ключей. Независимый escrow, markers каждой эпохи, representative production ciphertext и полный restore drill остаются operator gates.
 - Changes: docs/config preflight for PHB3 key versions, DP key ring backup/restore and provider secret references. Add safe diagnostic that reports availability/decrypt test using synthetic marker, never key values.
 - Owner actions: choose secret manager/offline escrow; store old decrypt keys for full retention; approve two custodians/locations if desired; perform isolated DP decrypt drill.
 - Stop: no production DR claim while either PHB3 key or DP key ring recovery is unproven.

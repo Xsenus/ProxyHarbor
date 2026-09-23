@@ -5,6 +5,7 @@
 
 ## [Unreleased]
 
+- Restore CLI получил офлайн-команду `dp-marker` для проверки перенесённой копии Data Protection key ring синтетическим marker без БД, provider I/O и автоматического создания ключей. Она дополняет PHB3 `--inspect-settings`, но не заменяет проверку реальных credentials и внешний escrow/drill.
 - Добавлена выключенная по умолчанию автоматическая публикация подписанного backup catalog для verified S3-копий: отдельный secret-file signing key с key reference, побайтно воспроизводимый однокопийный exact-policy sidecar, детерминированный object key, условный S3 PUT и независимые HEAD/GET-проверки размера/SHA-256 тела. PostgreSQL-backed worker хранит lease, retry и подтверждённый результат; включение требует `BackupCatalogSigning__Enabled=true` и destination routing. Real-provider canary и полный restore drill остаются отдельными обязательными проверками.
 - Restore CLI получил отдельный `offline-materialize`: подписанный catalog и локальный allowlist S3 destinations с раздельными файлами credentials позволяют получить проверенный PHB3 без production БД и Data Protection key ring; недоступная/повреждённая копия уступает следующей. Команда не выполняет restore БД и не заменяет real-provider drill.
 - Добавлен переносимый подписанный каталог verified S3-копий: строгая версия схемы, HMAC с отдельным доменом ключа, object keys и content identity без endpoint/bucket/secrets. Restore CLI умеет вручную экспортировать sidecar из БД и проверять/просматривать его офлайн; автоматическая публикация рядом с S3-копиями пока не включена.
