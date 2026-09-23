@@ -680,6 +680,47 @@ public sealed class AdminController(
         return Ok(new PagedResult<BackupDestinationOverviewResponse>(items, page, pageSize, total));
     }
 
+    /// <summary>Останавливает новые PUT в пользовательский route, сохраняя разрешённое чтение существующих копий.</summary>
+    [HttpPost("backups/pools/{poolId:guid}/routes/{destinationId:guid}/drain")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> DrainBackupRoute(
+        Guid poolId, Guid destinationId, [FromBody] DrainBackupRouteRequest request,
+        CancellationToken token)
+    {
+        if (poolId == BackupLegacyDestinationProjector.LegacyPoolId)
+            return Problem("Legacy route управляется backup settings и не может быть изменён здесь.",
+                statusCode: 409);
+        if (request.ExpectedPolicyVersion < 1)
+            return Problem("Укажите актуальную версию protection policy.", statusCode: 400);
+        await using var db = await dbFactory.CreateDbContextAsync(token);
+        var pool = await db.BackupPools.AsNoTracking().SingleOrDefaultAsync(
+            item => item.Id == poolId, token);
+        if (pool is null) return NotFound();
+        if (pool.PolicyVersion != request.ExpectedPolicyVersion)
+            return Problem("Protection policy изменилась; обновите список маршрутов.", statusCode: 409);
+        var changed = await db.BackupPoolDestinations
+            .Where(route => route.BackupPoolId == poolId &&
+                route.BackupDestinationId == destinationId &&
+                route.BackupPool.PolicyVersion == request.ExpectedPolicyVersion &&
+                (route.Enabled || !route.Draining))
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(route => route.Enabled, false)
+                .SetProperty(route => route.Draining, true), token);
+        if (changed == 0)
+        {
+            if (!await db.BackupPoolDestinations.AnyAsync(route =>
+                    route.BackupPoolId == poolId && route.BackupDestinationId == destinationId, token))
+                return NotFound();
+            if (!await db.BackupPools.AnyAsync(item => item.Id == poolId &&
+                    item.PolicyVersion == request.ExpectedPolicyVersion, token))
+                return Problem("Protection policy изменилась; обновите список маршрутов.", statusCode: 409);
+        }
+        return NoContent();
+    }
+
     /// <summary>Возвращает страницу истории и актуальную доступность локальных encrypted-файлов.</summary>
     [HttpGet("backups")]
     [ProducesResponseType<PagedResult<BackupFileResponse>>(StatusCodes.Status200OK)]
@@ -1067,6 +1108,9 @@ public sealed record BackupDestinationRouteResponse(
         route.BackupPool.RequiredVerifiedCopies, route.BackupPool.DesiredVerifiedCopies,
         route.Role, route.AllowedOperations, route.Priority, route.Enabled, route.Draining);
 }
+
+/// <summary>Оптимистическая проверка версии policy перед переводом маршрута в draining.</summary>
+public sealed record DrainBackupRouteRequest(int ExpectedPolicyVersion);
 
 /// <summary>Последняя типизированная provider-операция; сырой ответ не возвращается.</summary>
 public sealed record BackupDestinationOutcomeResponse(

@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Npgsql;
+using ProxyHarbor.Api;
 using ProxyHarbor.Api.Controllers;
 using ProxyHarbor.Domain;
 using ProxyHarbor.Infrastructure;
@@ -32,7 +33,7 @@ public sealed class BackupDestinationSchemaIntegrationTests
             await using (var db = new ProxyHarborDbContext(options))
             {
                 await DatabaseSeeder.MigrateSchemaAsync(db, CancellationToken.None);
-                var pool = new BackupPool { Name = "overview-test" };
+                var pool = new BackupPool { Name = "overview-test", PolicyVersion = 4 };
                 var destination = new BackupDestination
                 {
                     Name = "overview-test-s3",
@@ -46,7 +47,8 @@ public sealed class BackupDestinationSchemaIntegrationTests
                 db.BackupPoolDestinations.Add(new BackupPoolDestination
                 {
                     BackupPoolId = pool.Id,
-                    BackupDestinationId = destination.Id
+                    BackupDestinationId = destination.Id,
+                    AllowedOperations = "put,verify,read"
                 });
                 db.BackupDestinationHealthOutcomes.AddRange(
                     new BackupDestinationHealthOutcome
@@ -77,6 +79,36 @@ public sealed class BackupDestinationSchemaIntegrationTests
             Assert.Equal("missing", item.LastOutcome?.ProbeOutcome);
             Assert.Equal(nameof(BackupDestinationErrorCode.NotFound), item.LastOutcome?.ErrorCode);
             Assert.Single(item.Routes);
+            var route = Assert.Single(item.Routes);
+            Assert.Equal(4, route.PolicyVersion);
+            Assert.IsType<NoContentResult>(await controller.DrainBackupRoute(route.PoolId,
+                item.Id, new DrainBackupRouteRequest(4), CancellationToken.None));
+            Assert.IsType<NoContentResult>(await controller.DrainBackupRoute(route.PoolId,
+                item.Id, new DrainBackupRouteRequest(4), CancellationToken.None));
+            Assert.Equal(400, Assert.IsType<ObjectResult>(await controller.DrainBackupRoute(
+                route.PoolId, item.Id, new DrainBackupRouteRequest(0), CancellationToken.None)).StatusCode);
+            Assert.Equal(409, Assert.IsType<ObjectResult>(await controller.DrainBackupRoute(
+                route.PoolId, item.Id, new DrainBackupRouteRequest(3), CancellationToken.None)).StatusCode);
+            Assert.IsType<NotFoundResult>(await controller.DrainBackupRoute(route.PoolId,
+                Guid.NewGuid(), new DrainBackupRouteRequest(4), CancellationToken.None));
+            Assert.Equal(409, Assert.IsType<ObjectResult>(await controller.DrainBackupRoute(
+                BackupLegacyDestinationProjector.LegacyPoolId, item.Id,
+                new DrainBackupRouteRequest(4), CancellationToken.None)).StatusCode);
+            await using var verify = new ProxyHarborDbContext(options);
+            var persistedRoute = await verify.BackupPoolDestinations.Include(value => value.BackupDestination)
+                .SingleAsync();
+            Assert.False(persistedRoute.Enabled);
+            Assert.True(persistedRoute.Draining);
+            var registry = new BackupDestinationRegistry([
+                new S3BackupDestinationAdapter(), new TelegramBackupDestinationAdapter()
+            ]);
+            Assert.IsType<S3BackupDestinationAdapter>(registry.Resolve(persistedRoute.BackupDestination,
+                persistedRoute, BackupDestinationOperation.Materialize, 1));
+            Assert.Throws<BackupDestinationRouteException>(() =>
+            {
+                _ = registry.Resolve(persistedRoute.BackupDestination, persistedRoute,
+                    BackupDestinationOperation.Put, 1);
+            });
         }
         finally
         {
