@@ -326,13 +326,21 @@ public sealed class BackupService(
 
     internal static void EnsureStagingCapacity(string directory, long maximumBytes, string fileName)
     {
+        if (ReadPublishedBackupBytes(directory) > maximumBytes)
+            throw new BackupStagingCapacityException(fileName);
+    }
+
+    /// <summary>Размер только опубликованных сервисом локальных PHB3; соседние файлы volume не считаются staging.</summary>
+    public static long ReadPublishedBackupBytes(string directory)
+    {
         long total = 0;
-        foreach (var path in Directory.EnumerateFiles(directory, $"{PublishedBackupPrefix}*{PublishedBackupSuffix}"))
+        foreach (var path in Directory.EnumerateFiles(
+            directory, $"{PublishedBackupPrefix}*{PublishedBackupSuffix}", SearchOption.TopDirectoryOnly))
         {
-            total = checked(total + new FileInfo(path).Length);
-            if (total > maximumBytes)
-                throw new BackupStagingCapacityException(fileName);
+            var file = new FileInfo(path);
+            if (IsPublishedBackupName(file.Name)) total = checked(total + file.Length);
         }
+        return total;
     }
 
     private async Task<HashSet<string>> ReadReplayableStagingNamesAsync(CancellationToken token)

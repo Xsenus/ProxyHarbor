@@ -301,6 +301,73 @@ tests:
               summary: Очередь доставки backup задерживается
               description: Самая старая pending job ожидает более часа; проверьте worker, staging и доступность destination.
 
+  - name: Sustained backup staging utilization warns only after grace
+    interval: 1m
+    input_series:
+      - series: proxyharbor_backup_routing_enabled
+        values: '1x13'
+      - series: proxyharbor_backup_staging_read_success
+        values: '1x13'
+      - series: proxyharbor_backup_staging_used_bytes
+        values: '90x13'
+      - series: proxyharbor_backup_staging_limit_bytes
+        values: '100x13'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: ProxyHarborBackupStagingNearLimit
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: ProxyHarborBackupStagingNearLimit
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Backup staging близок к лимиту
+              description: Локальные служебные PHB3 занимают более 80% лимита; проверьте delivery backlog и retention, не удаляя неподтверждённые копии.
+
+  - name: Unreadable staging does not masquerade as empty and does not trigger capacity alert
+    interval: 1m
+    input_series:
+      - series: proxyharbor_backup_routing_enabled
+        values: '1x8'
+      - series: proxyharbor_backup_staging_read_success
+        values: '0x8'
+      - series: proxyharbor_backup_staging_used_bytes
+        values: '0x8'
+      - series: proxyharbor_backup_staging_limit_bytes
+        values: '100x8'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: ProxyHarborBackupStagingUnreadable
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Состояние backup staging недоступно
+              description: API не может прочитать локальный backup volume; нулевые bytes не означают свободное место.
+      - eval_time: 6m
+        alertname: ProxyHarborBackupStagingNearLimit
+        exp_alerts: []
+
+  - name: Disabled routing does not alarm on local staging
+    interval: 1m
+    input_series:
+      - series: proxyharbor_backup_routing_enabled
+        values: '0x13'
+      - series: proxyharbor_backup_staging_read_success
+        values: '0x13'
+      - series: proxyharbor_backup_staging_used_bytes
+        values: '90x13'
+      - series: proxyharbor_backup_staging_limit_bytes
+        values: '100x13'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: ProxyHarborBackupStagingUnreadable
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: ProxyHarborBackupStagingNearLimit
+        exp_alerts: []
+
   - name: Unknown protection assessment does not masquerade as zero debt
     interval: 1m
     input_series:

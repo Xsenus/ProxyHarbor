@@ -138,8 +138,10 @@ public sealed class BackupRetentionTests
             const string currentName = "proxyharbor-20260810-140000-0000.phbackup";
             File.WriteAllBytes(Path.Combine(directory, currentName), new byte[6]);
             File.WriteAllBytes(Path.Combine(directory, "manual.phbackup"), new byte[100]);
+            File.WriteAllBytes(Path.Combine(directory, "proxyharbor-not-a-published-backup.phbackup"), new byte[100]);
 
             BackupService.EnsureStagingCapacity(directory, maximumBytes: 6, currentName);
+            Assert.Equal(6, BackupService.ReadPublishedBackupBytes(directory));
         }
         finally { Directory.Delete(directory, recursive: true); }
     }
