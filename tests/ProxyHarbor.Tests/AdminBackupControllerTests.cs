@@ -13,6 +13,65 @@ namespace ProxyHarbor.Tests;
 public sealed class AdminBackupControllerTests
 {
     [Fact]
+    public async Task CreateS3DestinationEncryptsCredentialsAndLeavesRoutingDisabled()
+    {
+        var factory = Factory($"admin-create-s3-{Guid.NewGuid():N}");
+        var protector = new EphemeralDataProtectionProvider();
+        var controller = new AdminController(factory, null!, null!, null!, null!,
+            Options.Create(new BackupOptions()), Options.Create(new CollectorOptions()),
+            credentialProtectionProvider: protector);
+        var request = new CreateS3BackupDestinationRequest(
+            " Netherlands ", "https://s3.example.test", "eu-west-1", "private-backups",
+            "proxyharbor-drill", true, "test-access-key", "test-secret-key", 10);
+
+        var created = Assert.IsType<BackupDestinationOverviewResponse>(
+            Assert.IsType<ObjectResult>((await controller.CreateS3BackupDestination(
+                request, CancellationToken.None)).Result).Value);
+        Assert.Equal("Netherlands", created.Name);
+        Assert.False(created.Enabled);
+        Assert.Empty(created.Routes);
+        Assert.True(created.CredentialsConfigured);
+        var response = JsonSerializer.Serialize(created);
+        Assert.DoesNotContain(request.AccessKey!, response, StringComparison.Ordinal);
+        Assert.DoesNotContain(request.SecretKey!, response, StringComparison.Ordinal);
+        Assert.DoesNotContain(request.Bucket!, response, StringComparison.Ordinal);
+
+        await using var db = await factory.CreateDbContextAsync();
+        var saved = Assert.Single(await db.BackupDestinations.ToArrayAsync());
+        Assert.False(saved.Enabled);
+        Assert.Empty(await db.BackupPoolDestinations.ToArrayAsync());
+        Assert.Equal("s3:s3.example.test:eu-west-1", saved.FailureDomain);
+        Assert.DoesNotContain(request.AccessKey!, saved.ProtectedSecrets, StringComparison.Ordinal);
+        Assert.DoesNotContain(request.SecretKey!, saved.ProtectedSecrets, StringComparison.Ordinal);
+        Assert.DoesNotContain(request.SecretKey!, saved.SettingsJson, StringComparison.Ordinal);
+        var plaintext = protector.CreateProtector("ProxyHarbor.BackupDestination.Secrets.v1")
+            .Unprotect(saved.ProtectedSecrets);
+        Assert.Contains(request.AccessKey!, plaintext, StringComparison.Ordinal);
+        Assert.Contains(request.SecretKey!, plaintext, StringComparison.Ordinal);
+
+        Assert.Equal(409, Assert.IsType<ConflictObjectResult>((await controller.CreateS3BackupDestination(
+            request, CancellationToken.None)).Result).StatusCode);
+        Assert.Single(await db.BackupDestinations.ToArrayAsync());
+    }
+
+    [Fact]
+    public async Task CreateS3DestinationRejectsUnsafeConfigurationWithoutSavingSecrets()
+    {
+        var factory = Factory($"admin-create-invalid-s3-{Guid.NewGuid():N}");
+        var controller = new AdminController(factory, null!, null!, null!, null!,
+            Options.Create(new BackupOptions()), Options.Create(new CollectorOptions()),
+            credentialProtectionProvider: new EphemeralDataProtectionProvider());
+        var request = new CreateS3BackupDestinationRequest(
+            "unsafe", "http://127.0.0.1:9000", "eu-west-1", "private-backups",
+            "../escape", true, "test-access-key", "test-secret-key", 0);
+
+        Assert.Equal(400, Assert.IsType<ObjectResult>((await controller.CreateS3BackupDestination(
+            request, CancellationToken.None)).Result).StatusCode);
+        await using var db = await factory.CreateDbContextAsync();
+        Assert.Empty(await db.BackupDestinations.ToArrayAsync());
+    }
+
+    [Fact]
     public async Task DestinationOverviewShowsRoutesAndTypedOutcomeWithoutSecrets()
     {
         var factory = Factory($"admin-backup-destinations-{Guid.NewGuid():N}");

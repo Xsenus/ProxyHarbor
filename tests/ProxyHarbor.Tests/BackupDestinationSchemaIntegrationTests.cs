@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -109,6 +110,25 @@ public sealed class BackupDestinationSchemaIntegrationTests
                 _ = registry.Resolve(persistedRoute.BackupDestination, persistedRoute,
                     BackupDestinationOperation.Put, 1);
             });
+
+            var protector = new Microsoft.AspNetCore.DataProtection.EphemeralDataProtectionProvider();
+            var createController = new AdminController(factory, null!, null!, null!, null!,
+                Options.Create(new BackupOptions()), Options.Create(new CollectorOptions()),
+                credentialProtectionProvider: protector);
+            var request = new CreateS3BackupDestinationRequest(
+                "new-s3", "https://s3.example.test", "EU-WEST-1", "private-backups",
+                "proxyharbor-drill", true, "test-access-key", "test-secret-key", 5);
+            Assert.Equal(201, Assert.IsType<ObjectResult>((await createController.CreateS3BackupDestination(
+                request, CancellationToken.None)).Result).StatusCode);
+            Assert.Equal(409, Assert.IsType<ConflictObjectResult>((await createController.CreateS3BackupDestination(
+                request, CancellationToken.None)).Result).StatusCode);
+            var created = await verify.BackupDestinations.SingleAsync(item => item.Name == "new-s3");
+            Assert.False(created.Enabled);
+            Assert.Equal("s3:s3.example.test:eu-west-1", created.FailureDomain);
+            Assert.DoesNotContain("test-secret-key", created.ProtectedSecrets, StringComparison.Ordinal);
+            Assert.Contains("test-secret-key", protector.CreateProtector(
+                "ProxyHarbor.BackupDestination.Secrets.v1").Unprotect(created.ProtectedSecrets),
+                StringComparison.Ordinal);
         }
         finally
         {

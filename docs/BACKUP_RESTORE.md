@@ -24,6 +24,8 @@ Manifest v9 содержит согласованный repeatable-read snapshot
 
 При старте legacy S3/Telegram-конфигурация идемпотентно проецируется в зарезервированные destination/pool rows под PostgreSQL advisory lock. Credentials повторно защищаются отдельным Data Protection purpose; plaintext не попадает в settings/capabilities. Эта проекция не создаёт `BackupCopies` или `BackupDeliveryJobs` и не меняет текущий delivery path, пока `BackupRouting__Enabled=false` (значение по умолчанию).
 
+Дополнительное S3-назначение можно зарегистрировать через администраторский `POST /api/v1/admin/backups/destinations/s3`: оно создаётся только в состоянии `enabled=false`, без pool route и без сетевой проверки. Access/secret key записываются лишь как Data Protection ciphertext, поэтому потеря key ring лишит приложение возможности использовать это назначение. Failure domain выводится из host endpoint и region: одинаковый host/region не считается двумя независимыми копиями, но разные имена host сами по себе тоже **не доказывают** независимость провайдеров или аккаунтов. Перед включением маршрута нужны operator-проверка независимости и реальный canary/restore drill.
+
 ## Создание и доставка
 
 Snapshot сериализуется в ZIP-поток и сразу шифруется в PHB3: plaintext ZIP не записывается в backup volume. Результат проверяется и атомарно публикуется. При выключенном routing сохраняется прежняя последовательная S3/Telegram-доставка. При включённом routing completed snapshot и отдельные destination copies/jobs фиксируются одной PostgreSQL-транзакцией, а bounded worker повторно использует те же immutable bytes. S3 становится `verified` только после `PUT`+`HEAD` с совпавшими размером/SHA-256; Telegram delivery без independent verify не удовлетворяет protection quorum.
