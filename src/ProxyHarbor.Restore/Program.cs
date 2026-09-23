@@ -45,6 +45,8 @@ internal static class RestoreApplication
         {
             return args.Length > 0 && args[0] == "materialize"
                 ? await BackupMaterializeApplication.RunAsync(args[1..], shutdown.Token)
+                : args.Length > 0 && args[0] == "catalog"
+                ? await BackupCatalogApplication.RunAsync(args[1..], shutdown.Token)
                 : await RunAsync(args, shutdown.Token);
         }
         finally
