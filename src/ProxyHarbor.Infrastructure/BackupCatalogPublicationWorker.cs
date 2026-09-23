@@ -29,8 +29,7 @@ public sealed class BackupCatalogPublicationProcessor(
     public async Task<BackupCatalogPublicationLease?> TryClaimAsync(CancellationToken token)
     {
         var signing = signingOptions.Value;
-        if (!routingOptions.Value.Enabled || !signing.Enabled ||
-            !BackupCatalogSigningOptions.IsValid(signing))
+        if (!IsEnabled(signing, routingOptions.Value))
             return null;
         await using var db = await dbFactory.CreateDbContextAsync(token);
         await using var transaction = await db.Database.BeginTransactionAsync(token);
@@ -60,7 +59,7 @@ public sealed class BackupCatalogPublicationProcessor(
             return null;
         }
         var copy = await db.BackupCopies.SingleAsync(item => item.Id == copyId, token);
-        if (copy.CatalogKeyReference is not null && copy.CatalogKeyReference != signing.KeyReference)
+        if (NeedsKeyReview(copy.CatalogKeyReference, signing.KeyReference))
         {
             copy.CatalogState = "manual_review";
             copy.CatalogLeaseId = null;
@@ -86,18 +85,15 @@ public sealed class BackupCatalogPublicationProcessor(
     public async Task ProcessAsync(BackupCatalogPublicationLease lease, CancellationToken hostToken)
     {
         var signing = signingOptions.Value;
-        if (!routingOptions.Value.Enabled || !signing.Enabled ||
-            !BackupCatalogSigningOptions.IsValid(signing) || signing.SigningKey is null)
+        if (!IsEnabled(signing, routingOptions.Value))
             return;
         await using var db = await dbFactory.CreateDbContextAsync(hostToken);
         var copy = await db.BackupCopies.AsNoTracking()
             .Include(item => item.BackupRun)
             .Include(item => item.BackupDestination)
             .SingleOrDefaultAsync(item => item.Id == lease.CopyId, hostToken);
-        if (copy is null || copy.State != "verified" || copy.CatalogState != "processing" ||
-            copy.CatalogLeaseId != lease.LeaseId || copy.CatalogLeaseUntil <= DateTimeOffset.UtcNow ||
-            copy.CatalogKeyReference != signing.KeyReference ||
-            copy.BackupRun.BackupPoolId is not { } poolId)
+        if (copy is null || EligiblePoolId(copy, lease, signing.KeyReference,
+                DateTimeOffset.UtcNow) is not { } poolId)
             return;
         try
         {
@@ -115,7 +111,7 @@ public sealed class BackupCatalogPublicationProcessor(
                     BackupDestinationRouteRejection.UnsupportedOperation, "Catalog требует S3 locator.");
             var snapshot = await new BackupCatalogService(dbFactory).CreateForCopyAsync(
                 copy.Id, signing.KeyReference, hostToken);
-            var bytes = BackupCatalogService.SealForCopySidecar(snapshot, signing.SigningKey);
+            var bytes = BackupCatalogService.SealForCopySidecar(snapshot, signing.SigningKey!);
             var expectedKey = S3BackupObjectStorageTransport.BuildCatalogObjectKey(copy.NativeLocator);
             var expectedHash = Convert.ToHexStringLower(SHA256.HashData(bytes));
             using var deadline = CancellationTokenSource.CreateLinkedTokenSource(hostToken);
@@ -173,9 +169,25 @@ public sealed class BackupCatalogPublicationProcessor(
         }
     }
 
-    private static bool IsPermanent(BackupDestinationErrorCode code) => code is
+    internal static bool IsEnabled(BackupCatalogSigningOptions signing, BackupRoutingOptions routing) =>
+        routing.Enabled && signing.Enabled && BackupCatalogSigningOptions.IsValid(signing);
+
+    internal static bool NeedsKeyReview(string? pinnedReference, string currentReference) =>
+        pinnedReference is not null && pinnedReference != currentReference;
+
+    internal static Guid? EligiblePoolId(BackupCopy copy,
+        BackupCatalogPublicationLease lease, string keyReference, DateTimeOffset now) =>
+        copy.State == "verified" && copy.CatalogState == "processing" &&
+        copy.CatalogLeaseId == lease.LeaseId && copy.CatalogLeaseUntil is { } until &&
+        until > now && copy.CatalogKeyReference == keyReference
+            ? copy.BackupRun?.BackupPoolId : null;
+
+    internal static bool IsPermanent(BackupDestinationErrorCode code) => code is
         BackupDestinationErrorCode.Collision or BackupDestinationErrorCode.IntegrityMismatch or
         BackupDestinationErrorCode.UnsupportedOperation or BackupDestinationErrorCode.ProviderRejected;
+
+    internal static TimeSpan RetryDelay(int attempt) => TimeSpan.FromSeconds(
+        Math.Min(3600, 15 * (1 << Math.Min(8, Math.Max(0, attempt - 1)))));
 
     private static async Task FinishFailureAsync(
         ProxyHarborDbContext db, BackupCatalogPublicationLease lease,
@@ -185,13 +197,13 @@ public sealed class BackupCatalogPublicationProcessor(
         var attempt = await db.BackupCopies.AsNoTracking()
             .Where(item => item.Id == lease.CopyId && item.CatalogLeaseId == lease.LeaseId)
             .Select(item => item.CatalogAttempt).SingleOrDefaultAsync(token);
-        var delaySeconds = Math.Min(3600, 15 * (1 << Math.Min(8, Math.Max(0, attempt - 1))));
+        var delay = RetryDelay(attempt);
         _ = await db.BackupCopies.Where(item => item.Id == lease.CopyId &&
                 item.CatalogState == "processing" && item.CatalogLeaseId == lease.LeaseId)
             .ExecuteUpdateAsync(setters => setters
                 .SetProperty(item => item.CatalogState, permanent ? "manual_review" : "pending")
                 .SetProperty(item => item.CatalogNotBefore,
-                    permanent ? (DateTimeOffset?)null : now.AddSeconds(delaySeconds))
+                    permanent ? (DateTimeOffset?)null : now.Add(delay))
                 .SetProperty(item => item.CatalogLeaseId, (Guid?)null)
                 .SetProperty(item => item.CatalogLeaseUntil, (DateTimeOffset?)null)
                 .SetProperty(item => item.CatalogLastErrorCode, code.ToString()), token);
@@ -218,7 +230,8 @@ public sealed class BackupCatalogPublicationWorker(
         {
             try
             {
-                if (!routingOptions.Value.Enabled || !signingOptions.Value.Enabled)
+                if (!BackupCatalogPublicationProcessor.IsEnabled(
+                        signingOptions.Value, routingOptions.Value))
                 {
                     await Task.Delay(IdleDelay, stoppingToken);
                     continue;
