@@ -58,8 +58,14 @@ public sealed class BackupDestinationHealthPersistenceIntegrationTests
                 ProbeOutcome = "matching",
                 Succeeded = true
             });
+            db.BackupDestinationHealthOutcomes.Add(new BackupDestinationHealthOutcome
+            {
+                BackupDestinationId = destination.Id,
+                Operation = "put",
+                Succeeded = true
+            });
             await db.SaveChangesAsync();
-            Assert.Equal(2, await db.BackupDestinationHealthOutcomes.CountAsync());
+            Assert.Equal(3, await db.BackupDestinationHealthOutcomes.CountAsync());
             var invalidId = Guid.NewGuid();
             await Assert.ThrowsAsync<PostgresException>(() => db.Database.ExecuteSqlInterpolatedAsync($"""
                 INSERT INTO "BackupDestinationHealthOutcomes"
@@ -112,6 +118,13 @@ public sealed class BackupDestinationHealthPersistenceIntegrationTests
                         BackupDestinationId = destination.Id,
                         Succeeded = false,
                         ErrorCode = BackupDestinationErrorCode.Unavailable.ToString(),
+                        ObservedAt = DateTimeOffset.UtcNow.AddDays(-9)
+                    },
+                    new BackupDestinationHealthOutcome
+                    {
+                        BackupDestinationId = destination.Id,
+                        Operation = "put",
+                        Succeeded = true,
                         ObservedAt = DateTimeOffset.UtcNow.AddDays(-2)
                     },
                     new BackupDestinationHealthOutcome
@@ -132,7 +145,7 @@ public sealed class BackupDestinationHealthPersistenceIntegrationTests
                 BackupDestinationOperation.Put, CancellationToken.None)).Allowed);
             Assert.Equal(1, await BackupDestinationHealth.PruneOldOutcomesAsync(
                 replica, CancellationToken.None));
-            Assert.Single(await replica.BackupDestinationHealthOutcomes.ToArrayAsync());
+            Assert.Equal(2, await replica.BackupDestinationHealthOutcomes.CountAsync());
         }
         finally
         {

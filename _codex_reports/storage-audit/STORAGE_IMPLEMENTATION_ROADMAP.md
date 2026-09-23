@@ -420,7 +420,7 @@ Current merged checkpoint: `main@f2c1e46` contains STG-00–02 and TASK-020–03
 
 Merged checkpoint `main@aa3d687`: PR #286 passed CI and put pool-route priority before job creation time for pending claims of one run (EVID-074). This is scheduling order only, not automatic failback or serialized cross-replica delivery.
 
-Merged checkpoint `main@9de84ec`: PR #287–288 passed CI and store exact VERIFY probe results plus typed inconclusive failure codes; older conclusive rows remain unclassified (EVID-075–076). Local checkpoint EVID-077 adds bounded read-only S3 recovery probes, but still awaits full gate/merge. Next local dependency is a failback eligibility gate requiring fresh matching evidence and successful PUT after the last destination failure; it must account for the 24-hour outcome retention versus policy windows up to seven days, and may not infer health from `missing`, `mismatching`, a legacy null result, or elapsed time alone. Real-provider canary and isolated restore remain external gates.
+Merged checkpoint `main@ffdfc77`: PR #287–289 passed CI, store exact typed VERIFY results, and add bounded read-only S3 recovery probes (EVID-075–077). Local EVID-078 adds durable per-attempt PUT outcomes and eight-day retention; full gate/merge is still pending. Next local dependency is a failback eligibility gate requiring fresh matching evidence and successful PUT after the last destination failure; it may not infer health from `missing`, `mismatching`, a legacy null result, or elapsed time alone. Real-provider canary and isolated restore remain external gates.
 
 ## 16. Регламент продолжения в новой сессии
 

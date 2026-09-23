@@ -431,6 +431,15 @@ public sealed class BackupDeliveryWorkerIntegrationTests
             Assert.Equal("failed", exhausted.State);
             Assert.Equal("permanent_failed", exhausted.BackupCopy.State);
             Assert.Equal(BackupDestinationErrorCode.Unavailable.ToString(), exhausted.LastErrorCode);
+            var putOutcomes = await verify.BackupDestinationHealthOutcomes
+                .OrderBy(item => item.ObservedAt).ToArrayAsync();
+            Assert.Equal(2, putOutcomes.Length);
+            Assert.All(putOutcomes, item =>
+            {
+                Assert.Equal("put", item.Operation);
+                Assert.False(item.Succeeded);
+                Assert.Equal(BackupDestinationErrorCode.Unavailable.ToString(), item.ErrorCode);
+            });
         }
         finally { Directory.Delete(directory, recursive: true); }
     }
@@ -488,6 +497,10 @@ public sealed class BackupDeliveryWorkerIntegrationTests
             Assert.Null(persistedJob.BackupCopy.VerifiedAt);
             Assert.True(persistedJob.BackupCopy.BackupRun.SentToTelegram);
             Assert.False(persistedJob.BackupCopy.BackupRun.SentToObjectStorage);
+            var outcome = Assert.Single(await verify.BackupDestinationHealthOutcomes.ToArrayAsync());
+            Assert.Equal("put", outcome.Operation);
+            Assert.False(outcome.Succeeded);
+            Assert.Equal(BackupDestinationErrorCode.UnsupportedOperation.ToString(), outcome.ErrorCode);
         }
         finally { Directory.Delete(directory, recursive: true); }
     }
@@ -535,6 +548,10 @@ public sealed class BackupDeliveryWorkerIntegrationTests
             Assert.Equal("unknown", persistedJob.BackupCopy.State);
             Assert.NotNull(persistedJob.BackupCopy.UnknownSince);
             Assert.Null(persistedJob.LeaseId);
+            var putOutcome = Assert.Single(await verify.BackupDestinationHealthOutcomes.ToArrayAsync());
+            Assert.Equal("put", putOutcome.Operation);
+            Assert.False(putOutcome.Succeeded);
+            Assert.Equal(BackupDestinationErrorCode.UnknownOutcome.ToString(), putOutcome.ErrorCode);
             var reconcileLease = Guid.NewGuid();
             persistedJob.State = "processing";
             persistedJob.LeaseId = reconcileLease;
@@ -1227,6 +1244,13 @@ public sealed class BackupDeliveryWorkerIntegrationTests
             Assert.Equal("permanent_failed", copies[0].State);
             Assert.Equal("verified", copies[1].State);
             Assert.Equal("fallback/fallback.phbackup", copies[1].NativeLocator);
+            var outcomes = await verify.BackupDestinationHealthOutcomes
+                .OrderBy(item => item.ObservedAt).ToArrayAsync();
+            Assert.Equal(2, outcomes.Length);
+            Assert.All(outcomes, item => Assert.Equal("put", item.Operation));
+            Assert.Contains(outcomes, item => !item.Succeeded &&
+                item.ErrorCode == BackupDestinationErrorCode.Unavailable.ToString());
+            Assert.Contains(outcomes, item => item.Succeeded && item.ErrorCode is null);
             var run = await verify.BackupRuns.SingleAsync(item => item.Id == runId);
             Assert.True(run.SentToObjectStorage);
             Assert.Equal("fallback/fallback.phbackup", run.ObjectStorageKey);
