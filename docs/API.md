@@ -502,6 +502,10 @@ Host должен быть публичным IP. Пароль не сохран
 
 Администратор получает read-only оценку защиты конкретного backup run и состояния его внешних копий. Ответ содержит `assessment` (`evaluated`, `legacy_unassessed`, `unknown_adapter` или `invalid_policy`), `state` и счётчики verified/required/desired copies и copy debt. Для записей без достоверной оценки `state` и счётчики равны `null` — это не считается защитой. Массив `copies` показывает destination, состояние, типизированный код ошибки, время независимой проверки и наличие native locator. Endpoint не выполняет provider I/O и не возвращает credentials, сам locator, object key или сырой текст ошибки. Отсутствующий run даёт `404`.
 
+## GET `/api/v1/admin/backups/destinations`
+
+Администратор получает страницу (`page`, `pageSize` 10–100) настроенных backup destinations. Ответ показывает имя, allowlisted kind, включённость, приоритет, только признаки наличия credentials/failure domain, pool policy и route, а также последний типизированный PUT/VERIFY outcome. Содержимое credentials, failure domain, provider settings, locator и сырой текст ошибки не возвращаются. Последний outcome — audit-наблюдение, а не live health-check; отсутствие ошибок не доказывает доступность provider. Endpoint read-only, не добавляет и не переключает маршруты.
+
 ## Публичные разделы, cookies и аналитика
 
 `GET /api/v1/site-settings` возвращает runtime-настройки публикации, реквизитов, cookie-диалога и типизированных метрик. Значения скрытых необязательных строк и банковского блока сервер редактирует до сериализации; ответ имеет `Cache-Control: no-store`. Секреты и произвольный код этот контракт не поддерживает.
