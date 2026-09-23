@@ -110,6 +110,15 @@ public interface IBackupDestinationAdapter
                     BackupDestinationErrorCode.UnsupportedOperation,
                     BackupDestinationFailureDisposition.Permanent),
                 "Backup adapter не реализует запись."));
+
+    /// <summary>Проверяет исход ранее начатой записи без повторной передачи body.</summary>
+    Task<BackupDestinationProbeResult> ProbeWriteOutcomeAsync(
+        BackupDestination destination,
+        string fileName,
+        string expectedSha256,
+        long expectedSize,
+        CancellationToken token) => Task.FromResult(
+            new BackupDestinationProbeResult(BackupDestinationProbeOutcome.Unsupported));
 }
 
 /// <summary>Безопасный результат provider write, пригодный для durable copy audit.</summary>
@@ -118,6 +127,28 @@ public sealed record BackupDestinationWriteResult(
     string? NativeVersion,
     string? NativeChecksum,
     bool IndependentlyVerified);
+
+/// <summary>Доказанный исход проверки ранее начатой записи без повторного PUT.</summary>
+public enum BackupDestinationProbeOutcome
+{
+    /// <summary>Объект существует и совпадает по content identity.</summary>
+    Matching,
+    /// <summary>Provider доказал отсутствие детерминированного locator.</summary>
+    Missing,
+    /// <summary>Locator занят содержимым с другой identity.</summary>
+    Mismatching,
+    /// <summary>Проверка временно не смогла доказать безопасный исход.</summary>
+    Inconclusive,
+    /// <summary>Destination не умеет независимо проверить исход записи.</summary>
+    Unsupported
+}
+
+/// <summary>Безопасные evidence проверки ранее начатой записи.</summary>
+public sealed record BackupDestinationProbeResult(
+    BackupDestinationProbeOutcome Outcome,
+    string? NativeLocator = null,
+    string? NativeVersion = null,
+    string? NativeChecksum = null);
 
 /// <summary>Причина отказа control-plane routing до provider I/O.</summary>
 public enum BackupDestinationRouteRejection
@@ -291,13 +322,68 @@ public sealed class S3BackupDestinationAdapter : IBackupDestinationAdapter
         ArgumentNullException.ThrowIfNull(destination);
         if (transport is null || protector is null || !string.Equals(destination.Kind, Kind, StringComparison.Ordinal))
             throw Failure(BackupDestinationErrorCode.InvalidConfiguration);
+        var options = ReadOptions(destination);
+        var result = await transport.UploadAndVerifyDetailedAsync(path, options, token);
+        if (result.SizeBytes != expectedSize ||
+            !string.Equals(result.Sha256, expectedSha256, StringComparison.Ordinal))
+            throw Failure(BackupDestinationErrorCode.IntegrityMismatch);
+        return new BackupDestinationWriteResult(
+            result.ObjectKey,
+            result.VersionId,
+            result.NativeChecksum ?? result.EntityTag,
+            IndependentlyVerified: true);
+    }
+
+    /// <inheritdoc />
+    public async Task<BackupDestinationProbeResult> ProbeWriteOutcomeAsync(
+        BackupDestination destination,
+        string fileName,
+        string expectedSha256,
+        long expectedSize,
+        CancellationToken token)
+    {
+        ArgumentNullException.ThrowIfNull(destination);
+        if (transport is null || protector is null || !string.Equals(destination.Kind, Kind, StringComparison.Ordinal) ||
+            string.IsNullOrWhiteSpace(fileName) || fileName != Path.GetFileName(fileName))
+            throw Failure(BackupDestinationErrorCode.InvalidConfiguration);
+        var options = ReadOptions(destination);
+        var locator = S3BackupObjectStorageTransport.BuildObjectKey(options.ObjectStoragePrefix, fileName);
+        try
+        {
+            var result = await transport.VerifyAsync(
+                locator, expectedSize, expectedSha256, options, token);
+            return new BackupDestinationProbeResult(
+                BackupDestinationProbeOutcome.Matching,
+                locator,
+                result.VersionId,
+                result.NativeChecksum ?? result.EntityTag);
+        }
+        catch (BackupDestinationOperationException exception)
+        {
+            return exception.Failure.Code switch
+            {
+                BackupDestinationErrorCode.NotFound => new(
+                    BackupDestinationProbeOutcome.Missing, locator),
+                BackupDestinationErrorCode.IntegrityMismatch or BackupDestinationErrorCode.Collision => new(
+                    BackupDestinationProbeOutcome.Mismatching, locator),
+                _ => new(BackupDestinationProbeOutcome.Inconclusive, locator)
+            };
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            return new BackupDestinationProbeResult(BackupDestinationProbeOutcome.Inconclusive, locator);
+        }
+    }
+
+    private BackupOptions ReadOptions(BackupDestination destination)
+    {
         S3Settings settings;
         S3Secrets secrets;
         try
         {
             settings = JsonSerializer.Deserialize<S3Settings>(destination.SettingsJson, Json)
                 ?? throw new JsonException();
-            secrets = JsonSerializer.Deserialize<S3Secrets>(protector.Unprotect(destination.ProtectedSecrets), Json)
+            secrets = JsonSerializer.Deserialize<S3Secrets>(protector!.Unprotect(destination.ProtectedSecrets), Json)
                 ?? throw new JsonException();
         }
         catch (Exception exception) when (exception is JsonException or CryptographicException)
@@ -305,7 +391,7 @@ public sealed class S3BackupDestinationAdapter : IBackupDestinationAdapter
             throw Failure(BackupDestinationErrorCode.InvalidConfiguration);
         }
 
-        var options = new BackupOptions
+        return new BackupOptions
         {
             SendToObjectStorage = true,
             ObjectStorageEndpoint = settings.Endpoint ?? string.Empty,
@@ -316,15 +402,6 @@ public sealed class S3BackupDestinationAdapter : IBackupDestinationAdapter
             ObjectStorageAccessKey = secrets.AccessKey ?? string.Empty,
             ObjectStorageSecretKey = secrets.SecretKey ?? string.Empty
         };
-        var result = await transport.UploadAndVerifyDetailedAsync(path, options, token);
-        if (result.SizeBytes != expectedSize ||
-            !string.Equals(result.Sha256, expectedSha256, StringComparison.Ordinal))
-            throw Failure(BackupDestinationErrorCode.IntegrityMismatch);
-        return new BackupDestinationWriteResult(
-            result.ObjectKey,
-            result.VersionId,
-            result.NativeChecksum ?? result.EntityTag,
-            IndependentlyVerified: true);
     }
 
     private static BackupDestinationOperationException Failure(BackupDestinationErrorCode code) => new(

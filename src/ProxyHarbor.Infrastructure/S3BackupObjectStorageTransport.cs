@@ -33,19 +33,7 @@ public sealed class S3BackupObjectStorageTransport : IBackupObjectStorageTranspo
         var key = BuildObjectKey(options.ObjectStoragePrefix, file.Name);
 
         using var client = CreateClient(options);
-        var request = new PutObjectRequest
-        {
-            BucketName = options.ObjectStorageBucket,
-            Key = key,
-            FilePath = file.FullName,
-            ContentType = "application/octet-stream",
-            AutoCloseStream = true,
-            // SHA-256 передаётся и как стандартный SDK checksum, и как совместимая
-            // metadata: часть S3-compatible реализаций не возвращает native checksum.
-            ChecksumSHA256 = Convert.ToBase64String(Convert.FromHexString(hash))
-        };
-        request.Metadata["sha256"] = hash;
-        request.Metadata["format"] = "PHB3";
+        var request = CreatePutRequest(file, key, hash, options.ObjectStorageBucket!);
         var put = await ExecuteProviderAsync(
             BackupDestinationOperation.Put,
             () => client.PutObjectAsync(request, token),
@@ -79,6 +67,27 @@ public sealed class S3BackupObjectStorageTransport : IBackupObjectStorageTranspo
             FirstValue(verified.VersionId, put.VersionId),
             FirstValue(verified.NativeChecksum, put.ChecksumSHA256),
             FirstValue(verified.EntityTag, put.ETag));
+    }
+
+    internal static PutObjectRequest CreatePutRequest(
+        FileInfo file, string key, string hash, string bucket)
+    {
+        var request = new PutObjectRequest
+        {
+            BucketName = bucket,
+            Key = key,
+            FilePath = file.FullName,
+            ContentType = "application/octet-stream",
+            AutoCloseStream = true,
+            // Не заменять существующий immutable locator даже при повторной доставке.
+            IfNoneMatch = "*",
+            // SHA-256 передаётся и как стандартный SDK checksum, и как совместимая
+            // metadata: часть S3-compatible реализаций не возвращает native checksum.
+            ChecksumSHA256 = Convert.ToBase64String(Convert.FromHexString(hash))
+        };
+        request.Metadata["sha256"] = hash;
+        request.Metadata["format"] = "PHB3";
+        return request;
     }
 
     /// <inheritdoc />
@@ -251,17 +260,23 @@ public sealed class S3BackupObjectStorageTransport : IBackupObjectStorageTranspo
                 return new(BackupDestinationErrorCode.InvalidConfiguration,
                     BackupDestinationFailureDisposition.Permanent);
             if (code is "SlowDown" or "Throttling" || (int)s3.StatusCode == 429)
-                return new(BackupDestinationErrorCode.RateLimited,
-                    BackupDestinationFailureDisposition.Retryable);
-            if (s3.StatusCode == HttpStatusCode.PreconditionFailed)
+                return operation == BackupDestinationOperation.Put
+                    ? new(BackupDestinationErrorCode.RateLimited,
+                        BackupDestinationFailureDisposition.UnknownOutcome)
+                    : new(BackupDestinationErrorCode.RateLimited,
+                        BackupDestinationFailureDisposition.Retryable);
+            if (s3.StatusCode is HttpStatusCode.PreconditionFailed or HttpStatusCode.Conflict)
                 return new(BackupDestinationErrorCode.Collision,
                     BackupDestinationFailureDisposition.Permanent);
             if (s3.StatusCode == HttpStatusCode.NotFound)
                 return new(BackupDestinationErrorCode.NotFound,
                     BackupDestinationFailureDisposition.Permanent);
             if ((int)s3.StatusCode >= 500)
-                return new(BackupDestinationErrorCode.Unavailable,
-                    BackupDestinationFailureDisposition.Retryable);
+                return operation == BackupDestinationOperation.Put
+                    ? new(BackupDestinationErrorCode.UnknownOutcome,
+                        BackupDestinationFailureDisposition.UnknownOutcome)
+                    : new(BackupDestinationErrorCode.Unavailable,
+                        BackupDestinationFailureDisposition.Retryable);
             return new(BackupDestinationErrorCode.ProviderRejected,
                 BackupDestinationFailureDisposition.Permanent);
         }

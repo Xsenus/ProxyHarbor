@@ -185,6 +185,47 @@ public sealed class BackupDestinationRegistryTests
         Assert.Equal("https://storage.example.test", transport.Options.ObjectStorageEndpoint);
     }
 
+    [Theory]
+    [InlineData(null, BackupDestinationProbeOutcome.Matching)]
+    [InlineData(BackupDestinationErrorCode.NotFound, BackupDestinationProbeOutcome.Missing)]
+    [InlineData(BackupDestinationErrorCode.IntegrityMismatch, BackupDestinationProbeOutcome.Mismatching)]
+    [InlineData(BackupDestinationErrorCode.Unavailable, BackupDestinationProbeOutcome.Inconclusive)]
+    public async Task S3ProbeMapsHeadEvidenceWithoutUpload(
+        BackupDestinationErrorCode? failure, BackupDestinationProbeOutcome expected)
+    {
+        var protection = new EphemeralDataProtectionProvider();
+        var transport = new CapturingObjectStorageTransport { VerificationFailure = failure };
+        var adapter = new S3BackupDestinationAdapter(transport, protection);
+        var destination = new BackupDestination
+        {
+            Kind = "s3",
+            SettingsJson = "{\"endpoint\":\"https://storage.example.test\",\"region\":\"eu-1\",\"bucket\":\"backup\",\"prefix\":\"safe\",\"usePathStyle\":true}",
+            ProtectedSecrets = protection.CreateProtector("ProxyHarbor.BackupDestination.Secrets.v1")
+                .Protect("{\"accessKey\":\"access\",\"secretKey\":\"secret\"}")
+        };
+
+        var result = await adapter.ProbeWriteOutcomeAsync(
+            destination, "snapshot.phbackup", new string('a', 64), 123, CancellationToken.None);
+
+        Assert.Equal(expected, result.Outcome);
+        Assert.Equal("safe/snapshot.phbackup", result.NativeLocator);
+        Assert.Equal(0, transport.UploadCalls);
+    }
+
+    [Fact]
+    public async Task S3ProbeRejectsNonBasenameLocator()
+    {
+        var protection = new EphemeralDataProtectionProvider();
+        var adapter = new S3BackupDestinationAdapter(
+            new CapturingObjectStorageTransport(), protection);
+        var exception = await Assert.ThrowsAsync<BackupDestinationOperationException>(() =>
+            adapter.ProbeWriteOutcomeAsync(
+                new BackupDestination { Kind = "s3" },
+                "../foreign.phbackup", new string('a', 64), 123, CancellationToken.None));
+
+        Assert.Equal(BackupDestinationErrorCode.InvalidConfiguration, exception.Failure.Code);
+    }
+
     private static BackupDestinationRegistry CreateRegistry() => new([
         new S3BackupDestinationAdapter(),
         new TelegramBackupDestinationAdapter()
@@ -226,6 +267,8 @@ public sealed class BackupDestinationRegistryTests
     private sealed class CapturingObjectStorageTransport : IBackupObjectStorageTransport
     {
         public BackupOptions? Options { get; private set; }
+        public BackupDestinationErrorCode? VerificationFailure { get; init; }
+        public int UploadCalls { get; private set; }
 
         public Task<string> UploadAndVerifyAsync(
             string path,
@@ -237,6 +280,7 @@ public sealed class BackupDestinationRegistryTests
             BackupOptions options,
             CancellationToken token)
         {
+            UploadCalls++;
             Options = options;
             return Task.FromResult(new BackupObjectStorageWriteResult(
                 "safe/snapshot.phbackup",
@@ -245,6 +289,19 @@ public sealed class BackupDestinationRegistryTests
                 "version-1",
                 "checksum",
                 "etag"));
+        }
+
+        public Task<BackupObjectStorageVerificationResult> VerifyAsync(
+            string objectKey, long expectedSize, string expectedSha256,
+            BackupOptions options, CancellationToken token)
+        {
+            Options = options;
+            if (VerificationFailure is { } code)
+                throw new BackupDestinationOperationException(
+                    new BackupDestinationFailure(code, BackupDestinationFailureDisposition.Permanent),
+                    "synthetic HEAD failure");
+            return Task.FromResult(new BackupObjectStorageVerificationResult(
+                objectKey, expectedSize, expectedSha256, "version-1", "checksum", "etag"));
         }
     }
 }
