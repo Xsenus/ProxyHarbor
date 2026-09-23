@@ -63,6 +63,8 @@ curl --fail https://proxy.example.com/api/v1/stats
 
 Оставляйте `BACKUP_ROUTING_ENABLED=false` до отдельного разрешённого canary новой orchestration. В этом режиме startup только идемпотентно проецирует legacy S3/Telegram-настройки в destination schema; текущая доставка остаётся неизменной и новые delivery jobs не создаются. Для canary заранее проверьте свободное место и задайте `BACKUP_ROUTING_MAXIMUM_STAGING_BYTES`/`BACKUP_ROUTING_STAGING_TTL_HOURS`; включённый worker не удаляет remote objects и не повторяет вслепую job с истёкшим lease. Необязательный `BACKUP_ROUTING_POOL_ID` выбирает заранее настроенный protection pool; пустое значение оставляет `legacy-default`, несуществующий UUID останавливает запуск backup. До выбора другого пула проверьте его quorum, маршруты, credentials и независимые failure domains.
 
+При обновлении с writer PHB3 v7 сначала зафиксируйте и проверьте отдельный предрелизный PostgreSQL dump на изолированной цели: v7 не сохраняет все durable-таблицы, поэтому существующий PHB3 не заменяет этот rollback point. После одобренного additive deploy с routing выключенным создайте **новый** PHB3 v9, проверьте его manifest и выполните полный restore в изолированной БД с восстановленными ключами. Успешный `Audit-Backup.ps1` подтверждает создание и доставку, но не полноту восстановления. Только после этого и отдельного provider canary разрешается обсуждать routing cutover; старые архивы, dump и ключи не удаляйте автоматически. Текущее production-состояние и ограничения зафиксированы в [storage evidence](../_codex_reports/storage-audit/STORAGE_EVIDENCE.md) (EVID-091).
+
 До аварийной замены данных извлеките безопасную конфигурацию из backup v9 без подключения к БД и сохраните её вне временного restore-контейнера:
 
 ```bash
