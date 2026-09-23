@@ -103,23 +103,9 @@ public sealed class BackupCatchUpPlanner(
                 .ToDictionaryAsync(item => item.BackupDestinationId, token);
             var copies = await db.BackupCopies.AsNoTracking()
                 .Include(item => item.BackupDestination)
-                .Where(item => item.BackupRunId == runId && item.State == "verified" &&
-                    item.VerifiedAt != null && item.NativeLocator != null &&
-                    item.PolicyVersion == run.ProtectionPolicyVersion &&
-                    item.ContentSha256 == run.ContentSha256 && item.SizeBytes == run.SizeBytes)
+                .Where(item => item.BackupRunId == runId)
                 .ToArrayAsync(token);
-            var readable = copies.Any(copy =>
-            {
-                if (!routes.TryGetValue(copy.BackupDestinationId, out var route)) return false;
-                try
-                {
-                    _ = registry.Resolve(copy.BackupDestination, route,
-                        BackupDestinationOperation.Materialize, copy.SizeBytes);
-                    return true;
-                }
-                catch (BackupDestinationRouteException) { return false; }
-            });
-            if (!readable) continue;
+            if (!HasReadableSource(run, copies, routes, registry)) continue;
 
             var planned = await deliveryPlanner.PlanAsync(
                 db, runId, run.ContentSha256!, run.SizeBytes, token, maxNewCopies: 1);
@@ -130,5 +116,34 @@ public sealed class BackupCatchUpPlanner(
 
         await transaction.CommitAsync(token);
         return 0;
+    }
+
+    internal static bool HasReadableSource(
+        BackupRun run,
+        IEnumerable<BackupCopy> copies,
+        IReadOnlyDictionary<Guid, BackupPoolDestination> routes,
+        BackupDestinationRegistry registry)
+    {
+        foreach (var copy in copies)
+        {
+            if (copy.State != "verified" || copy.VerifiedAt is null ||
+                string.IsNullOrWhiteSpace(copy.NativeLocator) ||
+                copy.PolicyVersion != run.ProtectionPolicyVersion ||
+                copy.SizeBytes != run.SizeBytes ||
+                !string.Equals(copy.ContentSha256, run.ContentSha256, StringComparison.Ordinal) ||
+                !routes.TryGetValue(copy.BackupDestinationId, out var route))
+                continue;
+            try
+            {
+                _ = registry.Resolve(copy.BackupDestination, route,
+                    BackupDestinationOperation.Materialize, copy.SizeBytes);
+                return true;
+            }
+            catch (BackupDestinationRouteException)
+            {
+                // Try another verified source without leaving the immutable pool.
+            }
+        }
+        return false;
     }
 }

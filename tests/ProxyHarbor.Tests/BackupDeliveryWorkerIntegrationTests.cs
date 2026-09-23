@@ -70,6 +70,129 @@ public sealed class BackupDeliveryWorkerIntegrationTests
     }
 
     [Fact]
+    public async Task PlannerLimitsCatchUpToOneNewCopyPerPass()
+    {
+        var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+            .UseInMemoryDatabase($"delivery-limit-{Guid.NewGuid():N}").Options;
+        await using var db = new ProxyHarborDbContext(options);
+        var pool = Pool();
+        var run = Run(pool.Id, new string('a', 64), "limit.phbackup");
+        var first = Destination("limit-first", "domain-a", 10);
+        var second = Destination("limit-second", "domain-b", 20);
+        db.AddRange(pool, run, first, second,
+            Route(pool.Id, first.Id, 10), Route(pool.Id, second.Id, 20));
+        await db.SaveChangesAsync();
+        var planner = new BackupDeliveryPlanner(Registry(
+            new SuccessfulAdapter("s3"), new SuccessfulAdapter("telegram")));
+
+        Assert.Equal(1, await planner.PlanAsync(
+            db, run.Id, run.ContentSha256!, run.SizeBytes, CancellationToken.None, maxNewCopies: 1));
+        Assert.Equal(1, await planner.PlanAsync(
+            db, run.Id, run.ContentSha256!, run.SizeBytes, CancellationToken.None, maxNewCopies: 1));
+        Assert.Equal(0, await planner.PlanAsync(
+            db, run.Id, run.ContentSha256!, run.SizeBytes, CancellationToken.None, maxNewCopies: 1));
+        Assert.Equal(2, await db.BackupDeliveryJobs.CountAsync());
+    }
+
+    [Fact]
+    public async Task PlannerRejectsChangedPoolPolicyBeforeCreatingCopies()
+    {
+        var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+            .UseInMemoryDatabase($"delivery-stale-policy-{Guid.NewGuid():N}").Options;
+        await using var db = new ProxyHarborDbContext(options);
+        var pool = Pool();
+        pool.PolicyVersion++;
+        var run = Run(pool.Id, new string('a', 64), "stale.phbackup");
+        var destination = Destination("stale-destination", "domain-a", 10);
+        db.AddRange(pool, run, destination, Route(pool.Id, destination.Id, 10));
+        await db.SaveChangesAsync();
+        var planner = new BackupDeliveryPlanner(Registry(
+            new SuccessfulAdapter("s3"), new SuccessfulAdapter("telegram")));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => planner.PlanAsync(
+            db, run.Id, run.ContentSha256!, run.SizeBytes, CancellationToken.None));
+        Assert.Empty(db.BackupCopies);
+    }
+
+    [Theory]
+    [InlineData("running", true)]
+    [InlineData("completed", false)]
+    public async Task PlannerRequiresCompletedRunAndExistingPool(string status, bool includePool)
+    {
+        var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+            .UseInMemoryDatabase($"delivery-incomplete-{Guid.NewGuid():N}").Options;
+        await using var db = new ProxyHarborDbContext(options);
+        var pool = Pool();
+        var run = Run(pool.Id, new string('a', 64), "incomplete.phbackup");
+        run.Status = status;
+        db.BackupRuns.Add(run);
+        if (includePool) db.BackupPools.Add(pool);
+        await db.SaveChangesAsync();
+        var planner = new BackupDeliveryPlanner(Registry(
+            new SuccessfulAdapter("s3"), new SuccessfulAdapter("telegram")));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => planner.PlanAsync(
+            db, run.Id, run.ContentSha256!, run.SizeBytes, CancellationToken.None));
+        Assert.Empty(db.BackupDeliveryJobs);
+    }
+
+    [Fact]
+    public async Task PlannerRejectsNonPositivePerPassLimit()
+    {
+        var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+            .UseInMemoryDatabase($"delivery-invalid-limit-{Guid.NewGuid():N}").Options;
+        await using var db = new ProxyHarborDbContext(options);
+        var planner = new BackupDeliveryPlanner(Registry(
+            new SuccessfulAdapter("s3"), new SuccessfulAdapter("telegram")));
+
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => planner.PlanAsync(
+            db, Guid.NewGuid(), new string('a', 64), 5, CancellationToken.None, maxNewCopies: 0));
+    }
+
+    [Theory]
+    [InlineData("valid", true)]
+    [InlineData("not-verified", false)]
+    [InlineData("no-verified-at", false)]
+    [InlineData("no-locator", false)]
+    [InlineData("wrong-policy", false)]
+    [InlineData("wrong-hash", false)]
+    [InlineData("wrong-size", false)]
+    [InlineData("no-route", false)]
+    [InlineData("no-read", false)]
+    [InlineData("disabled-destination", false)]
+    public void CatchUpRequiresExactReadableVerifiedSource(string scenario, bool expected)
+    {
+        var pool = Pool();
+        var run = Run(pool.Id, new string('a', 64), "source.phbackup");
+        var destination = Destination("read-source", "domain-a", 10);
+        var copy = Copy(run.Id, destination.Id, run.ContentSha256!);
+        copy.BackupDestination = destination;
+        copy.State = "verified";
+        copy.VerifiedAt = DateTimeOffset.UtcNow;
+        copy.NativeLocator = "source/source.phbackup";
+        var routes = new Dictionary<Guid, BackupPoolDestination>
+        {
+            [destination.Id] = Route(pool.Id, destination.Id, 10)
+        };
+        switch (scenario)
+        {
+            case "not-verified": copy.State = "quarantined"; break;
+            case "no-verified-at": copy.VerifiedAt = null; break;
+            case "no-locator": copy.NativeLocator = null; break;
+            case "wrong-policy": copy.PolicyVersion++; break;
+            case "wrong-hash": copy.ContentSha256 = new string('b', 64); break;
+            case "wrong-size": copy.SizeBytes++; break;
+            case "no-route": routes.Clear(); break;
+            case "no-read": routes[destination.Id].AllowedOperations = "put,verify"; break;
+            case "disabled-destination": destination.Enabled = false; break;
+        }
+
+        Assert.Equal(expected, BackupCatchUpPlanner.HasReadableSource(
+            run, [copy], routes,
+            Registry(new SuccessfulAdapter("s3"), new SuccessfulAdapter("telegram"))));
+    }
+
+    [Fact]
     public async Task PolicyVersionChangeFencesAlreadyPlannedJob()
     {
         var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
