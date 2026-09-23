@@ -89,6 +89,30 @@ public sealed class BackupCopyMaterializerTests
     }
 
     [Fact]
+    public async Task LocalCandidateMismatchDoesNotQuarantineRemoteCopy()
+    {
+        var directory = NewDirectory();
+        try
+        {
+            var factory = NewFactory();
+            var (run, preferred, _) = await SeedAsync(factory);
+            var adapter = new ReadAdapter(Guid.Empty, Bytes, localCorruptDestination: preferred.Id);
+            var materializer = NewMaterializer(factory, adapter);
+            var path = Path.Combine(directory, "restored.phbackup");
+
+            await Assert.ThrowsAsync<IOException>(() => materializer.MaterializeAsync(
+                run.Id, path, TimeSpan.FromSeconds(10), CancellationToken.None));
+
+            Assert.False(File.Exists(path));
+            Assert.Empty(Directory.GetFiles(directory, "*.candidate"));
+            Assert.Equal([preferred.Id], adapter.Calls);
+            await using var db = await factory.CreateDbContextAsync();
+            Assert.All(await db.BackupCopies.ToArrayAsync(), copy => Assert.Equal("verified", copy.State));
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    [Fact]
     public async Task DrainingSourceRemainsReadableButExistingTargetIsNeverOverwritten()
     {
         var directory = NewDirectory();
@@ -254,7 +278,8 @@ public sealed class BackupCopyMaterializerTests
     }
 
     private sealed class ReadAdapter(
-        Guid failingDestination, byte[] bytes, Guid corruptDestination = default, bool failAll = false)
+        Guid failingDestination, byte[] bytes, Guid corruptDestination = default,
+        bool failAll = false, Guid localCorruptDestination = default)
         : IBackupDestinationAdapter
     {
         public string Kind => "s3";
@@ -273,8 +298,14 @@ public sealed class BackupCopyMaterializerTests
                         BackupDestinationErrorCode.Unavailable,
                         BackupDestinationFailureDisposition.Retryable),
                     "synthetic provider outage");
+            if (destination.Id == corruptDestination)
+                throw new BackupDestinationOperationException(
+                    new BackupDestinationFailure(
+                        BackupDestinationErrorCode.IntegrityMismatch,
+                        BackupDestinationFailureDisposition.Permanent),
+                    "synthetic provider hash mismatch");
             await File.WriteAllBytesAsync(
-                finalPath, destination.Id == corruptDestination ? [9, 9, 9, 9, 9] : bytes, token);
+                finalPath, destination.Id == localCorruptDestination ? [9, 9, 9, 9, 9] : bytes, token);
             return new BackupDestinationMaterializationResult(
                 finalPath, bytes.Length, expectedSha256, null, null);
         }
