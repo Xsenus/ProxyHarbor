@@ -463,6 +463,15 @@ public sealed class BackupDeliveryProcessor(
                 Succeeded = conclusive,
                 ErrorCode = conclusive ? null :
                     (probeFailureCode ?? BackupDestinationErrorCode.Unavailable).ToString(),
+                ProbeOutcome = result.Outcome switch
+                {
+                    BackupDestinationProbeOutcome.Matching when
+                        !string.IsNullOrWhiteSpace(result.NativeLocator) => "matching",
+                    BackupDestinationProbeOutcome.Matching => "invalid",
+                    BackupDestinationProbeOutcome.Missing => "missing",
+                    BackupDestinationProbeOutcome.Mismatching => "mismatching",
+                    _ => "inconclusive"
+                },
                 ObservedAt = now
             });
         }

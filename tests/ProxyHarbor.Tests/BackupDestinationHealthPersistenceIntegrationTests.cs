@@ -10,6 +10,72 @@ public sealed class BackupDestinationHealthPersistenceIntegrationTests
 {
     [Fact]
     [Trait("Category", "PostgresIntegration")]
+    public async Task ProbeOutcomeMigrationPreservesLegacyRowsWithoutClaimingMatchingEvidence()
+    {
+        var baseConnection = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
+        if (string.IsNullOrWhiteSpace(baseConnection)) return;
+
+        var schema = $"proxyharbor_probe_migration_{Guid.NewGuid():N}";
+        await using var admin = new NpgsqlConnection(baseConnection);
+        await admin.OpenAsync();
+        await using (var create = new NpgsqlCommand($"CREATE SCHEMA \"{schema}\"", admin))
+            await create.ExecuteNonQueryAsync();
+        try
+        {
+            var scopedConnection = new NpgsqlConnectionStringBuilder(baseConnection)
+            {
+                SearchPath = schema
+            };
+            var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+                .UseNpgsql(scopedConnection.ConnectionString).Options;
+            await using var db = new ProxyHarborDbContext(options);
+            await db.Database.MigrateAsync("20260923103233_AddBackupDestinationHealthOutcomes");
+            var destination = new BackupDestination
+            {
+                Name = "legacy-probe",
+                Kind = "s3",
+                Enabled = true,
+                FailureDomain = "migration-test"
+            };
+            db.BackupDestinations.Add(destination);
+            await db.SaveChangesAsync();
+            var oldId = Guid.NewGuid();
+            await db.Database.ExecuteSqlInterpolatedAsync($"""
+                INSERT INTO "BackupDestinationHealthOutcomes"
+                    ("Id", "BackupDestinationId", "Operation", "Succeeded", "ObservedAt")
+                VALUES ({oldId}, {destination.Id}, 'verify', TRUE, {DateTimeOffset.UtcNow})
+                """);
+
+            await db.Database.MigrateAsync();
+            var legacy = await db.BackupDestinationHealthOutcomes.AsNoTracking()
+                .SingleAsync(item => item.Id == oldId);
+            Assert.True(legacy.Succeeded);
+            Assert.Null(legacy.ProbeOutcome);
+
+            db.BackupDestinationHealthOutcomes.Add(new BackupDestinationHealthOutcome
+            {
+                BackupDestinationId = destination.Id,
+                ProbeOutcome = "matching",
+                Succeeded = true
+            });
+            await db.SaveChangesAsync();
+            Assert.Equal(2, await db.BackupDestinationHealthOutcomes.CountAsync());
+            var invalidId = Guid.NewGuid();
+            await Assert.ThrowsAsync<PostgresException>(() => db.Database.ExecuteSqlInterpolatedAsync($"""
+                INSERT INTO "BackupDestinationHealthOutcomes"
+                    ("Id", "BackupDestinationId", "Operation", "Succeeded", "ProbeOutcome", "ObservedAt")
+                VALUES ({invalidId}, {destination.Id}, 'verify', TRUE, 'unsupported', {DateTimeOffset.UtcNow})
+                """));
+        }
+        finally
+        {
+            await using var drop = new NpgsqlCommand($"DROP SCHEMA \"{schema}\" CASCADE", admin);
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
     public async Task VerifyFailureSurvivesReplicaAndOldObservationsArePruned()
     {
         var baseConnection = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
