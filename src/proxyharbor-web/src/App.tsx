@@ -22,6 +22,9 @@ type ValidationRun = { id: string; startedAt: string; finishedAt?: string; claim
 type BackupRun = { id: string; startedAt: string; finishedAt?: string; status: string; fileName?: string; sizeBytes: number; telegramConfigured: boolean; sentToTelegram: boolean; objectStorageConfigured?:boolean; sentToObjectStorage?:boolean; objectStorageKey?:string; error?: string }
 type BackupFile = BackupRun & { available: boolean }
 type BackupSettings = { enabled:boolean;intervalHours:number;retentionDays:number;historyRetentionDays:number;maxTelegramFileSizeMb:number;sendToTelegram:boolean;telegramBotConfigured:boolean;telegramRecipientId?:string;telegramRecipientDisplayName?:string;telegramRecipientUsername?:string;sendToObjectStorage:boolean;objectStorageEndpoint:string;objectStorageRegion:string;objectStorageBucket:string;objectStoragePrefix:string;objectStorageUsePathStyle:boolean;objectStorageCredentialsConfigured:boolean;objectStorageAccessKey:string;objectStorageSecretKey:string;clearObjectStorageCredentials:boolean;encryptionConfigured:boolean;format:string }
+type BackupDestinationRoute = { poolId:string;poolName:string;policyVersion:number;requiredVerifiedCopies:number;desiredVerifiedCopies:number;role:string;allowedOperations:string;priority:number;enabled:boolean;draining:boolean }
+type BackupDestinationOutcome = { operation:string;succeeded:boolean;probeOutcome?:string;errorCode?:string;observedAt:string }
+type BackupDestinationOverview = { id:string;name:string;kind:string;enabled:boolean;priority:number;credentialsConfigured:boolean;failureDomainConfigured:boolean;routes:BackupDestinationRoute[];lastOutcome?:BackupDestinationOutcome }
 type TelegramBackupRecipient = { id:string;displayName:string;username?:string;lastInteractionAt:string;isDefault:boolean }
 type SourceCatalogSnapshot = { lastAuditedOn: string; expectedSources: number; presentSources: number; enabledSources: number; healthySources: number; failingSources: number; neverAuditedSources: number; staleSources: number; truncatedSources: number; expectedProviders: number; presentProviders: number; enabledProviders: number; isComplete: boolean; isHealthy: boolean }
 type Diagnostics = {
@@ -767,6 +770,7 @@ export default function App() {
             <AdminPageHeader id="admin-backups-title" title="Резервные копии"><button className="primary-admin-button" onClick={() => runAdminAction('backup')} disabled={!adminAuthenticated || adminMutationBusy}><Database/>{action === 'backup' ? 'Создаём…' : 'Создать backup'}</button></AdminPageHeader>
             <div className="backup-summary"><article><span><Database/></span><div><small>Размер базы</small><strong>{formatBytes(diagnostics?.databaseBytes)}</strong></div></article><article><span><HardDriveDownload/></span><div><small>Последняя копия</small><strong>{latestBackup ? formatBytes(latestBackup.sizeBytes) : '—'}</strong></div></article><article><span><ShieldCheck/></span><div><small>Доставка</small><strong>{latestBackup ? backupDelivery(latestBackup) : 'Нет данных'}</strong></div></article></div>
             <AdminBackupSettings onError={setAdminError}/>
+            <AdminBackupDestinations/>
             <section className="admin-card backup-registry">
               <div className="card-heading"><div><span className="kicker">ИСТОРИЯ</span><h2>Резервные копии <em>{backupTotal}</em></h2></div><button className="icon-button" aria-label="Обновить резервные копии" onClick={() => void loadBackups()} disabled={!!backupBusy}><RefreshCw/></button></div>
               <div className="backup-list">{backups.length === 0 ? <p className="empty-state">Резервные копии ещё не создавались.</p> : backups.map(run => <article key={run.id}>
@@ -988,6 +992,47 @@ function AdminProxiesPage() {
 
 /** Доступный переключатель вместо платформенно-зависимого checkbox. */
 /** Настройки backup живут в PostgreSQL и применяются worker без рестарта контейнера. */
+function AdminBackupDestinations(){
+  const [page,setPage]=useState(1)
+  const [pageSize,setPageSize]=useState(10)
+  const [refresh,setRefresh]=useState(0)
+  const [data,setData]=useState<PagedResult<BackupDestinationOverview>|null>(null)
+  const [loading,setLoading]=useState(true)
+  const [error,setError]=useState('')
+  useEffect(()=>{
+    const controller=new AbortController()
+    const load=async()=>{
+      setLoading(true)
+      setError('')
+      try{
+        const response=await fetch(`${API}/api/v1/admin/backups/destinations?page=${page}&pageSize=${pageSize}`,{credentials:'include',cache:'no-store',signal:controller.signal})
+        if(!response.ok)throw new Error(await responseMessage(response,'Назначения резервных копий недоступны'))
+        const result=await response.json() as PagedResult<BackupDestinationOverview>
+        if(!controller.signal.aborted)setData(result)
+      }catch(reason){if(!controller.signal.aborted)setError(reason instanceof Error?reason.message:'Назначения резервных копий недоступны')}
+      finally{if(!controller.signal.aborted)setLoading(false)}
+    }
+    void load()
+    return()=>controller.abort()
+  },[page,pageSize,refresh])
+  const outcomeText=(outcome?:BackupDestinationOutcome)=>{
+    if(!outcome)return 'Операций ещё нет'
+    const operation=outcome.operation==='verify'?'VERIFY':outcome.operation==='put'?'PUT':'Операция'
+    const result=outcome.probeOutcome??(outcome.succeeded?'подтверждена':outcome.errorCode??'ошибка')
+    return `${operation}: ${result}`
+  }
+  return <section className="admin-card backup-destinations" aria-labelledby="backup-destinations-title" aria-busy={loading}>
+    <div className="card-heading"><div><span className="kicker">ВНЕШНИЕ КОПИИ</span><h2 id="backup-destinations-title">Назначения и маршруты <em>{data?.total??'—'}</em></h2><p>Состояние из БД без обращения к provider. Последняя успешная операция не доказывает доступность сейчас.</p></div><button className="icon-button" type="button" aria-label="Обновить назначения резервных копий" disabled={loading} onClick={()=>setRefresh(value=>value+1)}><RefreshCw className={loading?'spin':undefined} width={18} height={18}/></button></div>
+    {error&&<p className="backup-destination-error" role="alert">{error}</p>}
+    {loading&&!data?<p className="empty-state">Загружаем назначения…</p>:data?.items.length===0?<p className="empty-state">Назначения пока не настроены. Это не подтверждает внешнюю защиту backup.</p>:<div className="backup-destination-list">{data?.items.map(destination=><article key={destination.id}>
+      <div className="backup-destination-heading"><div><b>{destination.name}</b><small>{destination.kind==='s3'?'S3':destination.kind==='telegram'?'Telegram':'Неизвестный тип'} · приоритет {destination.priority} · {destination.failureDomainConfigured?'граница отказа задана':'граница отказа не задана'} · {destination.credentialsConfigured?'ключи сохранены':'ключи не сохранены'}</small></div><span className={destination.enabled?'state-pill active':'state-pill'}>{destination.enabled?'Включено':'Выключено'}</span></div>
+      <p>Последний исход: {outcomeText(destination.lastOutcome)}{destination.lastOutcome&&<> · <time dateTime={destination.lastOutcome.observedAt}>{formatDateTime(destination.lastOutcome.observedAt)}</time></>}</p>
+      {destination.routes.length===0?<p>Не входит ни в один pool.</p>:<ul>{destination.routes.map(route=><li key={route.poolId}><b>{route.poolName}</b><span>v{route.policyVersion} · quorum {route.requiredVerifiedCopies}/{route.desiredVerifiedCopies} · {route.role} · {route.allowedOperations} · {route.draining?'draining':route.enabled?'маршрут включён':'маршрут выключен'}</span></li>)}</ul>}
+    </article>)}</div>}
+    {data&&data.total>data.pageSize&&<ProxyPagination page={page} pageSize={pageSize} total={data.total} totalPages={Math.max(1,Math.ceil(data.total/pageSize))} onPageChange={setPage} onPageSizeChange={size=>{setPageSize(size);setPage(1)}}/>}
+  </section>
+}
+
 function AdminBackupSettings({onError}:{onError:(message:string)=>void}){
   const [draft,setDraft]=useState<BackupSettings|null>(null)
   const [recipients,setRecipients]=useState<TelegramBackupRecipient[]>([])

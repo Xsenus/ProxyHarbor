@@ -241,7 +241,7 @@ Purpose: remove production-DB/VPS circular dependency. Covers REQ-007/008/014, R
 
 #### TASK-050 — Admin API and UI for destinations/copies
 
-- Status: `PARTIAL: read-only per-run protection/copy detail merged in PR #293; destination/pool management remains`; Codex.
+- Status: `PARTIAL: read-only per-run protection/copy detail and paged destination/route overview implemented; destination/pool mutation management remains`; Codex.
 - Changes: `AdminController`, DTO/OpenAPI; React backup settings/history. Show pool policy, destination state, verified copies, pending/degraded/UNKNOWN, safe locator summary. Credentials write-only. Preserve old response fields.
 - UI rules: use `StyledSelect`, shared Toggle/button/checkbox/table/modal patterns; explicit Lucide sizes; keyboard/focus/mobile tests per `AGENTS.md`.
 - Checks: controller auth/validation, frontend interaction/a11y, desktop/mobile visual verification; full frontend lint/test/build final gate.
@@ -249,7 +249,7 @@ Purpose: remove production-DB/VPS circular dependency. Covers REQ-007/008/014, R
 
 #### TASK-051 — Metrics, alerts and diagnostics
 
-- Status: `IN PROGRESS: latest-run quorum/debt, fail-closed last protected age, copy/job backlog, isolated-restore and aggregate durable PUT/VERIFY outcome metrics plus bounded alerts implemented; per-destination health, staging and drill SLO gates remain`; Codex.
+- Status: `IN PROGRESS: latest-run quorum/debt, fail-closed last protected age, copy/job backlog, isolated-restore, aggregate and per-destination durable PUT/VERIFY outcome metrics plus bounded alerts implemented; live destination health, staging and drill SLO gates remain`; Codex.
 - Changes: `MetricsController`, `DiagnosticsDatabaseSnapshot`, `deploy/prometheus/alerts.yml` and tests, `MONITORING.md`. Metrics from TЗ §10 with bounded labels. Add protection age/debt/UNKNOWN/all-failed/staging/drill overdue; retain current alerts during transition.
 - Health: optional destination not global readiness failure; required pool exhaustion visible separately.
 - Checks: promtool contracts, metrics tests, sanitization, restored DB compatibility.

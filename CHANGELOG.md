@@ -5,6 +5,7 @@
 
 ## [Unreleased]
 
+- Админка получила read-only обзор внешних backup destinations и маршрутов пула с последним типизированным исходом операции. Новый защищённый endpoint не возвращает credentials, failure domain, provider settings или locator; управление маршрутами остаётся отдельным этапом.
 - Prometheus показывает failed PUT и неблагополучные VERIFY за последний час отдельно по каждому настроенному backup destination. Метки содержат только внутренний UUID и allowlisted тип адаптера, без bucket, account, locator или credentials.
 - Добавлен единый runbook изолированного DR-дрилла: отдельные проверки S3 protocol canary и реального offline restore, независимый escrow ключей, PostgreSQL/sentinel acceptance, RPO/RTO и stop-критерии. Сам дрилл на реальном provider пока не выполнен.
 - Prometheus теперь ищет последнюю routed-копию с доказанным обязательным quorum, даже если более новый backup ещё не защищён; неоценимая история явно отделена от доказанного отсутствия копии. Добавлены alarms для просроченной защиты и подтверждённого несовпадения S3-копии.

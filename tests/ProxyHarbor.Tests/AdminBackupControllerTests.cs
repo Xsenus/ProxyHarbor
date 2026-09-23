@@ -13,6 +13,84 @@ namespace ProxyHarbor.Tests;
 public sealed class AdminBackupControllerTests
 {
     [Fact]
+    public async Task DestinationOverviewShowsRoutesAndTypedOutcomeWithoutSecrets()
+    {
+        var factory = Factory($"admin-backup-destinations-{Guid.NewGuid():N}");
+        var pool = new BackupPool
+        {
+            Name = "durable",
+            RequiredVerifiedCopies = 1,
+            DesiredVerifiedCopies = 2,
+            PolicyVersion = 3
+        };
+        var destination = new BackupDestination
+        {
+            Name = "Netherlands",
+            Kind = "s3",
+            Enabled = true,
+            Priority = 2,
+            FailureDomain = "private-account-id",
+            SettingsJson = "private-bucket-settings",
+            ProtectedSecrets = "private-protected-credentials"
+        };
+        var latest = new BackupDestinationHealthOutcome
+        {
+            BackupDestinationId = destination.Id,
+            Operation = "verify",
+            Succeeded = false,
+            ProbeOutcome = "mismatching",
+            ErrorCode = "raw-provider-error-secret",
+            ObservedAt = DateTimeOffset.UtcNow
+        };
+        await using (var seed = await factory.CreateDbContextAsync())
+        {
+            seed.BackupPools.Add(pool);
+            seed.BackupDestinations.Add(destination);
+            seed.BackupPoolDestinations.Add(new BackupPoolDestination
+            {
+                BackupPoolId = pool.Id,
+                BackupDestinationId = destination.Id,
+                Role = "fallback",
+                AllowedOperations = "verify,read",
+                Priority = 1,
+                Enabled = false,
+                Draining = true
+            });
+            seed.BackupDestinationHealthOutcomes.AddRange(
+                new BackupDestinationHealthOutcome
+                {
+                    BackupDestinationId = destination.Id,
+                    Operation = "put",
+                    Succeeded = true,
+                    ObservedAt = latest.ObservedAt.AddMinutes(-1)
+                }, latest);
+            await seed.SaveChangesAsync();
+        }
+
+        var response = Assert.IsType<PagedResult<BackupDestinationOverviewResponse>>(
+            Assert.IsType<OkObjectResult>((await Controller(factory, Path.GetTempPath())
+                .BackupDestinations(1, 10, CancellationToken.None)).Result).Value);
+        Assert.Equal(1, response.Total);
+        var item = Assert.Single(response.Items);
+        Assert.Equal(destination.Id, item.Id);
+        Assert.True(item.CredentialsConfigured);
+        Assert.True(item.FailureDomainConfigured);
+        var route = Assert.Single(item.Routes);
+        Assert.Equal(pool.Id, route.PoolId);
+        Assert.Equal(3, route.PolicyVersion);
+        Assert.Equal("fallback", route.Role);
+        Assert.True(route.Draining);
+        Assert.False(route.Enabled);
+        Assert.Equal("mismatching", item.LastOutcome?.ProbeOutcome);
+        Assert.Null(item.LastOutcome?.ErrorCode);
+        var json = JsonSerializer.Serialize(response);
+        Assert.DoesNotContain("private-account-id", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("private-bucket-settings", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("private-protected-credentials", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("raw-provider-error-secret", json, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task ProtectionDetailIsFailClosedForLegacyOrMissingRuns()
     {
         var factory = Factory($"admin-backup-protection-legacy-{Guid.NewGuid():N}");

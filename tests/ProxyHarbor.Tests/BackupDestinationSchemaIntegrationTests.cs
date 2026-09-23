@@ -1,5 +1,8 @@
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using Npgsql;
+using ProxyHarbor.Api.Controllers;
 using ProxyHarbor.Domain;
 using ProxyHarbor.Infrastructure;
 
@@ -9,6 +12,79 @@ namespace ProxyHarbor.Tests;
 [Collection(PostgresIntegrationGroup.Name)]
 public sealed class BackupDestinationSchemaIntegrationTests
 {
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
+    public async Task AdminDestinationOverviewReadsLatestOutcomeFromPostgres()
+    {
+        var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
+        if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
+
+        var schema = $"proxyharbor_backup_destination_overview_{Guid.NewGuid():N}";
+        var connectionBuilder = new NpgsqlConnectionStringBuilder(baseConnectionString) { SearchPath = schema };
+        await using var admin = new NpgsqlConnection(baseConnectionString);
+        await admin.OpenAsync();
+        await using (var create = new NpgsqlCommand($"CREATE SCHEMA \"{schema}\"", admin))
+            await create.ExecuteNonQueryAsync();
+        try
+        {
+            var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+                .UseNpgsql(connectionBuilder.ConnectionString).Options;
+            await using (var db = new ProxyHarborDbContext(options))
+            {
+                await DatabaseSeeder.MigrateSchemaAsync(db, CancellationToken.None);
+                var pool = new BackupPool { Name = "overview-test" };
+                var destination = new BackupDestination
+                {
+                    Name = "overview-test-s3",
+                    Kind = "s3",
+                    Enabled = true,
+                    FailureDomain = "private-account",
+                    SettingsJson = "{}"
+                };
+                db.BackupPools.Add(pool);
+                db.BackupDestinations.Add(destination);
+                db.BackupPoolDestinations.Add(new BackupPoolDestination
+                {
+                    BackupPoolId = pool.Id,
+                    BackupDestinationId = destination.Id
+                });
+                db.BackupDestinationHealthOutcomes.AddRange(
+                    new BackupDestinationHealthOutcome
+                    {
+                        BackupDestinationId = destination.Id,
+                        Operation = "put",
+                        Succeeded = true,
+                        ObservedAt = DateTimeOffset.UtcNow.AddMinutes(-2)
+                    },
+                    new BackupDestinationHealthOutcome
+                    {
+                        BackupDestinationId = destination.Id,
+                        Operation = "verify",
+                        Succeeded = false,
+                        ProbeOutcome = "missing",
+                        ErrorCode = nameof(BackupDestinationErrorCode.NotFound),
+                        ObservedAt = DateTimeOffset.UtcNow.AddMinutes(-1)
+                    });
+                await db.SaveChangesAsync();
+            }
+            var factory = new ContextFactory(options);
+            var controller = new AdminController(factory, null!, null!, null!, null!,
+                Options.Create(new BackupOptions()), Options.Create(new CollectorOptions()));
+            var result = Assert.IsType<PagedResult<BackupDestinationOverviewResponse>>(
+                Assert.IsType<OkObjectResult>((await controller.BackupDestinations(
+                    1, 10, CancellationToken.None)).Result).Value);
+            var item = Assert.Single(result.Items);
+            Assert.Equal("missing", item.LastOutcome?.ProbeOutcome);
+            Assert.Equal(nameof(BackupDestinationErrorCode.NotFound), item.LastOutcome?.ErrorCode);
+            Assert.Single(item.Routes);
+        }
+        finally
+        {
+            await using var drop = new NpgsqlCommand($"DROP SCHEMA IF EXISTS \"{schema}\" CASCADE", admin);
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
+
     [Fact]
     [Trait("Category", "PostgresIntegration")]
     public async Task FreshSchemaCreatesNoJobsAndRejectsInvalidDurableState()
@@ -141,5 +217,11 @@ public sealed class BackupDestinationSchemaIntegrationTests
             await using var drop = new NpgsqlCommand($"DROP SCHEMA IF EXISTS \"{schema}\" CASCADE", admin);
             await drop.ExecuteNonQueryAsync();
         }
+    }
+
+    private sealed class ContextFactory(DbContextOptions<ProxyHarborDbContext> options)
+        : IDbContextFactory<ProxyHarborDbContext>
+    {
+        public ProxyHarborDbContext CreateDbContext() => new(options);
     }
 }

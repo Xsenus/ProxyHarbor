@@ -631,6 +631,55 @@ public sealed class AdminController(
         return Ok(await CreateBackupSettingsResponseAsync(updated, token));
     }
 
+    /// <summary>Возвращает безопасный обзор настроенных destination и маршрутов без provider I/O.</summary>
+    [HttpGet("backups/destinations")]
+    [ProducesResponseType<PagedResult<BackupDestinationOverviewResponse>>(StatusCodes.Status200OK)]
+    public async Task<ActionResult<PagedResult<BackupDestinationOverviewResponse>>> BackupDestinations(
+        [FromQuery] int page = 1, [FromQuery] int pageSize = 20, CancellationToken token = default)
+    {
+        page = Math.Clamp(page, 1, 100_000);
+        pageSize = Math.Clamp(pageSize, 10, 100);
+        await using var db = await dbFactory.CreateDbContextAsync(token);
+        var total = await db.BackupDestinations.CountAsync(token);
+        var destinations = await db.BackupDestinations.AsNoTracking()
+            .OrderBy(destination => destination.Priority).ThenBy(destination => destination.Name)
+            .ThenBy(destination => destination.Id)
+            .Skip((page - 1) * pageSize).Take(pageSize)
+            .Select(destination => new
+            {
+                destination.Id,
+                destination.Name,
+                destination.Kind,
+                destination.Enabled,
+                destination.Priority,
+                CredentialsConfigured = destination.ProtectedSecrets != "",
+                FailureDomainConfigured = destination.FailureDomain != ""
+            }).ToArrayAsync(token);
+        var ids = destinations.Select(destination => destination.Id).ToArray();
+        var routes = await db.BackupPoolDestinations.AsNoTracking()
+            .Where(route => ids.Contains(route.BackupDestinationId))
+            .Include(route => route.BackupPool)
+            .ToArrayAsync(token);
+        var lastOutcomes = await db.BackupDestinationHealthOutcomes.AsNoTracking()
+            .Where(outcome => ids.Contains(outcome.BackupDestinationId))
+            .GroupBy(outcome => outcome.BackupDestinationId)
+            .Select(group => group.OrderByDescending(outcome => outcome.ObservedAt)
+                .ThenByDescending(outcome => outcome.Id).First())
+            .ToDictionaryAsync(outcome => outcome.BackupDestinationId, token);
+        var routesByDestination = routes.GroupBy(route => route.BackupDestinationId)
+            .ToDictionary(group => group.Key, group => group.OrderBy(route => route.Priority)
+                .ThenBy(route => route.BackupPool.Name, StringComparer.Ordinal)
+                .Select(BackupDestinationRouteResponse.From).ToArray());
+        var items = destinations.Select(destination => new BackupDestinationOverviewResponse(
+            destination.Id, destination.Name, destination.Kind, destination.Enabled,
+            destination.Priority, destination.CredentialsConfigured,
+            destination.FailureDomainConfigured,
+            routesByDestination.GetValueOrDefault(destination.Id) ?? [],
+            lastOutcomes.TryGetValue(destination.Id, out var outcome)
+                ? BackupDestinationOutcomeResponse.From(outcome) : null)).ToArray();
+        return Ok(new PagedResult<BackupDestinationOverviewResponse>(items, page, pageSize, total));
+    }
+
     /// <summary>Возвращает страницу истории и актуальную доступность локальных encrypted-файлов.</summary>
     [HttpGet("backups")]
     [ProducesResponseType<PagedResult<BackupFileResponse>>(StatusCodes.Status200OK)]
@@ -984,6 +1033,59 @@ public sealed record BackupCopyStatusResponse(
             route?.Draining == true,
             copy.Jobs.OrderByDescending(job => job.UpdatedAt).FirstOrDefault()?.State,
             copy.CatalogState);
+    }
+}
+
+/// <summary>Безопасное состояние настроенного назначения без provider locator и credentials.</summary>
+public sealed record BackupDestinationOverviewResponse(
+    Guid Id,
+    string Name,
+    string Kind,
+    bool Enabled,
+    int Priority,
+    bool CredentialsConfigured,
+    bool FailureDomainConfigured,
+    BackupDestinationRouteResponse[] Routes,
+    BackupDestinationOutcomeResponse? LastOutcome);
+
+/// <summary>Публичная для администратора часть маршрута pool → destination.</summary>
+public sealed record BackupDestinationRouteResponse(
+    Guid PoolId,
+    string PoolName,
+    int PolicyVersion,
+    int RequiredVerifiedCopies,
+    int DesiredVerifiedCopies,
+    string Role,
+    string AllowedOperations,
+    int Priority,
+    bool Enabled,
+    bool Draining)
+{
+    /// <summary>Проецирует маршрут без provider-specific настроек.</summary>
+    public static BackupDestinationRouteResponse From(BackupPoolDestination route) => new(
+        route.BackupPoolId, route.BackupPool.Name, route.BackupPool.PolicyVersion,
+        route.BackupPool.RequiredVerifiedCopies, route.BackupPool.DesiredVerifiedCopies,
+        route.Role, route.AllowedOperations, route.Priority, route.Enabled, route.Draining);
+}
+
+/// <summary>Последняя типизированная provider-операция; сырой ответ не возвращается.</summary>
+public sealed record BackupDestinationOutcomeResponse(
+    string Operation,
+    bool Succeeded,
+    string? ProbeOutcome,
+    string? ErrorCode,
+    DateTimeOffset ObservedAt)
+{
+    /// <summary>Разрешает только известные коды из durable audit.</summary>
+    public static BackupDestinationOutcomeResponse From(BackupDestinationHealthOutcome outcome)
+    {
+        var error = Enum.TryParse<BackupDestinationErrorCode>(outcome.ErrorCode, out var code) &&
+            Enum.IsDefined(code) ? code.ToString() : null;
+        var probe = outcome.ProbeOutcome is "matching" or "missing" or "mismatching" or
+            "inconclusive" or "invalid" ? outcome.ProbeOutcome : null;
+        return new BackupDestinationOutcomeResponse(
+            outcome.Operation is "put" or "verify" ? outcome.Operation : "unknown",
+            outcome.Succeeded, probe, error, outcome.ObservedAt);
     }
 }
 
