@@ -5,6 +5,7 @@
 
 ## [Unreleased]
 
+- При включённом destination routing отдельный worker ограниченно проверяет существующую verified S3-копию через read-only HEAD: не более одного probe в минуту на replica и не чаще одного за пять минут на destination. `missing` снимает verified-статус, `mismatching` карантинит копию, inconclusive сохраняет typed failure; PUT/DELETE не выполняются. Это ещё не доказывает право автоматического failback или целостность полного ciphertext.
 - S3 VERIFY probe больше не теряет типизированную причину inconclusive ответа: authentication, authorization, rate limit и timeout проходят через adapter в durable health history и operation-scoped breaker без сырого текста provider. Это не включает автоматический failback.
 - Durable VERIFY history теперь сохраняет точный probe outcome (`matching`, `missing`, `mismatching`, `inconclusive` либо `invalid`) отдельно от признака ответа provider. Старые записи остаются без этой классификации и не могут служить доказательством здорового failback; текущие breaker/маршрутизация не переключаются автоматически.
 - Delivery worker теперь учитывает приоритет pool route и destination при аренде pending jobs одного backup run; возрастная защита очереди сохраняется. Это упорядочивает preferred/fallback, но параллельные replicas и healthy-window failback требуют отдельных проверок.
