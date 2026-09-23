@@ -526,6 +526,18 @@ public sealed class BackupDeliveryWorkerIntegrationTests
             saved.BackupCopy.BackupRun.SentToObjectStorage);
         Assert.Equal(outcome == BackupDestinationProbeOutcome.Matching,
             saved.BackupCopy.VerifiedAt.HasValue);
+        var healthOutcomes = await verify.BackupDestinationHealthOutcomes.ToArrayAsync();
+        if (outcome == BackupDestinationProbeOutcome.Unsupported)
+            Assert.Empty(healthOutcomes);
+        else
+        {
+            var healthOutcome = Assert.Single(healthOutcomes);
+            Assert.Equal(saved.BackupCopy.BackupDestinationId, healthOutcome.BackupDestinationId);
+            Assert.Equal("verify", healthOutcome.Operation);
+            Assert.Equal(outcome != BackupDestinationProbeOutcome.Inconclusive, healthOutcome.Succeeded);
+            Assert.Equal(outcome == BackupDestinationProbeOutcome.Inconclusive
+                ? BackupDestinationErrorCode.Unavailable.ToString() : null, healthOutcome.ErrorCode);
+        }
         if (outcome == BackupDestinationProbeOutcome.Inconclusive)
             Assert.True(saved.NotBefore > DateTimeOffset.UtcNow);
     }
@@ -568,6 +580,53 @@ public sealed class BackupDeliveryWorkerIntegrationTests
         Assert.Equal("manual_review", saved.BackupCopy.State);
         Assert.NotNull(saved.BackupCopy.UnknownSince);
         Assert.Null(saved.BackupCopy.VerifiedAt);
+        Assert.Equal(0, adapter.PutCalls);
+    }
+
+    [Fact]
+    public async Task TypedProbeFailureIsDurableAndOpensOnlyVerifyOnNewReplica()
+    {
+        var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+            .UseInMemoryDatabase($"delivery-probe-auth-{Guid.NewGuid():N}").Options;
+        var factory = new TestDbFactory(options);
+        var leaseId = Guid.NewGuid();
+        Guid jobId;
+        Guid destinationId;
+        await using (var seed = await factory.CreateDbContextAsync())
+        {
+            var pool = Pool();
+            var run = Run(pool.Id, new string('a', 64), "auth-probe.phbackup");
+            var destination = Destination("auth-probe", "domain-a", 10);
+            destinationId = destination.Id;
+            var copy = Copy(run.Id, destinationId, run.ContentSha256!);
+            copy.State = "unknown";
+            copy.UnknownSince = DateTimeOffset.UtcNow.AddMinutes(-1);
+            var job = Job(copy.Id, "auth-probe-job");
+            job.State = "processing";
+            job.Attempt = 1;
+            job.LeaseId = leaseId;
+            job.LeaseUntil = DateTimeOffset.UtcNow.AddMinutes(1);
+            seed.AddRange(pool, run, destination, Route(pool.Id, destinationId, 10), copy, job);
+            await seed.SaveChangesAsync();
+            jobId = job.Id;
+        }
+        var adapter = new ProbingAdapter(BackupDestinationProbeOutcome.Inconclusive,
+            BackupDestinationErrorCode.AuthenticationFailed);
+        var processor = Processor(
+            factory, Registry(adapter, new SuccessfulAdapter("telegram")), Path.GetTempPath());
+
+        await processor.ProcessReconciliationAsync(
+            new BackupDeliveryLease(jobId, leaseId), CancellationToken.None);
+
+        await using var replica = await factory.CreateDbContextAsync();
+        var outcome = Assert.Single(await replica.BackupDestinationHealthOutcomes.ToArrayAsync());
+        Assert.False(outcome.Succeeded);
+        Assert.Equal(BackupDestinationErrorCode.AuthenticationFailed.ToString(), outcome.ErrorCode);
+        var gate = new BackupDestinationHealth();
+        Assert.False((await gate.TryEnterAsync(
+            replica, destinationId, BackupDestinationOperation.Verify, CancellationToken.None)).Allowed);
+        Assert.True((await gate.TryEnterAsync(
+            replica, destinationId, BackupDestinationOperation.Put, CancellationToken.None)).Allowed);
         Assert.Equal(0, adapter.PutCalls);
     }
 
@@ -1220,7 +1279,9 @@ public sealed class BackupDeliveryWorkerIntegrationTests
                     "synthetic failure"));
     }
 
-    private sealed class ProbingAdapter(BackupDestinationProbeOutcome outcome) : IBackupDestinationAdapter
+    private sealed class ProbingAdapter(
+        BackupDestinationProbeOutcome outcome,
+        BackupDestinationErrorCode? failureCode = null) : IBackupDestinationAdapter
     {
         public string Kind => "s3";
         public BackupDestinationCapabilities Capabilities { get; } = new(
@@ -1241,6 +1302,10 @@ public sealed class BackupDeliveryWorkerIntegrationTests
             long expectedSize, CancellationToken token)
         {
             ProbeCalls++;
+            if (failureCode is { } code)
+                throw new BackupDestinationOperationException(
+                    new BackupDestinationFailure(code, BackupDestinationFailureDisposition.Permanent),
+                    "synthetic probe failure");
             return Task.FromResult(new BackupDestinationProbeResult(
                 outcome,
                 outcome == BackupDestinationProbeOutcome.Matching ? $"safe/{fileName}" : null,

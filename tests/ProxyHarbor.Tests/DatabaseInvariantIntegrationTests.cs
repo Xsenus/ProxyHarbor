@@ -54,6 +54,8 @@ public sealed class DatabaseInvariantIntegrationTests
         "CK_BackupDeliveryJobs_Lease",
         "CK_BackupDeliveryJobs_State",
         "CK_BackupDeliveryJobs_Timeline",
+        "CK_BackupDestinationHealthOutcomes_Operation",
+        "CK_BackupDestinationHealthOutcomes_Result",
         "CK_BackupDestinations_Kind",
         "CK_BackupDestinations_Priority",
         "CK_BackupDestinations_Timeline",

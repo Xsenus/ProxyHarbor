@@ -41,6 +41,8 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
     public DbSet<BackupCopy> BackupCopies => Set<BackupCopy>();
     /// <summary>Durable очередь delivery/reconcile.</summary>
     public DbSet<BackupDeliveryJob> BackupDeliveryJobs => Set<BackupDeliveryJob>();
+    /// <summary>Recent durable VERIFY outcomes for operation-scoped health.</summary>
+    public DbSet<BackupDestinationHealthOutcome> BackupDestinationHealthOutcomes => Set<BackupDestinationHealthOutcome>();
     /// <summary>История проверенных restore drill.</summary>
     public DbSet<BackupRestoreVerification> BackupRestoreVerifications => Set<BackupRestoreVerification>();
     /// <summary>Текущие тарифы пользователей, отделённые от Identity-ролей.</summary>
@@ -646,6 +648,21 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
             table.HasCheckConstraint("CK_BackupDeliveryJobs_Attempt", "\"Attempt\" >= 0");
             table.HasCheckConstraint("CK_BackupDeliveryJobs_Lease", "(\"LeaseId\" IS NULL) = (\"LeaseUntil\" IS NULL) AND (\"State\" = 'processing' OR \"LeaseId\" IS NULL)");
             table.HasCheckConstraint("CK_BackupDeliveryJobs_Timeline", "\"UpdatedAt\" >= \"CreatedAt\"");
+        });
+
+        var backupDestinationHealthOutcome = builder.Entity<BackupDestinationHealthOutcome>();
+        backupDestinationHealthOutcome.HasIndex(x => new { x.BackupDestinationId, x.Operation, x.ObservedAt });
+        backupDestinationHealthOutcome.HasIndex(x => x.ObservedAt);
+        backupDestinationHealthOutcome.Property(x => x.Operation).HasMaxLength(16);
+        backupDestinationHealthOutcome.Property(x => x.ErrorCode).HasMaxLength(64);
+        backupDestinationHealthOutcome.HasOne<BackupDestination>().WithMany()
+            .HasForeignKey(x => x.BackupDestinationId).OnDelete(DeleteBehavior.Cascade);
+        backupDestinationHealthOutcome.ToTable(table =>
+        {
+            table.HasCheckConstraint("CK_BackupDestinationHealthOutcomes_Operation",
+                "\"Operation\" = 'verify'");
+            table.HasCheckConstraint("CK_BackupDestinationHealthOutcomes_Result",
+                "\"Succeeded\" = (\"ErrorCode\" IS NULL)");
         });
 
         var backupRestoreVerification = builder.Entity<BackupRestoreVerification>();

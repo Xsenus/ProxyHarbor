@@ -129,6 +129,62 @@ public sealed class BackupDestinationHealthTests
     }
 
     [Fact]
+    public async Task DurableVerifyAuthenticationFailureOpensOnlyVerifyOnNewReplica()
+    {
+        var clock = new AdjustableTimeProvider(DateTimeOffset.UtcNow);
+        var destinationId = Guid.NewGuid();
+        await using var db = EmptyDatabase();
+        db.BackupDestinationHealthOutcomes.Add(new BackupDestinationHealthOutcome
+        {
+            BackupDestinationId = destinationId,
+            Succeeded = false,
+            ErrorCode = BackupDestinationErrorCode.AuthenticationFailed.ToString(),
+            ObservedAt = clock.GetUtcNow().AddSeconds(-10)
+        });
+        await db.SaveChangesAsync();
+
+        var newReplica = new BackupDestinationHealth(clock);
+        Assert.False((await newReplica.TryEnterAsync(
+            db, destinationId, BackupDestinationOperation.Verify, CancellationToken.None)).Allowed);
+        Assert.True((await newReplica.TryEnterAsync(
+            db, destinationId, BackupDestinationOperation.Put, CancellationToken.None)).Allowed);
+        clock.Advance(TimeSpan.FromMinutes(5));
+        Assert.True((await newReplica.TryEnterAsync(
+            db, destinationId, BackupDestinationOperation.Verify, CancellationToken.None)).Allowed);
+    }
+
+    [Fact]
+    public async Task DurableVerifyTransientFailuresAndLaterSuccessSurviveReplicaChange()
+    {
+        var clock = new AdjustableTimeProvider(DateTimeOffset.UtcNow);
+        var destinationId = Guid.NewGuid();
+        await using var db = EmptyDatabase();
+        foreach (var secondsAgo in new[] { 20, 10 })
+        {
+            db.BackupDestinationHealthOutcomes.Add(new BackupDestinationHealthOutcome
+            {
+                BackupDestinationId = destinationId,
+                Succeeded = false,
+                ErrorCode = BackupDestinationErrorCode.Unavailable.ToString(),
+                ObservedAt = clock.GetUtcNow().AddSeconds(-secondsAgo)
+            });
+        }
+        await db.SaveChangesAsync();
+        Assert.False((await new BackupDestinationHealth(clock).TryEnterAsync(
+            db, destinationId, BackupDestinationOperation.Verify, CancellationToken.None)).Allowed);
+
+        db.BackupDestinationHealthOutcomes.Add(new BackupDestinationHealthOutcome
+        {
+            BackupDestinationId = destinationId,
+            Succeeded = true,
+            ObservedAt = clock.GetUtcNow().AddSeconds(-1)
+        });
+        await db.SaveChangesAsync();
+        Assert.True((await new BackupDestinationHealth(clock).TryEnterAsync(
+            db, destinationId, BackupDestinationOperation.Verify, CancellationToken.None)).Allowed);
+    }
+
+    [Fact]
     public async Task ContentCollisionDoesNotOpenDestinationBreaker()
     {
         var gate = new BackupDestinationHealth();

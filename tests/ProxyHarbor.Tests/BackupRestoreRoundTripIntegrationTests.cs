@@ -53,6 +53,19 @@ public sealed class BackupRestoreRoundTripIntegrationTests
                 var targetSourceMarker = await target.Sources.OrderBy(source => source.Priority).FirstAsync();
                 targetSourceMarker.Name = "Target metadata must survive failed restore";
                 target.Proxies.Add(new ProxyEndpoint { Host = "9.9.9.9", Port = 9_999 });
+                var destination = new BackupDestination
+                {
+                    Name = "target-health-marker",
+                    Kind = "s3",
+                    FailureDomain = "target-health"
+                };
+                target.BackupDestinations.Add(destination);
+                target.BackupDestinationHealthOutcomes.Add(new BackupDestinationHealthOutcome
+                {
+                    BackupDestinationId = destination.Id,
+                    Succeeded = false,
+                    ErrorCode = BackupDestinationErrorCode.Unavailable.ToString()
+                });
                 await target.SaveChangesAsync();
             }
 
@@ -338,6 +351,7 @@ public sealed class BackupRestoreRoundTripIntegrationTests
         Assert.Equal(
             "Target metadata must survive failed restore",
             await unchanged.Sources.OrderBy(source => source.Priority).Select(source => source.Name).FirstAsync());
+        Assert.Single(await unchanged.BackupDestinationHealthOutcomes.ToArrayAsync());
     }
 
     private static async Task VerifySettingsSnapshotAsync(string encryptedPath, string directory)
@@ -451,6 +465,7 @@ public sealed class BackupRestoreRoundTripIntegrationTests
     private static async Task VerifyRestoredSnapshotAsync(DbContextOptions<ProxyHarborDbContext> options)
     {
         await using var db = new ProxyHarborDbContext(options);
+        Assert.Empty(await db.BackupDestinationHealthOutcomes.ToArrayAsync());
         var proxy = await db.Proxies.AsNoTracking().SingleAsync();
         var expectedRestoredProxy = ExpectedProxy();
         expectedRestoredProxy.CheckLeaseId = null;
