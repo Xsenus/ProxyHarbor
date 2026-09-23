@@ -113,11 +113,12 @@ public sealed class BackupService(
                         cancellationToken);
                 if (routingOptions?.Value.Enabled == true)
                 {
+                    var selectedPoolId = routingOptions.Value.PoolId ?? BackupLegacyDestinationProjector.LegacyPoolId;
                     var pool = await auditDb.BackupPools.AsNoTracking().SingleOrDefaultAsync(
-                        x => x.Id == BackupLegacyDestinationProjector.LegacyPoolId,
+                        x => x.Id == selectedPoolId,
                         cancellationToken)
                         ?? throw new InvalidOperationException(
-                            "Backup routing включён, но legacy protection pool не спроецирован.");
+                            $"Backup routing включён, но выбранный protection pool {selectedPoolId} не найден.");
                     backupRun.BackupPoolId = pool.Id;
                     backupRun.ProtectionPolicyVersion = pool.PolicyVersion;
                     backupRun.RequiredVerifiedCopies = pool.RequiredVerifiedCopies;

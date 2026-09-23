@@ -8,6 +8,7 @@ services:
       # Отсутствующие или некорректные secret-файлы остановят API через options validation.
       Backup__Enabled: true
       BackupRouting__Enabled: ${BACKUP_ROUTING_ENABLED:-false}
+      BackupRouting__PoolId: ${BACKUP_ROUTING_POOL_ID:-}
 
   # В production frontend доступен только через TLS gateway.
   web:

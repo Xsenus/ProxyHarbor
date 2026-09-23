@@ -19,14 +19,18 @@ public sealed class BackupAuditIntegrationTests
 {
     private const string EncryptionKey = "integration-encryption-key-32-chars";
 
-    [Fact]
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
     [Trait("Category", "PostgresIntegration")]
-    public async Task SuccessfulBackupAndAuditSurviveLoggingProviderFailure()
+    public async Task BackupUsesSelectedPoolAndFailsClosedWhenItIsMissing(bool useCustomPool, bool missingPool)
     {
         var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
         if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
 
         var schema = $"proxyharbor_backup_logging_{Guid.NewGuid():N}";
+        var poolId = useCustomPool ? Guid.NewGuid() : BackupLegacyDestinationProjector.LegacyPoolId;
         var directory = Path.Combine(Path.GetTempPath(), $"proxyharbor-backup-logging-{Guid.NewGuid():N}");
         var builder = new NpgsqlConnectionStringBuilder(baseConnectionString) { SearchPath = schema };
         await using var admin = new NpgsqlConnection(baseConnectionString);
@@ -43,29 +47,32 @@ public sealed class BackupAuditIntegrationTests
             await using (var migrationDb = await factory.CreateDbContextAsync())
             {
                 await migrationDb.Database.MigrateAsync();
-                migrationDb.BackupPools.Add(new BackupPool
+                if (!missingPool)
                 {
-                    Id = BackupLegacyDestinationProjector.LegacyPoolId,
-                    Name = "legacy-default",
-                    RequiredVerifiedCopies = 2,
-                    DesiredVerifiedCopies = 3,
-                    PolicyVersion = 7
-                });
-                var destination = new BackupDestination
-                {
-                    Name = "planned-s3",
-                    Kind = "s3",
-                    Enabled = true,
-                    FailureDomain = "planned-domain"
-                };
-                migrationDb.BackupDestinations.Add(destination);
-                migrationDb.BackupPoolDestinations.Add(new BackupPoolDestination
-                {
-                    BackupPoolId = BackupLegacyDestinationProjector.LegacyPoolId,
-                    BackupDestinationId = destination.Id,
-                    AllowedOperations = "put,verify,read",
-                    Enabled = true
-                });
+                    migrationDb.BackupPools.Add(new BackupPool
+                    {
+                        Id = poolId,
+                        Name = useCustomPool ? "custom-pool" : "legacy-default",
+                        RequiredVerifiedCopies = 2,
+                        DesiredVerifiedCopies = 3,
+                        PolicyVersion = 7
+                    });
+                    var destination = new BackupDestination
+                    {
+                        Name = "planned-s3",
+                        Kind = "s3",
+                        Enabled = true,
+                        FailureDomain = "planned-domain"
+                    };
+                    migrationDb.BackupDestinations.Add(destination);
+                    migrationDb.BackupPoolDestinations.Add(new BackupPoolDestination
+                    {
+                        BackupPoolId = poolId,
+                        BackupDestinationId = destination.Id,
+                        AllowedOperations = "put,verify,read",
+                        Enabled = true
+                    });
+                }
                 await migrationDb.SaveChangesAsync();
             }
 
@@ -86,8 +93,23 @@ public sealed class BackupAuditIntegrationTests
                 new ConfigurationBuilder().Build(),
                 new ThrowingLogger<BackupService>(),
                 snapshotDbFactory: snapshotFactory,
-                routingOptions: Options.Create(new BackupRoutingOptions { Enabled = true }),
+                routingOptions: Options.Create(new BackupRoutingOptions
+                {
+                    Enabled = true,
+                    PoolId = useCustomPool ? poolId : null
+                }),
                 deliveryPlanner: new BackupDeliveryPlanner(registry));
+
+            if (missingPool)
+            {
+                var error = await Assert.ThrowsAsync<InvalidOperationException>(
+                    () => service.CreateAndSendAsync(CancellationToken.None));
+                Assert.Contains(poolId.ToString(), error.Message, StringComparison.Ordinal);
+                await using var missingPoolDb = await factory.CreateDbContextAsync();
+                Assert.Empty(await missingPoolDb.BackupRuns.ToListAsync());
+                Assert.False(Directory.Exists(directory));
+                return;
+            }
 
             var path = await service.CreateAndSendAsync(CancellationToken.None);
 
@@ -101,7 +123,7 @@ public sealed class BackupAuditIntegrationTests
                 Assert.Equal(
                     Convert.ToHexStringLower(await SHA256.HashDataAsync(stream)),
                     audit.ContentSha256);
-            Assert.Equal(BackupLegacyDestinationProjector.LegacyPoolId, audit.BackupPoolId);
+            Assert.Equal(poolId, audit.BackupPoolId);
             Assert.Equal(7, audit.ProtectionPolicyVersion);
             Assert.Equal(2, audit.RequiredVerifiedCopies);
             Assert.Equal(3, audit.DesiredVerifiedCopies);

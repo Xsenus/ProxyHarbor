@@ -37,6 +37,7 @@ docker compose up -d --build
 | `BACKUP_HISTORY_RETENTION_DAYS` | Хранение строк аудита backup, `1..3650` |
 | `BACKUP_ENCRYPTION_KEY` | Ключ новых PHB3, 32–1024 символа без control characters |
 | `BACKUP_ROUTING_ENABLED` | Destination planner/worker; по умолчанию `false`, включать только для отдельного canary |
+| `BACKUP_ROUTING_POOL_ID` | Необязательный UUID активного protection pool при включённом routing; пустое значение выбирает зарезервированный `legacy-default`. Несуществующий pool останавливает backup до создания архива (fail-closed). Перед переключением проверьте policy, маршруты и независимые failure domains. |
 | `BACKUP_ROUTING_MAXIMUM_STAGING_BYTES` | Суммарный лимит replayable PHB3 staging, 100 MiB..10 TiB; default 10 GiB |
 | `BACKUP_ROUTING_STAGING_TTL_HOURS` | Максимальный возраст локального staging-источника, `1..720`; default 72 часа. Более старый run может доставляться только из разрешённой verified-копии того же immutable архива. |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | Обязательная пара для включённого backup |
