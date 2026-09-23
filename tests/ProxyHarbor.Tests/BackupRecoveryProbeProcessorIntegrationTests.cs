@@ -10,6 +10,82 @@ namespace ProxyHarbor.Tests;
 [Collection(PostgresIntegrationGroup.Name)]
 public sealed class BackupRecoveryProbeProcessorIntegrationTests
 {
+    [Theory]
+    [InlineData(BackupDestinationProbeOutcome.Matching, "safe/probe.phbackup", null,
+        true, "matching", null)]
+    [InlineData(BackupDestinationProbeOutcome.Missing, "safe/probe.phbackup", null,
+        true, "missing", null)]
+    [InlineData(BackupDestinationProbeOutcome.Mismatching, "safe/probe.phbackup", null,
+        true, "mismatching", null)]
+    [InlineData(BackupDestinationProbeOutcome.Inconclusive, "safe/probe.phbackup",
+        BackupDestinationErrorCode.AuthenticationFailed,
+        false, "inconclusive", BackupDestinationErrorCode.AuthenticationFailed)]
+    [InlineData(BackupDestinationProbeOutcome.Inconclusive, null, null,
+        false, "inconclusive", BackupDestinationErrorCode.Unavailable)]
+    [InlineData(BackupDestinationProbeOutcome.Matching, "other/probe.phbackup", null,
+        false, "invalid", BackupDestinationErrorCode.InvalidConfiguration)]
+    [InlineData(BackupDestinationProbeOutcome.Missing, "other/probe.phbackup", null,
+        false, "invalid", BackupDestinationErrorCode.InvalidConfiguration)]
+    [InlineData(BackupDestinationProbeOutcome.Matching, null, null,
+        false, "invalid", BackupDestinationErrorCode.InvalidConfiguration)]
+    [InlineData(BackupDestinationProbeOutcome.Unsupported, "safe/probe.phbackup", null,
+        false, "invalid", BackupDestinationErrorCode.InvalidConfiguration)]
+    [InlineData(BackupDestinationProbeOutcome.Inconclusive, "other/probe.phbackup",
+        BackupDestinationErrorCode.RateLimited,
+        false, "inconclusive", BackupDestinationErrorCode.RateLimited)]
+    public void ClassificationRequiresExactLocatorAndPreservesTypedFailure(
+        BackupDestinationProbeOutcome outcome,
+        string? locator,
+        BackupDestinationErrorCode? failure,
+        bool expectedConclusive,
+        string expectedOutcome,
+        BackupDestinationErrorCode? expectedFailure)
+    {
+        var classified = BackupRecoveryProbeProcessor.ClassifyOutcome(
+            new BackupDestinationProbeResult(outcome, locator, FailureCode: failure),
+            "safe/probe.phbackup");
+
+        Assert.Equal(expectedConclusive, classified.Conclusive);
+        Assert.Equal(expectedOutcome, classified.ExactOutcome);
+        Assert.Equal(expectedFailure, classified.FailureCode);
+    }
+
+    [Fact]
+    public void CurrentVerifiedCopyRequiresMatchingImmutableRunIdentity()
+    {
+        Assert.True(BackupRecoveryProbeProcessor.IsCurrentVerifiedCopy(ValidCopy()));
+    }
+
+    [Theory]
+    [InlineData("state")]
+    [InlineData("verified-at")]
+    [InlineData("locator")]
+    [InlineData("copy-size")]
+    [InlineData("run-status")]
+    [InlineData("policy")]
+    [InlineData("hash")]
+    [InlineData("run-size")]
+    [InlineData("file-name")]
+    public void CurrentVerifiedCopyRejectsStaleOrIncompleteEvidence(string mutation)
+    {
+        var copy = ValidCopy();
+        switch (mutation)
+        {
+            case "state": copy.State = "missing"; break;
+            case "verified-at": copy.VerifiedAt = null; break;
+            case "locator": copy.NativeLocator = string.Empty; break;
+            case "copy-size": copy.SizeBytes = 0; break;
+            case "run-status": copy.BackupRun.Status = "failed"; break;
+            case "policy": copy.PolicyVersion++; break;
+            case "hash": copy.ContentSha256 = new string('b', 64); break;
+            case "run-size": copy.BackupRun.SizeBytes++; break;
+            case "file-name": copy.BackupRun.FileName = string.Empty; break;
+            default: throw new ArgumentOutOfRangeException(nameof(mutation));
+        }
+
+        Assert.False(BackupRecoveryProbeProcessor.IsCurrentVerifiedCopy(copy));
+    }
+
     [Fact]
     public async Task DisabledRoutingNeverStartsProviderProbe()
     {
@@ -160,6 +236,28 @@ public sealed class BackupRecoveryProbeProcessorIntegrationTests
 
         public Task<ProxyHarborDbContext> CreateDbContextAsync(
             CancellationToken cancellationToken = default) => Task.FromResult(CreateDbContext());
+    }
+
+    private static BackupCopy ValidCopy()
+    {
+        var run = new BackupRun
+        {
+            Status = "completed",
+            FileName = "probe.phbackup",
+            SizeBytes = 5,
+            ContentSha256 = new string('a', 64),
+            ProtectionPolicyVersion = 1
+        };
+        return new BackupCopy
+        {
+            BackupRun = run,
+            State = "verified",
+            VerifiedAt = DateTimeOffset.UtcNow,
+            NativeLocator = "safe/probe.phbackup",
+            SizeBytes = run.SizeBytes,
+            ContentSha256 = run.ContentSha256,
+            PolicyVersion = run.ProtectionPolicyVersion.Value
+        };
     }
 
     private sealed class ProbeAdapter(

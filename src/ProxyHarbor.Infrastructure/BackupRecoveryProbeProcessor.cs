@@ -131,19 +131,7 @@ public sealed class BackupRecoveryProbeProcessor(
                     FailureCode: BackupDestinationErrorCode.Unavailable);
             }
             token.ThrowIfCancellationRequested();
-            var locatorMatches = string.Equals(
-                result.NativeLocator, expectedLocator, StringComparison.Ordinal);
-            var conclusive = locatorMatches && result.Outcome is
-                BackupDestinationProbeOutcome.Matching or BackupDestinationProbeOutcome.Missing or
-                BackupDestinationProbeOutcome.Mismatching;
-            var exactOutcome = conclusive
-                ? result.Outcome.ToString().ToLowerInvariant()
-                : result.Outcome == BackupDestinationProbeOutcome.Inconclusive
-                    ? "inconclusive" : "invalid";
-            BackupDestinationErrorCode? failureCode = conclusive ? null :
-                result.FailureCode ?? (exactOutcome == "invalid"
-                    ? BackupDestinationErrorCode.InvalidConfiguration
-                    : BackupDestinationErrorCode.Unavailable);
+            var classification = ClassifyOutcome(result, expectedLocator);
 
             await using var transaction = await db.Database.BeginTransactionAsync(token);
             await using (var command = new NpgsqlCommand("""
@@ -166,13 +154,13 @@ public sealed class BackupRecoveryProbeProcessor(
                 health.ReleaseWithoutOutcome(copy.BackupDestinationId, BackupDestinationOperation.Verify);
                 return 0;
             }
-            if (conclusive && result.Outcome == BackupDestinationProbeOutcome.Missing)
+            if (classification.Conclusive && result.Outcome == BackupDestinationProbeOutcome.Missing)
             {
                 copy.State = "missing";
                 copy.VerifiedAt = null;
                 copy.LastErrorCode = BackupDestinationErrorCode.NotFound.ToString();
             }
-            else if (conclusive && result.Outcome == BackupDestinationProbeOutcome.Mismatching)
+            else if (classification.Conclusive && result.Outcome == BackupDestinationProbeOutcome.Mismatching)
             {
                 copy.State = "quarantined";
                 copy.VerifiedAt = null;
@@ -181,24 +169,43 @@ public sealed class BackupRecoveryProbeProcessor(
             db.BackupDestinationHealthOutcomes.Add(new BackupDestinationHealthOutcome
             {
                 BackupDestinationId = copy.BackupDestinationId,
-                Succeeded = conclusive,
-                ErrorCode = failureCode?.ToString(),
-                ProbeOutcome = exactOutcome,
+                Succeeded = classification.Conclusive,
+                ErrorCode = classification.FailureCode?.ToString(),
+                ProbeOutcome = classification.ExactOutcome,
                 ObservedAt = DateTimeOffset.UtcNow
             });
             await db.SaveChangesAsync(token);
             await transaction.CommitAsync(token);
-            if (conclusive)
+            if (classification.Conclusive)
                 health.RecordSuccess(copy.BackupDestinationId, BackupDestinationOperation.Verify);
             else
                 health.RecordFailure(copy.BackupDestinationId, BackupDestinationOperation.Verify,
-                    failureCode!.Value);
+                    classification.FailureCode!.Value);
             return 1;
         }
         return 0;
     }
 
-    private static bool IsCurrentVerifiedCopy(BackupCopy copy) =>
+    internal static BackupRecoveryProbeClassification ClassifyOutcome(
+        BackupDestinationProbeResult result, string expectedLocator)
+    {
+        var locatorMatches = string.Equals(
+            result.NativeLocator, expectedLocator, StringComparison.Ordinal);
+        var conclusive = locatorMatches && result.Outcome is
+            BackupDestinationProbeOutcome.Matching or BackupDestinationProbeOutcome.Missing or
+            BackupDestinationProbeOutcome.Mismatching;
+        var exactOutcome = conclusive
+            ? result.Outcome.ToString().ToLowerInvariant()
+            : result.Outcome == BackupDestinationProbeOutcome.Inconclusive
+                ? "inconclusive" : "invalid";
+        BackupDestinationErrorCode? failureCode = conclusive ? null :
+            result.FailureCode ?? (exactOutcome == "invalid"
+                ? BackupDestinationErrorCode.InvalidConfiguration
+                : BackupDestinationErrorCode.Unavailable);
+        return new BackupRecoveryProbeClassification(conclusive, exactOutcome, failureCode);
+    }
+
+    internal static bool IsCurrentVerifiedCopy(BackupCopy copy) =>
         copy.State == "verified" && copy.VerifiedAt is not null &&
         !string.IsNullOrWhiteSpace(copy.NativeLocator) && copy.SizeBytes > 0 &&
         copy.BackupRun.Status == "completed" &&
@@ -207,6 +214,9 @@ public sealed class BackupRecoveryProbeProcessor(
         copy.SizeBytes == copy.BackupRun.SizeBytes &&
         !string.IsNullOrWhiteSpace(copy.BackupRun.FileName);
 }
+
+internal sealed record BackupRecoveryProbeClassification(
+    bool Conclusive, string ExactOutcome, BackupDestinationErrorCode? FailureCode);
 
 /// <summary>Runs bounded read-only S3 probes without delaying backup delivery jobs.</summary>
 public sealed class BackupRecoveryProbeWorker(
