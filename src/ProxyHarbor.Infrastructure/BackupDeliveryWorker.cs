@@ -40,10 +40,17 @@ public sealed class BackupDeliveryProcessor(
             FROM "BackupDeliveryJobs" AS job
             JOIN "BackupCopies" AS copy ON copy."Id" = job."BackupCopyId"
             JOIN "BackupRuns" AS run ON run."Id" = copy."BackupRunId"
+            LEFT JOIN "BackupPoolDestinations" AS route
+              ON route."BackupPoolId" = run."BackupPoolId"
+              AND route."BackupDestinationId" = copy."BackupDestinationId"
+            LEFT JOIN "BackupDestinations" AS destination
+              ON destination."Id" = copy."BackupDestinationId"
             WHERE job."State" = 'pending' AND job."NotBefore" <= @now
             ORDER BY
                 CASE WHEN job."CreatedAt" <= @starvation THEN 0 ELSE 1 END,
                 run."StartedAt" DESC,
+                COALESCE(route."Priority", 2147483647),
+                COALESCE(destination."Priority", 2147483647),
                 job."CreatedAt",
                 job."Id"
             FOR UPDATE OF job SKIP LOCKED

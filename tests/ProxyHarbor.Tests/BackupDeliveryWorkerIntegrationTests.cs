@@ -762,6 +762,58 @@ public sealed class BackupDeliveryWorkerIntegrationTests
 
     [Fact]
     [Trait("Category", "PostgresIntegration")]
+    public async Task ClaimPrefersPoolRoutePriorityWithinRunOverJobCreationOrder()
+    {
+        var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
+        if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
+
+        var schema = $"proxyharbor_delivery_priority_{Guid.NewGuid():N}";
+        var builder = new NpgsqlConnectionStringBuilder(baseConnectionString) { SearchPath = schema };
+        await using var admin = new NpgsqlConnection(baseConnectionString);
+        await admin.OpenAsync();
+        await using (var create = new NpgsqlCommand($"CREATE SCHEMA \"{schema}\"", admin))
+            await create.ExecuteNonQueryAsync();
+        try
+        {
+            var factory = await CreateFactoryAsync(builder.ConnectionString);
+            var registry = Registry(new SuccessfulAdapter("s3"), new SuccessfulAdapter("telegram"));
+            var processor = Processor(factory, registry, Path.GetTempPath());
+            Guid preferredJobId;
+            Guid fallbackJobId;
+            await using (var seed = await factory.CreateDbContextAsync())
+            {
+                var pool = Pool();
+                var run = Run(pool.Id, new string('a', 64), "priority.phbackup");
+                var preferred = Destination("preferred", "domain-a", 10);
+                var fallback = Destination("fallback", "domain-b", 20);
+                var preferredCopy = Copy(run.Id, preferred.Id, run.ContentSha256!);
+                var fallbackCopy = Copy(run.Id, fallback.Id, run.ContentSha256!);
+                var preferredJob = Job(preferredCopy.Id, "preferred-priority");
+                var fallbackJob = Job(fallbackCopy.Id, "fallback-priority");
+                preferredJob.CreatedAt = DateTimeOffset.UtcNow.AddMinutes(-1);
+                fallbackJob.CreatedAt = DateTimeOffset.UtcNow.AddMinutes(-2);
+                preferredJobId = preferredJob.Id;
+                fallbackJobId = fallbackJob.Id;
+                seed.AddRange(pool, run, preferred, fallback,
+                    Route(pool.Id, preferred.Id, 10), Route(pool.Id, fallback.Id, 20),
+                    preferredCopy, fallbackCopy, preferredJob, fallbackJob);
+                await seed.SaveChangesAsync();
+            }
+
+            var first = await processor.TryClaimAsync(CancellationToken.None);
+            var second = await processor.TryClaimAsync(CancellationToken.None);
+            Assert.Equal(preferredJobId, first?.JobId);
+            Assert.Equal(fallbackJobId, second?.JobId);
+        }
+        finally
+        {
+            await using var drop = new NpgsqlCommand($"DROP SCHEMA IF EXISTS \"{schema}\" CASCADE", admin);
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
     public async Task TwoWorkersLeaseOnceAndExpiredLeaseBecomesUnknown()
     {
         var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
