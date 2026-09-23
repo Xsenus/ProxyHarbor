@@ -34,6 +34,28 @@ public sealed class BackupCatalogServiceTests
     }
 
     [Fact]
+    public void SingleCopySidecarIsByteStableAcrossCrashRetry()
+    {
+        var snapshot = Snapshot();
+        var first = BackupCatalogService.SealForCopySidecar(snapshot, Key);
+        var retry = BackupCatalogService.SealForCopySidecar(snapshot, Key);
+
+        Assert.Equal(first, retry);
+        Assert.Equal(snapshot.Copies, BackupCatalogService.Open(first, Key).Copies);
+        Assert.NotEqual(first, BackupCatalogService.Seal(snapshot, Key));
+        Assert.Throws<ArgumentException>(() => BackupCatalogService.SealForCopySidecar(
+            snapshot, "short"));
+        var secondCopy = snapshot.Copies[0] with
+        {
+            CopyId = Guid.NewGuid(),
+            DestinationId = Guid.NewGuid()
+        };
+        var multiCopy = snapshot with { Copies = [snapshot.Copies[0], secondCopy] };
+        Assert.Throws<ArgumentException>(() =>
+            BackupCatalogService.SealForCopySidecar(multiCopy, Key));
+    }
+
+    [Fact]
     public void TamperingWrongKeyAndDuplicateFieldsAreRejected()
     {
         var encoded = BackupCatalogService.Seal(Snapshot(), Key);
@@ -215,6 +237,11 @@ public sealed class BackupCatalogServiceTests
         Assert.Single(sidecar.Copies);
         Assert.Equal(allowedCopyId, sidecar.Copies[0].CopyId);
         Assert.Equal("catalog-v1", sidecar.KeyReference);
+        Assert.Equal(sidecar.Copies[0].VerifiedAt, sidecar.ExportedAt);
+        var repeated = await service.CreateForCopyAsync(
+            allowedCopyId, "catalog-v1", CancellationToken.None);
+        Assert.Equal(BackupCatalogService.SealForCopySidecar(sidecar, Key),
+            BackupCatalogService.SealForCopySidecar(repeated, Key));
         await Assert.ThrowsAsync<InvalidOperationException>(() => service.CreateForCopyAsync(
             forbiddenCopyId, "catalog-v1", CancellationToken.None));
 
