@@ -390,6 +390,29 @@ groups:
           summary: Очередь доставки backup задерживается
           description: Самая старая pending job ожидает более часа; проверьте worker, staging и доступность destination.
 
+      - alert: ProxyHarborBackupStagingUnreadable
+        expr: |
+          proxyharbor_backup_routing_enabled == 1
+          and on() proxyharbor_backup_staging_read_success == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Состояние backup staging недоступно
+          description: API не может прочитать локальный backup volume; нулевые bytes не означают свободное место.
+
+      - alert: ProxyHarborBackupStagingNearLimit
+        expr: |
+          proxyharbor_backup_routing_enabled == 1
+          and on() proxyharbor_backup_staging_read_success == 1
+          and on() (proxyharbor_backup_staging_used_bytes / proxyharbor_backup_staging_limit_bytes > 0.8)
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Backup staging близок к лимиту
+          description: Локальные служебные PHB3 занимают более 80% лимита; проверьте delivery backlog и retention, не удаляя неподтверждённые копии.
+
       - alert: ProxyHarborTelegramDeliveryFailed
         expr: |
           proxyharbor_backup_enabled == 1

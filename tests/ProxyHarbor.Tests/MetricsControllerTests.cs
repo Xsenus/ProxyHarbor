@@ -12,6 +12,34 @@ namespace ProxyHarbor.Tests;
 public sealed class MetricsControllerTests
 {
     [Fact]
+    public async Task StagingMetricsReportExactOwnedBytesAndExplicitReadFailure()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"proxyharbor-staging-metrics-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            File.WriteAllBytes(Path.Combine(directory, "proxyharbor-20260810-140000-0000.phbackup"), new byte[6]);
+            File.WriteAllBytes(Path.Combine(directory, "proxyharbor-invalid.phbackup"), new byte[100]);
+            var factory = new TestDbFactory(new DbContextOptionsBuilder<ProxyHarborDbContext>()
+                .UseInMemoryDatabase($"metrics-staging-{Guid.NewGuid():N}").Options);
+            var routing = Options.Create(new BackupRoutingOptions { Enabled = true, MaximumStagingBytes = 104_857_600 });
+            var controller = new MetricsController(factory, Options.Create(new CollectorOptions()),
+                Options.Create(new BackupOptions { Directory = directory }), new ProbeControlHealth(),
+                backupRoutingOptions: routing);
+            var metrics = Assert.IsType<ContentResult>(await controller.Get(CancellationToken.None)).Content!;
+            Assert.Contains("proxyharbor_backup_staging_read_success 1\n", metrics, StringComparison.Ordinal);
+            Assert.Contains("proxyharbor_backup_staging_used_bytes 6\n", metrics, StringComparison.Ordinal);
+            Assert.Contains("proxyharbor_backup_staging_limit_bytes 104857600\n", metrics, StringComparison.Ordinal);
+
+            Directory.Delete(directory, recursive: true);
+            metrics = Assert.IsType<ContentResult>(await controller.Get(CancellationToken.None)).Content!;
+            Assert.Contains("proxyharbor_backup_staging_read_success 0\n", metrics, StringComparison.Ordinal);
+            Assert.Contains("proxyharbor_backup_staging_used_bytes 0\n", metrics, StringComparison.Ordinal);
+        }
+        finally { if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true); }
+    }
+
+    [Fact]
     public async Task DestinationMetricsAllowlistKindAndNeverRenderProviderSettings()
     {
         var factory = new TestDbFactory(new DbContextOptionsBuilder<ProxyHarborDbContext>()

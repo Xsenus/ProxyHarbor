@@ -696,7 +696,10 @@ jobs:
             sleep 1
           done
           curl --fail --silent http://127.0.0.1:9090/api/v1/rules | jq --exit-status \
-            '[.data.groups[].rules[] | select(.type == "alerting")] | length == 34'
+            '[.data.groups[].rules[] | select(.type == "alerting") | .name] as $alerts |
+             ($alerts | length) == 36 and
+             ($alerts | index("ProxyHarborBackupStagingUnreadable")) != null and
+             ($alerts | index("ProxyHarborBackupStagingNearLimit")) != null'
           for attempt in {1..60}; do
             if curl --fail --silent http://127.0.0.1:9090/api/v1/alertmanagers | jq --exit-status \
               '.data.activeAlertmanagers | any(.url | startswith("http://alertmanager:9093/"))'; then break; fi

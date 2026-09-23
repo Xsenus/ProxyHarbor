@@ -41,6 +41,7 @@ public sealed class MetricsController(
     {
         var (effectiveBackupOptions, backupConfigurationReadSucceeded) =
             await ResolveBackupOptionsAsync(requestToken);
+        var stagingUsage = ReadStagingUsage(effectiveBackupOptions);
         var cachedProxySnapshot = proxySnapshotCache is null
             ? null
             : await proxySnapshotCache.GetPassiveAsync(requestToken);
@@ -51,7 +52,19 @@ public sealed class MetricsController(
         return await BufferedReadSnapshot.ExecuteAsync(
             db, token => GetSnapshotAsync(
                 db, cachedProxySnapshot, cachedVpnSnapshot, effectiveBackupOptions,
-                backupConfigurationReadSucceeded, token), requestToken);
+                backupConfigurationReadSucceeded, stagingUsage, token), requestToken);
+    }
+
+    private (long UsedBytes, bool ReadSucceeded) ReadStagingUsage(BackupOptions options)
+    {
+        if (backupRoutingOptions?.Value.Enabled != true) return (0, true);
+        try { return (BackupService.ReadPublishedBackupBytes(options.Directory), true); }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or
+            OverflowException or ArgumentException or NotSupportedException)
+        {
+            // A missing/inaccessible volume must not be published as an empty, healthy staging area.
+            return (0, false);
+        }
     }
 
     private async Task<(BackupOptions Options, bool ReadSucceeded)> ResolveBackupOptionsAsync(
@@ -78,6 +91,7 @@ public sealed class MetricsController(
         VpnMetricsSnapshot? cachedVpnSnapshot,
         BackupOptions effectiveBackupOptions,
         bool backupConfigurationReadSucceeded,
+        (long UsedBytes, bool ReadSucceeded) stagingUsage,
         CancellationToken token)
     {
         var now = DateTimeOffset.UtcNow;
@@ -397,6 +411,12 @@ public sealed class MetricsController(
             runMetrics.LastSuccessfulBackupFinishedAt?.ToUnixTimeSeconds() ?? 0);
         Gauge(output, "proxyharbor_backup_routing_enabled", "Whether destination-based backup routing is enabled.",
             backupRoutingOptions?.Value.Enabled == true ? 1 : 0);
+        Gauge(output, "proxyharbor_backup_staging_read_success", "Whether local backup staging usage was read successfully; one when routing is disabled.",
+            stagingUsage.ReadSucceeded ? 1 : 0);
+        Gauge(output, "proxyharbor_backup_staging_used_bytes", "Bytes of service-owned published local PHB3 files; meaningful only when staging read succeeds.",
+            stagingUsage.UsedBytes);
+        Gauge(output, "proxyharbor_backup_staging_limit_bytes", "Configured maximum local backup staging bytes.",
+            backupRoutingOptions?.Value.MaximumStagingBytes ?? 0);
         Gauge(output, "proxyharbor_backup_latest_routed_run_exists", "Whether a completed routed backup run exists.",
             protectionMetrics.LatestRunExists ? 1 : 0);
         Gauge(output, "proxyharbor_backup_latest_routed_run_assessed", "Whether the latest completed routed backup has a valid fail-closed protection assessment.",
