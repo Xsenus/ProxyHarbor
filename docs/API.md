@@ -506,6 +506,10 @@ Host должен быть публичным IP. Пароль не сохран
 
 Администратор получает страницу (`page`, `pageSize` 10–100) настроенных backup destinations. Ответ показывает имя, allowlisted kind, включённость, приоритет, только признаки наличия credentials/failure domain, pool policy и route, а также последний типизированный PUT/VERIFY outcome. Содержимое credentials, failure domain, provider settings, locator и сырой текст ошибки не возвращаются. Последний outcome — audit-наблюдение, а не live health-check; отсутствие ошибок не доказывает доступность provider. Endpoint read-only, не добавляет и не переключает маршруты.
 
+## POST `/api/v1/admin/backups/destinations/s3`
+
+Создаёт новое **выключенное** S3-назначение без маршрутов и без обращения к provider. Тело содержит `name`, `endpoint`, `region`, `bucket`, `prefix`, `usePathStyle`, `accessKey`, `secretKey`, `priority`. Требуются безопасный HTTPS endpoint, корректные S3-поля и непустые credentials; повторное имя даёт `409`, некорректные данные — `400`, недоступное server-side шифрование — `503`. Ответ `201` имеет формат одного элемента обзора и не содержит ключи, bucket, endpoint или failure domain. Ключи защищаются Data Protection до записи в БД. Создание не подтверждает доступность хранилища и не включает его в backup policy.
+
 ## POST `/api/v1/admin/backups/pools/{poolId}/routes/{destinationId}/drain`
 
 Переводит маршрут пользовательского pool в draining: новые PUT через него больше не допускаются, а ранее разрешённое чтение существующих копий остаётся доступным. Тело `{ "expectedPolicyVersion": 4 }` обязательно; неверная версия или попытка изменить зарезервированный legacy pool даёт `409`, несуществующий pool/route — `404`, некорректная версия — `400`. Повторный вызов идемпотентен (`204`). Операция не отменяет уже начатый provider PUT; сначала дождитесь завершения его lease и проверьте состояние копий. Она не удаляет копии, не меняет credentials и не переключает активный pool.

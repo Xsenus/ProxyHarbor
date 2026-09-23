@@ -252,12 +252,13 @@ public sealed class BackupLegacyDestinationProjector(
         return protector.Protect(plaintext);
     }
 
-    private static string S3FailureDomain(string? endpoint, string? region)
+    /// <summary>Консервативная граница отказа для legacy и новых S3 назначений.</summary>
+    public static string S3FailureDomain(string? endpoint, string? region)
     {
         var host = Uri.TryCreate(endpoint, UriKind.Absolute, out var uri)
             ? uri.IdnHost
             : "unconfigured";
-        var value = $"s3:{host}:{region ?? "unconfigured"}";
+        var value = $"s3:{host}:{region?.ToLowerInvariant() ?? "unconfigured"}";
         return value.Length <= 120
             ? value
             : $"s3:{Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant()}";

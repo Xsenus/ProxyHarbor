@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using System.Text.Json;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Mvc;
@@ -680,6 +681,74 @@ public sealed class AdminController(
         return Ok(new PagedResult<BackupDestinationOverviewResponse>(items, page, pageSize, total));
     }
 
+    /// <summary>Создаёт выключенное S3 назначение; credentials принимаются только на запись.</summary>
+    [HttpPost("backups/destinations/s3")]
+    [ProducesResponseType<BackupDestinationOverviewResponse>(StatusCodes.Status201Created)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]
+    public async Task<ActionResult<BackupDestinationOverviewResponse>> CreateS3BackupDestination(
+        [FromBody] CreateS3BackupDestinationRequest request, CancellationToken token)
+    {
+        var name = request.Name?.Trim();
+        if (string.IsNullOrWhiteSpace(name) || name.Length > 120 || request.Priority < 0)
+            return Problem("Некорректное имя или приоритет назначения.", statusCode: 400);
+        var options = new BackupOptions
+        {
+            ObjectStorageEndpoint = request.Endpoint,
+            ObjectStorageRegion = request.Region ?? string.Empty,
+            ObjectStorageBucket = request.Bucket,
+            ObjectStoragePrefix = request.Prefix ?? string.Empty,
+            ObjectStorageUsePathStyle = request.UsePathStyle,
+            ObjectStorageAccessKey = request.AccessKey,
+            ObjectStorageSecretKey = request.SecretKey
+        };
+        if (!BackupOptions.IsObjectStorageConfigurationValid(options))
+            return Problem("Некорректная конфигурация S3 назначения.", statusCode: 400);
+        if (credentialProtectionProvider is null)
+            return Problem("Шифрование credentials недоступно.", statusCode: 503);
+
+        var json = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        var protectedSecrets = credentialProtectionProvider.CreateProtector(
+            "ProxyHarbor.BackupDestination.Secrets.v1").Protect(JsonSerializer.Serialize(new
+            {
+                accessKey = request.AccessKey,
+                secretKey = request.SecretKey
+            }, json));
+        var destination = new BackupDestination
+        {
+            Name = name,
+            Kind = "s3",
+            Enabled = false,
+            Priority = request.Priority,
+            FailureDomain = BackupLegacyDestinationProjector.S3FailureDomain(
+                request.Endpoint, request.Region),
+            CapabilitiesJson = JsonSerializer.Serialize(new S3BackupDestinationAdapter().Capabilities, json),
+            SettingsJson = JsonSerializer.Serialize(new
+            {
+                endpoint = request.Endpoint,
+                region = request.Region,
+                bucket = request.Bucket,
+                prefix = request.Prefix,
+                usePathStyle = request.UsePathStyle
+            }, json),
+            ProtectedSecrets = protectedSecrets
+        };
+        await using var db = await dbFactory.CreateDbContextAsync(token);
+        if (await db.BackupDestinations.AnyAsync(item => item.Name == name, token))
+            return Conflict(new ProblemDetails { Title = "Назначение с таким именем уже существует", Status = 409 });
+        db.BackupDestinations.Add(destination);
+        try { await db.SaveChangesAsync(token); }
+        catch (DbUpdateException exception) when (exception.InnerException is PostgresException
+        { SqlState: PostgresErrorCodes.UniqueViolation })
+        {
+            return Conflict(new ProblemDetails { Title = "Назначение с таким именем уже существует", Status = 409 });
+        }
+        return StatusCode(StatusCodes.Status201Created, new BackupDestinationOverviewResponse(
+            destination.Id, destination.Name, destination.Kind, destination.Enabled,
+            destination.Priority, CredentialsConfigured: true, FailureDomainConfigured: true,
+            Routes: [], LastOutcome: null));
+    }
+
     /// <summary>Останавливает новые PUT в пользовательский route, сохраняя разрешённое чтение существующих копий.</summary>
     [HttpPost("backups/pools/{poolId:guid}/routes/{destinationId:guid}/drain")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
@@ -1111,6 +1180,11 @@ public sealed record BackupDestinationRouteResponse(
 
 /// <summary>Оптимистическая проверка версии policy перед переводом маршрута в draining.</summary>
 public sealed record DrainBackupRouteRequest(int ExpectedPolicyVersion);
+
+/// <summary>Write-only конфигурация нового S3 назначения без активации маршрута.</summary>
+public sealed record CreateS3BackupDestinationRequest(
+    string? Name, string? Endpoint, string? Region, string? Bucket, string? Prefix,
+    bool UsePathStyle, string? AccessKey, string? SecretKey, int Priority);
 
 /// <summary>Последняя типизированная provider-операция; сырой ответ не возвращается.</summary>
 public sealed record BackupDestinationOutcomeResponse(
