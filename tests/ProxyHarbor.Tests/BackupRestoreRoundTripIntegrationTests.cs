@@ -1,4 +1,5 @@
 using System.IO.Compression;
+using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
@@ -237,8 +238,12 @@ public sealed class BackupRestoreRoundTripIntegrationTests
                 }
             }
 
+            // После потери source DB signed inventory и отдельный provider config
+            // должны дать те же PHB3 bytes для восстановления в изолированную БД.
+            var offlinePath = await MaterializeOfflineAfterSourceLossAsync(
+                admin, sourceSchema, encryptedPath, backupDirectory);
             var exitCode = await RestoreApplication.RunAsync([
-                "--input", encryptedPath,
+                "--input", offlinePath,
                 "--connection", targetConnection,
                 "--encryption-key-file", restoreKeyFile,
                 "--replace-existing-data"]);
@@ -251,6 +256,74 @@ public sealed class BackupRestoreRoundTripIntegrationTests
             if (Directory.Exists(backupDirectory)) Directory.Delete(backupDirectory, recursive: true);
             await DropSchemaAsync(admin, sourceSchema);
             await DropSchemaAsync(admin, targetSchema);
+        }
+    }
+
+    private static async Task<string> MaterializeOfflineAfterSourceLossAsync(
+        NpgsqlConnection admin, string sourceSchema, string encryptedPath, string directory)
+    {
+        var fileName = Path.GetFileName(encryptedPath);
+        var body = await File.ReadAllBytesAsync(encryptedPath);
+        var sha256 = Convert.ToHexStringLower(SHA256.HashData(body));
+        var now = DateTimeOffset.UtcNow;
+        var destinationId = Guid.NewGuid();
+        var snapshot = new BackupCatalogSnapshot(
+            Guid.NewGuid(), fileName, body.Length, sha256, 1,
+            now.AddMinutes(-2), now, "catalog-v1",
+            [new BackupCatalogCopy(Guid.NewGuid(), destinationId, "s3",
+                S3BackupObjectStorageTransport.BuildObjectKey("safe", fileName),
+                0, now.AddMinutes(-1))]);
+        var signedCatalog = BackupCatalogService.SealForCopySidecar(snapshot, EncryptionKey);
+        var accessFile = Path.Combine(directory, "offline-access.secret");
+        var secretFile = Path.Combine(directory, "offline-secret.secret");
+        await File.WriteAllTextAsync(accessFile, "SYNTHETIC-ACCESS");
+        await File.WriteAllTextAsync(secretFile, "SYNTHETIC-SECRET");
+        var providers = JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            version = 1,
+            destinations = new[]
+            {
+                new
+                {
+                    destinationId,
+                    endpoint = "https://s3.example.invalid",
+                    region = "test-region",
+                    bucket = "private-bucket",
+                    prefix = "safe",
+                    usePathStyle = true,
+                    accessKeyFile = accessFile,
+                    secretKeyFile = secretFile
+                }
+            }
+        });
+        await DropSchemaAsync(admin, sourceSchema);
+        var materialized = await new OfflineCatalogMaterializer(
+            new LocalArchiveTransport(encryptedPath)).MaterializeAsync(
+                signedCatalog, EncryptionKey, providers,
+                Path.Combine(directory, "offline-recovered.phbackup"),
+                TimeSpan.FromSeconds(30), CancellationToken.None);
+        Assert.Equal(sha256, materialized.Sha256);
+        Assert.Equal(body, await File.ReadAllBytesAsync(materialized.Path));
+        return materialized.Path;
+    }
+
+    private sealed class LocalArchiveTransport(string sourcePath) : IBackupObjectStorageTransport
+    {
+        public Task<string> UploadAndVerifyAsync(
+            string path, BackupOptions options, CancellationToken token) =>
+            throw new NotSupportedException();
+
+        public async Task<BackupObjectStorageMaterializationResult> MaterializeAndVerifyAsync(
+            string objectKey, string finalPath, long expectedSize, string expectedSha256,
+            BackupOptions options, CancellationToken token)
+        {
+            await using (var source = File.OpenRead(sourcePath))
+            await using (var target = new FileStream(finalPath, FileMode.CreateNew, FileAccess.Write,
+                FileShare.None, 128 * 1024, FileOptions.Asynchronous))
+                await source.CopyToAsync(target, token);
+            return new BackupObjectStorageMaterializationResult(
+                finalPath, new FileInfo(finalPath).Length, expectedSha256,
+                null, null, null);
         }
     }
 
