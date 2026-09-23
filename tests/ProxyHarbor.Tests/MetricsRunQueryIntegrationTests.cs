@@ -124,6 +124,23 @@ public sealed class MetricsRunQueryIntegrationTests
                 VerifiedAt = successfulBackupAt,
                 NativeLocator = "opaque-private-key"
             });
+            db.BackupDestinationHealthOutcomes.AddRange(
+                new BackupDestinationHealthOutcome
+                {
+                    BackupDestinationId = destination.Id,
+                    Operation = "put",
+                    Succeeded = true,
+                    ObservedAt = DateTimeOffset.UtcNow.AddMinutes(-1)
+                },
+                new BackupDestinationHealthOutcome
+                {
+                    BackupDestinationId = destination.Id,
+                    Operation = "verify",
+                    Succeeded = false,
+                    ErrorCode = "timeout",
+                    ProbeOutcome = "inconclusive",
+                    ObservedAt = DateTimeOffset.UtcNow.AddMinutes(-1)
+                });
             await db.SaveChangesAsync();
 
             commands.Reset();
@@ -153,6 +170,10 @@ public sealed class MetricsRunQueryIntegrationTests
             Assert.Contains("proxyharbor_backup_latest_verified_independent_copies 1", metrics,
                 StringComparison.Ordinal);
             Assert.Contains("proxyharbor_backup_latest_required_copy_debt 0", metrics,
+                StringComparison.Ordinal);
+            Assert.Contains("proxyharbor_backup_provider_put_verified_last_1h 1", metrics,
+                StringComparison.Ordinal);
+            Assert.Contains("proxyharbor_backup_provider_verify_inconclusive_last_1h 1", metrics,
                 StringComparison.Ordinal);
             Assert.DoesNotContain("opaque-private-key", metrics, StringComparison.Ordinal);
 

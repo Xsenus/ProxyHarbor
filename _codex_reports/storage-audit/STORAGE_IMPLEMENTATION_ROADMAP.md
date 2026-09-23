@@ -249,7 +249,7 @@ Purpose: remove production-DB/VPS circular dependency. Covers REQ-007/008/014, R
 
 #### TASK-051 — Metrics, alerts and diagnostics
 
-- Status: `IN PROGRESS: latest-run quorum/debt, copy/job backlog and isolated-restore metrics plus bounded alerts implemented locally; full protected-age, provider health, staging and drill SLO gates remain`; Codex.
+- Status: `IN PROGRESS: latest-run quorum/debt, copy/job backlog, isolated-restore and aggregate durable PUT/VERIFY outcome metrics plus bounded alerts implemented; full protected-age, per-destination health, staging and drill SLO gates remain`; Codex.
 - Changes: `MetricsController`, `DiagnosticsDatabaseSnapshot`, `deploy/prometheus/alerts.yml` and tests, `MONITORING.md`. Metrics from TЗ §10 with bounded labels. Add protection age/debt/UNKNOWN/all-failed/staging/drill overdue; retain current alerts during transition.
 - Health: optional destination not global readiness failure; required pool exhaustion visible separately.
 - Checks: promtool contracts, metrics tests, sanitization, restored DB compatibility.
