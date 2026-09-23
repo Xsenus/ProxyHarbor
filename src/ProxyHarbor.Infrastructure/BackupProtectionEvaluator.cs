@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using ProxyHarbor.Domain;
 
 namespace ProxyHarbor.Infrastructure;
 
@@ -147,6 +148,23 @@ public sealed class BackupProtectionEvaluator(
         var routes = await db.BackupPoolDestinations.AsNoTracking()
             .Where(route => route.BackupPoolId == poolId)
             .ToDictionaryAsync(route => route.BackupDestinationId, token);
+        return EvaluateLoaded(run, routes, hasDurableLocalStaging);
+    }
+
+    /// <summary>Оценивает уже загруженный run и маршруты без повторного чтения сущностей.</summary>
+    public BackupProtectionEvaluation EvaluateLoaded(
+        BackupRun run,
+        IReadOnlyDictionary<Guid, BackupPoolDestination> routes,
+        bool hasDurableLocalStaging)
+    {
+        ArgumentNullException.ThrowIfNull(run);
+        ArgumentNullException.ThrowIfNull(routes);
+        if (run.BackupPoolId is not { } poolId ||
+            run.ProtectionPolicyVersion is not { } policyVersion ||
+            run.RequiredVerifiedCopies is not { } required ||
+            run.DesiredVerifiedCopies is not { } desired ||
+            string.IsNullOrWhiteSpace(run.ContentSha256))
+            throw new InvalidOperationException("Backup run не содержит полный protection policy snapshot.");
         var candidates = run.Copies.Select(copy =>
         {
             var routeEligible = routes.TryGetValue(copy.BackupDestinationId, out var route) &&

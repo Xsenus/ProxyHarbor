@@ -4,6 +4,7 @@ import { currentLocale, LanguageSwitcher, useI18n } from './i18n'
 import { StyledSelect } from './components/StyledSelect'
 import { Toggle } from './components/Toggle'
 import { ToastSignal } from './components/Toasts'
+import { BackupProtectionDetail } from './BackupProtectionDetail'
 import { PublicPricingSection } from './PublicPricingSection'
 import { publicInfoPaths } from './publicInfoRoutes'
 import { useSiteSettings } from './siteSettingsContext'
@@ -151,6 +152,7 @@ export default function App() {
   const [backupTotal, setBackupTotal] = useState(0)
   const [backupBusy, setBackupBusy] = useState('')
   const [backupDeleteTarget, setBackupDeleteTarget] = useState<BackupFile | null>(null)
+  const [backupProtectionTarget, setBackupProtectionTarget] = useState<BackupFile | null>(null)
   const [adminLoading, setAdminLoading] = useState(false)
   const [action, setAction] = useState('')
   const [sourceBusy, setSourceBusy] = useState('')
@@ -359,6 +361,7 @@ export default function App() {
       const snapshot = await response.json() as PagedResult<BackupFile>
       if (requestId !== backupRequestIdRef.current) return
       setBackups(snapshot.items)
+      setBackupProtectionTarget(current => current && snapshot.items.some(item => item.id === current.id) ? current : null)
       setBackupTotal(snapshot.total)
       const availablePages = Math.max(1, Math.ceil(snapshot.total / requestedPageSize))
       if (requestedPage > availablePages) setBackupPage(availablePages)
@@ -426,6 +429,7 @@ export default function App() {
     setBackupTotal(0)
     setBackupBusy('')
     setBackupDeleteTarget(null)
+    setBackupProtectionTarget(null)
     setAction('')
     setSourceBusy('')
     setSourceEditorOpen(false)
@@ -763,7 +767,21 @@ export default function App() {
             <AdminPageHeader id="admin-backups-title" title="Резервные копии"><button className="primary-admin-button" onClick={() => runAdminAction('backup')} disabled={!adminAuthenticated || adminMutationBusy}><Database/>{action === 'backup' ? 'Создаём…' : 'Создать backup'}</button></AdminPageHeader>
             <div className="backup-summary"><article><span><Database/></span><div><small>Размер базы</small><strong>{formatBytes(diagnostics?.databaseBytes)}</strong></div></article><article><span><HardDriveDownload/></span><div><small>Последняя копия</small><strong>{latestBackup ? formatBytes(latestBackup.sizeBytes) : '—'}</strong></div></article><article><span><ShieldCheck/></span><div><small>Доставка</small><strong>{latestBackup ? backupDelivery(latestBackup) : 'Нет данных'}</strong></div></article></div>
             <AdminBackupSettings onError={setAdminError}/>
-            <section className="admin-card backup-registry"><div className="card-heading"><div><span className="kicker">ИСТОРИЯ</span><h2>Резервные копии <em>{backupTotal}</em></h2></div><button className="icon-button" aria-label="Обновить резервные копии" onClick={() => void loadBackups()} disabled={!!backupBusy}><RefreshCw/></button></div><div className="backup-list">{backups.length === 0 ? <p className="empty-state">Резервные копии ещё не создавались.</p> : backups.map(run => <article key={run.id}><i className={statusClass(run.status)}/><div><div className="backup-file-heading"><b>{run.fileName ?? 'Резервная копия'}</b><time dateTime={run.startedAt}>{formatDateTime(run.startedAt)}</time></div><small>{formatBytes(run.sizeBytes)} · {backupDelivery(run)}{run.fileName && !run.available ? ' · локальный архив удалён по настроенному сроку хранения; запись аудита сохранена' : ''}</small></div><time className="backup-relative-time" dateTime={run.startedAt}>{timeAgo(run.startedAt)}</time><div className="backup-actions">{run.available ? <a className="backup-action-icon" data-tooltip="Скачать зашифрованный архив" aria-label={`Скачать ${run.fileName ?? 'резервную копию'}`} href={`${API}/api/v1/admin/backups/${run.id}/download`} download={run.fileName}><ArrowDownToLine/></a> : <button className="backup-action-icon" data-tooltip="Архив уже удалён по политике хранения" aria-label="Архив недоступен для скачивания" disabled><ArrowDownToLine/></button>}<button className="backup-action-icon danger" data-tooltip="Удалить архив с сервера и запись истории" aria-label={`Удалить ${run.fileName ?? 'резервную копию'}`} disabled={run.status === 'running' || !!backupBusy} onClick={() => setBackupDeleteTarget(run)}><Trash2/></button></div></article>)}</div>{backupTotal > 0 && <ProxyPagination page={backupPage} pageSize={backupPageSize} total={backupTotal} totalPages={backupTotalPages} onPageChange={next => { setBackupPage(next); document.getElementById('admin-backups-title')?.scrollIntoView?.({behavior:'smooth'}) }} onPageSizeChange={size => { setBackupPageSize(size); setBackupPage(1) }}/>}</section>
+            <section className="admin-card backup-registry">
+              <div className="card-heading"><div><span className="kicker">ИСТОРИЯ</span><h2>Резервные копии <em>{backupTotal}</em></h2></div><button className="icon-button" aria-label="Обновить резервные копии" onClick={() => void loadBackups()} disabled={!!backupBusy}><RefreshCw/></button></div>
+              <div className="backup-list">{backups.length === 0 ? <p className="empty-state">Резервные копии ещё не создавались.</p> : backups.map(run => <article key={run.id}>
+                <i className={statusClass(run.status)}/>
+                <div><div className="backup-file-heading"><b>{run.fileName ?? 'Резервная копия'}</b><time dateTime={run.startedAt}>{formatDateTime(run.startedAt)}</time></div><small>{formatBytes(run.sizeBytes)} · {backupDelivery(run)}{run.fileName && !run.available ? ' · локальный архив удалён по настроенному сроку хранения; запись аудита сохранена' : ''}</small></div>
+                <time className="backup-relative-time" dateTime={run.startedAt}>{timeAgo(run.startedAt)}</time>
+                <div className="backup-actions">
+                  <button className="backup-action-icon" data-tooltip="Состояние защиты и копий" aria-label={`Показать защиту ${run.fileName ?? 'резервной копии'}`} aria-expanded={backupProtectionTarget?.id === run.id} aria-controls={backupProtectionTarget?.id === run.id ? `backup-protection-${run.id}` : undefined} onClick={() => setBackupProtectionTarget(current => current?.id === run.id ? null : run)}><ShieldCheck width={15} height={15}/></button>
+                  {run.available ? <a className="backup-action-icon" data-tooltip="Скачать зашифрованный архив" aria-label={`Скачать ${run.fileName ?? 'резервную копию'}`} href={`${API}/api/v1/admin/backups/${run.id}/download`} download={run.fileName}><ArrowDownToLine/></a> : <button className="backup-action-icon" data-tooltip="Архив уже удалён по политике хранения" aria-label="Архив недоступен для скачивания" disabled><ArrowDownToLine/></button>}
+                  <button className="backup-action-icon danger" data-tooltip="Удалить архив с сервера и запись истории" aria-label={`Удалить ${run.fileName ?? 'резервную копию'}`} disabled={run.status === 'running' || !!backupBusy} onClick={() => setBackupDeleteTarget(run)}><Trash2/></button>
+                </div>
+                {backupProtectionTarget?.id === run.id && <BackupProtectionDetail key={run.id} backupId={run.id} apiBaseUrl={API}/>}
+              </article>)}</div>
+              {backupTotal > 0 && <ProxyPagination page={backupPage} pageSize={backupPageSize} total={backupTotal} totalPages={backupTotalPages} onPageChange={next => { setBackupProtectionTarget(null); setBackupPage(next); document.getElementById('admin-backups-title')?.scrollIntoView?.({behavior:'smooth'}) }} onPageSizeChange={size => { setBackupProtectionTarget(null); setBackupPageSize(size); setBackupPage(1) }} />}
+            </section>
           </section>}
           {adminSection === 'users' && <Suspense fallback={<div className="admin-initial-loading"><RefreshCw className="spin"/><span>Загружаем пользователей…</span></div>}><AdminUsersPage/></Suspense>}
           {adminSection === 'checkers' && <Suspense fallback={<div className="admin-initial-loading"><RefreshCw className="spin"/><span>Загружаем узлы проверки…</span></div>}><AdminCheckerNodesPage/></Suspense>}
