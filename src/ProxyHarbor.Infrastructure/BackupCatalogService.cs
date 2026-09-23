@@ -39,6 +39,7 @@ public sealed class BackupCatalogService(
     private const int MaximumBytes = 256 * 1024;
     private const int SigningIterations = 200_000;
     private static ReadOnlySpan<byte> SigningDomain => "ProxyHarbor.BackupCatalog.SigningKey.v1"u8;
+    private static ReadOnlySpan<byte> SidecarSaltDomain => "ProxyHarbor.BackupCatalog.SidecarSalt.v1"u8;
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
     private readonly TimeProvider clock = timeProvider ?? TimeProvider.System;
 
@@ -91,13 +92,63 @@ public sealed class BackupCatalogService(
         return snapshot;
     }
 
+    /// <summary>Готовит однокопийный sidecar для точного S3 locator после verified commit.</summary>
+    public async Task<BackupCatalogSnapshot> CreateForCopyAsync(
+        Guid backupCopyId,
+        string keyReference,
+        CancellationToken token)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(token);
+        var runId = await db.BackupCopies.AsNoTracking()
+            .Where(copy => copy.Id == backupCopyId)
+            .Select(copy => (Guid?)copy.BackupRunId)
+            .SingleOrDefaultAsync(token)
+            ?? throw new InvalidOperationException("Backup copy не найдена.");
+        var snapshot = await CreateAsync(runId, keyReference, token);
+        var selected = snapshot.Copies.SingleOrDefault(copy => copy.CopyId == backupCopyId)
+            ?? throw new InvalidOperationException("Backup copy не пригодна для catalog publication.");
+        return snapshot with { ExportedAt = selected.VerifiedAt, Copies = [selected] };
+    }
+
     /// <summary>Подписывает canonical JSON отдельным domain-separated HMAC key.</summary>
     public static byte[] Seal(BackupCatalogSnapshot snapshot, string encryptionKey)
     {
         Validate(snapshot, DateTimeOffset.UtcNow);
         ValidateKey(encryptionKey);
+        return SealWithSalt(snapshot, encryptionKey, RandomNumberGenerator.GetBytes(16));
+    }
+
+    /// <summary>
+    /// Повторяемая подпись однокопийного immutable sidecar: crash/retry использует
+    /// те же байты и не конфликтует с условным S3 PUT. Ручной export остаётся random-salted.
+    /// </summary>
+    public static byte[] SealForCopySidecar(BackupCatalogSnapshot snapshot, string signingKey)
+    {
+        Validate(snapshot, DateTimeOffset.UtcNow);
+        if (snapshot.Copies.Length != 1 || !BackupOptions.IsNewEncryptionKeyValid(signingKey))
+            throw new ArgumentException("Для sidecar нужны одна copy и сильный signing key.");
+        var secret = Encoding.UTF8.GetBytes(signingKey);
+        try
+        {
+            var identity = Encoding.ASCII.GetBytes(snapshot.Copies[0].CopyId.ToString("D"));
+            var material = new byte[SidecarSaltDomain.Length + identity.Length];
+            SidecarSaltDomain.CopyTo(material);
+            identity.CopyTo(material.AsSpan(SidecarSaltDomain.Length));
+            try
+            {
+                var digest = HMACSHA256.HashData(secret, material);
+                try { return SealWithSalt(snapshot, signingKey, digest[..16]); }
+                finally { CryptographicOperations.ZeroMemory(digest); }
+            }
+            finally { CryptographicOperations.ZeroMemory(material); }
+        }
+        finally { CryptographicOperations.ZeroMemory(secret); }
+    }
+
+    private static byte[] SealWithSalt(
+        BackupCatalogSnapshot snapshot, string encryptionKey, byte[] salt)
+    {
         var payload = JsonSerializer.SerializeToUtf8Bytes(snapshot, Json);
-        var salt = RandomNumberGenerator.GetBytes(16);
         var mac = ComputeMac(payload, encryptionKey, salt);
         var result = JsonSerializer.SerializeToUtf8Bytes(
             new BackupCatalogEnvelope(Format, Version, snapshot,

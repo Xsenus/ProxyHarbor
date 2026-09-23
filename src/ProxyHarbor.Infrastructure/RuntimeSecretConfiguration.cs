@@ -36,6 +36,7 @@ public static class RuntimeSecretConfiguration
         AddSecretOverride(configuration, overrides, "SecretFiles:AdminPassword", "Security:AdminPassword");
         AddSecretOverride(configuration, overrides, "SecretFiles:SmtpPassword", "Email:Password");
         AddSecretOverride(configuration, overrides, "SecretFiles:BackupEncryptionKey", "Backup:EncryptionKey");
+        AddSecretOverride(configuration, overrides, "SecretFiles:BackupCatalogSigningKey", "BackupCatalogSigning:SigningKey");
         AddSecretOverride(configuration, overrides, "SecretFiles:TelegramBotToken", "Backup:TelegramBotToken");
         AddSecretOverride(configuration, overrides, "SecretFiles:TelegramChatId", "Backup:TelegramChatId");
         AddSecretOverride(configuration, overrides, "SecretFiles:AlertmanagerWebhookToken", "Monitoring:AlertmanagerWebhookToken");

@@ -150,6 +150,24 @@ public sealed class BackupRoutingOptions
     public int StagingTtlHours { get; set; } = 72;
 }
 
+/// <summary>Отдельный долгоживущий ключ подписи offline catalog, не PHB3 decrypt key.</summary>
+public sealed class BackupCatalogSigningOptions
+{
+    /// <summary>Имя configuration-секции.</summary>
+    public const string Section = "BackupCatalogSigning";
+    /// <summary>Секрет подписи, предоставляемый только через защищённую runtime-конфигурацию.</summary>
+    public string? SigningKey { get; set; }
+    /// <summary>Несекретная ссылка на внешне сохранённую версию ключа.</summary>
+    public string KeyReference { get; set; } = "catalog-v1";
+
+    /// <summary>Проверяет конфигурацию, когда ключ явно предоставлен.</summary>
+    public static bool IsValid(BackupCatalogSigningOptions options) =>
+        options.KeyReference is { Length: >= 1 and <= 64 } &&
+        options.KeyReference.All(character => char.IsAsciiLetterOrDigit(character) ||
+            character is '-' or '_' or '.') &&
+        (options.SigningKey is null || BackupOptions.IsNewEncryptionKeyValid(options.SigningKey));
+}
+
 /// <summary>Параметры шифрованного резервного копирования.</summary>
 public sealed class BackupOptions
 {

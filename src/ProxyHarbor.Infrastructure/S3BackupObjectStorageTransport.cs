@@ -12,6 +12,14 @@ namespace ProxyHarbor.Infrastructure;
 /// </summary>
 public sealed class S3BackupObjectStorageTransport : IBackupObjectStorageTransport
 {
+    private readonly Func<BackupOptions, AmazonS3Client> clientFactory;
+
+    /// <summary>Production transport создаёт отдельный клиент на одну операцию.</summary>
+    public S3BackupObjectStorageTransport() : this(CreateClient) { }
+
+    internal S3BackupObjectStorageTransport(Func<BackupOptions, AmazonS3Client> clientFactory) =>
+        this.clientFactory = clientFactory;
+
     /// <inheritdoc />
     public async Task<string> UploadAndVerifyAsync(
         string path,
@@ -32,7 +40,7 @@ public sealed class S3BackupObjectStorageTransport : IBackupObjectStorageTranspo
         var hash = await ComputeSha256Async(path, token);
         var key = BuildObjectKey(options.ObjectStoragePrefix, file.Name);
 
-        using var client = CreateClient(options);
+        using var client = clientFactory(options);
         var request = CreatePutRequest(file, key, hash, options.ObjectStorageBucket!);
         var put = await ExecuteProviderAsync(
             BackupDestinationOperation.Put,
@@ -91,6 +99,152 @@ public sealed class S3BackupObjectStorageTransport : IBackupObjectStorageTranspo
     }
 
     /// <inheritdoc />
+    public async Task<BackupObjectStorageVerificationResult> PublishCatalogAsync(
+        string backupObjectKey,
+        ReadOnlyMemory<byte> signedCatalog,
+        BackupOptions options,
+        CancellationToken token)
+    {
+        ValidateOptions(options);
+        var catalogKey = BuildCatalogObjectKey(backupObjectKey);
+        if (signedCatalog.Length is < 1 or > 256 * 1024)
+            throw new ArgumentOutOfRangeException(nameof(signedCatalog));
+        var bytes = signedCatalog.ToArray();
+        var hash = Convert.ToHexStringLower(SHA256.HashData(bytes));
+        using var client = clientFactory(options);
+        try
+        {
+            return await VerifyCatalogAsync(client, catalogKey, bytes.Length, hash, options, token);
+        }
+        catch (BackupDestinationOperationException exception)
+            when (exception.Failure.Code == BackupDestinationErrorCode.IntegrityMismatch)
+        {
+            throw Failure(BackupDestinationErrorCode.Collision,
+                BackupDestinationFailureDisposition.Permanent,
+                "S3 catalog locator занят другим содержимым.");
+        }
+        catch (BackupDestinationOperationException exception)
+            when (exception.Failure.Code == BackupDestinationErrorCode.NotFound)
+        {
+            // Только доказанное отсутствие разрешает новый условный PUT.
+        }
+
+        var request = CreateCatalogPutRequest(bytes, catalogKey, hash, options.ObjectStorageBucket!);
+        try
+        {
+            _ = await ExecuteProviderAsync(BackupDestinationOperation.Put,
+                () => client.PutObjectAsync(request, token), token);
+        }
+        catch (BackupDestinationOperationException exception)
+            when (exception.Failure.Code == BackupDestinationErrorCode.Collision)
+        {
+            // Другая replica могла опубликовать тот же immutable sidecar.
+            try { return await VerifyCatalogAsync(client, catalogKey, bytes.Length, hash, options, token); }
+            catch (BackupDestinationOperationException verification)
+                when (verification.Failure.Code == BackupDestinationErrorCode.IntegrityMismatch)
+            {
+                throw Failure(BackupDestinationErrorCode.Collision,
+                    BackupDestinationFailureDisposition.Permanent,
+                    "S3 catalog locator занят другим содержимым.");
+            }
+        }
+        try
+        {
+            return await VerifyCatalogAsync(client, catalogKey, bytes.Length, hash, options, token);
+        }
+        catch (BackupDestinationOperationException exception)
+            when (exception.Failure.Code != BackupDestinationErrorCode.IntegrityMismatch)
+        {
+            throw Failure(BackupDestinationErrorCode.UnknownOutcome,
+                BackupDestinationFailureDisposition.UnknownOutcome,
+                "S3 catalog PUT выполнен, но HEAD не подтвердил содержимое.");
+        }
+        catch (OperationCanceledException)
+        {
+            throw Failure(BackupDestinationErrorCode.UnknownOutcome,
+                BackupDestinationFailureDisposition.UnknownOutcome,
+                "S3 catalog PUT выполнен, но HEAD был прерван.");
+        }
+    }
+
+    internal static string BuildCatalogObjectKey(string backupObjectKey)
+    {
+        const string suffix = ".catalog.v1.json";
+        if (string.IsNullOrWhiteSpace(backupObjectKey) ||
+            !backupObjectKey.EndsWith(".phbackup", StringComparison.Ordinal) ||
+            backupObjectKey.Length + suffix.Length > 1024 ||
+            backupObjectKey.Split('/').Any(segment => segment.Length == 0 ||
+                segment is "." or ".." ||
+                segment.Any(character => !char.IsAsciiLetterOrDigit(character) &&
+                    character is not ('-' or '_' or '.'))))
+            throw new ArgumentException("Некорректный PHB3 locator.", nameof(backupObjectKey));
+        return backupObjectKey + suffix;
+    }
+
+    internal static PutObjectRequest CreateCatalogPutRequest(
+        byte[] bytes, string key, string hash, string bucket)
+    {
+        var request = new PutObjectRequest
+        {
+            BucketName = bucket,
+            Key = key,
+            InputStream = new MemoryStream(bytes, writable: false),
+            ContentType = "application/json",
+            AutoCloseStream = true,
+            IfNoneMatch = "*",
+            ChecksumSHA256 = Convert.ToBase64String(Convert.FromHexString(hash))
+        };
+        request.Metadata["sha256"] = hash;
+        request.Metadata["format"] = "ProxyHarbor.BackupCatalog.v1";
+        return request;
+    }
+
+    private static async Task<BackupObjectStorageVerificationResult> VerifyCatalogAsync(
+        AmazonS3Client client,
+        string key,
+        int expectedSize,
+        string expectedSha256,
+        BackupOptions options,
+        CancellationToken token)
+    {
+        var head = await VerifyAsync(client, key, expectedSize, expectedSha256, options, token);
+        using var response = await ExecuteProviderAsync(
+            BackupDestinationOperation.Materialize,
+            () => client.GetObjectAsync(new GetObjectRequest
+            {
+                BucketName = options.ObjectStorageBucket,
+                Key = key
+            }, token), token);
+        if (response.ContentLength != expectedSize)
+            throw Failure(BackupDestinationErrorCode.IntegrityMismatch,
+                BackupDestinationFailureDisposition.Permanent,
+                "S3 catalog body имеет другой размер.");
+        using var hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        var buffer = new byte[32 * 1024];
+        var total = 0;
+        while (true)
+        {
+            var read = await ExecuteProviderAsync(
+                BackupDestinationOperation.Materialize,
+                () => response.ResponseStream.ReadAsync(buffer, token).AsTask(), token);
+            if (read == 0) break;
+            total = checked(total + read);
+            if (total > expectedSize)
+                throw Failure(BackupDestinationErrorCode.IntegrityMismatch,
+                    BackupDestinationFailureDisposition.Permanent,
+                    "S3 catalog body превышает ожидаемый размер.");
+            hasher.AppendData(buffer, 0, read);
+        }
+        if (total != expectedSize ||
+            !string.Equals(Convert.ToHexStringLower(hasher.GetHashAndReset()),
+                expectedSha256, StringComparison.Ordinal))
+            throw Failure(BackupDestinationErrorCode.IntegrityMismatch,
+                BackupDestinationFailureDisposition.Permanent,
+                "S3 catalog body не совпадает с SHA-256.");
+        return head;
+    }
+
+    /// <inheritdoc />
     public async Task<BackupObjectStorageVerificationResult> VerifyAsync(
         string objectKey,
         long expectedSize,
@@ -99,7 +253,7 @@ public sealed class S3BackupObjectStorageTransport : IBackupObjectStorageTranspo
         CancellationToken token)
     {
         ValidateOptions(options);
-        using var client = CreateClient(options);
+        using var client = clientFactory(options);
         return await VerifyAsync(client, objectKey, expectedSize, expectedSha256, options, token);
     }
 
@@ -124,7 +278,7 @@ public sealed class S3BackupObjectStorageTransport : IBackupObjectStorageTranspo
             directory,
             $".{Path.GetFileName(fullFinalPath)}.{Guid.NewGuid():N}.partial");
 
-        using var client = CreateClient(options);
+        using var client = clientFactory(options);
         try
         {
             using var response = await ExecuteProviderAsync(

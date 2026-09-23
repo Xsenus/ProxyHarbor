@@ -34,6 +34,28 @@ public sealed class BackupCatalogServiceTests
     }
 
     [Fact]
+    public void SingleCopySidecarIsByteStableAcrossCrashRetry()
+    {
+        var snapshot = Snapshot();
+        var first = BackupCatalogService.SealForCopySidecar(snapshot, Key);
+        var retry = BackupCatalogService.SealForCopySidecar(snapshot, Key);
+
+        Assert.Equal(first, retry);
+        Assert.Equal(snapshot.Copies, BackupCatalogService.Open(first, Key).Copies);
+        Assert.NotEqual(first, BackupCatalogService.Seal(snapshot, Key));
+        Assert.Throws<ArgumentException>(() => BackupCatalogService.SealForCopySidecar(
+            snapshot, "short"));
+        var secondCopy = snapshot.Copies[0] with
+        {
+            CopyId = Guid.NewGuid(),
+            DestinationId = Guid.NewGuid()
+        };
+        var multiCopy = snapshot with { Copies = [snapshot.Copies[0], secondCopy] };
+        Assert.Throws<ArgumentException>(() =>
+            BackupCatalogService.SealForCopySidecar(multiCopy, Key));
+    }
+
+    [Fact]
     public void TamperingWrongKeyAndDuplicateFieldsAreRejected()
     {
         var encoded = BackupCatalogService.Seal(Snapshot(), Key);
@@ -132,6 +154,8 @@ public sealed class BackupCatalogServiceTests
         var factory = NewFactory();
         Guid runId;
         Guid allowedId;
+        Guid allowedCopyId = Guid.Empty;
+        Guid forbiddenCopyId = Guid.Empty;
         await using (var db = await factory.CreateDbContextAsync())
         {
             var now = DateTimeOffset.UtcNow;
@@ -178,7 +202,7 @@ public sealed class BackupCatalogServiceTests
                     AllowedOperations = operations,
                     Enabled = true
                 });
-                db.BackupCopies.Add(new BackupCopy
+                var copy = new BackupCopy
                 {
                     BackupRunId = run.Id,
                     BackupDestinationId = destination.Id,
@@ -190,7 +214,10 @@ public sealed class BackupCatalogServiceTests
                         ? "foreign/snapshot.phbackup"
                         : $"safe/{name}/snapshot.phbackup",
                     PolicyVersion = 3
-                });
+                };
+                if (name == "allowed") allowedCopyId = copy.Id;
+                if (name == "forbidden") forbiddenCopyId = copy.Id;
+                db.BackupCopies.Add(copy);
             }
             await db.SaveChangesAsync();
             runId = run.Id;
@@ -204,6 +231,19 @@ public sealed class BackupCatalogServiceTests
         Assert.Equal(allowedId, snapshot.Copies[0].DestinationId);
         Assert.Equal(Hash, snapshot.Sha256);
         Assert.Equal("legacy", snapshot.KeyReference);
+
+        var sidecar = await service.CreateForCopyAsync(
+            allowedCopyId, "catalog-v1", CancellationToken.None);
+        Assert.Single(sidecar.Copies);
+        Assert.Equal(allowedCopyId, sidecar.Copies[0].CopyId);
+        Assert.Equal("catalog-v1", sidecar.KeyReference);
+        Assert.Equal(sidecar.Copies[0].VerifiedAt, sidecar.ExportedAt);
+        var repeated = await service.CreateForCopyAsync(
+            allowedCopyId, "catalog-v1", CancellationToken.None);
+        Assert.Equal(BackupCatalogService.SealForCopySidecar(sidecar, Key),
+            BackupCatalogService.SealForCopySidecar(repeated, Key));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.CreateForCopyAsync(
+            forbiddenCopyId, "catalog-v1", CancellationToken.None));
 
         await using (var db = await factory.CreateDbContextAsync())
         {
