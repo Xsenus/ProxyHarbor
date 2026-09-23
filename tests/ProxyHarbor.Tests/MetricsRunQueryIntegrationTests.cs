@@ -171,11 +171,38 @@ public sealed class MetricsRunQueryIntegrationTests
                 StringComparison.Ordinal);
             Assert.Contains("proxyharbor_backup_latest_required_copy_debt 0", metrics,
                 StringComparison.Ordinal);
+            Assert.Contains("proxyharbor_backup_last_protected_run_search_assessed 1", metrics,
+                StringComparison.Ordinal);
+            Assert.Contains(
+                $"proxyharbor_backup_last_protected_run_timestamp_seconds {successfulBackupAt.ToUnixTimeSeconds()}",
+                metrics, StringComparison.Ordinal);
             Assert.Contains("proxyharbor_backup_provider_put_verified_last_1h 1", metrics,
                 StringComparison.Ordinal);
             Assert.Contains("proxyharbor_backup_provider_verify_inconclusive_last_1h 1", metrics,
                 StringComparison.Ordinal);
             Assert.DoesNotContain("opaque-private-key", metrics, StringComparison.Ordinal);
+
+            db.BackupRuns.Add(new BackupRun
+            {
+                StartedAt = latestCollectionAt.AddMinutes(2),
+                FinishedAt = latestCollectionAt.AddMinutes(3),
+                Status = "completed",
+                BackupPoolId = pool.Id,
+                ProtectionPolicyVersion = 1,
+                RequiredVerifiedCopies = 1,
+                DesiredVerifiedCopies = 1,
+                ContentSha256 = new string('b', 64),
+                SizeBytes = 12_345
+            });
+            await db.SaveChangesAsync();
+            metrics = await ReadMetricsAsync(factory);
+            Assert.Contains("proxyharbor_backup_latest_required_copy_debt 1", metrics,
+                StringComparison.Ordinal);
+            Assert.Contains("proxyharbor_backup_last_protected_run_search_assessed 1", metrics,
+                StringComparison.Ordinal);
+            Assert.Contains(
+                $"proxyharbor_backup_last_protected_run_timestamp_seconds {successfulBackupAt.ToUnixTimeSeconds()}",
+                metrics, StringComparison.Ordinal);
 
             await db.Runs.ExecuteDeleteAsync();
             await db.BackupCopies.ExecuteDeleteAsync();

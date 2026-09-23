@@ -339,6 +339,24 @@ groups:
           summary: Недостаточно подтверждённых внешних копий backup
           description: Последний routed backup не достиг обязательного quorum независимых verified-копий.
 
+      - alert: ProxyHarborBackupProtectionStale
+        expr: |
+          proxyharbor_backup_routing_enabled == 1
+          and on() proxyharbor_backup_enabled == 1
+          and on() proxyharbor_backup_last_protected_run_search_assessed == 1
+          and on() (
+            proxyharbor_backup_last_protected_run_timestamp_seconds == 0
+            or
+            time() - proxyharbor_backup_last_protected_run_timestamp_seconds
+              > 1.5 * proxyharbor_backup_interval_seconds
+          )
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: Подтверждённая защита backup просрочена
+          description: Нет доказанного routed backup с обязательным quorum независимых внешних копий в пределах полутора интервалов.
+
       - alert: ProxyHarborBackupCopyOutcomeUnknown
         expr: |
           proxyharbor_backup_routing_enabled == 1
@@ -349,6 +367,17 @@ groups:
         annotations:
           summary: Исход записи backup неизвестен
           description: Есть copy с UNKNOWN исходом; проверьте reconciliation без слепого повторного PUT.
+
+      - alert: ProxyHarborBackupProviderContentMismatch
+        expr: |
+          proxyharbor_backup_routing_enabled == 1
+          and on() proxyharbor_backup_provider_verify_mismatching_last_1h > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: S3-копия backup не совпала с ожидаемыми данными
+          description: VERIFY обнаружил несовпадение ciphertext или metadata; проверьте карантин копии и независимую копию до восстановления.
 
       - alert: ProxyHarborBackupDeliveryBacklog
         expr: |
