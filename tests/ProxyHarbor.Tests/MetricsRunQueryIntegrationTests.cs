@@ -180,6 +180,8 @@ public sealed class MetricsRunQueryIntegrationTests
                 StringComparison.Ordinal);
             Assert.Contains("proxyharbor_backup_provider_verify_inconclusive_last_1h 1", metrics,
                 StringComparison.Ordinal);
+            Assert.Contains($"proxyharbor_backup_destination_verify_unhealthy_last_1h{{destination_id=\"{destination.Id:N}\",kind=\"s3\"}} 1",
+                metrics, StringComparison.Ordinal);
             Assert.DoesNotContain("opaque-private-key", metrics, StringComparison.Ordinal);
 
             db.BackupRuns.Add(new BackupRun
