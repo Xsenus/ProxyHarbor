@@ -257,7 +257,7 @@ Purpose: remove production-DB/VPS circular dependency. Covers REQ-007/008/014, R
 
 #### TASK-052 — Runbooks and operator commands
 
-- Status: `BLOCKED: STG-04/05`; Codex.
+- Status: `IN PROGRESS: isolated full DR drill runbook drafted; operator/provider execution, destination management and rollout procedures remain`; Codex.
 - Changes: `BACKUP_RESTORE.md`, `DEPLOYMENT.md`, `CONFIGURATION.md`, `MONITORING.md`, `ARCHITECTURE.md`, API docs. Procedures: add/drain provider, inventory, canary, restore, UNKNOWN manual review, key rotation, all-failed, catch-up, rollback/roll-forward.
 - Rules: commands default dry-run/read-only; destructive cleanup separate explicit approval; never paste secrets.
 - Checks: docs links/contracts/publication gate.
