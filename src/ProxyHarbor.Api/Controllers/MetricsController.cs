@@ -426,6 +426,18 @@ public sealed class MetricsController(
                 ? Math.Max(0, (long)(now - oldestDuePendingJobAt).TotalSeconds) : 0);
         Gauge(output, "proxyharbor_backup_last_isolated_restore_pass_timestamp_seconds", "Latest passed isolated restore verification; zero when none.",
             protectionMetrics.LastIsolatedRestorePassedAt?.ToUnixTimeSeconds() ?? 0);
+        Gauge(output, "proxyharbor_backup_provider_put_verified_last_1h", "Verified provider PUT outcomes observed during the last hour.",
+            protectionMetrics.ProviderPutVerifiedLastHour);
+        Gauge(output, "proxyharbor_backup_provider_put_failed_last_1h", "Failed provider PUT outcomes observed during the last hour.",
+            protectionMetrics.ProviderPutFailedLastHour);
+        Gauge(output, "proxyharbor_backup_provider_verify_matching_last_1h", "Exact matching provider VERIFY outcomes observed during the last hour.",
+            protectionMetrics.ProviderVerifyMatchingLastHour);
+        Gauge(output, "proxyharbor_backup_provider_verify_missing_last_1h", "Provider VERIFY outcomes reporting a missing object during the last hour.",
+            protectionMetrics.ProviderVerifyMissingLastHour);
+        Gauge(output, "proxyharbor_backup_provider_verify_mismatching_last_1h", "Provider VERIFY outcomes reporting a mismatching object during the last hour.",
+            protectionMetrics.ProviderVerifyMismatchingLastHour);
+        Gauge(output, "proxyharbor_backup_provider_verify_inconclusive_last_1h", "Inconclusive, invalid or legacy provider VERIFY outcomes during the last hour.",
+            protectionMetrics.ProviderVerifyInconclusiveLastHour);
         var content = output.ToString();
         // Prometheus text exposition требует LF. AppendLine использует CRLF на Windows,
         // поэтому локальный promtool/Prometheus иначе отклоняет TYPE как `counter\r`.
@@ -459,6 +471,23 @@ public sealed class MetricsController(
             .OrderByDescending(verification => verification.FinishedAt)
             .Select(verification => verification.FinishedAt)
             .FirstOrDefaultAsync(token);
+        var providerOutcomes = await db.BackupDestinationHealthOutcomes.AsNoTracking()
+            .Where(outcome => outcome.ObservedAt >= now.AddHours(-1))
+            .GroupBy(_ => 1)
+            .Select(group => new
+            {
+                PutVerified = group.Count(outcome => outcome.Operation == "put" && outcome.Succeeded),
+                PutFailed = group.Count(outcome => outcome.Operation == "put" && !outcome.Succeeded),
+                VerifyMatching = group.Count(outcome => outcome.Operation == "verify" &&
+                    outcome.Succeeded && outcome.ProbeOutcome == "matching"),
+                VerifyMissing = group.Count(outcome => outcome.Operation == "verify" &&
+                    outcome.ProbeOutcome == "missing"),
+                VerifyMismatching = group.Count(outcome => outcome.Operation == "verify" &&
+                    outcome.ProbeOutcome == "mismatching"),
+                VerifyInconclusive = group.Count(outcome => outcome.Operation == "verify" &&
+                    (outcome.ProbeOutcome == null || outcome.ProbeOutcome == "inconclusive" ||
+                        outcome.ProbeOutcome == "invalid"))
+            }).SingleOrDefaultAsync(token);
         var result = new BackupProtectionOperationalMetrics
         {
             LatestRunExists = runMetrics.LatestRoutedRunId.HasValue,
@@ -468,7 +497,13 @@ public sealed class MetricsController(
             PendingJobs = jobCounts?.Pending ?? 0,
             ReconcilingJobs = jobCounts?.Reconciling ?? 0,
             OldestDuePendingJobAt = oldestDuePendingJobAt,
-            LastIsolatedRestorePassedAt = lastIsolatedRestorePassedAt
+            LastIsolatedRestorePassedAt = lastIsolatedRestorePassedAt,
+            ProviderPutVerifiedLastHour = providerOutcomes?.PutVerified ?? 0,
+            ProviderPutFailedLastHour = providerOutcomes?.PutFailed ?? 0,
+            ProviderVerifyMatchingLastHour = providerOutcomes?.VerifyMatching ?? 0,
+            ProviderVerifyMissingLastHour = providerOutcomes?.VerifyMissing ?? 0,
+            ProviderVerifyMismatchingLastHour = providerOutcomes?.VerifyMismatching ?? 0,
+            ProviderVerifyInconclusiveLastHour = providerOutcomes?.VerifyInconclusive ?? 0
         };
         if (runMetrics.LatestRoutedRunId is not { } runId || backupProtectionEvaluator is null ||
             runMetrics.LatestRoutedRunPoolId is not { } poolId ||
@@ -528,6 +563,12 @@ public sealed class MetricsController(
         public int ReconcilingJobs { get; init; }
         public DateTimeOffset? OldestDuePendingJobAt { get; init; }
         public DateTimeOffset? LastIsolatedRestorePassedAt { get; init; }
+        public int ProviderPutVerifiedLastHour { get; init; }
+        public int ProviderPutFailedLastHour { get; init; }
+        public int ProviderVerifyMatchingLastHour { get; init; }
+        public int ProviderVerifyMissingLastHour { get; init; }
+        public int ProviderVerifyMismatchingLastHour { get; init; }
+        public int ProviderVerifyInconclusiveLastHour { get; init; }
     }
 
     /// <summary>

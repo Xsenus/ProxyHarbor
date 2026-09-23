@@ -106,6 +106,65 @@ public sealed class MetricsControllerTests
                 Result = "passed",
                 FinishedAt = now.AddDays(-1)
             });
+            seed.BackupDestinationHealthOutcomes.AddRange(
+                new BackupDestinationHealthOutcome
+                {
+                    BackupDestinationId = primary.Id,
+                    Operation = "put",
+                    Succeeded = true,
+                    ObservedAt = now.AddMinutes(-5)
+                },
+                new BackupDestinationHealthOutcome
+                {
+                    BackupDestinationId = fallback.Id,
+                    Operation = "put",
+                    Succeeded = false,
+                    ErrorCode = "timeout",
+                    ObservedAt = now.AddMinutes(-4)
+                },
+                new BackupDestinationHealthOutcome
+                {
+                    BackupDestinationId = primary.Id,
+                    Operation = "verify",
+                    Succeeded = true,
+                    ProbeOutcome = "matching",
+                    ObservedAt = now.AddMinutes(-3)
+                },
+                new BackupDestinationHealthOutcome
+                {
+                    BackupDestinationId = fallback.Id,
+                    Operation = "verify",
+                    Succeeded = false,
+                    ErrorCode = "not_found",
+                    ProbeOutcome = "missing",
+                    ObservedAt = now.AddMinutes(-2)
+                },
+                new BackupDestinationHealthOutcome
+                {
+                    BackupDestinationId = sameDomain.Id,
+                    Operation = "verify",
+                    Succeeded = false,
+                    ErrorCode = "checksum_mismatch",
+                    ProbeOutcome = "mismatching",
+                    ObservedAt = now.AddMinutes(-2)
+                },
+                new BackupDestinationHealthOutcome
+                {
+                    BackupDestinationId = fallback.Id,
+                    Operation = "verify",
+                    Succeeded = false,
+                    ErrorCode = "timeout",
+                    ProbeOutcome = "inconclusive",
+                    ObservedAt = now.AddMinutes(-1)
+                },
+                new BackupDestinationHealthOutcome
+                {
+                    BackupDestinationId = fallback.Id,
+                    Operation = "put",
+                    Succeeded = false,
+                    ErrorCode = "old_failure",
+                    ObservedAt = now.AddHours(-2)
+                });
             await seed.SaveChangesAsync();
         }
 
@@ -125,6 +184,13 @@ public sealed class MetricsControllerTests
         Assert.Contains("proxyharbor_backup_copies_unknown 1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_backup_delivery_jobs_pending 1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_backup_last_isolated_restore_pass_timestamp_seconds ", metrics,
+            StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_backup_provider_put_verified_last_1h 1", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_backup_provider_put_failed_last_1h 1", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_backup_provider_verify_matching_last_1h 1", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_backup_provider_verify_missing_last_1h 1", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_backup_provider_verify_mismatching_last_1h 1", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_backup_provider_verify_inconclusive_last_1h 1", metrics,
             StringComparison.Ordinal);
         Assert.DoesNotContain("opaque-private-object-key", metrics, StringComparison.Ordinal);
         Assert.DoesNotContain("second-object-in-same-account", metrics, StringComparison.Ordinal);
