@@ -170,12 +170,16 @@ public enum BackupDestinationProbeOutcome
     Unsupported
 }
 
-/// <summary>Безопасные evidence проверки ранее начатой записи.</summary>
+/// <summary>
+/// Безопасные evidence проверки ранее начатой записи. FailureCode сохраняет типизированную
+/// причину inconclusive outcome без provider response text.
+/// </summary>
 public sealed record BackupDestinationProbeResult(
     BackupDestinationProbeOutcome Outcome,
     string? NativeLocator = null,
     string? NativeVersion = null,
-    string? NativeChecksum = null);
+    string? NativeChecksum = null,
+    BackupDestinationErrorCode? FailureCode = null);
 
 /// <summary>Проверенный локальный ciphertext и безопасные provider evidence.</summary>
 public sealed record BackupDestinationMaterializationResult(
@@ -402,12 +406,15 @@ public sealed class S3BackupDestinationAdapter : IBackupDestinationAdapter
                     BackupDestinationProbeOutcome.Missing, locator),
                 BackupDestinationErrorCode.IntegrityMismatch or BackupDestinationErrorCode.Collision => new(
                     BackupDestinationProbeOutcome.Mismatching, locator),
-                _ => new(BackupDestinationProbeOutcome.Inconclusive, locator)
+                _ => new(BackupDestinationProbeOutcome.Inconclusive, locator,
+                    FailureCode: exception.Failure.Code)
             };
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
-            return new BackupDestinationProbeResult(BackupDestinationProbeOutcome.Inconclusive, locator);
+            return new BackupDestinationProbeResult(
+                BackupDestinationProbeOutcome.Inconclusive, locator,
+                FailureCode: BackupDestinationErrorCode.Timeout);
         }
     }
 

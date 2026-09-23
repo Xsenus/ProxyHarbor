@@ -200,6 +200,10 @@ public sealed class BackupDestinationRegistryTests
     [InlineData(BackupDestinationErrorCode.NotFound, BackupDestinationProbeOutcome.Missing)]
     [InlineData(BackupDestinationErrorCode.IntegrityMismatch, BackupDestinationProbeOutcome.Mismatching)]
     [InlineData(BackupDestinationErrorCode.Unavailable, BackupDestinationProbeOutcome.Inconclusive)]
+    [InlineData(BackupDestinationErrorCode.AuthenticationFailed, BackupDestinationProbeOutcome.Inconclusive)]
+    [InlineData(BackupDestinationErrorCode.AuthorizationFailed, BackupDestinationProbeOutcome.Inconclusive)]
+    [InlineData(BackupDestinationErrorCode.RateLimited, BackupDestinationProbeOutcome.Inconclusive)]
+    [InlineData(BackupDestinationErrorCode.Timeout, BackupDestinationProbeOutcome.Inconclusive)]
     public async Task S3ProbeMapsHeadEvidenceWithoutUpload(
         BackupDestinationErrorCode? failure, BackupDestinationProbeOutcome expected)
     {
@@ -218,6 +222,8 @@ public sealed class BackupDestinationRegistryTests
             destination, "snapshot.phbackup", new string('a', 64), 123, CancellationToken.None);
 
         Assert.Equal(expected, result.Outcome);
+        Assert.Equal(expected == BackupDestinationProbeOutcome.Inconclusive ? failure : null,
+            result.FailureCode);
         Assert.Equal("safe/snapshot.phbackup", result.NativeLocator);
         Assert.Equal(0, transport.UploadCalls);
     }

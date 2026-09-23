@@ -664,8 +664,11 @@ public sealed class BackupDeliveryWorkerIntegrationTests
         Assert.Equal(0, adapter.PutCalls);
     }
 
-    [Fact]
-    public async Task TypedProbeFailureIsDurableAndOpensOnlyVerifyOnNewReplica()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task TypedProbeFailureIsDurableAndOpensOnlyVerifyOnNewReplica(
+        bool adapterReturnsFailure)
     {
         var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
             .UseInMemoryDatabase($"delivery-probe-auth-{Guid.NewGuid():N}").Options;
@@ -692,7 +695,8 @@ public sealed class BackupDeliveryWorkerIntegrationTests
             jobId = job.Id;
         }
         var adapter = new ProbingAdapter(BackupDestinationProbeOutcome.Inconclusive,
-            BackupDestinationErrorCode.AuthenticationFailed);
+            BackupDestinationErrorCode.AuthenticationFailed,
+            returnTypedFailure: adapterReturnsFailure);
         var processor = Processor(
             factory, Registry(adapter, new SuccessfulAdapter("telegram")), Path.GetTempPath());
 
@@ -1519,7 +1523,8 @@ public sealed class BackupDeliveryWorkerIntegrationTests
     private sealed class ProbingAdapter(
         BackupDestinationProbeOutcome outcome,
         BackupDestinationErrorCode? failureCode = null,
-        bool includeLocator = true) : IBackupDestinationAdapter
+        bool includeLocator = true,
+        bool returnTypedFailure = false) : IBackupDestinationAdapter
     {
         public string Kind => "s3";
         public BackupDestinationCapabilities Capabilities { get; } = new(
@@ -1540,7 +1545,7 @@ public sealed class BackupDeliveryWorkerIntegrationTests
             long expectedSize, CancellationToken token)
         {
             ProbeCalls++;
-            if (failureCode is { } code)
+            if (failureCode is { } code && !returnTypedFailure)
                 throw new BackupDestinationOperationException(
                     new BackupDestinationFailure(code, BackupDestinationFailureDisposition.Permanent),
                     "synthetic probe failure");
@@ -1549,7 +1554,8 @@ public sealed class BackupDeliveryWorkerIntegrationTests
                 outcome == BackupDestinationProbeOutcome.Matching && includeLocator
                     ? $"safe/{fileName}" : null,
                 null,
-                outcome == BackupDestinationProbeOutcome.Matching ? expectedSha256 : null));
+                outcome == BackupDestinationProbeOutcome.Matching ? expectedSha256 : null,
+                returnTypedFailure ? failureCode : null));
         }
     }
 
