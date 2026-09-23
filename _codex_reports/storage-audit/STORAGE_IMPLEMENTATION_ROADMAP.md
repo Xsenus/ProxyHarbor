@@ -50,7 +50,7 @@ flowchart LR
 | STG-02 | DONE / merged | schema, registry, provider adapters | v8 stable | TASK-020–024 merged with green CI; routing flag off |
 | STG-03 | IN PROGRESS | durable jobs/fallback/reconcile/repair | schema/adapters | TEST-004–008 local fault matrix, including failback |
 | STG-04 | IN PROGRESS | independent catalog/materializer/restore | copies stable | local two-provider fixtures + isolated real-provider restore |
-| STG-05 | BLOCKED | API/UI/metrics/runbooks | state contracts stable | UI/a11y + alert contracts + no secrets |
+| STG-05 | IN PROGRESS | API/UI/metrics/runbooks | state contracts stable | UI/a11y + alert contracts + no secrets |
 | STG-06 | BLOCKED by owner/external | inventory/backfill/canary/real drill | all local gates | owner-approved RPO/RTO and observation |
 | STG-07 | BLOCKED | final gates/handoff | STG-06 evidence | AC-001–014 disposition and operational sign-off |
 
@@ -241,7 +241,7 @@ Purpose: remove production-DB/VPS circular dependency. Covers REQ-007/008/014, R
 
 #### TASK-050 — Admin API and UI for destinations/copies
 
-- Status: `PARTIAL: read-only per-run protection/copy detail implemented locally; destination/pool management and final gates remain`; Codex.
+- Status: `PARTIAL: read-only per-run protection/copy detail merged in PR #293; destination/pool management remains`; Codex.
 - Changes: `AdminController`, DTO/OpenAPI; React backup settings/history. Show pool policy, destination state, verified copies, pending/degraded/UNKNOWN, safe locator summary. Credentials write-only. Preserve old response fields.
 - UI rules: use `StyledSelect`, shared Toggle/button/checkbox/table/modal patterns; explicit Lucide sizes; keyboard/focus/mobile tests per `AGENTS.md`.
 - Checks: controller auth/validation, frontend interaction/a11y, desktop/mobile visual verification; full frontend lint/test/build final gate.
@@ -249,7 +249,7 @@ Purpose: remove production-DB/VPS circular dependency. Covers REQ-007/008/014, R
 
 #### TASK-051 — Metrics, alerts and diagnostics
 
-- Status: `BLOCKED: TASK-030,TASK-031`; Codex.
+- Status: `IN PROGRESS: latest-run quorum/debt, copy/job backlog and isolated-restore metrics plus bounded alerts implemented locally; full protected-age, provider health, staging and drill SLO gates remain`; Codex.
 - Changes: `MetricsController`, `DiagnosticsDatabaseSnapshot`, `deploy/prometheus/alerts.yml` and tests, `MONITORING.md`. Metrics from TЗ §10 with bounded labels. Add protection age/debt/UNKNOWN/all-failed/staging/drill overdue; retain current alerts during transition.
 - Health: optional destination not global readiness failure; required pool exhaustion visible separately.
 - Checks: promtool contracts, metrics tests, sanitization, restored DB compatibility.

@@ -12,6 +12,168 @@ namespace ProxyHarbor.Tests;
 public sealed class MetricsControllerTests
 {
     [Fact]
+    public async Task BackupProtectionMetricsUseIndependentVerifiedCopiesAndBoundedStates()
+    {
+        var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+            .UseInMemoryDatabase($"metrics-backup-protection-{Guid.NewGuid():N}").Options;
+        var factory = new TestDbFactory(options);
+        var now = DateTimeOffset.UtcNow;
+        var pool = new BackupPool { RequiredVerifiedCopies = 1, DesiredVerifiedCopies = 2 };
+        var primary = new BackupDestination
+        {
+            Name = "Primary",
+            Kind = "s3",
+            Enabled = true,
+            FailureDomain = "account-a"
+        };
+        var fallback = new BackupDestination
+        {
+            Name = "Fallback",
+            Kind = "s3",
+            Enabled = true,
+            FailureDomain = "account-b"
+        };
+        var sameDomain = new BackupDestination
+        {
+            Name = "Same account",
+            Kind = "s3",
+            Enabled = true,
+            FailureDomain = "account-a"
+        };
+        var run = new BackupRun
+        {
+            Status = "completed",
+            FinishedAt = now.AddMinutes(-3),
+            BackupPoolId = pool.Id,
+            ProtectionPolicyVersion = 1,
+            RequiredVerifiedCopies = 1,
+            DesiredVerifiedCopies = 2,
+            ContentSha256 = new string('a', 64),
+            SizeBytes = 123
+        };
+        var verified = new BackupCopy
+        {
+            BackupRunId = run.Id,
+            BackupDestinationId = primary.Id,
+            State = "verified",
+            VerifiedAt = now.AddMinutes(-2),
+            NativeLocator = "opaque-private-object-key",
+            ContentSha256 = run.ContentSha256,
+            SizeBytes = run.SizeBytes,
+            PolicyVersion = 1
+        };
+        var uncertain = new BackupCopy
+        {
+            BackupRunId = run.Id,
+            BackupDestinationId = fallback.Id,
+            State = "unknown",
+            ContentSha256 = run.ContentSha256,
+            SizeBytes = run.SizeBytes,
+            PolicyVersion = 1
+        };
+        var duplicateDomain = new BackupCopy
+        {
+            BackupRunId = run.Id,
+            BackupDestinationId = sameDomain.Id,
+            State = "verified",
+            VerifiedAt = now.AddMinutes(-2),
+            NativeLocator = "second-object-in-same-account",
+            ContentSha256 = run.ContentSha256,
+            SizeBytes = run.SizeBytes,
+            PolicyVersion = 1
+        };
+        await using (var seed = await factory.CreateDbContextAsync())
+        {
+            seed.BackupPools.Add(pool);
+            seed.BackupDestinations.AddRange(primary, fallback, sameDomain);
+            seed.BackupPoolDestinations.AddRange(
+                new BackupPoolDestination { BackupPoolId = pool.Id, BackupDestinationId = primary.Id },
+                new BackupPoolDestination { BackupPoolId = pool.Id, BackupDestinationId = fallback.Id },
+                new BackupPoolDestination { BackupPoolId = pool.Id, BackupDestinationId = sameDomain.Id });
+            seed.BackupRuns.Add(run);
+            seed.BackupCopies.AddRange(verified, uncertain, duplicateDomain);
+            seed.BackupDeliveryJobs.Add(new BackupDeliveryJob
+            {
+                BackupCopyId = uncertain.Id,
+                State = "pending",
+                CreatedAt = now.AddMinutes(-10),
+                NotBefore = now.AddMinutes(-10)
+            });
+            seed.BackupRestoreVerifications.Add(new BackupRestoreVerification
+            {
+                BackupRunId = run.Id,
+                Environment = "isolated",
+                Result = "passed",
+                FinishedAt = now.AddDays(-1)
+            });
+            await seed.SaveChangesAsync();
+        }
+
+        var registry = new BackupDestinationRegistry(
+            [new MetadataAdapter("s3", true), new MetadataAdapter("telegram", false)]);
+        var controller = new MetricsController(factory, Options.Create(new CollectorOptions()),
+            Options.Create(new BackupOptions()), new ProbeControlHealth(),
+            backupRoutingOptions: Options.Create(new BackupRoutingOptions { Enabled = true }),
+            backupProtectionEvaluator: new BackupProtectionEvaluator(factory, registry));
+
+        var metrics = Assert.IsType<ContentResult>(await controller.Get(CancellationToken.None)).Content!;
+        Assert.Contains("proxyharbor_backup_routing_enabled 1", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_backup_latest_routed_run_assessed 1", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_backup_latest_verified_independent_copies 1", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_backup_latest_required_copy_debt 0", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_backup_latest_desired_copy_debt 1", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_backup_copies_unknown 1", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_backup_delivery_jobs_pending 1", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_backup_last_isolated_restore_pass_timestamp_seconds ", metrics,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("opaque-private-object-key", metrics, StringComparison.Ordinal);
+        Assert.DoesNotContain("second-object-in-same-account", metrics, StringComparison.Ordinal);
+        Assert.DoesNotContain("account-a", metrics, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task BackupProtectionMetricsDoNotAssessLegacyRunAsProtected()
+    {
+        var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+            .UseInMemoryDatabase($"metrics-backup-legacy-{Guid.NewGuid():N}").Options;
+        var factory = new TestDbFactory(options);
+        await using (var seed = await factory.CreateDbContextAsync())
+        {
+            seed.BackupRuns.Add(new BackupRun
+            {
+                Status = "completed",
+                FinishedAt = DateTimeOffset.UtcNow,
+                BackupPoolId = Guid.NewGuid(),
+                ContentSha256 = new string('b', 64)
+            });
+            seed.BackupDeliveryJobs.Add(new BackupDeliveryJob
+            {
+                BackupCopyId = Guid.NewGuid(),
+                State = "pending",
+                CreatedAt = DateTimeOffset.UtcNow.AddHours(-3),
+                NotBefore = DateTimeOffset.UtcNow.AddHours(1)
+            });
+            await seed.SaveChangesAsync();
+        }
+
+        var controller = new MetricsController(factory, Options.Create(new CollectorOptions()),
+            Options.Create(new BackupOptions()), new ProbeControlHealth(),
+            backupRoutingOptions: Options.Create(new BackupRoutingOptions { Enabled = true }),
+            backupProtectionEvaluator: new BackupProtectionEvaluator(factory,
+                new BackupDestinationRegistry(
+                    [new MetadataAdapter("s3", true), new MetadataAdapter("telegram", false)])));
+
+        var metrics = Assert.IsType<ContentResult>(await controller.Get(CancellationToken.None)).Content!;
+        Assert.Contains("proxyharbor_backup_latest_routed_run_exists 1", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_backup_latest_routed_run_assessed 0", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_backup_latest_verified_independent_copies 0", metrics,
+            StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_backup_delivery_jobs_pending 1", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_backup_oldest_due_pending_job_age_seconds 0", metrics,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task MetricsExposeVpnSourceAndBuiltInCatalogHealth()
     {
         var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
@@ -416,5 +578,12 @@ public sealed class MetricsControllerTests
 
         public Task SaveAsync(BackupOptions options, CancellationToken token = default) =>
             Task.CompletedTask;
+    }
+
+    private sealed class MetadataAdapter(string kind, bool canVerify) : IBackupDestinationAdapter
+    {
+        public string Kind { get; } = kind;
+        public BackupDestinationCapabilities Capabilities { get; } = new(
+            new(true), new(canVerify), new(false), false, false, false);
     }
 }

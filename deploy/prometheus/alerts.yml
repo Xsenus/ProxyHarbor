@@ -315,11 +315,58 @@ groups:
           summary: Backup выполняется слишком долго
           description: Backup run остаётся активным более одного часа.
 
+      - alert: ProxyHarborBackupProtectionUnassessed
+        expr: |
+          proxyharbor_backup_routing_enabled == 1
+          and on() proxyharbor_backup_latest_routed_run_exists == 1
+          and on() proxyharbor_backup_latest_routed_run_assessed == 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: Защиту последнего backup нельзя оценить
+          description: Policy snapshot или маршрут последнего routed backup не прошёл fail-closed оценку; не считайте его защищённым.
+
+      - alert: ProxyHarborBackupRequiredCopiesUnmet
+        expr: |
+          proxyharbor_backup_routing_enabled == 1
+          and on() proxyharbor_backup_latest_routed_run_assessed == 1
+          and on() proxyharbor_backup_latest_required_copy_debt > 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: Недостаточно подтверждённых внешних копий backup
+          description: Последний routed backup не достиг обязательного quorum независимых verified-копий.
+
+      - alert: ProxyHarborBackupCopyOutcomeUnknown
+        expr: |
+          proxyharbor_backup_routing_enabled == 1
+          and on() proxyharbor_backup_copies_unknown > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Исход записи backup неизвестен
+          description: Есть copy с UNKNOWN исходом; проверьте reconciliation без слепого повторного PUT.
+
+      - alert: ProxyHarborBackupDeliveryBacklog
+        expr: |
+          proxyharbor_backup_routing_enabled == 1
+          and on() proxyharbor_backup_oldest_due_pending_job_age_seconds > 3600
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Очередь доставки backup задерживается
+          description: Самая старая pending job ожидает более часа; проверьте worker, staging и доступность destination.
+
       - alert: ProxyHarborTelegramDeliveryFailed
         expr: |
           proxyharbor_backup_enabled == 1
           and on() proxyharbor_backup_telegram_configured == 1
           and on() proxyharbor_last_backup_sent_to_telegram == 0
+          and on() proxyharbor_backup_routing_enabled == 0
         for: 15m
         labels:
           severity: critical

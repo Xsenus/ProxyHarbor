@@ -229,6 +229,8 @@ tests:
         values: '1x16'
       - series: proxyharbor_last_backup_sent_to_telegram
         values: '0x16'
+      - series: proxyharbor_backup_routing_enabled
+        values: '0x16'
     alert_rule_test:
       - eval_time: 16m
         alertname: ProxyHarborBackupFailed
@@ -254,6 +256,90 @@ tests:
             exp_annotations:
               summary: Backup не подтверждён Telegram
               description: Telegram настроен, но последний успешный backup не имеет подтверждённой доставки.
+
+  - name: Routed backup protection debt and unknown copy alert after grace
+    interval: 1m
+    input_series:
+      - series: proxyharbor_backup_routing_enabled
+        values: '1x16'
+      - series: proxyharbor_backup_latest_routed_run_exists
+        values: '1x16'
+      - series: proxyharbor_backup_latest_routed_run_assessed
+        values: '1x16'
+      - series: proxyharbor_backup_latest_required_copy_debt
+        values: '1x16'
+      - series: proxyharbor_backup_copies_unknown
+        values: '1x16'
+      - series: proxyharbor_backup_oldest_due_pending_job_age_seconds
+        values: '3700x16'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: ProxyHarborBackupRequiredCopiesUnmet
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: ProxyHarborBackupRequiredCopiesUnmet
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: Недостаточно подтверждённых внешних копий backup
+              description: Последний routed backup не достиг обязательного quorum независимых verified-копий.
+      - eval_time: 11m
+        alertname: ProxyHarborBackupCopyOutcomeUnknown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Исход записи backup неизвестен
+              description: Есть copy с UNKNOWN исходом; проверьте reconciliation без слепого повторного PUT.
+      - eval_time: 11m
+        alertname: ProxyHarborBackupDeliveryBacklog
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Очередь доставки backup задерживается
+              description: Самая старая pending job ожидает более часа; проверьте worker, staging и доступность destination.
+
+  - name: Unknown protection assessment does not masquerade as zero debt
+    interval: 1m
+    input_series:
+      - series: proxyharbor_backup_routing_enabled
+        values: '1x16'
+      - series: proxyharbor_backup_latest_routed_run_exists
+        values: '1x16'
+      - series: proxyharbor_backup_latest_routed_run_assessed
+        values: '0x16'
+      - series: proxyharbor_backup_latest_required_copy_debt
+        values: '0x16'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: ProxyHarborBackupProtectionUnassessed
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: Защиту последнего backup нельзя оценить
+              description: Policy snapshot или маршрут последнего routed backup не прошёл fail-closed оценку; не считайте его защищённым.
+      - eval_time: 11m
+        alertname: ProxyHarborBackupRequiredCopiesUnmet
+        exp_alerts: []
+
+  - name: Routed backups do not require optional Telegram delivery
+    interval: 1m
+    input_series:
+      - series: proxyharbor_backup_enabled
+        values: '1x16'
+      - series: proxyharbor_backup_telegram_configured
+        values: '1x16'
+      - series: proxyharbor_last_backup_sent_to_telegram
+        values: '0x16'
+      - series: proxyharbor_backup_routing_enabled
+        values: '1x16'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: ProxyHarborTelegramDeliveryFailed
+        exp_alerts: []
 
   - name: Validation stall requires due work healthy control and workers
     interval: 1m

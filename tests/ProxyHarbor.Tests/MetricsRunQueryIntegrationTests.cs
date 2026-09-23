@@ -69,16 +69,42 @@ public sealed class MetricsRunQueryIntegrationTests
                 new CollectionRun { StartedAt = latestCollectionAt.AddMinutes(1), Status = "running" });
 
             var successfulBackupAt = successfulCollectionAt.AddMinutes(1);
+            var pool = new BackupPool
+            {
+                Name = "metrics-test",
+                RequiredVerifiedCopies = 1,
+                DesiredVerifiedCopies = 1
+            };
+            var destination = new BackupDestination
+            {
+                Name = "Isolated S3",
+                Kind = "s3",
+                Enabled = true,
+                FailureDomain = "metrics-account"
+            };
+            db.BackupPools.Add(pool);
+            db.BackupDestinations.Add(destination);
+            db.BackupPoolDestinations.Add(new BackupPoolDestination
+            {
+                BackupPoolId = pool.Id,
+                BackupDestinationId = destination.Id
+            });
+            var routedBackup = new BackupRun
+            {
+                StartedAt = successfulBackupAt.AddSeconds(-10),
+                FinishedAt = successfulBackupAt,
+                Status = "completed",
+                TelegramConfigured = true,
+                SentToTelegram = true,
+                SizeBytes = 12_345,
+                ContentSha256 = new string('a', 64),
+                BackupPoolId = pool.Id,
+                ProtectionPolicyVersion = 1,
+                RequiredVerifiedCopies = 1,
+                DesiredVerifiedCopies = 1
+            };
             db.BackupRuns.AddRange(
-                new BackupRun
-                {
-                    StartedAt = successfulBackupAt.AddSeconds(-10),
-                    FinishedAt = successfulBackupAt,
-                    Status = "completed",
-                    TelegramConfigured = true,
-                    SentToTelegram = true,
-                    SizeBytes = 12_345
-                },
+                routedBackup,
                 new BackupRun
                 {
                     StartedAt = latestCollectionAt.AddSeconds(-2),
@@ -87,6 +113,17 @@ public sealed class MetricsRunQueryIntegrationTests
                     Error = "expected integration failure"
                 },
                 new BackupRun { StartedAt = latestCollectionAt.AddMinutes(1), Status = "running" });
+            db.BackupCopies.Add(new BackupCopy
+            {
+                BackupRunId = routedBackup.Id,
+                BackupDestinationId = destination.Id,
+                State = "verified",
+                ContentSha256 = routedBackup.ContentSha256!,
+                SizeBytes = routedBackup.SizeBytes,
+                PolicyVersion = 1,
+                VerifiedAt = successfulBackupAt,
+                NativeLocator = "opaque-private-key"
+            });
             await db.SaveChangesAsync();
 
             commands.Reset();
@@ -112,8 +149,15 @@ public sealed class MetricsRunQueryIntegrationTests
             Assert.Contains("proxyharbor_last_backup_size_bytes 12345", metrics, StringComparison.Ordinal);
             Assert.Contains($"proxyharbor_last_backup_timestamp_seconds {successfulBackupAt.ToUnixTimeSeconds()}",
                 metrics, StringComparison.Ordinal);
+            Assert.Contains("proxyharbor_backup_latest_routed_run_assessed 1", metrics, StringComparison.Ordinal);
+            Assert.Contains("proxyharbor_backup_latest_verified_independent_copies 1", metrics,
+                StringComparison.Ordinal);
+            Assert.Contains("proxyharbor_backup_latest_required_copy_debt 0", metrics,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain("opaque-private-key", metrics, StringComparison.Ordinal);
 
             await db.Runs.ExecuteDeleteAsync();
+            await db.BackupCopies.ExecuteDeleteAsync();
             await db.BackupRuns.ExecuteDeleteAsync();
             commands.Reset();
             metrics = await ReadMetricsAsync(factory);
@@ -136,7 +180,10 @@ public sealed class MetricsRunQueryIntegrationTests
             factory,
             Options.Create(new CollectorOptions()),
             Options.Create(new BackupOptions()),
-            new ProbeControlHealth());
+            new ProbeControlHealth(),
+            backupProtectionEvaluator: new BackupProtectionEvaluator(factory,
+                new BackupDestinationRegistry(
+                    [new S3BackupDestinationAdapter(), new MetadataAdapter("telegram", false)])));
         var result = Assert.IsType<ContentResult>(await controller.Get(CancellationToken.None));
         return result.Content!;
     }
@@ -162,6 +209,13 @@ public sealed class MetricsRunQueryIntegrationTests
             cancellationToken.ThrowIfCancellationRequested();
             return Task.FromResult(CreateDbContext());
         }
+    }
+
+    private sealed class MetadataAdapter(string kind, bool canVerify) : IBackupDestinationAdapter
+    {
+        public string Kind { get; } = kind;
+        public BackupDestinationCapabilities Capabilities { get; } = new(
+            new(true), new(canVerify), new(false), false, false, false);
     }
 
     private sealed class MetricsCommandCounter : DbCommandInterceptor
