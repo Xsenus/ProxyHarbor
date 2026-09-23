@@ -192,6 +192,83 @@ public sealed class BackupDeliveryWorkerIntegrationTests
             Registry(new SuccessfulAdapter("s3"), new SuccessfulAdapter("telegram"))));
     }
 
+    [Theory]
+    [InlineData("valid", true)]
+    [InlineData("put-started", false)]
+    [InlineData("unknown", false)]
+    [InlineData("job-not-failed", false)]
+    [InlineData("policy-changed", false)]
+    [InlineData("cooldown", false)]
+    [InlineData("ambiguous-error", false)]
+    [InlineData("attempt-marked", false)]
+    [InlineData("native-evidence", false)]
+    [InlineData("older-ambiguous-error", false)]
+    [InlineData("no-route", false)]
+    [InlineData("rearm-cap", false)]
+    public void PrePutRearmRequiresDurableProofAndCurrentPolicy(string scenario, bool expected)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var pool = Pool();
+        var run = Run(pool.Id, new string('a', 64), "rearm.phbackup");
+        var destination = Destination("rearm-target", "domain-b", 20);
+        var route = Route(pool.Id, destination.Id, 20);
+        var copy = Copy(run.Id, destination.Id, run.ContentSha256!);
+        copy.BackupDestination = destination;
+        copy.State = "permanent_failed";
+        copy.LastErrorCode = BackupDestinationErrorCode.InvalidConfiguration.ToString();
+        copy.Jobs.Add(new BackupDeliveryJob
+        {
+            State = "failed",
+            LastErrorCode = copy.LastErrorCode,
+            CreatedAt = now.AddMinutes(-21),
+            UpdatedAt = now.AddMinutes(-20)
+        });
+        var routes = new Dictionary<Guid, BackupPoolDestination> { [destination.Id] = route };
+        switch (scenario)
+        {
+            case "put-started": copy.LastAttemptAt = now.AddMinutes(-20); break;
+            case "unknown": copy.UnknownSince = now.AddMinutes(-20); break;
+            case "job-not-failed": copy.Jobs.Single().State = "reconciling"; break;
+            case "policy-changed": pool.PolicyVersion++; break;
+            case "cooldown": copy.Jobs.Single().UpdatedAt = now.AddMinutes(-1); break;
+            case "ambiguous-error":
+                copy.LastErrorCode = BackupDestinationErrorCode.UnknownOutcome.ToString();
+                copy.Jobs.Single().LastErrorCode = copy.LastErrorCode;
+                break;
+            case "attempt-marked": copy.AttemptCount = 1; break;
+            case "native-evidence": copy.NativeVersion = "provider-version"; break;
+            case "older-ambiguous-error":
+                copy.Jobs.Add(new BackupDeliveryJob
+                {
+                    State = "failed",
+                    LastErrorCode = BackupDestinationErrorCode.UnknownOutcome.ToString(),
+                    CreatedAt = now.AddMinutes(-22),
+                    UpdatedAt = now.AddMinutes(-21)
+                });
+                break;
+            case "no-route": routes.Clear(); break;
+            case "rearm-cap":
+                copy.Jobs.Add(new BackupDeliveryJob
+                {
+                    State = "failed",
+                    LastErrorCode = copy.LastErrorCode,
+                    CreatedAt = now.AddMinutes(-21),
+                    UpdatedAt = now.AddMinutes(-20)
+                });
+                copy.Jobs.Add(new BackupDeliveryJob
+                {
+                    State = "failed",
+                    LastErrorCode = copy.LastErrorCode,
+                    CreatedAt = now.AddMinutes(-21),
+                    UpdatedAt = now.AddMinutes(-20)
+                });
+                break;
+        }
+
+        Assert.Equal(expected, BackupCatchUpPlanner.CanRearmPrePutFailure(
+            copy, run, pool, routes, now));
+    }
+
     [Fact]
     public async Task PolicyVersionChangeFencesAlreadyPlannedJob()
     {
@@ -896,6 +973,109 @@ public sealed class BackupDeliveryWorkerIntegrationTests
         finally
         {
             Directory.Delete(directory, recursive: true);
+            await using var drop = new NpgsqlCommand($"DROP SCHEMA IF EXISTS \"{schema}\" CASCADE", admin);
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
+    public async Task PrePutFailureRearmsOnceAcrossReplicasAndStopsAtDurableCap()
+    {
+        var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
+        if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
+
+        var schema = $"proxyharbor_rearm_{Guid.NewGuid():N}";
+        var builder = new NpgsqlConnectionStringBuilder(baseConnectionString) { SearchPath = schema };
+        await using var admin = new NpgsqlConnection(baseConnectionString);
+        await admin.OpenAsync();
+        await using (var create = new NpgsqlCommand($"CREATE SCHEMA \"{schema}\"", admin))
+            await create.ExecuteNonQueryAsync();
+        try
+        {
+            var factory = await CreateFactoryAsync(builder.ConnectionString);
+            var hash = new string('a', 64);
+            var adapter = new RepairAdapter([1, 2, 3, 4, 5], "rearm-source", "rearm-target",
+                "rearm.phbackup");
+            var registry = Registry(adapter, new SuccessfulAdapter("telegram"));
+            var firstReplica = new BackupCatchUpPlanner(factory, registry,
+                new BackupDeliveryPlanner(registry));
+            var secondReplica = new BackupCatchUpPlanner(factory, registry,
+                new BackupDeliveryPlanner(registry));
+            Guid targetCopyId;
+            await using (var seed = await factory.CreateDbContextAsync())
+            {
+                var pool = Pool();
+                var run = Run(pool.Id, hash, "rearm.phbackup");
+                var source = Destination("rearm-source", "domain-a", 10);
+                var target = Destination("rearm-target", "domain-b", 20);
+                var verified = Copy(run.Id, source.Id, hash);
+                verified.State = "verified";
+                verified.VerifiedAt = DateTimeOffset.UtcNow;
+                verified.NativeLocator = "source/rearm.phbackup";
+                var failed = Copy(run.Id, target.Id, hash);
+                failed.State = "permanent_failed";
+                failed.LastErrorCode = BackupDestinationErrorCode.InvalidConfiguration.ToString();
+                var oldJob = Job(failed.Id, "initial-preput-failure");
+                oldJob.State = "failed";
+                oldJob.LastErrorCode = failed.LastErrorCode;
+                oldJob.CreatedAt = DateTimeOffset.UtcNow.AddMinutes(-21);
+                oldJob.UpdatedAt = DateTimeOffset.UtcNow.AddMinutes(-20);
+                seed.AddRange(pool, run, source, target,
+                    Route(pool.Id, source.Id, 10), Route(pool.Id, target.Id, 20),
+                    verified, failed, oldJob);
+                await seed.SaveChangesAsync();
+                targetCopyId = failed.Id;
+            }
+
+            var concurrent = await Task.WhenAll(
+                firstReplica.TryRearmPrePutFailureAsync(CancellationToken.None),
+                secondReplica.TryRearmPrePutFailureAsync(CancellationToken.None));
+            Assert.Equal(1, concurrent.Sum());
+            await using (var verify = await factory.CreateDbContextAsync())
+            {
+                var copy = await verify.BackupCopies.Include(item => item.Jobs)
+                    .SingleAsync(item => item.Id == targetCopyId);
+                Assert.Equal("planned", copy.State);
+                Assert.Null(copy.LastAttemptAt);
+                Assert.Equal(2, copy.Jobs.Count);
+                Assert.Single(copy.Jobs, item => item.State == "pending");
+            }
+            Assert.Equal(0, adapter.PutCalls);
+            Assert.Equal(0, adapter.ReadCalls);
+
+            await using (var update = await factory.CreateDbContextAsync())
+            {
+                var copy = await update.BackupCopies.Include(item => item.Jobs)
+                    .SingleAsync(item => item.Id == targetCopyId);
+                var latest = copy.Jobs.Single(item => item.State == "pending");
+                latest.State = "failed";
+                latest.LastErrorCode = BackupDestinationErrorCode.Timeout.ToString();
+                latest.CreatedAt = DateTimeOffset.UtcNow.AddMinutes(-21);
+                latest.UpdatedAt = DateTimeOffset.UtcNow.AddMinutes(-20);
+                copy.State = "permanent_failed";
+                copy.LastErrorCode = latest.LastErrorCode;
+                await update.SaveChangesAsync();
+            }
+            Assert.Equal(1, await firstReplica.TryRearmPrePutFailureAsync(CancellationToken.None));
+            await using (var update = await factory.CreateDbContextAsync())
+            {
+                var copy = await update.BackupCopies.Include(item => item.Jobs)
+                    .SingleAsync(item => item.Id == targetCopyId);
+                Assert.Equal(3, copy.Jobs.Count);
+                var latest = copy.Jobs.Single(item => item.State == "pending");
+                latest.State = "failed";
+                latest.LastErrorCode = BackupDestinationErrorCode.Timeout.ToString();
+                latest.CreatedAt = DateTimeOffset.UtcNow.AddMinutes(-21);
+                latest.UpdatedAt = DateTimeOffset.UtcNow.AddMinutes(-20);
+                copy.State = "permanent_failed";
+                copy.LastErrorCode = latest.LastErrorCode;
+                await update.SaveChangesAsync();
+            }
+            Assert.Equal(0, await secondReplica.TryRearmPrePutFailureAsync(CancellationToken.None));
+        }
+        finally
+        {
             await using var drop = new NpgsqlCommand($"DROP SCHEMA IF EXISTS \"{schema}\" CASCADE", admin);
             await drop.ExecuteNonQueryAsync();
         }

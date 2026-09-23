@@ -734,6 +734,8 @@ public sealed class BackupDeliveryWorker(
                 cycles = cycles == int.MaxValue ? 1 : cycles + 1;
                 if (cycles % 10 == 0)
                     _ = await catchUpPlanner.TryPlanAsync(oldestFirst: cycles % 100 == 0, stoppingToken);
+                if (cycles % 100 == 0)
+                    _ = await catchUpPlanner.TryRearmPrePutFailureAsync(stoppingToken);
                 _ = await processor.ReconcileExpiredLeasesAsync(stoppingToken);
                 var reconciliation = await processor.TryClaimReconciliationAsync(stoppingToken);
                 if (reconciliation is not null)
