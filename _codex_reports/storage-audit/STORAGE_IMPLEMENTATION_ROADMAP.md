@@ -48,8 +48,8 @@ flowchart LR
 | STG-00 | DONE locally | Characterization + model coverage guard | clean scoped branch | TEST-001 and legacy integration fixtures green |
 | STG-01 | DONE / merged | Manifest v8/full restore | coverage inventory agreed | PR #262 merged after verify, PostgreSQL, analysis and CodeQL gates |
 | STG-02 | DONE / merged | schema, registry, provider adapters | v8 stable | TASK-020–024 merged with green CI; routing flag off |
-| STG-03 | READY | durable jobs/fallback/reconcile/repair | schema/adapters | TEST-004–008 local fault matrix |
-| STG-04 | BLOCKED | independent catalog/materializer/restore | copies stable | local two-provider fixtures + isolated restore |
+| STG-03 | IN PROGRESS | durable jobs/fallback/reconcile/repair | schema/adapters | TEST-004–008 local fault matrix, including failback |
+| STG-04 | IN PROGRESS | independent catalog/materializer/restore | copies stable | local two-provider fixtures + isolated real-provider restore |
 | STG-05 | BLOCKED | API/UI/metrics/runbooks | state contracts stable | UI/a11y + alert contracts + no secrets |
 | STG-06 | BLOCKED by owner/external | inventory/backfill/canary/real drill | all local gates | owner-approved RPO/RTO and observation |
 | STG-07 | BLOCKED | final gates/handoff | STG-06 evidence | AC-001–014 disposition and operational sign-off |
@@ -187,7 +187,7 @@ Purpose: fulfill owner requirement without false success. Covers REQ-004–006/0
 
 #### TASK-033 — Operation-scoped health, budgets and automatic fallback
 
-- Status: `IN PROGRESS / partial checkpoint merged`; Codex. PR #270 (`f39f7b9`) merged with green CI; verified-copy READ is wired into materialization and delivery via PR #281. VERIFY health remains local-only; durable cross-replica health and failback hysteresis are not proven.
+- Status: `IN PROGRESS / partial checkpoint merged`; Codex. PR #270 (`f39f7b9`) merged with green CI; verified-copy READ is wired into materialization and delivery via PR #281. PR #283 persists recent VERIFY outcomes across replicas. `FailbackHealthyForSeconds` is stored but not applied to route selection; repeated real provider-health proof and failback hysteresis are not proven.
 - Changes: health/breaker per destination+operation, short-lived local state backed by durable recent outcomes; planner enforces overall deadline and allowlisted graph. Optional storage does not fail global readiness.
 - Tests: A down/B healthy; A slow leaves budget for B; auth/quota/capability; all down; cross-pool route rejected; breaker half-open; multi-instance eventual consistency.
 - Numeric budgets: begin conservative test defaults, measure canary, label production values `PROPOSED` until owner accepts.
@@ -195,7 +195,7 @@ Purpose: fulfill owner requirement without false success. Covers REQ-004–006/0
 
 #### TASK-034 — Catch-up, repair and failback
 
-- Status: `IN PROGRESS / local repair path`; Codex. PR #281 merged the bounded verified-copy source path for a delivery job after staging expires. A one-copy-per-pass catch-up planner for missing routes is under local validation. Existing failed/UNKNOWN jobs are never blindly rearmed. Durable queue fairness, failback healthy window, interrupted backfill, restart/flapping matrix and real-provider proof remain open; this is not AC-008 completion.
+- Status: `IN PROGRESS / local repair path`; Codex. PR #281 merged the bounded verified-copy source path for a delivery job after staging expires. PR #282 added one-copy-per-pass missing-route catch-up; PR #284 added bounded rearm only for proven pre-PUT failures. UNKNOWN or possibly-started PUT is never blindly rearmed. Healthy-window failback, interrupted backfill, restart/flapping matrix and real-provider proof remain open; this is not AC-008 completion.
 - Changes: reconciler scans copy debt, chooses verified same-hash source, materializes/streams to destination, verifies, rate limits. Quarantine corruption. Healthy window/hysteresis before destination eligibility; no automatic delete.
 - Historical behavior: B-only copies remain locatable; backfill coverage checkpoint blocks retirement/cleanup. Policy changes cancel/replan only safe jobs with version fencing.
 - Tests: TEST-008: recovery, flapping, stale/corrupt source, concurrent repair, destination draining, restart.
@@ -414,7 +414,9 @@ No dates are invented. STG-00–05 may proceed without these decisions using iso
 | 2026-09-22 | implementation checkpoint 5 | Added immutable run policy/content snapshot, fail-closed protection evaluator and `200/202/503` acknowledgement contract; local PostgreSQL 17 and restore coverage are green. | EVID-050–051 |
 | 2026-09-22 | implementation checkpoint 6 | Added atomic per-destination planner and leased delivery worker with bounded retry/deadline, crash-to-UNKNOWN semantics, independent fallback, staging byte/TTL budgets and routing disabled by default. | EVID-054–055 |
 
-Current checkpoint: STG-00–02 and TASK-020–032 are merged in `main` with green CI. TASK-033 operation health and fallback budgets are partially merged via PR #270; S3 materialization, verified-copy read failover, DB-backed materialization, signed catalog, conditional sidecar and offline restore proof were merged via PR #271–280. PR #281 merged remote-source delivery when local staging is unavailable (1565 local PostgreSQL tests and CI green). Missing-route catch-up is in local validation, not yet a complete TASK-034 repair/failback solution. Durable VERIFY history, failed-job reconciliation policy, healthy-window failback, independent key escrow and real-provider restore remain. Routing remains disabled by default; production/provider access or deployment has not occurred.
+| 2026-09-23 | merged checkpoints 7–10 | PR #281–284 merged into `main`: verified remote-source delivery, bounded missing-route catch-up, durable VERIFY health and isolated S3 canary script, bounded proven pre-PUT rearm. PR #284 passed PostgreSQL, verify/container smoke, C#/JS analysis and CodeQL. | EVID-070–073 |
+
+Current checkpoint: `main@c8a556a` contains STG-00–02 and TASK-020–032 with green CI. TASK-033/034 and STG-04 remain partial. PR #281–284 added remote-source delivery, missing-route catch-up, durable VERIFY outcomes, a dry-run-tested HOSTKEY NL canary, and bounded pre-PUT rearm. `FailbackHealthyForSeconds` is not enforced; no real-provider S3 canary, independent key escrow, isolated real-provider restore, historical backfill, production rollout or two observed scheduled cycles have been proven. Routing remains disabled by default. Next local implementation: design/test a durable healthy-window failback eligibility gate without treating a completed copy or passive wait as fresh provider health. Next external gate: authorized canary in the isolated test bucket after a locally protected credential file is available.
 
 ## 16. Регламент продолжения в новой сессии
 
