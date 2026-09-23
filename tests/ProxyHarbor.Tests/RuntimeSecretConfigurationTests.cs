@@ -18,6 +18,7 @@ public sealed class RuntimeSecretConfigurationTests
             var adminPath = WriteSecret(directory, "admin", "admin-key-at-least-24-characters\n");
             var adminPasswordPath = WriteSecret(directory, "admin-password", "admin-password-at-least-24-characters\n");
             var encryptionPath = WriteSecret(directory, "encryption", "encryption-key-at-least-32-characters");
+            var catalogSigningPath = WriteSecret(directory, "catalog-signing", "separate-catalog-signing-key-32-characters");
             var tokenPath = WriteSecret(directory, "telegram-token", "123456:bot-token");
             var chatPath = WriteSecret(directory, "telegram-chat", "-1001234567890");
             var alertmanagerPath = WriteSecret(directory, "alertmanager", "monitoring-webhook-secret-at-least-32-characters");
@@ -31,6 +32,7 @@ public sealed class RuntimeSecretConfigurationTests
                 ["SecretFiles:AdminApiKey"] = adminPath,
                 ["SecretFiles:AdminPassword"] = adminPasswordPath,
                 ["SecretFiles:BackupEncryptionKey"] = encryptionPath,
+                ["SecretFiles:BackupCatalogSigningKey"] = catalogSigningPath,
                 ["SecretFiles:TelegramBotToken"] = tokenPath,
                 ["SecretFiles:TelegramChatId"] = chatPath,
                 ["SecretFiles:AlertmanagerWebhookToken"] = alertmanagerPath
@@ -44,6 +46,8 @@ public sealed class RuntimeSecretConfigurationTests
             Assert.Equal("admin-key-at-least-24-characters", configuration["Security:AdminApiKey"]);
             Assert.Equal("admin-password-at-least-24-characters", configuration["Security:AdminPassword"]);
             Assert.Equal("encryption-key-at-least-32-characters", configuration["Backup:EncryptionKey"]);
+            Assert.Equal("separate-catalog-signing-key-32-characters",
+                configuration["BackupCatalogSigning:SigningKey"]);
             Assert.Equal("123456:bot-token", configuration["Backup:TelegramBotToken"]);
             Assert.Equal("-1001234567890", configuration["Backup:TelegramChatId"]);
             Assert.Equal("monitoring-webhook-secret-at-least-32-characters",

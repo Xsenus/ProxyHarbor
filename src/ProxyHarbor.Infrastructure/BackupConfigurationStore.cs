@@ -198,6 +198,13 @@ public interface IBackupObjectStorageTransport
         string expectedSha256,
         BackupOptions options,
         CancellationToken token) => throw new NotSupportedException();
+
+    /// <summary>Условно публикует небольшой подписанный sidecar рядом с PHB3 и подтверждает HEAD.</summary>
+    Task<BackupObjectStorageVerificationResult> PublishCatalogAsync(
+        string backupObjectKey,
+        ReadOnlyMemory<byte> signedCatalog,
+        BackupOptions options,
+        CancellationToken token) => throw new NotSupportedException();
 }
 
 /// <summary>Подтверждённый результат S3 PUT+HEAD.</summary>

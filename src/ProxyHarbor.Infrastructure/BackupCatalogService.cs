@@ -91,6 +91,24 @@ public sealed class BackupCatalogService(
         return snapshot;
     }
 
+    /// <summary>Готовит однокопийный sidecar для точного S3 locator после verified commit.</summary>
+    public async Task<BackupCatalogSnapshot> CreateForCopyAsync(
+        Guid backupCopyId,
+        string keyReference,
+        CancellationToken token)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(token);
+        var runId = await db.BackupCopies.AsNoTracking()
+            .Where(copy => copy.Id == backupCopyId)
+            .Select(copy => (Guid?)copy.BackupRunId)
+            .SingleOrDefaultAsync(token)
+            ?? throw new InvalidOperationException("Backup copy не найдена.");
+        var snapshot = await CreateAsync(runId, keyReference, token);
+        var selected = snapshot.Copies.SingleOrDefault(copy => copy.CopyId == backupCopyId)
+            ?? throw new InvalidOperationException("Backup copy не пригодна для catalog publication.");
+        return snapshot with { Copies = [selected] };
+    }
+
     /// <summary>Подписывает canonical JSON отдельным domain-separated HMAC key.</summary>
     public static byte[] Seal(BackupCatalogSnapshot snapshot, string encryptionKey)
     {

@@ -90,6 +90,11 @@ public static class ServiceCollectionExtensions
             .Validate(x => !x.SendToObjectStorage || BackupOptions.IsObjectStorageConfigurationValid(x),
                 "Для S3 backup нужны безопасный HTTPS endpoint, region, bucket, prefix и оба ключа")
             .ValidateOnStart();
+        services.AddOptions<BackupCatalogSigningOptions>()
+            .Bind(configuration.GetSection(BackupCatalogSigningOptions.Section))
+            .Validate(BackupCatalogSigningOptions.IsValid,
+                "BackupCatalogSigning требует отдельный ключ 32..1024 символов и безопасный key reference")
+            .ValidateOnStart();
         // Схема destinations/copies/jobs разворачивается заранее. Сам новый маршрут
         // остаётся fail-closed до отдельного совместимого rollout.
         services.AddOptions<BackupRoutingOptions>()
