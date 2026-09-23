@@ -16,7 +16,8 @@ public sealed class BackupDeliveryProcessor(
     IOptions<BackupOptions> backupOptions,
     IOptions<BackupRoutingOptions> routingOptions,
     IBackupConfigurationStore? configurationStore = null,
-    BackupDestinationHealth? destinationHealth = null)
+    BackupDestinationHealth? destinationHealth = null,
+    BackupCopyMaterializer? copyMaterializer = null)
 {
     internal static readonly TimeSpan LeaseDuration = TimeSpan.FromMinutes(15);
     private static readonly TimeSpan MinimumRetryDelay = TimeSpan.FromSeconds(15);
@@ -167,12 +168,6 @@ public sealed class BackupDeliveryProcessor(
         var copy = job.BackupCopy;
         var run = copy.BackupRun;
         var destination = copy.BackupDestination;
-        if (DateTimeOffset.UtcNow - run.StartedAt >
-            TimeSpan.FromHours(routingOptions.Value.StagingTtlHours))
-        {
-            await FinishPermanentAsync(db, job, BackupDestinationErrorCode.NotFound, hostToken);
-            return;
-        }
         if (run.BackupPoolId is not { } poolId || run.ProtectionPolicyVersion != copy.PolicyVersion)
         {
             await FinishPermanentAsync(db, job, BackupDestinationErrorCode.InvalidConfiguration, hostToken);
@@ -200,13 +195,16 @@ public sealed class BackupDeliveryProcessor(
             await FinishPermanentAsync(db, job, BackupDestinationErrorCode.InvalidConfiguration, hostToken);
             return;
         }
+        using var temporaryFile = new TemporaryMaterializedFile();
         var path = string.Empty;
         var contentVerified = false;
         try
         {
             path = ResolveStagingPath(current.Directory, run.FileName);
-            contentVerified = await MatchesContentAsync(
-                path, copy.SizeBytes, copy.ContentSha256, hostToken);
+            if (DateTimeOffset.UtcNow - run.StartedAt <=
+                TimeSpan.FromHours(routingOptions.Value.StagingTtlHours))
+                contentVerified = await MatchesContentAsync(
+                    path, copy.SizeBytes, copy.ContentSha256, hostToken);
         }
         catch (Exception exception) when (exception is InvalidOperationException or IOException)
         {
@@ -214,8 +212,39 @@ public sealed class BackupDeliveryProcessor(
         }
         if (!contentVerified)
         {
-            await FinishPermanentAsync(db, job, BackupDestinationErrorCode.IntegrityMismatch, hostToken);
-            return;
+            if (copyMaterializer is null || string.IsNullOrEmpty(path))
+            {
+                await FinishPermanentAsync(db, job, BackupDestinationErrorCode.IntegrityMismatch, hostToken);
+                return;
+            }
+            var readBudget = job.LeaseUntil!.Value - DateTimeOffset.UtcNow - TimeSpan.FromSeconds(5);
+            var overallBudget = TimeSpan.FromSeconds(pool.OverallDeadlineSeconds) -
+                (DateTimeOffset.UtcNow - job.CreatedAt);
+            if (readBudget > overallBudget) readBudget = overallBudget;
+            readBudget /= 2; // Reserve the other half of the lease/deadline for PUT and verification.
+            if (readBudget > TimeSpan.FromMinutes(30)) readBudget = TimeSpan.FromMinutes(30);
+            if (readBudget <= TimeSpan.Zero)
+            {
+                await FinishPermanentAsync(db, job, BackupDestinationErrorCode.Timeout, hostToken);
+                return;
+            }
+            temporaryFile.Path = Path.Combine(
+                Path.GetDirectoryName(path)!, $".delivery-{job.Id:N}-{Guid.NewGuid():N}",
+                run.FileName!);
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(temporaryFile.Path)!);
+                _ = await copyMaterializer.MaterializeAsync(
+                    run.Id, temporaryFile.Path, readBudget, hostToken);
+                path = temporaryFile.Path;
+            }
+            catch (Exception exception) when (!hostToken.IsCancellationRequested &&
+                exception is InvalidOperationException or IOException or UnauthorizedAccessException or
+                    OperationCanceledException)
+            {
+                await DeferForHealthAsync(db, job, DateTimeOffset.UtcNow.Add(MinimumRetryDelay), hostToken);
+                return;
+            }
         }
         if (job.LeaseUntil <= DateTimeOffset.UtcNow)
         {
@@ -616,6 +645,23 @@ public sealed class BackupDeliveryProcessor(
         if (!string.Equals(Path.GetDirectoryName(path), root, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("Backup staging path выходит за разрешённый каталог.");
         return path;
+    }
+
+    private sealed class TemporaryMaterializedFile : IDisposable
+    {
+        public string? Path { get; set; }
+
+        public void Dispose()
+        {
+            if (Path is null) return;
+            try
+            {
+                File.Delete(Path);
+                Directory.Delete(System.IO.Path.GetDirectoryName(Path)!);
+            }
+            catch (IOException) { /* Temp cleanup will be retried by operational cleanup. */ }
+            catch (UnauthorizedAccessException) { /* Do not replace the delivery outcome. */ }
+        }
     }
 
     private static async Task<bool> MatchesContentAsync(
