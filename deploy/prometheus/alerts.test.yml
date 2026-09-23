@@ -325,6 +325,70 @@ tests:
         alertname: ProxyHarborBackupRequiredCopiesUnmet
         exp_alerts: []
 
+  - name: Routed protection age uses the last assessed protected run
+    interval: 1m
+    input_series:
+      - series: proxyharbor_backup_routing_enabled
+        values: '1x130'
+      - series: proxyharbor_backup_enabled
+        values: '1x130'
+      - series: proxyharbor_backup_last_protected_run_search_assessed
+        values: '1x130'
+      - series: proxyharbor_backup_last_protected_run_timestamp_seconds
+        values: '1000x130'
+      - series: proxyharbor_backup_interval_seconds
+        values: '3600x130'
+    alert_rule_test:
+      - eval_time: 120m
+        alertname: ProxyHarborBackupProtectionStale
+        exp_alerts: []
+      - eval_time: 123m
+        alertname: ProxyHarborBackupProtectionStale
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: Подтверждённая защита backup просрочена
+              description: Нет доказанного routed backup с обязательным quorum независимых внешних копий в пределах полутора интервалов.
+
+  - name: Unassessed protected history cannot trigger a stale conclusion
+    interval: 1m
+    input_series:
+      - series: proxyharbor_backup_routing_enabled
+        values: '1x16'
+      - series: proxyharbor_backup_enabled
+        values: '1x16'
+      - series: proxyharbor_backup_last_protected_run_search_assessed
+        values: '0x16'
+      - series: proxyharbor_backup_last_protected_run_timestamp_seconds
+        values: '0x16'
+      - series: proxyharbor_backup_interval_seconds
+        values: '3600x16'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: ProxyHarborBackupProtectionStale
+        exp_alerts: []
+
+  - name: Exact provider content mismatch alarms after grace
+    interval: 1m
+    input_series:
+      - series: proxyharbor_backup_routing_enabled
+        values: '1x7'
+      - series: proxyharbor_backup_provider_verify_mismatching_last_1h
+        values: '1x7'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: ProxyHarborBackupProviderContentMismatch
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: ProxyHarborBackupProviderContentMismatch
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: S3-копия backup не совпала с ожидаемыми данными
+              description: VERIFY обнаружил несовпадение ciphertext или metadata; проверьте карантин копии и независимую копию до восстановления.
+
   - name: Routed backups do not require optional Telegram delivery
     interval: 1m
     input_series:

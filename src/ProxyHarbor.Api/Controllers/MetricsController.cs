@@ -403,6 +403,10 @@ public sealed class MetricsController(
             protectionMetrics.LatestRunAssessed ? 1 : 0);
         Gauge(output, "proxyharbor_backup_latest_routed_run_timestamp_seconds", "Completion time of the latest routed backup; zero when absent.",
             protectionMetrics.LatestRunFinishedAt?.ToUnixTimeSeconds() ?? 0);
+        Gauge(output, "proxyharbor_backup_last_protected_run_search_assessed", "Whether all newer routed backup candidates were assessed before locating the latest required-protected run.",
+            protectionMetrics.LastProtectedRunSearchAssessed ? 1 : 0);
+        Gauge(output, "proxyharbor_backup_last_protected_run_timestamp_seconds", "Completion time of the latest routed backup with required independent verified copies; zero when absent or unassessed.",
+            protectionMetrics.LastProtectedRunFinishedAt?.ToUnixTimeSeconds() ?? 0);
         Gauge(output, "proxyharbor_backup_latest_verified_independent_copies", "Independent verified external copies of the latest routed backup; meaningful only when assessed.",
             protectionMetrics.VerifiedIndependentCopies);
         Gauge(output, "proxyharbor_backup_latest_required_copies", "Required independent verified copies in the latest routed backup policy snapshot; meaningful only when assessed.",
@@ -541,10 +545,60 @@ public sealed class MetricsController(
             result.DesiredCopies = assessment.DesiredVerifiedCopies;
             result.RequiredCopyDebt = assessment.RequiredCopyDebt;
             result.DesiredCopyDebt = assessment.DesiredCopyDebt;
+            if (assessment.RequiredProtectionMet)
+            {
+                result.LastProtectedRunSearchAssessed = true;
+                result.LastProtectedRunFinishedAt = runMetrics.LatestRoutedRunFinishedAt;
+            }
+            else
+            {
+                var olderProtected = await ReadLastProtectedRoutedRunAsync(db, runId, token);
+                result.LastProtectedRunSearchAssessed = olderProtected.Assessed;
+                result.LastProtectedRunFinishedAt = olderProtected.FinishedAt;
+            }
         }
         catch (BackupDestinationRouteException) { }
         catch (ArgumentException) { }
         return result;
+    }
+
+    private async Task<(bool Assessed, DateTimeOffset? FinishedAt)> ReadLastProtectedRoutedRunAsync(
+        ProxyHarborDbContext db, Guid latestRunId, CancellationToken token)
+    {
+        // A run without any verified copy cannot meet a policy requiring at least one external copy.
+        // Evaluate every newer candidate in order; skipping an unassessable candidate would make an
+        // older timestamp look like the latest protected backup without proof.
+        var candidates = await db.BackupRuns.AsNoTracking()
+            .Where(run => run.Id != latestRunId && run.Status == "completed" &&
+                run.FinishedAt != null && run.BackupPoolId != null &&
+                run.Copies.Any(copy => copy.State == "verified"))
+            .OrderByDescending(run => run.FinishedAt).ThenByDescending(run => run.Id)
+            .Include(run => run.Copies).ThenInclude(copy => copy.BackupDestination)
+            .AsSplitQuery()
+            .ToListAsync(token);
+        var poolIds = candidates.Select(run => run.BackupPoolId!.Value).Distinct().ToArray();
+        var allRoutes = await db.BackupPoolDestinations.AsNoTracking()
+            .Where(route => poolIds.Contains(route.BackupPoolId))
+            .ToListAsync(token);
+        var routesByPool = allRoutes.GroupBy(route => route.BackupPoolId)
+            .ToDictionary(group => group.Key,
+                group => (IReadOnlyDictionary<Guid, BackupPoolDestination>)group.ToDictionary(
+                    route => route.BackupDestinationId));
+        foreach (var candidate in candidates)
+        {
+            if (!routesByPool.TryGetValue(candidate.BackupPoolId!.Value, out var routes))
+                routes = new Dictionary<Guid, BackupPoolDestination>();
+            try
+            {
+                var assessment = backupProtectionEvaluator!.EvaluateLoaded(candidate, routes, false);
+                if (assessment.RequiredProtectionMet)
+                    return (true, candidate.FinishedAt);
+            }
+            catch (BackupDestinationRouteException) { return (false, null); }
+            catch (ArgumentException) { return (false, null); }
+            catch (InvalidOperationException) { return (false, null); }
+        }
+        return (true, null);
     }
 
     private sealed class BackupProtectionOperationalMetrics
@@ -552,6 +606,8 @@ public sealed class MetricsController(
         public bool LatestRunExists { get; init; }
         public bool LatestRunAssessed { get; set; }
         public DateTimeOffset? LatestRunFinishedAt { get; init; }
+        public bool LastProtectedRunSearchAssessed { get; set; }
+        public DateTimeOffset? LastProtectedRunFinishedAt { get; set; }
         public int VerifiedIndependentCopies { get; set; }
         public int RequiredCopies { get; set; }
         public int DesiredCopies { get; set; }

@@ -180,6 +180,10 @@ public sealed class MetricsControllerTests
         Assert.Contains("proxyharbor_backup_latest_routed_run_assessed 1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_backup_latest_verified_independent_copies 1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_backup_latest_required_copy_debt 0", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_backup_last_protected_run_search_assessed 1", metrics,
+            StringComparison.Ordinal);
+        Assert.Contains($"proxyharbor_backup_last_protected_run_timestamp_seconds {run.FinishedAt!.Value.ToUnixTimeSeconds()}",
+            metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_backup_latest_desired_copy_debt 1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_backup_copies_unknown 1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_backup_delivery_jobs_pending 1", metrics, StringComparison.Ordinal);
@@ -195,6 +199,62 @@ public sealed class MetricsControllerTests
         Assert.DoesNotContain("opaque-private-object-key", metrics, StringComparison.Ordinal);
         Assert.DoesNotContain("second-object-in-same-account", metrics, StringComparison.Ordinal);
         Assert.DoesNotContain("account-a", metrics, StringComparison.Ordinal);
+
+        await using (var seed = await factory.CreateDbContextAsync())
+        {
+            seed.BackupRuns.Add(new BackupRun
+            {
+                Status = "completed",
+                FinishedAt = now.AddMinutes(-1),
+                BackupPoolId = pool.Id,
+                ProtectionPolicyVersion = 1,
+                RequiredVerifiedCopies = 1,
+                DesiredVerifiedCopies = 2,
+                ContentSha256 = new string('b', 64),
+                SizeBytes = 123
+            });
+            await seed.SaveChangesAsync();
+        }
+        metrics = Assert.IsType<ContentResult>(await controller.Get(CancellationToken.None)).Content!;
+        Assert.Contains("proxyharbor_backup_latest_required_copy_debt 1", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_backup_last_protected_run_search_assessed 1", metrics,
+            StringComparison.Ordinal);
+        Assert.Contains($"proxyharbor_backup_last_protected_run_timestamp_seconds {run.FinishedAt!.Value.ToUnixTimeSeconds()}",
+            metrics, StringComparison.Ordinal);
+
+        await using (var seed = await factory.CreateDbContextAsync())
+        {
+            var unassessable = new BackupRun
+            {
+                Status = "completed",
+                FinishedAt = now.AddMinutes(-2),
+                BackupPoolId = pool.Id,
+                ProtectionPolicyVersion = 1,
+                RequiredVerifiedCopies = 0,
+                DesiredVerifiedCopies = 2,
+                ContentSha256 = new string('c', 64),
+                SizeBytes = 123
+            };
+            seed.BackupRuns.Add(unassessable);
+            seed.BackupCopies.Add(new BackupCopy
+            {
+                BackupRunId = unassessable.Id,
+                BackupDestinationId = primary.Id,
+                State = "verified",
+                VerifiedAt = now.AddMinutes(-2),
+                NativeLocator = "unassessable-candidate",
+                ContentSha256 = unassessable.ContentSha256,
+                SizeBytes = 123,
+                PolicyVersion = 1
+            });
+            await seed.SaveChangesAsync();
+        }
+        metrics = Assert.IsType<ContentResult>(await controller.Get(CancellationToken.None)).Content!;
+        Assert.Contains("proxyharbor_backup_last_protected_run_search_assessed 0", metrics,
+            StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_backup_last_protected_run_timestamp_seconds 0", metrics,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("unassessable-candidate", metrics, StringComparison.Ordinal);
     }
 
     [Fact]
