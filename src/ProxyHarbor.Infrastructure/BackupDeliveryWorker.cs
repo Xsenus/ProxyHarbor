@@ -15,12 +15,14 @@ public sealed class BackupDeliveryProcessor(
     BackupDestinationRegistry registry,
     IOptions<BackupOptions> backupOptions,
     IOptions<BackupRoutingOptions> routingOptions,
-    IBackupConfigurationStore? configurationStore = null)
+    IBackupConfigurationStore? configurationStore = null,
+    BackupDestinationHealth? destinationHealth = null)
 {
     internal static readonly TimeSpan LeaseDuration = TimeSpan.FromMinutes(15);
     private static readonly TimeSpan MinimumRetryDelay = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan MaximumRetryDelay = TimeSpan.FromMinutes(15);
     private static readonly TimeSpan ReconciliationWindow = TimeSpan.FromHours(1);
+    private readonly BackupDestinationHealth health = destinationHealth ?? new BackupDestinationHealth();
 
     /// <summary>Атомарно арендует одну due job; SKIP LOCKED допускает несколько replicas.</summary>
     public async Task<BackupDeliveryLease?> TryClaimAsync(CancellationToken token)
@@ -232,19 +234,63 @@ public sealed class BackupDeliveryProcessor(
             return;
         }
 
+        var candidates = await db.BackupPoolDestinations.AsNoTracking()
+            .Include(item => item.BackupDestination)
+            .Where(item => item.BackupPoolId == poolId && item.Enabled && !item.Draining &&
+                item.BackupDestination.Enabled)
+            .ToArrayAsync(hostToken);
+        var routeCount = 0;
+        foreach (var candidate in candidates)
+        {
+            try
+            {
+                _ = registry.Resolve(
+                    candidate.BackupDestination, candidate, BackupDestinationOperation.Put, copy.SizeBytes);
+                routeCount++;
+            }
+            catch (BackupDestinationRouteException)
+            {
+                // Incompatible route не должен сокращать бюджет пригодного fallback.
+            }
+        }
+        var operationBudget = RemainingOperationBudget(job, pool, routeCount, DateTimeOffset.UtcNow);
+        if (operationBudget <= TimeSpan.Zero)
+        {
+            await FinishPermanentAsync(db, job, BackupDestinationErrorCode.Timeout, hostToken);
+            return;
+        }
+        var healthDecision = await health.TryEnterAsync(
+            db, destination.Id, BackupDestinationOperation.Put, hostToken);
+        if (!healthDecision.Allowed)
+        {
+            await DeferForHealthAsync(db, job, healthDecision.RetryAt, hostToken);
+            return;
+        }
+
         copy.State = "uploading";
         copy.AttemptCount = job.Attempt;
         copy.LastAttemptAt = DateTimeOffset.UtcNow;
         copy.LastErrorCode = null;
-        if (!await SaveLeaseOutcomeAsync(db, job, hostToken)) return;
+        if (!await SaveLeaseOutcomeAsync(db, job, hostToken))
+        {
+            health.ReleaseWithoutOutcome(destination.Id, BackupDestinationOperation.Put);
+            return;
+        }
         var remainingLease = job.LeaseUntil!.Value - DateTimeOffset.UtcNow - TimeSpan.FromSeconds(5);
         if (remainingLease <= TimeSpan.Zero)
         {
+            health.ReleaseWithoutOutcome(destination.Id, BackupDestinationOperation.Put);
             await FinishUnknownAsync(db, job, hostToken);
             return;
         }
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(hostToken);
-        var operationBudget = TimeSpan.FromSeconds(pool.OverallDeadlineSeconds);
+        operationBudget = RemainingOperationBudget(job, pool, routeCount, DateTimeOffset.UtcNow);
+        if (operationBudget <= TimeSpan.Zero)
+        {
+            health.ReleaseWithoutOutcome(destination.Id, BackupDestinationOperation.Put);
+            await FinishPermanentAsync(db, job, BackupDestinationErrorCode.Timeout, hostToken);
+            return;
+        }
         deadline.CancelAfter(remainingLease < operationBudget ? remainingLease : operationBudget);
         try
         {
@@ -255,6 +301,7 @@ public sealed class BackupDeliveryProcessor(
                 copy.SizeBytes,
                 deadline.Token);
             var finishedAt = DateTimeOffset.UtcNow;
+            copy.LastAttemptAt = finishedAt;
             copy.NativeLocator = result.NativeLocator;
             copy.NativeVersion = result.NativeVersion;
             copy.NativeChecksum = result.NativeChecksum;
@@ -266,6 +313,7 @@ public sealed class BackupDeliveryProcessor(
                 ? null
                 : BackupDestinationErrorCode.UnsupportedOperation.ToString();
             job.State = "completed";
+            job.LastErrorCode = null;
             ClearLease(job, finishedAt);
             if (string.Equals(destination.Kind, "s3", StringComparison.Ordinal))
             {
@@ -277,14 +325,20 @@ public sealed class BackupDeliveryProcessor(
                 run.SentToTelegram = true;
             }
             await SaveLeaseOutcomeAsync(db, job, CancellationToken.None);
+            health.RecordSuccess(destination.Id, BackupDestinationOperation.Put);
         }
         catch (OperationCanceledException) when (hostToken.IsCancellationRequested)
         {
             // Host shutdown сохраняет replayable job; provider outcome мог стать UNKNOWN.
+            copy.LastAttemptAt = DateTimeOffset.UtcNow;
+            health.RecordFailure(destination.Id, BackupDestinationOperation.Put,
+                BackupDestinationErrorCode.UnknownOutcome);
             await FinishUnknownAsync(db, job, CancellationToken.None);
         }
         catch (BackupDestinationOperationException exception)
         {
+            copy.LastAttemptAt = DateTimeOffset.UtcNow;
+            health.RecordFailure(destination.Id, BackupDestinationOperation.Put, exception.Failure.Code);
             if (exception.Failure.Code == BackupDestinationErrorCode.Collision)
                 await FinishUnknownAsync(db, job, CancellationToken.None);
             else
@@ -292,14 +346,11 @@ public sealed class BackupDeliveryProcessor(
         }
         catch (OperationCanceledException)
         {
-            await FinishFailureAsync(
-                db,
-                job,
-                pool.MaxAttemptsPerCycle,
-                new BackupDestinationFailure(
-                    BackupDestinationErrorCode.Timeout,
-                    BackupDestinationFailureDisposition.Retryable),
-                CancellationToken.None);
+            // После прерванного PUT нельзя знать, были ли переданы все bytes.
+            copy.LastAttemptAt = DateTimeOffset.UtcNow;
+            health.RecordFailure(destination.Id, BackupDestinationOperation.Put,
+                BackupDestinationErrorCode.UnknownOutcome);
+            await FinishUnknownAsync(db, job, CancellationToken.None);
         }
     }
 
@@ -317,6 +368,7 @@ public sealed class BackupDeliveryProcessor(
         var copy = job.BackupCopy;
         var destination = copy.BackupDestination;
         BackupDestinationProbeResult result;
+        var attemptedProbe = false;
         try
         {
             var route = await db.BackupPoolDestinations.AsNoTracking().SingleOrDefaultAsync(
@@ -325,6 +377,16 @@ public sealed class BackupDeliveryProcessor(
             if (route is null) throw new BackupDestinationRouteException(
                 BackupDestinationRouteRejection.RouteForbidden, "Backup route отсутствует.");
             var adapter = registry.Resolve(destination, route, BackupDestinationOperation.Verify, copy.SizeBytes);
+            var healthDecision = await health.TryEnterAsync(
+                db, destination.Id, BackupDestinationOperation.Verify, hostToken);
+            if (!healthDecision.Allowed)
+            {
+                job.State = "reconciling";
+                job.NotBefore = healthDecision.RetryAt;
+                ClearLease(job, DateTimeOffset.UtcNow);
+                await SaveLeaseOutcomeAsync(db, job, hostToken);
+                return;
+            }
             using var deadline = CancellationTokenSource.CreateLinkedTokenSource(hostToken);
             var remaining = job.LeaseUntil.GetValueOrDefault() - DateTimeOffset.UtcNow - TimeSpan.FromSeconds(5);
             if (remaining <= TimeSpan.Zero)
@@ -332,6 +394,7 @@ public sealed class BackupDeliveryProcessor(
             else
             {
                 deadline.CancelAfter(remaining);
+                attemptedProbe = true;
                 result = await adapter.ProbeWriteOutcomeAsync(
                     destination, copy.BackupRun.FileName ?? string.Empty,
                     copy.ContentSha256, copy.SizeBytes, deadline.Token);
@@ -349,6 +412,12 @@ public sealed class BackupDeliveryProcessor(
         {
             result = new BackupDestinationProbeResult(BackupDestinationProbeOutcome.Inconclusive);
         }
+
+        if (result.Outcome is BackupDestinationProbeOutcome.Matching or
+            BackupDestinationProbeOutcome.Missing or BackupDestinationProbeOutcome.Mismatching)
+            health.RecordSuccess(destination.Id, BackupDestinationOperation.Verify);
+        else if (result.Outcome == BackupDestinationProbeOutcome.Unsupported)
+            health.ReleaseWithoutOutcome(destination.Id, BackupDestinationOperation.Verify);
 
         var now = DateTimeOffset.UtcNow;
         switch (result.Outcome)
@@ -378,11 +447,24 @@ public sealed class BackupDeliveryProcessor(
                 break;
             case BackupDestinationProbeOutcome.Inconclusive
                 when now - copy.UnknownSince < ReconciliationWindow:
+                if (attemptedProbe)
+                    health.RecordFailure(destination.Id, BackupDestinationOperation.Verify,
+                        BackupDestinationErrorCode.Unavailable);
+                else
+                    health.ReleaseWithoutOutcome(destination.Id, BackupDestinationOperation.Verify);
                 copy.State = "unknown";
                 job.State = "reconciling";
                 job.NotBefore = now.Add(RetryDelay(job.Id, Math.Max(1, job.Attempt)));
                 break;
             default:
+                if (result.Outcome == BackupDestinationProbeOutcome.Inconclusive)
+                {
+                    if (attemptedProbe)
+                        health.RecordFailure(destination.Id, BackupDestinationOperation.Verify,
+                            BackupDestinationErrorCode.Unavailable);
+                    else
+                        health.ReleaseWithoutOutcome(destination.Id, BackupDestinationOperation.Verify);
+                }
                 // Missing даже после HEAD не доказывает безопасность повторного PUT на
                 // произвольном S3-compatible backend. Оператор решает дальнейший retry.
                 copy.State = "manual_review";
@@ -405,6 +487,32 @@ public sealed class BackupDeliveryProcessor(
             MinimumRetryDelay.TotalSeconds * Math.Pow(2, exponent));
         var jitter = BitConverter.ToUInt32(jobId.ToByteArray(), 0) % 1_001 / 10_000d;
         return TimeSpan.FromSeconds(baseSeconds * (0.95d + jitter));
+    }
+
+    internal static TimeSpan RemainingOperationBudget(
+        BackupDeliveryJob job,
+        BackupPool pool,
+        int destinationCount,
+        DateTimeOffset now)
+    {
+        var remaining = job.CreatedAt.AddSeconds(pool.OverallDeadlineSeconds) - now;
+        var fairShare = TimeSpan.FromSeconds(
+            (double)pool.OverallDeadlineSeconds / Math.Max(1, destinationCount));
+        return remaining < fairShare ? remaining : fairShare;
+    }
+
+    private static async Task DeferForHealthAsync(
+        ProxyHarborDbContext db,
+        BackupDeliveryJob job,
+        DateTimeOffset retryAt,
+        CancellationToken token)
+    {
+        var now = DateTimeOffset.UtcNow;
+        job.State = "pending";
+        job.Attempt = Math.Max(0, job.Attempt - 1);
+        job.NotBefore = retryAt > now ? retryAt : now.Add(MinimumRetryDelay);
+        ClearLease(job, now);
+        await SaveLeaseOutcomeAsync(db, job, token);
     }
 
     private static async Task FinishFailureAsync(

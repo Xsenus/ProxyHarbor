@@ -386,6 +386,59 @@ public sealed class BackupDeliveryWorkerIntegrationTests
     }
 
     [Fact]
+    public async Task SlowPreferredPutLeavesDeadlineForVerifiedFallback()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"delivery-slow-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var path = Path.Combine(directory, "slow.phbackup");
+            await File.WriteAllBytesAsync(path, [1, 2, 3, 4, 5]);
+            var hash = Convert.ToHexStringLower(SHA256.HashData(await File.ReadAllBytesAsync(path)));
+            var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+                .UseInMemoryDatabase($"delivery-slow-{Guid.NewGuid():N}").Options;
+            var factory = new TestDbFactory(options);
+            var leases = new List<BackupDeliveryLease>();
+            await using (var seed = await factory.CreateDbContextAsync())
+            {
+                var pool = Pool();
+                pool.OverallDeadlineSeconds = 4;
+                var run = Run(pool.Id, hash, Path.GetFileName(path));
+                var preferred = Destination("a-slow", "domain-a", 10);
+                var fallback = Destination("b-fast", "domain-b", 20);
+                seed.AddRange(pool, run, preferred, fallback,
+                    Route(pool.Id, preferred.Id, 10), Route(pool.Id, fallback.Id, 20));
+                foreach (var destination in new[] { preferred, fallback })
+                {
+                    var copy = Copy(run.Id, destination.Id, hash);
+                    var job = Job(copy.Id, $"slow-{destination.Name}");
+                    job.State = "processing";
+                    job.Attempt = 1;
+                    job.LeaseId = Guid.NewGuid();
+                    job.LeaseUntil = DateTimeOffset.UtcNow.AddMinutes(1);
+                    seed.AddRange(copy, job);
+                    leases.Add(new BackupDeliveryLease(job.Id, job.LeaseId.Value));
+                }
+                await seed.SaveChangesAsync();
+            }
+            var adapter = new SlowPreferredAdapter();
+            var processor = Processor(factory, Registry(adapter, new SuccessfulAdapter("telegram")), directory);
+
+            await processor.ProcessAsync(leases[0], CancellationToken.None);
+            await processor.ProcessAsync(leases[1], CancellationToken.None);
+
+            await using var verify = await factory.CreateDbContextAsync();
+            var copies = await verify.BackupCopies.Include(copy => copy.BackupDestination)
+                .OrderBy(copy => copy.BackupDestination.Name).ToArrayAsync();
+            Assert.Equal("unknown", copies[0].State);
+            Assert.Equal("verified", copies[1].State);
+            Assert.Equal(1, adapter.SlowCalls);
+            Assert.Equal(1, adapter.FastCalls);
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    [Fact]
     [Trait("Category", "PostgresIntegration")]
     public async Task TwoWorkersLeaseOnceAndExpiredLeaseBecomesUnknown()
     {
@@ -457,6 +510,48 @@ public sealed class BackupDeliveryWorkerIntegrationTests
 
     [Fact]
     [Trait("Category", "PostgresIntegration")]
+    public async Task NewReplicasObserveDurableDestinationAuthenticationFailure()
+    {
+        var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
+        if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
+
+        var schema = $"proxyharbor_delivery_health_{Guid.NewGuid():N}";
+        var builder = new NpgsqlConnectionStringBuilder(baseConnectionString) { SearchPath = schema };
+        await using var admin = new NpgsqlConnection(baseConnectionString);
+        await admin.OpenAsync();
+        await using (var create = new NpgsqlCommand($"CREATE SCHEMA \"{schema}\"", admin))
+            await create.ExecuteNonQueryAsync();
+        try
+        {
+            var factory = await CreateFactoryAsync(builder.ConnectionString);
+            await SeedSingleJobAsync(factory);
+            Guid destinationId;
+            await using (var failed = await factory.CreateDbContextAsync())
+            {
+                var copy = await failed.BackupCopies.Include(item => item.Jobs).SingleAsync();
+                destinationId = copy.BackupDestinationId;
+                copy.LastAttemptAt = DateTimeOffset.UtcNow;
+                copy.Jobs.Single().State = "failed";
+                copy.Jobs.Single().LastErrorCode = BackupDestinationErrorCode.AuthenticationFailed.ToString();
+                await failed.SaveChangesAsync();
+            }
+            var first = new BackupDestinationHealth();
+            var second = new BackupDestinationHealth();
+            await using var verify = await factory.CreateDbContextAsync();
+            Assert.False((await first.TryEnterAsync(
+                verify, destinationId, BackupDestinationOperation.Put, CancellationToken.None)).Allowed);
+            Assert.False((await second.TryEnterAsync(
+                verify, destinationId, BackupDestinationOperation.Put, CancellationToken.None)).Allowed);
+        }
+        finally
+        {
+            await using var drop = new NpgsqlCommand($"DROP SCHEMA IF EXISTS \"{schema}\" CASCADE", admin);
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
     public async Task FailedPreferredDestinationDoesNotPreventVerifiedFallback()
     {
         var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
@@ -505,6 +600,57 @@ public sealed class BackupDeliveryWorkerIntegrationTests
         finally
         {
             if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+            await using var drop = new NpgsqlCommand($"DROP SCHEMA IF EXISTS \"{schema}\" CASCADE", admin);
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
+    public async Task AllFailedDestinationsNeverSatisfyProtection()
+    {
+        var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
+        if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
+
+        var schema = $"proxyharbor_delivery_all_down_{Guid.NewGuid():N}";
+        var directory = Path.Combine(Path.GetTempPath(), $"proxyharbor-all-down-{Guid.NewGuid():N}");
+        var builder = new NpgsqlConnectionStringBuilder(baseConnectionString) { SearchPath = schema };
+        await using var admin = new NpgsqlConnection(baseConnectionString);
+        await admin.OpenAsync();
+        await using (var create = new NpgsqlCommand($"CREATE SCHEMA \"{schema}\"", admin))
+            await create.ExecuteNonQueryAsync();
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var path = Path.Combine(directory, "fallback.phbackup");
+            await File.WriteAllBytesAsync(path, [1, 2, 3, 4, 5]);
+            var hash = Convert.ToHexStringLower(SHA256.HashData(await File.ReadAllBytesAsync(path)));
+            var factory = await CreateFactoryAsync(builder.ConnectionString);
+            var registry = Registry(
+                new FailingAdapter("s3", BackupDestinationFailureDisposition.Permanent),
+                new SuccessfulAdapter("telegram"));
+            var runId = await SeedFallbackGraphAsync(factory, hash);
+            await using (var plan = await factory.CreateDbContextAsync())
+                Assert.Equal(2, await new BackupDeliveryPlanner(registry).PlanAsync(
+                    plan, runId, hash, 5, CancellationToken.None));
+            var processor = Processor(factory, registry, directory);
+            for (var index = 0; index < 2; index++)
+            {
+                var lease = await processor.TryClaimAsync(CancellationToken.None);
+                Assert.NotNull(lease);
+                await processor.ProcessAsync(lease, CancellationToken.None);
+            }
+
+            await using var verify = await factory.CreateDbContextAsync();
+            Assert.Equal(2, await verify.BackupCopies.CountAsync(copy => copy.State == "permanent_failed"));
+            Assert.False((await verify.BackupRuns.SingleAsync(item => item.Id == runId)).SentToObjectStorage);
+            var protection = await new BackupProtectionEvaluator(factory, registry)
+                .EvaluateAsync(runId, hasDurableLocalStaging: true, CancellationToken.None);
+            Assert.Equal(BackupProtectionState.Unavailable, protection.State);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
             await using var drop = new NpgsqlCommand($"DROP SCHEMA IF EXISTS \"{schema}\" CASCADE", admin);
             await drop.ExecuteNonQueryAsync();
         }
@@ -760,6 +906,29 @@ public sealed class BackupDeliveryWorkerIntegrationTests
             ProbeCalls++;
             return Task.FromResult(new BackupDestinationProbeResult(
                 BackupDestinationProbeOutcome.Matching, $"safe/{fileName}", null, expectedSha256));
+        }
+    }
+
+    private sealed class SlowPreferredAdapter : IBackupDestinationAdapter
+    {
+        public string Kind => "s3";
+        public BackupDestinationCapabilities Capabilities { get; } = new(
+            new(true), new(true), new(true), false, false, false);
+        public int SlowCalls { get; private set; }
+        public int FastCalls { get; private set; }
+
+        public async Task<BackupDestinationWriteResult> PutAsync(
+            BackupDestination destination, string path, string expectedSha256,
+            long expectedSize, CancellationToken token)
+        {
+            if (destination.Name == "a-slow")
+            {
+                SlowCalls++;
+                await Task.Delay(Timeout.InfiniteTimeSpan, token);
+            }
+            FastCalls++;
+            return new BackupDestinationWriteResult(
+                $"fallback/{Path.GetFileName(path)}", null, expectedSha256, true);
         }
     }
 }

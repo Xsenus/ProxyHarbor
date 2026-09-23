@@ -180,14 +180,14 @@ Purpose: fulfill owner requirement without false success. Covers REQ-004–006/0
 
 #### TASK-032 — UNKNOWN reconciliation and idempotency
 
-- Status: `LOCAL VERIFIED; PR/CI PENDING`; Codex. TASK-031 and TASK-023 are merged.
+- Status: `DONE / merged`; Codex. PR #269, commit `71805d1`. Provider canary remains operator-gated.
 - Changes: stable BackupId/copy idempotency; deterministic S3 locator; `ProbeWriteOutcomeAsync`; states/reasons from TЗ. Never retry non-replayable stream after bytes without local immutable source. Telegram ambiguous outcomes go manual/retry policy without false verified.
 - Fault tests: response lost after complete PUT, crash before/after DB update, object absent/matching/mismatching, duplicate client trigger, 409/412, corrupt metadata.
 - Done: AC-006; no duplicate logical backup or overwrite.
 
 #### TASK-033 — Operation-scoped health, budgets and automatic fallback
 
-- Status: `BLOCKED: TASK-031`; Codex.
+- Status: `IN PROGRESS / local verification`; Codex. TASK-031 is merged.
 - Changes: health/breaker per destination+operation, short-lived local state backed by durable recent outcomes; planner enforces overall deadline and allowlisted graph. Optional storage does not fail global readiness.
 - Tests: A down/B healthy; A slow leaves budget for B; auth/quota/capability; all down; cross-pool route rejected; breaker half-open; multi-instance eventual consistency.
 - Numeric budgets: begin conservative test defaults, measure canary, label production values `PROPOSED` until owner accepts.
@@ -414,7 +414,7 @@ No dates are invented. STG-00–05 may proceed without these decisions using iso
 | 2026-09-22 | implementation checkpoint 5 | Added immutable run policy/content snapshot, fail-closed protection evaluator and `200/202/503` acknowledgement contract; local PostgreSQL 17 and restore coverage are green. | EVID-050–051 |
 | 2026-09-22 | implementation checkpoint 6 | Added atomic per-destination planner and leased delivery worker with bounded retry/deadline, crash-to-UNKNOWN semantics, independent fallback, staging byte/TTL budgets and routing disabled by default. | EVID-054–055 |
 
-Current checkpoint: STG-00–02 and TASK-020–031 are merged in `main` with green CI. TASK-032 UNKNOWN reconciliation passed local Release build, 1448 unit tests, 65.03% branch coverage and documentation gates; PostgreSQL/container CI is still pending. Routing remains disabled by default, so legacy behavior is still authoritative until a separately approved canary. Existing S3 object keys and Telegram resolver/transport contracts are preserved. Docker and real providers remain unavailable locally. No production/provider access or deployment occurred.
+Current checkpoint: STG-00–02 and TASK-020–032 are merged in `main` with green CI. TASK-033 operation health and fallback budgets passed local Release build, 1460 backend tests, 65.21% branch coverage and documentation gates; PostgreSQL/container PR CI is pending. Routing remains disabled by default, so legacy behavior is still authoritative until a separately approved canary. Existing S3 object keys and Telegram resolver/transport contracts are preserved. Docker and real providers remain unavailable locally. No production/provider access or deployment occurred.
 
 ## 16. Регламент продолжения в новой сессии
 

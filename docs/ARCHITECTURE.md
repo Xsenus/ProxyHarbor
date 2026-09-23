@@ -161,6 +161,8 @@ API lease удерживается owning PostgreSQL session от startup до s
 
 Под одной repeatable-read транзакцией все durable-таблицы EF-модели и safe settings сериализуются в ZIP, который сразу передаётся через bounded pipe в PHB3 encryptor. Единственная исключённая таблица — эфемерные `ProxyValidationLeases`; legacy lease-поля proxy очищаются при restore. Plaintext ZIP на backup volume не создаётся. Ciphertext полностью self-verifies, durable flush выполняется до atomic rename. Только после этого запускаются retention и внешняя доставка.
 
+Новый destination routing остаётся выключенным по умолчанию. При включении один immutable PHB3 получает отдельные leased jobs только для разрешённых pool routes; worker делит общий deadline между пригодными назначениями, а operation-scoped breaker временно откладывает больной destination, не уменьшая счётчик verified copies и не объявляя optional отказ общей неготовностью API. Неизвестный исход PUT отдельно проверяется без повторной отправки body.
+
 Подробности и schema: [BACKUP_RESTORE.md](BACKUP_RESTORE.md).
 
 ## Trust boundaries
