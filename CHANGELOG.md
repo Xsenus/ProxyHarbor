@@ -5,6 +5,7 @@
 
 ## [Unreleased]
 
+- Restore CLI получил отдельный `offline-materialize`: подписанный catalog и локальный allowlist S3 destinations с раздельными файлами credentials позволяют получить проверенный PHB3 без production БД и Data Protection key ring; недоступная/повреждённая копия уступает следующей. Команда не выполняет restore БД и не заменяет real-provider drill.
 - Добавлен переносимый подписанный каталог verified S3-копий: строгая версия схемы, HMAC с отдельным доменом ключа, object keys и content identity без endpoint/bucket/secrets. Restore CLI умеет вручную экспортировать sidecar из БД и проверять/просматривать его офлайн; автоматическая публикация рядом с S3-копиями пока не включена.
 - Restore CLI получил отдельную команду `materialize`: она находит verified-копию по `backupRunId` через текущую БД, проверяет ciphertext и сохраняет его без перезаписи существующего файла. S3 credentials читаются через изолированную копию Data Protection key ring; режим не принимает inline secrets и не заменяет БД, но может изолировать доказанно повреждённую copy.
 - Добавлен внутренний выбор verified S3-копии для чтения: только exact hash/size/policy и разрешённый `read` route, bounded fallback при отказе источника, отдельный candidate-файл на попытку, повторная проверка байтов и карантин доказанно повреждённой копии. Пользовательский remote restore и независимый каталог пока не включены.
