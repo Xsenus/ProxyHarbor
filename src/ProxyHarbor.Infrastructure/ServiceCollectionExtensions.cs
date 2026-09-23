@@ -99,6 +99,8 @@ public static class ServiceCollectionExtensions
         // остаётся fail-closed до отдельного совместимого rollout.
         services.AddOptions<BackupRoutingOptions>()
             .Bind(configuration.GetSection(BackupRoutingOptions.Section))
+            .Validate(options => options.PoolId != Guid.Empty,
+                "BackupRouting PoolId не может быть пустым GUID")
             .Validate(options => options.MaximumStagingBytes is >= 104_857_600L and <= 10_995_116_277_760L,
                 "BackupRouting MaximumStagingBytes: 100 MiB..10 TiB")
             .Validate(options => options.StagingTtlHours is >= 1 and <= 720,

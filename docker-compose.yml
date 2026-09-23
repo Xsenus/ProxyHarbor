@@ -77,6 +77,7 @@ services:
       Collector__ValidationRunRetentionHours: ${VALIDATION_RUN_RETENTION_HOURS:-24}
       Backup__Enabled: ${BACKUP_ENABLED:-false}
       BackupRouting__Enabled: ${BACKUP_ROUTING_ENABLED:-false}
+      BackupRouting__PoolId: ${BACKUP_ROUTING_POOL_ID:-}
       BackupRouting__MaximumStagingBytes: ${BACKUP_ROUTING_MAXIMUM_STAGING_BYTES:-10737418240}
       BackupRouting__StagingTtlHours: ${BACKUP_ROUTING_STAGING_TTL_HOURS:-72}
       Backup__Directory: /app/backups

@@ -144,6 +144,8 @@ public sealed class BackupRoutingOptions
     public const string Section = "BackupRouting";
     /// <summary>Разрешить новую destination-based маршрутизацию.</summary>
     public bool Enabled { get; set; }
+    /// <summary>Активный protection pool; при отсутствии используется legacy-default.</summary>
+    public Guid? PoolId { get; set; }
     /// <summary>Максимальный суммарный размер replayable local staging.</summary>
     public long MaximumStagingBytes { get; set; } = 10L * 1024 * 1024 * 1024;
     /// <summary>Предельный возраст staging source для автоматической доставки.</summary>
