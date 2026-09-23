@@ -5,6 +5,7 @@
 
 ## [Unreleased]
 
+- Catch-up научился ограниченно перепланировать failed copy только при durable-доказательстве, что PUT ни разу не начинался: один новый job за проход, минимум 15 минут между раундами, не более двух rearm, PostgreSQL row lock против конкурирующих replicas. UNKNOWN, начатые PUT и неоднозначные ошибки остаются без автоматического повтора; полное failback healthy-window ещё не включено.
 - VERIFY-breaker теперь восстанавливает состояние после смены worker replica по типизированным результатам S3 reconciliation в PostgreSQL; conclusive probe и failure записываются в той же fenced transaction, записи старше суток удаляются отдельным часовым проходом. PUT и VERIFY остаются независимыми, optional destination не влияет на глобальную readiness.
 - Добавлен изолированный HOSTKEY NL protocol canary для небольшого синтетического PHB3 и подписанного sidecar: dry-run по умолчанию, DPAPI credential-файл вне репозитория, точное подтверждение bucket, проверка PUT/HEAD/GET/conditional collision, подписи catalog и адресная очистка. Это не заменяет полный DR restore.
 - Destination routing получил ограниченный catch-up недостающих копий: планирование только при текущей версии policy и разрешённом verified-источнике, одна новая job за проход, PostgreSQL row lock против конкурирующих workers. Просроченный локальный staging можно заменить проверенным удалённым ciphertext; failed/UNKNOWN jobs не перезапускаются вслепую. Routing по умолчанию выключен, полный failback и real-provider DR drill ещё не доказаны.
