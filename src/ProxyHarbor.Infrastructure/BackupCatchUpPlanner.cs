@@ -76,15 +76,23 @@ public sealed class BackupCatchUpPlanner(
                       AND existing."BackupDestinationId" = destination."Id"))
             ORDER BY
               CASE WHEN (
-                SELECT COUNT(DISTINCT verified_destination."FailureDomain")
+                SELECT COUNT(DISTINCT lower(btrim(verified_destination."FailureDomain")))
                 FROM "BackupCopies" AS verified
                 JOIN "BackupDestinations" AS verified_destination
                   ON verified_destination."Id" = verified."BackupDestinationId"
+                JOIN "BackupPoolDestinations" AS verified_route
+                  ON verified_route."BackupPoolId" = pool."Id"
+                  AND verified_route."BackupDestinationId" = verified_destination."Id"
                 WHERE verified."BackupRunId" = run."Id"
                   AND verified."State" = 'verified' AND verified."VerifiedAt" IS NOT NULL
+                  AND verified."NativeLocator" IS NOT NULL
                   AND verified."PolicyVersion" = run."ProtectionPolicyVersion"
                   AND verified."ContentSha256" = run."ContentSha256"
                   AND verified."SizeBytes" = run."SizeBytes"
+                  AND verified_destination."Enabled"
+                  AND (verified_route."Enabled" OR verified_route."Draining")
+                  AND verified_route."AllowedOperations" IN
+                    ('verify', 'verify,read', 'put,verify', 'put,verify,read')
               ) < COALESCE(run."RequiredVerifiedCopies", pool."RequiredVerifiedCopies")
                 THEN 0 ELSE 1 END,
               {ordering}
@@ -188,15 +196,23 @@ public sealed class BackupCatchUpPlanner(
                       ('read', 'verify,read', 'put,verify,read'))
             ORDER BY
               CASE WHEN (
-                SELECT COUNT(DISTINCT verified_destination."FailureDomain")
+                SELECT COUNT(DISTINCT lower(btrim(verified_destination."FailureDomain")))
                 FROM "BackupCopies" AS verified
                 JOIN "BackupDestinations" AS verified_destination
                   ON verified_destination."Id" = verified."BackupDestinationId"
+                JOIN "BackupPoolDestinations" AS verified_route
+                  ON verified_route."BackupPoolId" = pool."Id"
+                  AND verified_route."BackupDestinationId" = verified_destination."Id"
                 WHERE verified."BackupRunId" = run."Id"
                   AND verified."State" = 'verified' AND verified."VerifiedAt" IS NOT NULL
+                  AND verified."NativeLocator" IS NOT NULL
                   AND verified."PolicyVersion" = run."ProtectionPolicyVersion"
                   AND verified."ContentSha256" = run."ContentSha256"
                   AND verified."SizeBytes" = run."SizeBytes"
+                  AND verified_destination."Enabled"
+                  AND (verified_route."Enabled" OR verified_route."Draining")
+                  AND verified_route."AllowedOperations" IN
+                    ('verify', 'verify,read', 'put,verify', 'put,verify,read')
               ) < COALESCE(run."RequiredVerifiedCopies", pool."RequiredVerifiedCopies")
                 THEN 0 ELSE 1 END,
               run."StartedAt" DESC, route."Priority", copy."Id"

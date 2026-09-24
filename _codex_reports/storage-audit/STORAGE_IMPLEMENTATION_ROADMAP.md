@@ -195,7 +195,7 @@ Purpose: fulfill owner requirement without false success. Covers REQ-004–006/0
 
 #### TASK-034 — Catch-up, repair and failback
 
-- Status: `IN PROGRESS / local repair path`; Codex. PR #281 merged the bounded verified-copy source path for a delivery job after staging expires. PR #282 added one-copy-per-pass missing-route catch-up; PR #284 added bounded rearm only for proven pre-PUT failures. UNKNOWN or possibly-started PUT is never blindly rearmed. Healthy-window failback, interrupted backfill, restart/flapping matrix and real-provider proof remain open; this is not AC-008 completion.
+- Status: `IN PROGRESS / local repair path`; Codex. PR #281 merged the bounded verified-copy source path for a delivery job after staging expires. PR #282 added one-copy-per-pass missing-route catch-up; PR #284 added bounded rearm only for proven pre-PUT failures. Catch-up priority now excludes ineligible verified routes/destinations and normalizes failure domains, so underprotected runs are not postponed behind newer protected runs. UNKNOWN or possibly-started PUT is never blindly rearmed. Healthy-window failback, interrupted backfill, restart/flapping matrix and real-provider proof remain open; this is not AC-008 completion.
 - Changes: reconciler scans copy debt, chooses verified same-hash source, materializes/streams to destination, verifies, rate limits. Quarantine corruption. Healthy window/hysteresis before destination eligibility; no automatic delete.
 - Historical behavior: B-only copies remain locatable; backfill coverage checkpoint blocks retirement/cleanup. Policy changes cancel/replan only safe jobs with version fencing.
 - Tests: TEST-008: recovery, flapping, stale/corrupt source, concurrent repair, destination draining, restart.
