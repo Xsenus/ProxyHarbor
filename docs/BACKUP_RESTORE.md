@@ -28,6 +28,8 @@ Manifest v9 содержит согласованный repeatable-read snapshot
 
 После canary оператор может создать отдельный пользовательский pool в админке через «Создать pool» или через `POST /api/v1/admin/backups/pools` с явным allowlist S3 routes; запрос атомарно включает только выбранные ранее выключенные назначения. UI показывает созданный UUID для будущей конфигурации. Он не выполняет provider I/O и не меняет production routing flag/pool ID. Не выбирайте этот pool в `BackupRouting__PoolId` до проверки реальных прав, вместимости и независимого восстановления; `desiredVerifiedCopies=2` означает только целевую policy, а не доказательство двух уже проверенных копий.
 
+Маршрут пользовательского pool можно временно остановить через `POST /api/v1/admin/backups/pools/{poolId}/routes/{destinationId}/drain` и вернуть к новым PUT через `POST /api/v1/admin/backups/pools/{poolId}/routes/{destinationId}/activate`, каждый раз передав актуальный `expectedPolicyVersion`. Возврат проверяет локальную конфигурацию и зашифрованные credentials, но **не** выполняет S3 canary и сам по себе не подтверждает восстановимость копии. Legacy pool этими операциями не меняется.
+
 ## Создание и доставка
 
 Snapshot сериализуется в ZIP-поток и сразу шифруется в PHB3: plaintext ZIP не записывается в backup volume. Результат проверяется и атомарно публикуется. При выключенном routing сохраняется прежняя последовательная S3/Telegram-доставка. При включённом routing completed snapshot и отдельные destination copies/jobs фиксируются одной PostgreSQL-транзакцией, а bounded worker повторно использует те же immutable bytes. S3 становится `verified` только после `PUT`+`HEAD` с совпавшими размером/SHA-256; Telegram delivery без independent verify не удовлетворяет protection quorum.

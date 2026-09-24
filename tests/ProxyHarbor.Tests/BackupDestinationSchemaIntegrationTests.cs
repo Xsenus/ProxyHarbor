@@ -152,6 +152,58 @@ public sealed class BackupDestinationSchemaIntegrationTests
                 item.BackupPoolId == newPool.Id && item.Enabled && !item.Draining));
             Assert.True((await verifyPool.BackupDestinations.SingleAsync(item => item.Id == created.Id)).Enabled);
             Assert.True((await verifyPool.BackupDestinations.SingleAsync(item => item.Id == second.Id)).Enabled);
+
+            Assert.IsType<NoContentResult>(await createController.DrainBackupRoute(newPool.Id,
+                second.Id, new DrainBackupRouteRequest(1), CancellationToken.None));
+            Assert.Equal(400, Assert.IsType<ObjectResult>(await createController.ActivateBackupRoute(
+                newPool.Id, second.Id, new ActivateBackupRouteRequest(0), CancellationToken.None)).StatusCode);
+            Assert.Equal(409, Assert.IsType<ObjectResult>(await createController.ActivateBackupRoute(
+                newPool.Id, second.Id, new ActivateBackupRouteRequest(2), CancellationToken.None)).StatusCode);
+            Assert.Equal(409, Assert.IsType<ObjectResult>(await createController.ActivateBackupRoute(
+                BackupLegacyDestinationProjector.LegacyPoolId, second.Id,
+                new ActivateBackupRouteRequest(1), CancellationToken.None)).StatusCode);
+            Assert.IsType<NotFoundResult>(await createController.ActivateBackupRoute(
+                newPool.Id, Guid.NewGuid(), new ActivateBackupRouteRequest(1), CancellationToken.None));
+
+            var protectedSecrets = await verifyPool.BackupDestinations.AsNoTracking()
+                .Where(item => item.Id == second.Id).Select(item => item.ProtectedSecrets).SingleAsync();
+            await verifyPool.BackupDestinations.Where(item => item.Id == second.Id)
+                .ExecuteUpdateAsync(setters => setters.SetProperty(item => item.ProtectedSecrets, "invalid"));
+            Assert.Equal(409, Assert.IsType<ObjectResult>(await createController.ActivateBackupRoute(
+                newPool.Id, second.Id, new ActivateBackupRouteRequest(1), CancellationToken.None)).StatusCode);
+            await verifyPool.BackupDestinations.Where(item => item.Id == second.Id)
+                .ExecuteUpdateAsync(setters => setters.SetProperty(item => item.ProtectedSecrets, protectedSecrets));
+
+            Assert.IsType<NoContentResult>(await createController.ActivateBackupRoute(
+                newPool.Id, second.Id, new ActivateBackupRouteRequest(1), CancellationToken.None));
+            Assert.IsType<NoContentResult>(await createController.ActivateBackupRoute(
+                newPool.Id, second.Id, new ActivateBackupRouteRequest(1), CancellationToken.None));
+            var reactivated = await verifyPool.BackupPoolDestinations.AsNoTracking().SingleAsync(item =>
+                item.BackupPoolId == newPool.Id && item.BackupDestinationId == second.Id);
+            Assert.True(reactivated.Enabled);
+            Assert.False(reactivated.Draining);
+            Assert.Equal(1, (await verifyPool.BackupPools.AsNoTracking()
+                .SingleAsync(item => item.Id == newPool.Id)).PolicyVersion);
+
+            Assert.IsType<NoContentResult>(await createController.DrainBackupRoute(newPool.Id,
+                second.Id, new DrainBackupRouteRequest(1), CancellationToken.None));
+            await verifyPool.BackupPoolDestinations.Where(item => item.BackupPoolId == newPool.Id &&
+                    item.BackupDestinationId == second.Id)
+                .ExecuteUpdateAsync(setters => setters.SetProperty(item => item.AllowedOperations, "verify,read"));
+            Assert.Equal(409, Assert.IsType<ObjectResult>(await createController.ActivateBackupRoute(
+                newPool.Id, second.Id, new ActivateBackupRouteRequest(1), CancellationToken.None)).StatusCode);
+            await verifyPool.BackupPoolDestinations.Where(item => item.BackupPoolId == newPool.Id &&
+                    item.BackupDestinationId == second.Id)
+                .ExecuteUpdateAsync(setters => setters.SetProperty(item => item.AllowedOperations, "put,verify,read"));
+            await verifyPool.BackupDestinations.Where(item => item.Id == second.Id)
+                .ExecuteUpdateAsync(setters => setters.SetProperty(item => item.Enabled, false));
+            Assert.Equal(409, Assert.IsType<ObjectResult>(await createController.ActivateBackupRoute(
+                newPool.Id, second.Id, new ActivateBackupRouteRequest(1), CancellationToken.None)).StatusCode);
+            await verifyPool.BackupDestinations.Where(item => item.Id == second.Id)
+                .ExecuteUpdateAsync(setters => setters.SetProperty(item => item.Enabled, true));
+
+            Assert.Equal(503, Assert.IsType<ObjectResult>(await controller.ActivateBackupRoute(
+                newPool.Id, second.Id, new ActivateBackupRouteRequest(1), CancellationToken.None)).StatusCode);
         }
         finally
         {
