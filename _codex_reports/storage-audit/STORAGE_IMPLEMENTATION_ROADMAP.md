@@ -430,6 +430,8 @@ Merged monitoring checkpoint `main@b343984` (2026-09-24): PR #309 passed verify/
 
 Read-only production inventory checkpoint against `main@e0d531b` (2026-09-24): the same VPS checkout is now 53 commits behind and contains a v7 writer. Seven recent local PHB3 match their completed DB runs by filename and byte count, but their internal manifest was not decrypted or inspected; all seven were marked delivered only to Telegram, and no S3 destination was configured. Eighteen current rows occupy tables excluded from v7, so backups made by this writer cannot satisfy a complete restore. The newest predeploy dump is from 2026-09-21 on the same VPS. This changes rollout order: an approved flag-off writer upgrade and fresh v9 backup must precede the real isolated drill; no automatic routing cutover or deletion is justified (EVID-091).
 
+Synthetic migration checkpoint (2026-09-24): a disposable PostgreSQL 17 cluster was migrated to the exact last migration in the deployed checkout, seeded with legacy backup/metrics rows, then migrated to `main`; rows survived, new routing tables remained empty, and EF model drift was absent. A dedicated PostgreSQL integration test repeats this schema path in CI (EVID-092). This lowers code-path uncertainty but does not replace a fresh predeploy dump, production data rehearsal or owner-approved deployment.
+
 ## 16. Регламент продолжения в новой сессии
 
 1. Read root instructions plus all six reports; compare current branch/commit/diff to baseline.
