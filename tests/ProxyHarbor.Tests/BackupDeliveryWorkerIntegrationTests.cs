@@ -1193,6 +1193,155 @@ public sealed class BackupDeliveryWorkerIntegrationTests
         }
     }
 
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
+    public async Task RepeatedDrainAndReactivationRearmClaimedCopyAcrossRestarts()
+    {
+        var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
+        if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
+
+        var schema = $"proxyharbor_route_restart_{Guid.NewGuid():N}";
+        var directory = Path.Combine(Path.GetTempPath(), $"proxyharbor-route-restart-{Guid.NewGuid():N}");
+        var builder = new NpgsqlConnectionStringBuilder(baseConnectionString) { SearchPath = schema };
+        await using var admin = new NpgsqlConnection(baseConnectionString);
+        await admin.OpenAsync();
+        await using (var create = new NpgsqlCommand($"CREATE SCHEMA \"{schema}\"", admin))
+            await create.ExecuteNonQueryAsync();
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var factory = await CreateFactoryAsync(builder.ConnectionString);
+            byte[] bytes = [1, 2, 3, 4, 5];
+            var hash = Convert.ToHexStringLower(SHA256.HashData(bytes));
+            const string fileName = "route-restart.phbackup";
+            await File.WriteAllBytesAsync(Path.Combine(directory, fileName), bytes);
+            var adapter = new RepairAdapter(bytes, "restart-source", "restart-target", fileName);
+            var registry = Registry(adapter, new SuccessfulAdapter("telegram"));
+            Guid poolId;
+            Guid targetId;
+            Guid targetCopyId;
+            await using (var seed = await factory.CreateDbContextAsync())
+            {
+                var pool = Pool();
+                var run = Run(pool.Id, hash, fileName);
+                var source = Destination("restart-source", "domain-a", 10);
+                var target = Destination("restart-target", "domain-b", 20);
+                var verified = Copy(run.Id, source.Id, hash);
+                verified.State = "verified";
+                verified.VerifiedAt = DateTimeOffset.UtcNow;
+                verified.NativeLocator = "source/route-restart.phbackup";
+                var planned = Copy(run.Id, target.Id, hash);
+                seed.AddRange(pool, run, source, target,
+                    Route(pool.Id, source.Id, 10), Route(pool.Id, target.Id, 20),
+                    verified, planned, Job(planned.Id, "route-restart-initial"));
+                await seed.SaveChangesAsync();
+                poolId = pool.Id;
+                targetId = target.Id;
+                targetCopyId = planned.Id;
+            }
+
+            var firstProcessor = Processor(factory, registry, directory);
+            var claimed = await firstProcessor.TryClaimAsync(CancellationToken.None);
+            Assert.NotNull(claimed);
+            await using (var drain = await factory.CreateDbContextAsync())
+                await drain.BackupPoolDestinations.Where(item => item.BackupPoolId == poolId &&
+                        item.BackupDestinationId == targetId)
+                    .ExecuteUpdateAsync(setters => setters
+                        .SetProperty(item => item.Enabled, false)
+                        .SetProperty(item => item.Draining, true));
+
+            await firstProcessor.ProcessAsync(claimed, CancellationToken.None);
+            Assert.Equal(0, adapter.PutCalls);
+            await using (var failed = await factory.CreateDbContextAsync())
+            {
+                var copy = await failed.BackupCopies.Include(item => item.Jobs)
+                    .SingleAsync(item => item.Id == targetCopyId);
+                Assert.Equal("permanent_failed", copy.State);
+                Assert.Null(copy.LastAttemptAt);
+                Assert.Equal(0, copy.AttemptCount);
+                var job = Assert.Single(copy.Jobs);
+                Assert.Equal("failed", job.State);
+                Assert.Equal(BackupDestinationErrorCode.InvalidConfiguration.ToString(), job.LastErrorCode);
+                job.CreatedAt = DateTimeOffset.UtcNow.AddMinutes(-21);
+                job.UpdatedAt = DateTimeOffset.UtcNow.AddMinutes(-20);
+                await failed.SaveChangesAsync();
+            }
+
+            var restartedPlanner = new BackupCatchUpPlanner(factory, registry,
+                new BackupDeliveryPlanner(registry));
+            Assert.Equal(0, await restartedPlanner.TryRearmPrePutFailureAsync(CancellationToken.None));
+            await using (var activate = await factory.CreateDbContextAsync())
+                await activate.BackupPoolDestinations.Where(item => item.BackupPoolId == poolId &&
+                        item.BackupDestinationId == targetId)
+                    .ExecuteUpdateAsync(setters => setters
+                        .SetProperty(item => item.Enabled, true)
+                        .SetProperty(item => item.Draining, false));
+
+            Assert.Equal(1, await restartedPlanner.TryRearmPrePutFailureAsync(CancellationToken.None));
+            Assert.Equal(0, await restartedPlanner.TryRearmPrePutFailureAsync(CancellationToken.None));
+            var restartedProcessor = Processor(factory, registry, directory);
+            var retry = await restartedProcessor.TryClaimAsync(CancellationToken.None);
+            Assert.NotNull(retry);
+            await using (var drainAgain = await factory.CreateDbContextAsync())
+                await drainAgain.BackupPoolDestinations.Where(item => item.BackupPoolId == poolId &&
+                        item.BackupDestinationId == targetId)
+                    .ExecuteUpdateAsync(setters => setters
+                        .SetProperty(item => item.Enabled, false)
+                        .SetProperty(item => item.Draining, true));
+            await restartedProcessor.ProcessAsync(retry, CancellationToken.None);
+            Assert.Equal(0, adapter.PutCalls);
+            await using (var failedAgain = await factory.CreateDbContextAsync())
+            {
+                var copy = await failedAgain.BackupCopies.Include(item => item.Jobs)
+                    .SingleAsync(item => item.Id == targetCopyId);
+                Assert.Equal("permanent_failed", copy.State);
+                Assert.Null(copy.LastAttemptAt);
+                Assert.Equal(0, copy.AttemptCount);
+                Assert.Equal(2, copy.Jobs.Count);
+                var latestJob = copy.Jobs.OrderByDescending(item => item.CreatedAt).First();
+                Assert.Equal("failed", latestJob.State);
+                Assert.Equal(BackupDestinationErrorCode.InvalidConfiguration.ToString(), latestJob.LastErrorCode);
+                latestJob.CreatedAt = DateTimeOffset.UtcNow.AddMinutes(-21);
+                latestJob.UpdatedAt = DateTimeOffset.UtcNow.AddMinutes(-20);
+                await failedAgain.SaveChangesAsync();
+            }
+
+            var finalPlanner = new BackupCatchUpPlanner(factory, registry,
+                new BackupDeliveryPlanner(registry));
+            Assert.Equal(0, await finalPlanner.TryRearmPrePutFailureAsync(CancellationToken.None));
+            await using (var activateAgain = await factory.CreateDbContextAsync())
+                await activateAgain.BackupPoolDestinations.Where(item => item.BackupPoolId == poolId &&
+                        item.BackupDestinationId == targetId)
+                    .ExecuteUpdateAsync(setters => setters
+                        .SetProperty(item => item.Enabled, true)
+                        .SetProperty(item => item.Draining, false));
+
+            Assert.Equal(1, await finalPlanner.TryRearmPrePutFailureAsync(CancellationToken.None));
+            Assert.Equal(0, await finalPlanner.TryRearmPrePutFailureAsync(CancellationToken.None));
+            var finalProcessor = Processor(factory, registry, directory);
+            var finalRetry = await finalProcessor.TryClaimAsync(CancellationToken.None);
+            Assert.NotNull(finalRetry);
+            await finalProcessor.ProcessAsync(finalRetry, CancellationToken.None);
+            Assert.Equal(1, adapter.PutCalls);
+            Assert.Equal(0, adapter.ReadCalls);
+            await using (var verified = await factory.CreateDbContextAsync())
+            {
+                var copy = await verified.BackupCopies.Include(item => item.Jobs)
+                    .SingleAsync(item => item.Id == targetCopyId);
+                Assert.Equal("verified", copy.State);
+                Assert.Equal(3, copy.Jobs.Count);
+                Assert.Single(copy.Jobs, item => item.State == "completed");
+            }
+            Assert.Equal(0, await finalPlanner.TryRearmPrePutFailureAsync(CancellationToken.None));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+            await using var drop = new NpgsqlCommand($"DROP SCHEMA IF EXISTS \"{schema}\" CASCADE", admin);
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
+
     [Theory]
     [Trait("Category", "PostgresIntegration")]
     [InlineData("disabled-route")]
