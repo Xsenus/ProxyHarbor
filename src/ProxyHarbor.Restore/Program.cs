@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.IO.Compression;
 using System.Net;
 using System.Net.Http.Headers;
@@ -963,7 +964,10 @@ internal sealed record RestoreOptions(
     string? EncryptionKey,
     bool ConfirmReplace,
     bool ShowHelp,
-    bool InspectSettings = false)
+    bool InspectSettings = false,
+    string? ExpectedTargetHost = null,
+    int? ExpectedTargetPort = null,
+    string? ExpectedTargetDatabase = null)
 {
     public const string Help = """
         ProxyHarbor restore
@@ -981,6 +985,9 @@ internal sealed record RestoreOptions(
         путём. Inline --encryption-key совместим, но виден в process arguments.
         Перед --replace-existing-data остановите все API-реплики: живой API держит
         shared lifetime-lease, и restore fail-closed не начнёт замену данных.
+        Для изолированного DR передайте --expected-target-host, --expected-target-port
+        и --expected-target-database вместе: несовпадение со строкой БД останавливает
+        restore до расшифровки архива и без обращения к БД.
         Явные CLI-параметры имеют наивысший приоритет.
         """;
 
@@ -993,6 +1000,9 @@ internal sealed record RestoreOptions(
         var confirm = false;
         var help = false;
         var inspectSettings = false;
+        string? expectedTargetHost = null;
+        int? expectedTargetPort = null;
+        string? expectedTargetDatabase = null;
         for (var index = 0; index < args.Length; index++)
         {
             switch (args[index])
@@ -1003,6 +1013,14 @@ internal sealed record RestoreOptions(
                 case "--encryption-key-file": keyFile = NextValue(args, ref index, "--encryption-key-file"); break;
                 case "--replace-existing-data": confirm = true; break;
                 case "--inspect-settings": inspectSettings = true; break;
+                case "--expected-target-host": expectedTargetHost = NextValue(args, ref index, "--expected-target-host"); break;
+                case "--expected-target-port":
+                    if (!int.TryParse(NextValue(args, ref index, "--expected-target-port"),
+                            NumberStyles.None, CultureInfo.InvariantCulture, out var parsedPort))
+                        throw new ArgumentException("Для --expected-target-port требуется номер порта.");
+                    expectedTargetPort = parsedPort;
+                    break;
+                case "--expected-target-database": expectedTargetDatabase = NextValue(args, ref index, "--expected-target-database"); break;
                 case "--help" or "-h": help = true; break;
                 default: throw new ArgumentException($"Неизвестный аргумент: {args[index]}");
             }
@@ -1032,7 +1050,8 @@ internal sealed record RestoreOptions(
                 "SecretFiles__BackupEncryptionKey")
                 ?? Environment.GetEnvironmentVariable("Backup__EncryptionKey");
         }
-        return new RestoreOptions(input, connection, key, confirm, help, inspectSettings);
+        return new RestoreOptions(input, connection, key, confirm, help, inspectSettings,
+            expectedTargetHost, expectedTargetPort, expectedTargetDatabase);
     }
 
     public void Validate()
@@ -1044,15 +1063,35 @@ internal sealed record RestoreOptions(
                 $"Backup__EncryptionKey должен содержать {BackupOptions.MinimumLegacyDecryptionKeyLength}..{BackupOptions.MaximumEncryptionKeyLength} символов с корректной Unicode-кодировкой без управляющих знаков.");
         if (InspectSettings)
         {
-            if (ConfirmReplace)
+            if (ConfirmReplace || ExpectedTargetHost is not null || ExpectedTargetPort is not null ||
+                ExpectedTargetDatabase is not null)
                 throw new ArgumentException(
-                    "--inspect-settings нельзя объединять с --replace-existing-data.");
+                    "--inspect-settings нельзя объединять с параметрами destructive restore.");
             return;
         }
         if (string.IsNullOrWhiteSpace(ConnectionString))
             throw new ArgumentException("Не задана ConnectionStrings__Postgres.");
         if (!ConfirmReplace)
             throw new ArgumentException("Операция заменяет данные БД; добавьте --replace-existing-data.");
+        var targetGuardRequested = ExpectedTargetHost is not null || ExpectedTargetPort is not null ||
+            ExpectedTargetDatabase is not null;
+        if (!targetGuardRequested) return;
+        if (string.IsNullOrWhiteSpace(ExpectedTargetHost) || ExpectedTargetHost.Contains(',') ||
+            ExpectedTargetHost.Contains('/') || ExpectedTargetHost.Contains('\\') ||
+            ExpectedTargetHost.Any(char.IsWhiteSpace) ||
+            ExpectedTargetPort is null or < 1 or > 65535 ||
+            string.IsNullOrWhiteSpace(ExpectedTargetDatabase))
+            throw new ArgumentException("Укажите все три корректных параметра ожидаемой целевой БД.");
+        NpgsqlConnectionStringBuilder connection;
+        try { connection = new NpgsqlConnectionStringBuilder(ConnectionString); }
+        catch (Exception exception) when (exception is ArgumentException or FormatException)
+        {
+            throw new ArgumentException("Строка целевой БД некорректна.");
+        }
+        if (!string.Equals(connection.Host, ExpectedTargetHost, StringComparison.OrdinalIgnoreCase) ||
+            connection.Port != ExpectedTargetPort ||
+            !string.Equals(connection.Database, ExpectedTargetDatabase, StringComparison.Ordinal))
+            throw new ArgumentException("Целевая БД не совпадает с ожидаемыми host/port/database.");
     }
 
     private static string NextValue(string[] args, ref int index, string option)

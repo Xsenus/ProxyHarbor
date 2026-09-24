@@ -71,10 +71,13 @@ Marker подтверждает только конкретную эпоху DP 
 dotnet run --project src/ProxyHarbor.Restore -- `
   --input <absolute-recovered.phbackup> `
   --encryption-key-file <absolute-private-phb3-key-file> `
+  --expected-target-host <isolated-db-host> `
+  --expected-target-port <isolated-db-port> `
+  --expected-target-database <isolated-db-name> `
   --replace-existing-data
 ```
 
-Не повторяйте restore вслепую после неоднозначной ошибки: сначала проверьте состояние целевой БД и возможный commit. Если cleanup временного plaintext не подтверждён, остановите дрилл и обработайте это как инцидент с чувствительными данными.
+Все три `--expected-target-*` должны совпасть со строкой подключения до расшифровки архива и обращения к БД. Эта проверка ловит ошибочный connection string, но не доказывает, что DNS/туннель ведёт к отдельному инстансу: его сетевую и административную изоляцию подтвердите отдельно. Не повторяйте restore вслепую после неоднозначной ошибки: сначала проверьте состояние целевой БД и возможный commit. Если cleanup временного plaintext не подтверждён, остановите дрилл и обработайте это как инцидент с чувствительными данными.
 
 ## 4. Acceptance и измерение
 
