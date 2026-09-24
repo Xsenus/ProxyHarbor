@@ -54,6 +54,8 @@ flowchart LR
 | STG-06 | BLOCKED by owner/external | inventory/backfill/canary/real drill | all local gates | owner-approved RPO/RTO and observation |
 | STG-07 | BLOCKED | final gates/handoff | STG-06 evidence | AC-001–014 disposition and operational sign-off |
 
+Статусы этапов не являются линейным процентом готовности: три этапа завершены, три частичны, два ждут внешних условий. Для production-готовности решающими остаются реальные restore/DR-доказательства и приёмка AC-001–014; частичный код не засчитывается как закрытый acceptance gate.
+
 ## 6. Task cards
 
 ### STG-00 — Baseline and coverage guard
@@ -195,7 +197,7 @@ Purpose: fulfill owner requirement without false success. Covers REQ-004–006/0
 
 #### TASK-034 — Catch-up, repair and failback
 
-- Status: `IN PROGRESS / local repair path`; Codex. PR #281 merged the bounded verified-copy source path for a delivery job after staging expires. PR #282 added one-copy-per-pass missing-route catch-up; PR #284 added bounded rearm only for proven pre-PUT failures. Catch-up priority now excludes ineligible verified routes/destinations and normalizes failure domains, so underprotected runs are not postponed behind newer protected runs. UNKNOWN or possibly-started PUT is never blindly rearmed. Healthy-window failback, interrupted backfill, restart/flapping matrix and real-provider proof remain open; this is not AC-008 completion.
+- Status: `IN PROGRESS / local repair path`; Codex. PR #281 merged the bounded verified-copy source path for a delivery job after staging expires. PR #282 added one-copy-per-pass missing-route catch-up; PR #284 added bounded rearm only for proven pre-PUT failures. Catch-up priority now excludes ineligible verified routes/destinations and normalizes failure domains, so underprotected runs are not postponed behind newer protected runs. A PostgreSQL integration scenario covers two drain/reactivation cycles after job claim, with worker/planner restarts and one final PUT. UNKNOWN or possibly-started PUT is never blindly rearmed. Healthy-window failback, broader interrupted-backfill/restart matrix and real-provider proof remain open; this is not AC-008 completion.
 - Changes: reconciler scans copy debt, chooses verified same-hash source, materializes/streams to destination, verifies, rate limits. Quarantine corruption. Healthy window/hysteresis before destination eligibility; no automatic delete.
 - Historical behavior: B-only copies remain locatable; backfill coverage checkpoint blocks retirement/cleanup. Policy changes cancel/replan only safe jobs with version fencing.
 - Tests: TEST-008: recovery, flapping, stale/corrupt source, concurrent repair, destination draining, restart.
