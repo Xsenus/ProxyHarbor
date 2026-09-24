@@ -96,6 +96,34 @@ public sealed class S3BackupObjectStorageTransportTests
         }
     }
 
+    [Fact]
+    public async Task MidBodyReadFailureIsRetryableAndRemovesPartialFile()
+    {
+        byte[] bytes = [1, 2, 3];
+        var hash = Convert.ToHexStringLower(SHA256.HashData(bytes));
+        var directory = Path.Combine(Path.GetTempPath(), $"proxyharbor-s3-read-fail-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        var finalPath = Path.Combine(directory, "restored.phbackup");
+        var partialPath = Path.Combine(directory, ".restored.partial");
+        try
+        {
+            await using var response = new FailAfterFirstReadStream(bytes);
+            var failure = await Assert.ThrowsAsync<BackupDestinationOperationException>(() =>
+                S3BackupObjectStorageTransport.CopyVerifyAndPublishAsync(
+                    response, partialPath, finalPath, bytes.Length, hash, CancellationToken.None));
+
+            Assert.Equal(BackupDestinationErrorCode.Unavailable, failure.Failure.Code);
+            Assert.Equal(BackupDestinationFailureDisposition.Retryable, failure.Failure.Disposition);
+            Assert.DoesNotContain("private-endpoint", failure.Message, StringComparison.Ordinal);
+            Assert.False(File.Exists(finalPath));
+            Assert.False(File.Exists(partialPath));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     [Theory]
     [InlineData(HttpStatusCode.Forbidden, "AccessDenied", BackupDestinationErrorCode.AuthorizationFailed,
         BackupDestinationFailureDisposition.Permanent)]
@@ -438,6 +466,19 @@ public sealed class S3BackupObjectStorageTransportTests
                 ContentLength = Body.Length,
                 ResponseStream = new MemoryStream(Body, writable: false)
             });
+        }
+    }
+
+    private sealed class FailAfterFirstReadStream(byte[] bytes) : MemoryStream(bytes, writable: false)
+    {
+        private int readCount;
+
+        public override ValueTask<int> ReadAsync(
+            Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            if (Interlocked.Increment(ref readCount) > 1)
+                throw new IOException("private-endpoint disconnected during GET");
+            return base.ReadAsync(buffer, cancellationToken);
         }
     }
 

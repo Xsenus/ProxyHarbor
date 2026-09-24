@@ -356,7 +356,12 @@ public sealed class S3BackupObjectStorageTransport : IBackupObjectStorageTranspo
             long copied = 0;
             while (true)
             {
-                var read = await input.ReadAsync(buffer, token);
+                // A GET can succeed before its response stream fails. Classify that
+                // mid-body provider failure so offline recovery can try another copy;
+                // local output failures remain distinct and stop the operation.
+                var read = await ExecuteProviderAsync(
+                    BackupDestinationOperation.Materialize,
+                    () => input.ReadAsync(buffer, token).AsTask(), token);
                 if (read == 0) break;
                 copied = checked(copied + read);
                 if (copied > expectedSize)
