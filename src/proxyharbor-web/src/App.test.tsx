@@ -705,6 +705,7 @@ describe('ProxyHarbor UI', () => {
     let deleted = false
     let drained = false
     let drainAttempts = 0
+    let activateAttempts = 0
     vi.mocked(fetch).mockImplementation(async (input, options) => {
       const url = String(input)
       if (url.includes('/api/v1/admin/sources')) return jsonResponse({items:[],page:1,pageSize:10,total:0})
@@ -716,6 +717,12 @@ describe('ProxyHarbor UI', () => {
         drainAttempts++
         if (drainAttempts === 1) return jsonResponse({title:'Protection policy изменилась'},409)
         drained = true
+        return new Response(null,{status:204})
+      }
+      if (url.endsWith('/api/v1/admin/backups/pools/pool-1/routes/destination-1/activate') && options?.method === 'POST') {
+        activateAttempts++
+        if (activateAttempts === 1) return jsonResponse({title:'S3 destination больше не готов'},409)
+        drained = false
         return new Response(null,{status:204})
       }
       if (url.includes('/api/v1/admin/backups?')) return jsonResponse({items:deleted?[]:[backup],page:1,pageSize:10,total:deleted?0:1})
@@ -760,6 +767,25 @@ describe('ProxyHarbor UI', () => {
     expect(screen.queryByRole('button',{name:'Перевести в draining: durable'})).not.toBeInTheDocument()
     expect(screen.getByText('S3 Нидерланды',{selector:'b'})).toHaveFocus()
     expect(drainAttempts).toBe(2)
+    expect(screen.queryByRole('button',{name:'Включить маршрут: legacy-default'})).not.toBeInTheDocument()
+    const activateButton=screen.getByRole('button',{name:'Включить маршрут: durable'})
+    fireEvent.click(activateButton)
+    const activateConfirmation=screen.getByRole('group',{name:'Включить новые записи в durable?'})
+    expect(within(activateConfirmation).getByRole('button',{name:'Отмена'})).toHaveFocus()
+    expect(activateButton).toHaveAttribute('aria-expanded','true')
+    fireEvent.keyDown(activateConfirmation,{key:'Escape'})
+    expect(activateButton).toHaveFocus()
+    fireEvent.click(activateButton)
+    fireEvent.click(within(screen.getByRole('group',{name:'Включить новые записи в durable?'})).getByRole('button',{name:'Подтвердить включение'}))
+    expect(await screen.findByText('S3 destination больше не готов')).toBeInTheDocument()
+    expect(screen.getByText(/v2 · quorum 1\/2.*draining/)).toBeInTheDocument()
+    const activateCall=vi.mocked(fetch).mock.calls.find(([input,options])=>String(input).endsWith('/activate')&&options?.method==='POST')
+    expect(JSON.parse(String(activateCall?.[1]?.body))).toEqual({expectedPolicyVersion:2})
+    fireEvent.click(within(screen.getByRole('group',{name:'Включить новые записи в durable?'})).getByRole('button',{name:'Подтвердить включение'}))
+    await waitFor(()=>expect(screen.getByText(/v2 · quorum 1\/2.*маршрут включён/)).toBeInTheDocument())
+    expect(screen.queryByRole('button',{name:'Включить маршрут: durable'})).not.toBeInTheDocument()
+    expect(screen.getByText('S3 Нидерланды',{selector:'b'})).toHaveFocus()
+    expect(activateAttempts).toBe(2)
     fireEvent.click(screen.getByRole('button',{name:'Обновить назначения резервных копий'}))
     await waitFor(()=>expect(vi.mocked(fetch).mock.calls.filter(([input])=>String(input).includes('/api/v1/admin/backups/destinations?')).length).toBeGreaterThan(1))
     expect(screen.getAllByText('доставлен: S3 + Telegram').length).toBeGreaterThan(0)
