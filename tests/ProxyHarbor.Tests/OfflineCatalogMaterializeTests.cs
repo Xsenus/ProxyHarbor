@@ -47,6 +47,39 @@ public sealed class OfflineCatalogMaterializeTests
     }
 
     [Fact]
+    public async Task MidBodyReadFailureFallsBackToSecondCopy()
+    {
+        var fixture = await Fixture.CreateAsync();
+        try
+        {
+            var transport = new MidBodyThenHealthyTransport(fixture.Body);
+            var result = await fixture.RunAsync(transport);
+
+            Assert.Equal(fixture.SecondCopyId, result.CopyId);
+            Assert.Equal(fixture.Body, await File.ReadAllBytesAsync(result.Path));
+            Assert.Equal(2, transport.Calls);
+            Assert.Empty(Directory.GetFiles(fixture.Directory, "*.candidate"));
+            Assert.Empty(Directory.GetFiles(fixture.Directory, "*.partial"));
+        }
+        finally { fixture.Dispose(); }
+    }
+
+    [Fact]
+    public async Task LocalOutputFailureDoesNotGetMisclassifiedAsProviderFailover()
+    {
+        var fixture = await Fixture.CreateAsync();
+        try
+        {
+            var transport = new FakeTransport((call, path, options) =>
+                throw new IOException("synthetic local recovery disk full"));
+            await Assert.ThrowsAsync<IOException>(() => fixture.RunAsync(transport));
+            Assert.Equal(1, transport.Calls);
+            Assert.False(File.Exists(fixture.Output));
+        }
+        finally { fixture.Dispose(); }
+    }
+
+    [Fact]
     public async Task AllSourcesFailWithoutPublishingOutput()
     {
         var fixture = await Fixture.CreateAsync();
@@ -267,6 +300,39 @@ public sealed class OfflineCatalogMaterializeTests
         {
             Calls++;
             return Task.FromResult(behavior(Calls, finalPath, options));
+        }
+    }
+
+    private sealed class MidBodyThenHealthyTransport(byte[] body) : IBackupObjectStorageTransport
+    {
+        public int Calls { get; private set; }
+
+        public Task<string> UploadAndVerifyAsync(string path, BackupOptions options, CancellationToken token) =>
+            throw new NotSupportedException();
+
+        public async Task<BackupObjectStorageMaterializationResult> MaterializeAndVerifyAsync(
+            string objectKey, string finalPath, long expectedSize, string expectedSha256,
+            BackupOptions options, CancellationToken token)
+        {
+            Calls++;
+            await using Stream source = Calls == 1
+                ? new FailingReadStream(body)
+                : new MemoryStream(body, writable: false);
+            return await S3BackupObjectStorageTransport.CopyVerifyAndPublishAsync(
+                source, finalPath + ".inner.partial", finalPath, expectedSize, expectedSha256, token);
+        }
+    }
+
+    private sealed class FailingReadStream(byte[] bytes) : MemoryStream(bytes, writable: false)
+    {
+        private int readCount;
+
+        public override ValueTask<int> ReadAsync(
+            Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            if (Interlocked.Increment(ref readCount) > 1)
+                throw new IOException("synthetic provider stream lost");
+            return base.ReadAsync(buffer, cancellationToken);
         }
     }
 
