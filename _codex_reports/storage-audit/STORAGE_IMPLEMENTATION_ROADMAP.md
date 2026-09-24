@@ -241,7 +241,7 @@ Purpose: remove production-DB/VPS circular dependency. Covers REQ-007/008/014, R
 
 #### TASK-050 — Admin API and UI for destinations/copies
 
-- Status: `PARTIAL: read-only per-run protection/copy detail, paged destination/route overview, route drain, write-only S3 registration and atomic custom pool/route provisioning now have API and UI; editing existing policy and production provider proof remain`; Codex.
+- Status: `PARTIAL: read-only per-run protection/copy detail, paged destination/route overview, route drain UI, versioned route reactivation API, write-only S3 registration and atomic custom pool/route provisioning now exist; editing numeric policy, reactivation UI and production provider proof remain`; Codex.
 - Changes: `AdminController`, DTO/OpenAPI; React backup settings/history. Show pool policy, destination state, verified copies, pending/degraded/UNKNOWN, safe locator summary. Credentials write-only. Preserve old response fields.
 - UI rules: use `StyledSelect`, shared Toggle/button/checkbox/table/modal patterns; explicit Lucide sizes; keyboard/focus/mobile tests per `AGENTS.md`.
 - Checks: controller auth/validation, frontend interaction/a11y, desktop/mobile visual verification; full frontend lint/test/build final gate.

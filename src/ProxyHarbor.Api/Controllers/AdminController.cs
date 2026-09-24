@@ -922,6 +922,60 @@ public sealed class AdminController(
         return NoContent();
     }
 
+    /// <summary>Возвращает проверенный пользовательский S3 route к новым PUT после draining.</summary>
+    [HttpPost("backups/pools/{poolId:guid}/routes/{destinationId:guid}/activate")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> ActivateBackupRoute(
+        Guid poolId, Guid destinationId, [FromBody] ActivateBackupRouteRequest request,
+        CancellationToken token)
+    {
+        if (poolId == BackupLegacyDestinationProjector.LegacyPoolId)
+            return Problem("Legacy route управляется backup settings и не может быть изменён здесь.",
+                statusCode: 409);
+        if (request.ExpectedPolicyVersion < 1)
+            return Problem("Укажите актуальную версию protection policy.", statusCode: 400);
+        if (credentialProtectionProvider is null)
+            return Problem("Проверка зашифрованных credentials недоступна.", statusCode: 503);
+
+        await using var db = await dbFactory.CreateDbContextAsync(token);
+        var pool = await db.BackupPools.AsNoTracking().SingleOrDefaultAsync(
+            item => item.Id == poolId, token);
+        if (pool is null) return NotFound();
+        if (pool.PolicyVersion != request.ExpectedPolicyVersion)
+            return Problem("Protection policy изменилась; обновите список маршрутов.", statusCode: 409);
+        var route = await db.BackupPoolDestinations.AsNoTracking()
+            .Include(item => item.BackupDestination)
+            .SingleOrDefaultAsync(item => item.BackupPoolId == poolId &&
+                item.BackupDestinationId == destinationId, token);
+        if (route is null) return NotFound();
+        var destination = route.BackupDestination;
+        if (destination.Kind != "s3" || !destination.Enabled ||
+            route.AllowedOperations is not ("put" or "put,verify" or "put,verify,read") ||
+            !string.Equals(destination.FailureDomain,
+                ReadValidatedS3FailureDomain(destination, credentialProtectionProvider),
+                StringComparison.Ordinal))
+            return Problem("S3 destination или PUT route больше не готовы к активации.", statusCode: 409);
+        var changed = await db.BackupPoolDestinations
+            .Where(item => item.BackupPoolId == poolId &&
+                item.BackupDestinationId == destinationId &&
+                item.BackupPool.PolicyVersion == request.ExpectedPolicyVersion &&
+                item.AllowedOperations == route.AllowedOperations &&
+                item.BackupDestination.Enabled &&
+                item.BackupDestination.Kind == "s3" &&
+                item.BackupDestination.FailureDomain == destination.FailureDomain &&
+                item.BackupDestination.SettingsJson == destination.SettingsJson &&
+                item.BackupDestination.ProtectedSecrets == destination.ProtectedSecrets)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(item => item.Enabled, true)
+                .SetProperty(item => item.Draining, false), token);
+        if (changed == 0)
+            return Problem("Маршрут или policy изменились; обновите список маршрутов.", statusCode: 409);
+        return NoContent();
+    }
+
     /// <summary>Возвращает страницу истории и актуальную доступность локальных encrypted-файлов.</summary>
     [HttpGet("backups")]
     [ProducesResponseType<PagedResult<BackupFileResponse>>(StatusCodes.Status200OK)]
@@ -1312,6 +1366,9 @@ public sealed record BackupDestinationRouteResponse(
 
 /// <summary>Оптимистическая проверка версии policy перед переводом маршрута в draining.</summary>
 public sealed record DrainBackupRouteRequest(int ExpectedPolicyVersion);
+
+/// <summary>Явное подтверждение версии policy перед возвратом PUT route.</summary>
+public sealed record ActivateBackupRouteRequest(int ExpectedPolicyVersion);
 
 /// <summary>Write-only конфигурация нового S3 назначения без активации маршрута.</summary>
 public sealed record CreateS3BackupDestinationRequest(
