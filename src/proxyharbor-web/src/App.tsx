@@ -1001,19 +1001,19 @@ function AdminBackupDestinations(){
   const [data,setData]=useState<PagedResult<BackupDestinationOverview>|null>(null)
   const [loading,setLoading]=useState(true)
   const [error,setError]=useState('')
-  const [drainTarget,setDrainTarget]=useState<{destination:BackupDestinationOverview;route:BackupDestinationRoute}|null>(null)
-  const [drainBusy,setDrainBusy]=useState(false)
-  const [drainError,setDrainError]=useState('')
+  const [routeAction,setRouteAction]=useState<{destination:BackupDestinationOverview;route:BackupDestinationRoute;kind:'drain'|'activate'}|null>(null)
+  const [routeBusy,setRouteBusy]=useState(false)
+  const [routeError,setRouteError]=useState('')
   const [provisionMode,setProvisionMode]=useState<'destination'|'pool'|null>(null)
   const [provisionResult,setProvisionResult]=useState<BackupProvisioningResult|null>(null)
   const provisionTrigger=useRef<HTMLButtonElement|null>(null)
-  const drainTrigger=useRef<HTMLButtonElement|null>(null)
-  const drainCancel=useRef<HTMLButtonElement|null>(null)
-  useEffect(()=>{if(drainTarget)drainCancel.current?.focus()},[drainTarget])
-  const closeDrain=()=>{
-    setDrainTarget(null)
-    setDrainError('')
-    drainTrigger.current?.focus()
+  const routeTrigger=useRef<HTMLButtonElement|null>(null)
+  const routeCancel=useRef<HTMLButtonElement|null>(null)
+  useEffect(()=>{if(routeAction)routeCancel.current?.focus()},[routeAction])
+  const closeRouteAction=()=>{
+    setRouteAction(null)
+    setRouteError('')
+    routeTrigger.current?.focus()
   }
   const closeProvision=()=>{setProvisionMode(null);provisionTrigger.current?.focus()}
   const savedProvision=(result:BackupProvisioningResult)=>{
@@ -1023,20 +1023,21 @@ function AdminBackupDestinations(){
     setRefresh(value=>value+1)
     provisionTrigger.current?.focus()
   }
-  const drain=async()=>{
-    if(!drainTarget)return
-    setDrainBusy(true)
-    setDrainError('')
-    const {destination,route}=drainTarget
+  const changeRoute=async()=>{
+    if(!routeAction)return
+    setRouteBusy(true)
+    setRouteError('')
+    const {destination,route,kind}=routeAction
     try{
-      const response=await fetch(`${API}/api/v1/admin/backups/pools/${route.poolId}/routes/${destination.id}/drain`,{method:'POST',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({expectedPolicyVersion:route.policyVersion})})
-      if(!response.ok)throw new Error(await responseMessage(response,'Не удалось перевести маршрут в draining'))
-      setData(current=>current&&({...current,items:current.items.map(item=>item.id===destination.id?{...item,routes:item.routes.map(value=>value.poolId===route.poolId?{...value,enabled:false,draining:true}:value)}:item)}))
-      setDrainTarget(null)
+      const fallback=kind==='drain'?'Не удалось перевести маршрут в draining':'Не удалось включить маршрут'
+      const response=await fetch(`${API}/api/v1/admin/backups/pools/${route.poolId}/routes/${destination.id}/${kind}`,{method:'POST',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({expectedPolicyVersion:route.policyVersion})})
+      if(!response.ok)throw new Error(await responseMessage(response,fallback))
+      setData(current=>current&&({...current,items:current.items.map(item=>item.id===destination.id?{...item,routes:item.routes.map(value=>value.poolId===route.poolId?{...value,enabled:kind==='activate',draining:kind==='drain'}:value)}:item)}))
+      setRouteAction(null)
       document.getElementById(`backup-destination-${destination.id}`)?.focus()
       setRefresh(value=>value+1)
-    }catch(reason){setDrainError(reason instanceof Error?reason.message:'Не удалось перевести маршрут в draining')}
-    finally{setDrainBusy(false)}
+    }catch(reason){setRouteError(reason instanceof Error?reason.message:'Не удалось изменить маршрут')}
+    finally{setRouteBusy(false)}
   }
   useEffect(()=>{
     const controller=new AbortController()
@@ -1067,8 +1068,8 @@ function AdminBackupDestinations(){
     {loading&&!data?<p className="empty-state">Загружаем назначения…</p>:data?.items.length===0?<p className="empty-state">Назначения пока не настроены. Это не подтверждает внешнюю защиту backup.</p>:<div className="backup-destination-list">{data?.items.map(destination=><article key={destination.id}>
       <div className="backup-destination-heading"><div><b id={`backup-destination-${destination.id}`} tabIndex={-1}>{destination.name}</b><small>{destination.kind==='s3'?'S3':destination.kind==='telegram'?'Telegram':'Неизвестный тип'} · приоритет {destination.priority} · {destination.failureDomainConfigured?'граница отказа задана':'граница отказа не задана'} · {destination.credentialsConfigured?'ключи сохранены':'ключи не сохранены'}</small></div><span className={destination.enabled?'state-pill active':'state-pill'}>{destination.enabled?'Включено':'Выключено'}</span></div>
       <p>Последний исход: {outcomeText(destination.lastOutcome)}{destination.lastOutcome&&<> · <time dateTime={destination.lastOutcome.observedAt}>{formatDateTime(destination.lastOutcome.observedAt)}</time></>}</p>
-      {destination.routes.length===0?<p>Не входит ни в один pool.</p>:<ul>{destination.routes.map(route=><li key={route.poolId}><b>{route.poolName}</b><span>v{route.policyVersion} · quorum {route.requiredVerifiedCopies}/{route.desiredVerifiedCopies} · {route.role} · {route.allowedOperations} · {route.draining?'draining':route.enabled?'маршрут включён':'маршрут выключен'}</span>{route.enabled&&!route.draining&&route.poolId!==LEGACY_BACKUP_POOL_ID&&<button type="button" className="table-action danger" aria-expanded={drainTarget?.destination.id===destination.id&&drainTarget.route.poolId===route.poolId} aria-controls={drainTarget?.destination.id===destination.id&&drainTarget.route.poolId===route.poolId?'backup-drain-confirm':undefined} onClick={event=>{drainTrigger.current=event.currentTarget;setDrainError('');setDrainTarget({destination,route})}}><ShieldOff width={15} height={15}/>Перевести в draining: {route.poolName}</button>}</li>)}</ul>}
-      {drainTarget?.destination.id===destination.id&&<div id="backup-drain-confirm" className="source-delete-confirm backup-drain-confirm" role="group" aria-labelledby="backup-drain-title" onKeyDown={event=>{if(event.key==='Escape'&&!drainBusy){event.preventDefault();closeDrain()}}}><div><b id="backup-drain-title">Остановить новые записи в {drainTarget.route.poolName}?</b><p>Маршрут перейдёт в draining. Чтение уже существующих копий сохранится, но начатая загрузка может завершиться. Перед действием проверьте остальные маршруты и quorum.</p>{drainError&&<p className="backup-destination-error" role="alert">{drainError}</p>}</div><button ref={drainCancel} type="button" className="secondary-admin-button" disabled={drainBusy} onClick={closeDrain}>Отмена</button><button type="button" className="danger" disabled={drainBusy} onClick={()=>void drain()}>{drainBusy?'Переводим…':'Подтвердить draining'}</button></div>}
+      {destination.routes.length===0?<p>Не входит ни в один pool.</p>:<ul>{destination.routes.map(route=><li key={route.poolId}><b>{route.poolName}</b><span>v{route.policyVersion} · quorum {route.requiredVerifiedCopies}/{route.desiredVerifiedCopies} · {route.role} · {route.allowedOperations} · {route.draining?'draining':route.enabled?'маршрут включён':'маршрут выключен'}</span>{route.enabled&&!route.draining&&route.poolId!==LEGACY_BACKUP_POOL_ID&&<button type="button" className="table-action danger" aria-expanded={routeAction?.destination.id===destination.id&&routeAction.route.poolId===route.poolId} aria-controls={routeAction?.destination.id===destination.id&&routeAction.route.poolId===route.poolId?'backup-route-confirm':undefined} onClick={event=>{routeTrigger.current=event.currentTarget;setRouteError('');setRouteAction({destination,route,kind:'drain'})}}><ShieldOff width={15} height={15}/>Перевести в draining: {route.poolName}</button>}{destination.enabled&&route.draining&&route.poolId!==LEGACY_BACKUP_POOL_ID&&route.allowedOperations.split(',').includes('put')&&<button type="button" className="table-action" aria-expanded={routeAction?.destination.id===destination.id&&routeAction.route.poolId===route.poolId} aria-controls={routeAction?.destination.id===destination.id&&routeAction.route.poolId===route.poolId?'backup-route-confirm':undefined} onClick={event=>{routeTrigger.current=event.currentTarget;setRouteError('');setRouteAction({destination,route,kind:'activate'})}}><ShieldCheck width={15} height={15}/>Включить маршрут: {route.poolName}</button>}</li>)}</ul>}
+      {routeAction?.destination.id===destination.id&&<div id="backup-route-confirm" className={`source-delete-confirm backup-drain-confirm${routeAction.kind==='activate'?' backup-route-activate-confirm':''}`} role="group" aria-labelledby="backup-route-title" onKeyDown={event=>{if(event.key==='Escape'&&!routeBusy){event.preventDefault();closeRouteAction()}}}><div><b id="backup-route-title">{routeAction.kind==='drain'?`Остановить новые записи в ${routeAction.route.poolName}?`:`Включить новые записи в ${routeAction.route.poolName}?`}</b><p>{routeAction.kind==='drain'?'Маршрут перейдёт в draining. Чтение уже существующих копий сохранится, но начатая загрузка может завершиться. Перед действием проверьте остальные маршруты и quorum.':'Маршрут снова разрешит новые PUT, если этот pool используется. Локальная проверка ключей не подтверждает права или доступность S3: сначала выполните provider canary и проверьте quorum.'}</p>{routeError&&<p className="backup-destination-error" role="alert">{routeError}</p>}</div><button ref={routeCancel} type="button" className="secondary-admin-button" disabled={routeBusy} onClick={closeRouteAction}>Отмена</button><button type="button" className={routeAction.kind==='drain'?'danger':'primary-admin-button'} disabled={routeBusy} onClick={()=>void changeRoute()}>{routeBusy?'Сохраняем…':routeAction.kind==='drain'?'Подтвердить draining':'Подтвердить включение'}</button></div>}
     </article>)}</div>}
     {data&&data.total>data.pageSize&&<ProxyPagination page={page} pageSize={pageSize} total={data.total} totalPages={Math.max(1,Math.ceil(data.total/pageSize))} onPageChange={setPage} onPageSizeChange={size=>{setPageSize(size);setPage(1)}}/>}
     {provisionMode&&<AdminBackupProvisioning mode={provisionMode} apiBase={API} onClose={closeProvision} onSaved={savedProvision}/>}
