@@ -1193,6 +1193,87 @@ public sealed class BackupDeliveryWorkerIntegrationTests
         }
     }
 
+    [Theory]
+    [Trait("Category", "PostgresIntegration")]
+    [InlineData("disabled-route")]
+    [InlineData("disabled-destination")]
+    [InlineData("no-verify-route")]
+    [InlineData("same-domain")]
+    public async Task CatchUpPrioritizesUnderprotectedRunWithIneligibleVerifiedCopy(string scenario)
+    {
+        var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
+        if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
+
+        var schema = $"proxyharbor_catchup_priority_{Guid.NewGuid():N}";
+        var builder = new NpgsqlConnectionStringBuilder(baseConnectionString) { SearchPath = schema };
+        await using var admin = new NpgsqlConnection(baseConnectionString);
+        await admin.OpenAsync();
+        await using (var create = new NpgsqlCommand($"CREATE SCHEMA \"{schema}\"", admin))
+            await create.ExecuteNonQueryAsync();
+        try
+        {
+            var factory = await CreateFactoryAsync(builder.ConnectionString);
+            var registry = Registry(new SuccessfulAdapter("s3"), new SuccessfulAdapter("telegram"));
+            var planner = new BackupCatchUpPlanner(factory, registry, new BackupDeliveryPlanner(registry));
+            Guid underprotectedRunId;
+            Guid newerRunId;
+            await using (var db = await factory.CreateDbContextAsync())
+            {
+                var pool = Pool();
+                pool.RequiredVerifiedCopies = 2;
+                pool.DesiredVerifiedCopies = 3;
+                var older = Run(pool.Id, new string('a', 64), "older.phbackup");
+                older.StartedAt = DateTimeOffset.UtcNow.AddDays(-2);
+                older.RequiredVerifiedCopies = 2;
+                older.DesiredVerifiedCopies = 3;
+                var newer = Run(pool.Id, new string('b', 64), "newer.phbackup");
+                newer.StartedAt = DateTimeOffset.UtcNow.AddDays(-1);
+                newer.RequiredVerifiedCopies = 2;
+                newer.DesiredVerifiedCopies = 3;
+                var source = Destination("source", "domain-a", 10);
+                var disabled = Destination("disabled", "domain-b", 20);
+                if (scenario == "disabled-destination") disabled.Enabled = false;
+                if (scenario == "same-domain") disabled.FailureDomain = " DOMAIN-A ";
+                var second = Destination("second", "domain-c", 30);
+                var target = Destination("target", "domain-d", 40);
+                var disabledRoute = Route(pool.Id, disabled.Id, 20);
+                if (scenario == "disabled-route") disabledRoute.Enabled = false;
+                if (scenario == "no-verify-route") disabledRoute.AllowedOperations = "read";
+                db.AddRange(pool, older, newer, source, disabled, second, target,
+                    Route(pool.Id, source.Id, 10), disabledRoute,
+                    Route(pool.Id, second.Id, 30), Route(pool.Id, target.Id, 40));
+                foreach (var (run, destination, locator) in new[]
+                {
+                    (older, source, "source/older.phbackup"),
+                    (older, disabled, "disabled/older.phbackup"),
+                    (newer, source, "source/newer.phbackup"),
+                    (newer, second, "second/newer.phbackup")
+                })
+                {
+                    var copy = Copy(run.Id, destination.Id, run.ContentSha256!);
+                    copy.State = "verified";
+                    copy.VerifiedAt = DateTimeOffset.UtcNow;
+                    copy.NativeLocator = locator;
+                    db.BackupCopies.Add(copy);
+                }
+                await db.SaveChangesAsync();
+                underprotectedRunId = older.Id;
+                newerRunId = newer.Id;
+            }
+
+            Assert.Equal(1, await planner.TryPlanAsync(false, CancellationToken.None));
+            await using var verify = await factory.CreateDbContextAsync();
+            var created = await verify.BackupCopies.SingleAsync(copy => copy.State == "planned");
+            Assert.Equal(underprotectedRunId, created.BackupRunId);
+            Assert.NotEqual(newerRunId, created.BackupRunId);
+        }
+        finally
+        {
+            await using var drop = new NpgsqlCommand($"DROP SCHEMA IF EXISTS \"{schema}\" CASCADE", admin);
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
+
     [Fact]
     [Trait("Category", "PostgresIntegration")]
     public async Task PrePutFailureRearmsOnceAcrossReplicasAndStopsAtDurableCap()
