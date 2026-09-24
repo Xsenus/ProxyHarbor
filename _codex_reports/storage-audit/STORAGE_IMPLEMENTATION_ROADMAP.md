@@ -269,7 +269,7 @@ Requires separate owner authorization for external writes/production. Covers REQ
 
 #### TASK-060 — Inventory and historical backfill dry-run
 
-- Status: `PARTIAL: read-only v7-compatible local/BackupRuns inventory CLI; remote mapping, signed historical catalog, backfill and production run remain blocked by STG-04 and operator approval; one isolated test S3 bucket is not a second independent destination`; Codex/operator.
+- Status: `PARTIAL: read-only v7-compatible local/BackupRuns inventory CLI with optional ciphertext SHA-256; remote mapping, signed historical catalog, backfill and production run remain blocked by STG-04 and operator approval; one isolated test S3 bucket is not a second independent destination`; Codex/operator.
 - Inputs: local archive inventory, legacy `BackupRuns`, remote provider inventory only under explicit permission.
 - Steps: scan → map BackupId/hash/locator → classify unknown/orphan/conflict → create shadow copy rows → dry-run copy plan → checkpoint. No delete. Capture changes during backfill via jobs; rerun delta.
 - Verification: counts/bytes/hash by destination, newest retention window protected, B-only catalog, resume after interruption.
