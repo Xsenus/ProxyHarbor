@@ -46,6 +46,15 @@ public sealed class BackupUpgradeMigrationIntegrationTests
                     """);
             }
 
+            var legacyInventory = await BackupInventoryApplication.ReadLegacyRunsAsync(
+                builder.ConnectionString, CancellationToken.None);
+            var legacyRun = Assert.Single(legacyInventory);
+            Assert.Equal(Guid.Parse("00000000-0000-4000-8000-000000000001"), legacyRun.Id);
+            Assert.Equal("proxyharbor-synthetic.phbackup", legacyRun.FileName);
+            Assert.Equal(17, legacyRun.SizeBytes);
+            Assert.True(legacyRun.SentToTelegram);
+            Assert.False(legacyRun.SentToObjectStorage);
+
             await using (var upgrade = new ProxyHarborDbContext(options))
                 await upgrade.Database.MigrateAsync();
 
