@@ -286,7 +286,7 @@ Requires separate owner authorization for external writes/production. Covers REQ
 
 #### TASK-062 — Isolated full restore drill and SLO measurement
 
-- Status: `BLOCKED: production still writes incomplete PHB3 v7 (EVID-091); first an owner-approved additive flag-off deployment must produce a new v9 archive, then independent escrow of that archive/catalog/keys, isolated PostgreSQL target and explicit approval for transfer are needed`; owner/operator. Synthetic TASK-061 protocol canary alone does not clear this gate.
+- Status: `BLOCKED: production still writes incomplete PHB3 v7 (EVID-091); CLI now has an explicit host/port/database guard for the isolated restore target, but first an owner-approved additive flag-off deployment must produce a new v9 archive, then independent escrow of that archive/catalog/keys, isolated PostgreSQL target and explicit approval for transfer are needed`; owner/operator. Synthetic TASK-061 protocol canary alone does not clear this gate.
 - Steps: take latest complete v9 prod-approved copy; start isolated DB/app; retrieve without production DB catalog; restore; provide DP keys/secret refs through approved channel; assert every sentinel/invariant; login/API token/payment/Telegram config behavior; create a new protected backup; destroy isolated environment per approved procedure.
 - Measure: snapshot completion→verified copy (RPO evidence), retrieval+restore+smoke (RTO), copy lag, resource usage. No customer notification/payment calls.
 - Stop: missing data/key, decrypt failure, stale copy, business invariant, cleanup incident.
