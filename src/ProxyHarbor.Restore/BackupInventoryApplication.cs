@@ -1,4 +1,5 @@
 using System.Data;
+using System.Security.Cryptography;
 using System.Text.Json;
 using Npgsql;
 using ProxyHarbor.Infrastructure;
@@ -17,11 +18,13 @@ internal static class BackupInventoryApplication
     internal const string Help = """
         ProxyHarbor inventory — read-only comparison of BackupRuns and local PHB3 files.
 
-          inventory --backups-directory <existing-absolute-directory>
+          inventory --backups-directory <existing-absolute-directory> [--hash-ciphertext]
 
         Requires ConnectionStrings__Postgres; password may be supplied via
         SecretFiles__PostgresPassword. Prints JSON to stdout; no file or DB writes.
-        A name/size match does not verify ciphertext, decryption, restore or remote copies.
+        --hash-ciphertext reads canonical local PHB3 files and reports their SHA-256.
+        Without a trusted earlier reference, that hash does not verify the archive.
+        Neither mode proves decryption, restore or remote copies.
         """;
 
     internal static async Task<int> RunAsync(string[] args, CancellationToken token)
@@ -33,7 +36,8 @@ internal static class BackupInventoryApplication
                 Console.WriteLine(Help);
                 return 0;
             }
-            if (args.Length != 2 || args[0] != "--backups-directory" ||
+            if (args.Length is not (2 or 3) || args[0] != "--backups-directory" ||
+                (args.Length == 3 && args[2] != "--hash-ciphertext") ||
                 !Path.IsPathFullyQualified(args[1]) || !Directory.Exists(args[1]))
                 throw new ArgumentException("Invalid inventory options.");
 
@@ -44,7 +48,7 @@ internal static class BackupInventoryApplication
                 throw new ArgumentException("Missing database configuration.");
 
             var runs = await ReadLegacyRunsAsync(connectionString, token);
-            var files = ReadLocalFiles(args[1]);
+            var files = await ReadLocalFilesAsync(args[1], args.Length == 3, token);
             var report = Analyze(runs, files);
             Console.WriteLine(JsonSerializer.Serialize(report, JsonOptions));
             return 0;
@@ -90,14 +94,39 @@ internal static class BackupInventoryApplication
         return runs;
     }
 
-    internal static IReadOnlyList<LocalBackupFile> ReadLocalFiles(string directory)
+    internal static async Task<IReadOnlyList<LocalBackupFile>> ReadLocalFilesAsync(
+        string directory, bool hashCiphertext, CancellationToken token)
     {
         var files = new List<LocalBackupFile>();
         foreach (var file in new DirectoryInfo(directory).EnumerateFiles("*.phbackup", SearchOption.TopDirectoryOnly))
         {
+            token.ThrowIfCancellationRequested();
             // Never dereference reparse points (including symlinks outside the backup volume).
             var isLink = (file.Attributes & FileAttributes.ReparsePoint) != 0;
-            files.Add(new LocalBackupFile(file.Name, isLink ? null : file.Length));
+            if (isLink)
+            {
+                files.Add(new LocalBackupFile(file.Name, null));
+                if (files.Count > 100000)
+                    throw new InvalidOperationException("Inventory file limit exceeded.");
+                continue;
+            }
+            var size = file.Length;
+            string? sha256 = null;
+            if (hashCiphertext && BackupService.TryResolvePublishedBackupPath(directory, file.Name, out _))
+            {
+                var lastWrite = file.LastWriteTimeUtc;
+                await using var input = new FileStream(file.FullName, FileMode.Open,
+                    FileAccess.Read, FileShare.Read, 64 * 1024,
+                    FileOptions.Asynchronous | FileOptions.SequentialScan);
+                if (input.Length != size || (File.GetAttributes(file.FullName) & FileAttributes.ReparsePoint) != 0)
+                    throw new IOException("Backup file changed during inventory.");
+                sha256 = Convert.ToHexStringLower(await SHA256.HashDataAsync(input, token));
+                file.Refresh();
+                if (file.Length != size || file.LastWriteTimeUtc != lastWrite ||
+                    (file.Attributes & FileAttributes.ReparsePoint) != 0)
+                    throw new IOException("Backup file changed during inventory.");
+            }
+            files.Add(new LocalBackupFile(file.Name, size, sha256));
             if (files.Count > 100000)
                 throw new InvalidOperationException("Inventory file limit exceeded.");
         }
@@ -132,14 +161,21 @@ internal static class BackupInventoryApplication
             .Select(file => file.Name).Order(StringComparer.Ordinal).ToArray();
         var ignoredFiles = files.Count(file =>
             !BackupService.TryResolvePublishedBackupPath(Path.GetTempPath(), file.Name, out _));
-        return new BackupInventoryReport("metadata-only-unverified", entries, orphanFiles, ignoredFiles);
+        var hashes = files.Where(file => file.Sha256 is not null &&
+                BackupService.TryResolvePublishedBackupPath(Path.GetTempPath(), file.Name, out _))
+            .Select(file => new CiphertextHash(file.Name, file.SizeBytes!.Value, file.Sha256!))
+            .OrderBy(file => file.FileName, StringComparer.Ordinal).ToArray();
+        return new BackupInventoryReport(
+            hashes.Length == 0 ? "metadata-only-unverified" : "local-ciphertext-hashes-unverified",
+            entries, orphanFiles, ignoredFiles, hashes);
     }
 }
 
 internal sealed record LegacyBackupRun(Guid Id, string Status, string? FileName,
     long SizeBytes, bool SentToTelegram, bool SentToObjectStorage);
-internal sealed record LocalBackupFile(string Name, long? SizeBytes);
+internal sealed record LocalBackupFile(string Name, long? SizeBytes, string? Sha256 = null);
 internal sealed record BackupInventoryEntry(Guid RunId, string? FileName, string State,
     bool SentToTelegram, bool SentToObjectStorage);
+internal sealed record CiphertextHash(string FileName, long SizeBytes, string Sha256);
 internal sealed record BackupInventoryReport(string Assurance, BackupInventoryEntry[] Runs,
-    string[] OrphanFiles, int IgnoredFiles);
+    string[] OrphanFiles, int IgnoredFiles, CiphertextHash[] CiphertextHashes);

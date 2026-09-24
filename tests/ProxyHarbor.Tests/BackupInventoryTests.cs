@@ -39,6 +39,7 @@ public sealed class BackupInventoryTests
         Assert.Equal("not-completed", report.Runs[8].State);
         Assert.Equal([orphan], report.OrphanFiles);
         Assert.Equal(1, report.IgnoredFiles);
+        Assert.Empty(report.CiphertextHashes);
     }
 
     [Fact]
@@ -48,6 +49,61 @@ public sealed class BackupInventoryTests
         var report = BackupInventoryApplication.Analyze(
             [Run(name, 10)], [new LocalBackupFile(name, 10)]);
         Assert.Equal("name-size-match-unverified", Assert.Single(report.Runs).State);
+        Assert.Empty(report.CiphertextHashes);
+    }
+
+    [Fact]
+    public async Task OptionalHashReadsOnlyCanonicalLocalCiphertext()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"proxyharbor-inventory-test-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            const string name = "proxyharbor-20260924-123456-1234.phbackup";
+            await File.WriteAllBytesAsync(Path.Combine(directory, name), "abc"u8.ToArray());
+            await File.WriteAllBytesAsync(Path.Combine(directory, "other.phbackup"), "secret"u8.ToArray());
+
+            var files = await BackupInventoryApplication.ReadLocalFilesAsync(
+                directory, true, CancellationToken.None);
+            var report = BackupInventoryApplication.Analyze([Run(name, 3)], files);
+
+            Assert.Equal("local-ciphertext-hashes-unverified", report.Assurance);
+            Assert.Equal("name-size-match-unverified", Assert.Single(report.Runs).State);
+            var hash = Assert.Single(report.CiphertextHashes);
+            Assert.Equal(name, hash.FileName);
+            Assert.Equal(3, hash.SizeBytes);
+            Assert.Equal("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", hash.Sha256);
+            Assert.Equal(1, report.IgnoredFiles);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task HashModeSkipsSymbolicLinks()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        var directory = Path.Combine(Path.GetTempPath(), $"proxyharbor-inventory-link-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var target = Path.Combine(directory, "private.txt");
+            await File.WriteAllBytesAsync(target, "secret"u8.ToArray());
+            var link = Path.Combine(directory, "proxyharbor-20260924-123456-1234.phbackup");
+            File.CreateSymbolicLink(link, target);
+
+            var files = await BackupInventoryApplication.ReadLocalFilesAsync(
+                directory, true, CancellationToken.None);
+            var file = Assert.Single(files);
+            Assert.Null(file.SizeBytes);
+            Assert.Null(file.Sha256);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
     }
 
     private static LegacyBackupRun Run(string? name, long bytes, string status = "completed") =>
