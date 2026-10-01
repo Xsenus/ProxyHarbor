@@ -42,10 +42,12 @@ public sealed class S3BackupObjectStorageTransport : IBackupObjectStorageTranspo
 
         using var client = clientFactory(options);
         var request = CreatePutRequest(file, key, hash, options.ObjectStorageBucket!);
-        var put = await ExecuteProviderAsync(
-            BackupDestinationOperation.Put,
-            () => client.PutObjectAsync(request, token),
-            token);
+        var put = file.Length > 64L * 1024 * 1024
+            ? await UploadMultipartAsync(client, file, key, hash, options.ObjectStorageBucket!, token)
+            : await ExecuteProviderAsync(
+                BackupDestinationOperation.Put,
+                () => client.PutObjectAsync(request, token),
+                token);
         BackupObjectStorageVerificationResult verified;
         try
         {
@@ -96,6 +98,82 @@ public sealed class S3BackupObjectStorageTransport : IBackupObjectStorageTranspo
         request.Metadata["sha256"] = hash;
         request.Metadata["format"] = "PHB3";
         return request;
+    }
+
+    internal static async Task<PutObjectResponse> UploadMultipartAsync(
+        AmazonS3Client client, FileInfo file, string key, string hash, string bucket,
+        CancellationToken token)
+    {
+        const int partSize = 16 * 1024 * 1024;
+        if (file.Length > 10_000L * partSize)
+            throw Failure(BackupDestinationErrorCode.InvalidConfiguration,
+                BackupDestinationFailureDisposition.Permanent, "Backup превышает multipart limit.");
+        var initiate = new InitiateMultipartUploadRequest
+        {
+            BucketName = bucket, Key = key, ContentType = "application/octet-stream",
+            ChecksumAlgorithm = ChecksumAlgorithm.SHA256, ChecksumType = ChecksumType.COMPOSITE
+        };
+        initiate.Metadata["sha256"] = hash;
+        initiate.Metadata["format"] = "PHB3";
+        var started = await ExecuteProviderAsync(BackupDestinationOperation.Put,
+            () => client.InitiateMultipartUploadAsync(initiate, token), token);
+        try
+        {
+            var parts = new List<PartETag>();
+            var buffer = new byte[partSize];
+            await using var input = file.OpenRead();
+            while (input.Position < input.Length)
+            {
+                var count = (int)Math.Min(partSize, input.Length - input.Position);
+                await input.ReadExactlyAsync(buffer.AsMemory(0, count), token);
+                var checksum = Convert.ToBase64String(SHA256.HashData(buffer.AsSpan(0, count)));
+                using var body = new MemoryStream(buffer, 0, count, writable: false);
+                var number = parts.Count + 1;
+                var response = await ExecuteProviderAsync(BackupDestinationOperation.Put,
+                    () => client.UploadPartAsync(new UploadPartRequest
+                    {
+                        BucketName = bucket, Key = key, UploadId = started.UploadId,
+                        PartNumber = number, PartSize = count, InputStream = body,
+                        ChecksumSHA256 = checksum
+                    }, token), token);
+                parts.Add(new PartETag
+                {
+                    PartNumber = number, ETag = response.ETag, ChecksumSHA256 = checksum
+                });
+            }
+            var result = await ExecuteProviderAsync(BackupDestinationOperation.Put,
+                () => client.CompleteMultipartUploadAsync(new CompleteMultipartUploadRequest
+                {
+                    BucketName = bucket, Key = key, UploadId = started.UploadId,
+                    PartETags = parts, IfNoneMatch = "*", ChecksumType = ChecksumType.COMPOSITE
+                }, token), token);
+            return new PutObjectResponse
+            {
+                VersionId = result.VersionId, ETag = result.ETag,
+                ChecksumSHA256 = result.ChecksumSHA256, HttpStatusCode = result.HttpStatusCode
+            };
+        }
+        catch
+        {
+            // Abort targets only this unfinished upload, never a published object.
+            // A cancelled caller must not prevent bounded cleanup.
+            using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+            try
+            {
+                await client.AbortMultipartUploadAsync(new AbortMultipartUploadRequest
+                {
+                    BucketName = bucket, Key = key, UploadId = started.UploadId
+                }, cleanup.Token);
+            }
+            catch (AmazonS3Exception exception) when (exception.ErrorCode == "NoSuchUpload") { }
+            catch (Exception)
+            {
+                throw Failure(BackupDestinationErrorCode.UnknownOutcome,
+                    BackupDestinationFailureDisposition.UnknownOutcome,
+                    "S3 multipart cleanup не подтверждён; требуется проверка незавершённых uploads.");
+            }
+            throw;
+        }
     }
 
     /// <inheritdoc />

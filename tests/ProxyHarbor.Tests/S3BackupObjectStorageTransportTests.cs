@@ -428,6 +428,121 @@ public sealed class S3BackupObjectStorageTransportTests
         return response;
     }
 
+    [Fact]
+    public async Task MultipartUploadBoundsPartsAndPreservesConditionalCompletionAndChecksums()
+    {
+        var path = Path.GetTempFileName();
+        try
+        {
+            await using (var file = File.OpenWrite(path)) file.SetLength(17 * 1024 * 1024);
+            using var client = new MultipartS3Client();
+            var hash = new string('a', 64);
+            var result = await S3BackupObjectStorageTransport.UploadMultipartAsync(
+                client, new FileInfo(path), "safe/archive.phbackup", hash, "private", CancellationToken.None);
+            Assert.Equal([16 * 1024 * 1024, 1024 * 1024], client.Sizes);
+            Assert.Equal(hash, client.Initiate!.Metadata["sha256"]);
+            Assert.Equal("PHB3", client.Initiate.Metadata["format"]);
+            Assert.Equal(ChecksumAlgorithm.SHA256, client.Initiate.ChecksumAlgorithm);
+            Assert.Equal("*", client.Complete!.IfNoneMatch);
+            Assert.Equal([1, 2], client.Complete.PartETags.Select(part => part.PartNumber));
+            Assert.All(client.Complete.PartETags, part => Assert.False(string.IsNullOrEmpty(part.ChecksumSHA256)));
+            Assert.Equal("version", result.VersionId);
+            Assert.Equal(0, client.AbortCalls);
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Theory]
+    [InlineData("part", BackupDestinationErrorCode.UnknownOutcome)]
+    [InlineData("complete", BackupDestinationErrorCode.Collision)]
+    [InlineData("cleanup", BackupDestinationErrorCode.UnknownOutcome)]
+    public async Task MultipartFailureAbortsOnlyItsUploadAndNeverDeletesObjects(
+        string failure, BackupDestinationErrorCode expected)
+    {
+        var path = Path.GetTempFileName();
+        try
+        {
+            await File.WriteAllBytesAsync(path, [1, 2, 3]);
+            using var client = new MultipartS3Client { Failure = failure };
+            var error = await Assert.ThrowsAsync<BackupDestinationOperationException>(() =>
+                S3BackupObjectStorageTransport.UploadMultipartAsync(client, new FileInfo(path),
+                    "safe/archive.phbackup", new string('a', 64), "private", CancellationToken.None));
+            Assert.Equal(expected, error.Failure.Code);
+            Assert.Equal(1, client.AbortCalls);
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
+    public async Task MultipartCancellationStillUsesIndependentCleanupToken()
+    {
+        var path = Path.GetTempFileName();
+        try
+        {
+            await File.WriteAllBytesAsync(path, [1]);
+            using var cancellation = new CancellationTokenSource();
+            using var client = new MultipartS3Client { CancelAfterInitiate = cancellation };
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                S3BackupObjectStorageTransport.UploadMultipartAsync(client, new FileInfo(path),
+                    "safe/archive.phbackup", new string('a', 64), "private", cancellation.Token));
+            Assert.Equal(1, client.AbortCalls);
+        }
+        finally { File.Delete(path); }
+    }
+
+    private sealed class MultipartS3Client() : AmazonS3Client(
+        new BasicAWSCredentials("fixture-access", "fixture-secret"),
+        new AmazonS3Config { ServiceURL = "https://s3.example.invalid" })
+    {
+        public string? Failure { get; init; }
+        public CancellationTokenSource? CancelAfterInitiate { get; init; }
+        public InitiateMultipartUploadRequest? Initiate { get; private set; }
+        public CompleteMultipartUploadRequest? Complete { get; private set; }
+        public List<int> Sizes { get; } = [];
+        public int AbortCalls { get; private set; }
+
+        public override Task<InitiateMultipartUploadResponse> InitiateMultipartUploadAsync(
+            InitiateMultipartUploadRequest request, CancellationToken cancellationToken = default)
+        {
+            Initiate = request;
+            CancelAfterInitiate?.Cancel();
+            return Task.FromResult(new InitiateMultipartUploadResponse { UploadId = "own-upload" });
+        }
+
+        public override async Task<UploadPartResponse> UploadPartAsync(
+            UploadPartRequest request, CancellationToken cancellationToken = default)
+        {
+            if (Failure is "part" or "cleanup") throw new IOException("provider interrupted");
+            Assert.Equal("own-upload", request.UploadId);
+            using var bytes = new MemoryStream();
+            await request.InputStream.CopyToAsync(bytes, cancellationToken);
+            Assert.Equal(Convert.ToBase64String(SHA256.HashData(bytes.ToArray())), request.ChecksumSHA256);
+            Sizes.Add((int)bytes.Length);
+            return new UploadPartResponse { ETag = "part-etag" };
+        }
+
+        public override Task<CompleteMultipartUploadResponse> CompleteMultipartUploadAsync(
+            CompleteMultipartUploadRequest request, CancellationToken cancellationToken = default)
+        {
+            Complete = request;
+            Assert.Equal("own-upload", request.UploadId);
+            if (Failure == "complete")
+                throw new AmazonS3Exception("collision") { StatusCode = HttpStatusCode.PreconditionFailed };
+            return Task.FromResult(new CompleteMultipartUploadResponse { VersionId = "version" });
+        }
+
+        public override Task<AbortMultipartUploadResponse> AbortMultipartUploadAsync(
+            AbortMultipartUploadRequest request, CancellationToken cancellationToken = default)
+        {
+            AbortCalls++;
+            Assert.Equal("own-upload", request.UploadId);
+            Assert.Equal("safe/archive.phbackup", request.Key);
+            Assert.False(cancellationToken.IsCancellationRequested);
+            if (Failure == "cleanup") throw new IOException("cleanup interrupted");
+            return Task.FromResult(new AbortMultipartUploadResponse());
+        }
+    }
+
     private sealed class StubS3Client() : AmazonS3Client(
         new BasicAWSCredentials("fixture-access", "fixture-secret"),
         new AmazonS3Config { ServiceURL = "https://s3.example.invalid" })
