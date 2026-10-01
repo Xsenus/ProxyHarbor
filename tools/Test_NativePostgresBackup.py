@@ -165,6 +165,8 @@ class NativeBackupTests(unittest.TestCase):
             def dump(command, **kwargs):
                 if "pg_restore" not in command:
                     kwargs["stdout"].write(b"PGDMP-content")
+                else:
+                    self.assertEqual(os.read(kwargs["stdin"].fileno(), 5), b"PGDMP")
                 return subprocess_result
             subprocess_result = unittest.mock.Mock(returncode=0)
             with patch.object(native.subprocess, "run", side_effect=dump), patch.object(native.shutil, "disk_usage", return_value=unittest.mock.Mock(free=10 * 1024**3)):
