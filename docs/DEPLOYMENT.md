@@ -195,6 +195,43 @@ curl --fail https://proxy.example.com/health/ready
 При обычном обновлении уже работающей БД используйте тот же порядок и
 `up -d --build --no-deps api web`; это не пересоздаёт PostgreSQL.
 
+### Сборка на VPS с небольшим объёмом RAM
+
+Не запускайте параллельную сборку `api web restore` на production VPS с 2 ГБ RAM:
+компиляторы конкурируют с PostgreSQL и API, заполняют swap и вызывают тайм-ауты.
+Предпочтителен проверенный опубликованный release image. Если требуется локальная
+сборка уже прошедшего CI commit, собирайте сервисы последовательно в отдельном
+BuildKit-контейнере с лимитами. Пример для этого класса VPS:
+
+```bash
+docker buildx create --name proxyharbor-bounded --driver docker-container \
+  --driver-opt memory=700m,memory-swap=1400m,cpu-period=100000,cpu-quota=75000 \
+  --bootstrap
+revision="$(git rev-parse --verify HEAD)"
+docker buildx build --builder proxyharbor-bounded --load \
+  --build-arg VERSION=0.1.0 --build-arg SOURCE_REVISION="$revision" \
+  -f src/ProxyHarbor.Api/Dockerfile -t "proxyharbor-api:$revision" .
+# Затем отдельно соберите web и restore с их Dockerfile и соответствующими tags.
+docker buildx stop proxyharbor-bounded
+```
+
+Builder создаётся один раз; при повторном использовании проверяйте его лимиты
+через `docker inspect buildx_buildkit_proxyharbor-bounded0`. `memory-swap` задаёт
+суммарный лимит RAM и swap контейнера, но не создаёт swap на хосте. Следите за
+`free -m`, `docker stats`, свободным диском и `/health/ready` во время сборки;
+лимиты не заменяют достаточный запас ресурсов. Отключение SSH не гарантирует
+остановку удалённой сборки: после сбоя проверьте процессы и отмените только
+собственную точно идентифицированную операцию.
+
+Перед заменой сохраните прежние image IDs под rollback tags и проверьте
+предрелизный dump. После успешной сборки назначьте новые образы ожидаемым
+Compose tags и обновляйте `api`, затем `web` с теми же overlays, используя
+`up -d --no-build --no-deps --wait --wait-timeout 180 <service>`.
+Не включайте сборку повторно через `--build` и не пересоздавайте PostgreSQL.
+Проверьте health, публичный HTTP, отсутствие новых startup errors и свежую
+резервную копию с подтверждённой доставкой. Остановленный bounded builder
+сохраняет cache для следующей сборки, но не расходует RAM/CPU.
+
 ## Встроенный мониторинг
 
 Opt-in профиль запускает Prometheus с 30-дневным/10-ГБ bounded retention и Alertmanager с Telegram-маршрутом. До запуска задайте bot token и числовой chat ID (для group/channel обычно отрицательный):
