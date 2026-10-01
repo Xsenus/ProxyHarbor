@@ -233,7 +233,9 @@ def create_archive(config, directory):
             os.fsync(output.fileno())
         if result.returncode or not Path(partial).stat().st_size:
             raise BackupError("pg_dump_failed")
-        with open(partial, "rb") as source:
+        # A buffered header read may leave the underlying fd ahead of zero despite seek(0).
+        # pg_restore inherits the raw fd, not Python's buffer: use an unbuffered stream.
+        with open(partial, "rb", buffering=0) as source:
             if source.read(5) != b"PGDMP":
                 raise BackupError("not_postgresql_custom_archive")
             source.seek(0)
