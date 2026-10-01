@@ -38,6 +38,8 @@ Production запуск требует backup key и хотя бы один вн
 
 ### Настройка S3-совместимого хранилища
 
+Для архивов больше 64 МиБ используется multipart upload с последовательными частями по 16 МиБ и максимумом 10 000 частей. Каждая часть имеет SHA-256; итоговый объект сохраняет полный SHA-256 ciphertext в metadata. `CompleteMultipartUpload` использует `If-None-Match: *`, после чего HEAD проверяет размер и полный hash. При ошибке адресно отменяется только текущий unfinished upload; опубликованные объекты не удаляются. Неудачный cleanup остаётся явной ошибкой UNKNOWN и требует операторской проверки. Provider credentials должны разрешать initiate/upload/complete/abort multipart; застаревшие unfinished uploads желательно ограничивать bucket lifecycle отдельно. Conditional Complete необходимо проверять на конкретном provider.
+
 1. Создайте отдельный приватный bucket в российском регионе второго провайдера, включите versioning и retention/Object Lock.
 2. Создайте service account с минимальными правами `PutObject`, `HeadObject` и `GetObject` только на этот bucket/prefix. Чтение нужно для materialize и побайтной проверки подписанного sidecar; `DeleteObject` не требуется.
 3. В `/admin/backups` включите S3, укажите HTTPS endpoint, region, bucket, prefix и пару access/secret key. Для Yandex Object Storage endpoint — `https://storage.yandexcloud.net`, регион подписи — `ru-central1`.

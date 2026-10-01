@@ -19,7 +19,8 @@ FROM mcr.microsoft.com/dotnet/aspnet:10.0.12-noble@sha256:2d584d8147faddb0d678c5
 # Production crashed repeatedly inside Alpine's musl loader. The supported Ubuntu/glibc
 # runtime removes that native failure surface; curl provides the container healthcheck
 # and libgssapi is loaded by Npgsql during streamed PostgreSQL backups.
-RUN apt-get update && apt-get install -y --no-install-recommends curl libgssapi-krb5-2 && \
+# Install current Ubuntu security builds even when the pinned runtime contains older OpenSSL.
+RUN apt-get update && apt-get install -y --no-install-recommends curl libgssapi-krb5-2 libssl3t64 openssl && \
     rm -rf /var/lib/apt/lists/* && \
     groupadd --system --gid 101 proxyharbor && \
     useradd --system --uid 100 --gid 101 --home-dir /app --no-create-home --shell /usr/sbin/nologin proxyharbor && \
