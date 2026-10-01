@@ -1,0 +1,12 @@
+[Unit]
+Description=Daily ProxyHarbor native PostgreSQL backup
+
+[Timer]
+# Explicit UTC: 03:30 UTC equals 10:30 Asia/Novosibirsk.
+OnCalendar=*-*-* 03:30:00 UTC
+Persistent=true
+AccuracySec=1m
+Unit=proxyharbor-postgres-backup.service
+
+[Install]
+WantedBy=timers.target
