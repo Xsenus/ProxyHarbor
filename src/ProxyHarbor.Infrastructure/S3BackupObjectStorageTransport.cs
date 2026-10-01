@@ -110,8 +110,11 @@ public sealed class S3BackupObjectStorageTransport : IBackupObjectStorageTranspo
                 BackupDestinationFailureDisposition.Permanent, "Backup превышает multipart limit.");
         var initiate = new InitiateMultipartUploadRequest
         {
-            BucketName = bucket, Key = key, ContentType = "application/octet-stream",
-            ChecksumAlgorithm = ChecksumAlgorithm.SHA256, ChecksumType = ChecksumType.COMPOSITE
+            BucketName = bucket,
+            Key = key,
+            ContentType = "application/octet-stream",
+            ChecksumAlgorithm = ChecksumAlgorithm.SHA256,
+            ChecksumType = ChecksumType.COMPOSITE
         };
         initiate.Metadata["sha256"] = hash;
         initiate.Metadata["format"] = "PHB3";
@@ -132,25 +135,37 @@ public sealed class S3BackupObjectStorageTransport : IBackupObjectStorageTranspo
                 var response = await ExecuteProviderAsync(BackupDestinationOperation.Put,
                     () => client.UploadPartAsync(new UploadPartRequest
                     {
-                        BucketName = bucket, Key = key, UploadId = started.UploadId,
-                        PartNumber = number, PartSize = count, InputStream = body,
+                        BucketName = bucket,
+                        Key = key,
+                        UploadId = started.UploadId,
+                        PartNumber = number,
+                        PartSize = count,
+                        InputStream = body,
                         ChecksumSHA256 = checksum
                     }, token), token);
                 parts.Add(new PartETag
                 {
-                    PartNumber = number, ETag = response.ETag, ChecksumSHA256 = checksum
+                    PartNumber = number,
+                    ETag = response.ETag,
+                    ChecksumSHA256 = checksum
                 });
             }
             var result = await ExecuteProviderAsync(BackupDestinationOperation.Put,
                 () => client.CompleteMultipartUploadAsync(new CompleteMultipartUploadRequest
                 {
-                    BucketName = bucket, Key = key, UploadId = started.UploadId,
-                    PartETags = parts, IfNoneMatch = "*", ChecksumType = ChecksumType.COMPOSITE
+                    BucketName = bucket,
+                    Key = key,
+                    UploadId = started.UploadId,
+                    PartETags = parts,
+                    IfNoneMatch = "*",
+                    ChecksumType = ChecksumType.COMPOSITE
                 }, token), token);
             return new PutObjectResponse
             {
-                VersionId = result.VersionId, ETag = result.ETag,
-                ChecksumSHA256 = result.ChecksumSHA256, HttpStatusCode = result.HttpStatusCode
+                VersionId = result.VersionId,
+                ETag = result.ETag,
+                ChecksumSHA256 = result.ChecksumSHA256,
+                HttpStatusCode = result.HttpStatusCode
             };
         }
         catch
@@ -162,7 +177,9 @@ public sealed class S3BackupObjectStorageTransport : IBackupObjectStorageTranspo
             {
                 await client.AbortMultipartUploadAsync(new AbortMultipartUploadRequest
                 {
-                    BucketName = bucket, Key = key, UploadId = started.UploadId
+                    BucketName = bucket,
+                    Key = key,
+                    UploadId = started.UploadId
                 }, cleanup.Token);
             }
             catch (AmazonS3Exception exception) when (exception.ErrorCode == "NoSuchUpload") { }
