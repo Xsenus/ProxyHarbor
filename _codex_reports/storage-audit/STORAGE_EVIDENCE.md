@@ -105,6 +105,23 @@
 | EVID-099 | Restore CLI поддерживает необязательную точную сверку ожидаемых host/port/database целевой PostgreSQL до расшифровки PHB3 и любых операций с БД; изолированный DR-runbook требует её при выполнении дрилла. Частичные аргументы, неверный порт, multi-host и несовпадение отклоняются. | `RestoreOptions.Parse/Validate`; `RestoreOptionsTests`; `docs/ISOLATED_DR_DRILL.md`. | CODE/TEST | Focused 20/20, Release build 0 warnings, полный PostgreSQL-backed backend 1672/1672, format и профильные docs/backup contracts green. Первый полный прогон был прерван из-за ошибочного локального запуска тестовой PostgreSQL на 5432 вместо 55441; после исправления порта повтор прошёл. Guard сравнивает connection string, но не доказывает DNS/сетевую изоляцию или реальный DR; PR CI обязателен. | TASK-062, RISK-001/010 |
 | EVID-100 | При двух повторных draining/reactivation между захватом delivery job и PUT worker сохраняет типизированный pre-PUT отказ без отправки байтов; после каждого restart planner допускает только bounded rearm, а после окончательной активации новая job создаёт ровно одну verified copy. | `BackupDeliveryWorkerIntegrationTests.RepeatedDrainAndReactivationRearmClaimedCopyAcrossRestarts`; изолированная PostgreSQL 17 schema. | CODE/TEST | Focused PostgreSQL test 1/1, Release build без warnings, полный PostgreSQL-backed backend 1673/1673, format и профильные backup/changelog/canary contracts green. Локальный transport синтетический; PR CI обязателен. Это не доказывает real-provider failback, восстановление из production архива или полноту всей restart/flapping matrix. | TASK-034, TEST-008, RISK-019/020 |
 
+## Production checkpoint 2026-10-01
+
+| ID | Проверенное утверждение | Источник | Тип | Результат и ограничение |
+|---|---|---|---|---|
+| EVID-101 | Multipart S3 transport и совместимые dependency/security updates интегрированы в `main` (`7d8f050`, PR #327); открытых PR и дополнительных remote branches на момент проверки нет. | GitHub CI `36829045121`, PR CI `36828299629`, CodeQL `36828299613`; локальные проверки. | CODE/TEST | Release build без warnings, PostgreSQL-backed backend 1678/1678, frontend lint/131 tests/build, npm audit без vulnerabilities, format и профильные contracts пройдены. Major auto-merge не включался. |
+| EVID-102 | Параллельная production-сборка исчерпала RAM/swap и вызвала readiness/DB timeouts; API и web затем обновлены последовательной ограниченной сборкой. | VPS `free`, process list, Docker inspect/health, HTTP и API logs. | OPS | VPS имеет 1892 МБ RAM и 1023 МБ swap. Builder ограничен 700 MiB RAM, 1400 MiB RAM+swap и 0.75 CPU. Новые API/web healthy; публичные readiness, web и новый JS asset отвечают 200, admin без ключа — 401. PostgreSQL container создан 2026-09-11 и не пересоздавался. Старые image IDs сохранены как rollback tags; предрелизный dump полностью восстановлен в изолированную тестовую БД. |
+| EVID-103 | Штатный новый backup доставлен в HOSTKEY и Telegram; ciphertext прочитан обратно из S3 целиком. | Persisted backup audit `27b1be9d-6fc7-4df0-8ecc-26cef5ccf969`, независимые подписанные HEAD/GET. | PROVIDER/OPS | Запуск 07:53:25–07:57:48 UTC: `completed`, обе доставки true, error null, 157786391 bytes. Key `proxyharbor-backups/proxyharbor-20261001-075326-2501.phbackup`; SHA-256 `e1d2423d94b0c7bf997979a39417497afcab78e54dc01de861869b89e713150c` совпал у локального файла, HEAD metadata и GET. Расписание включено: 24 часа, локальная retention 7 дней, audit 365 дней. Первый будущий scheduled run ещё не наблюдался; remote retention delete не настроен. Routing/catalog publishing остаются выключены. |
+
+До этого checkpoint реальный диагностический PHB3 v9 из HOSTKEY был полностью
+восстановлен в изолированную PostgreSQL 18 без внешней сети: 1407589 proxies,
+546 sources, 5 users, 128 backup runs, 47 public tables, zero ephemeral leases.
+Два собственных diagnostic S3 objects и временная БД с её volume удалены;
+production objects/volumes и rollback dump сохранены. Это не независимый DR:
+encryption key взят с исходного VPS. Внешнее escrow encryption key и DP key ring,
+расшифровка защищённых integrations, login и failover остаются непроверенными;
+успешная S3-доставка не закрывает эти acceptance criteria.
+
 ## Выполненные команды
 
 | Команда/группа | Среда | Результат |
@@ -124,4 +141,8 @@
 | TASK-030 isolated PostgreSQL 17 integration | временный локальный cluster, затем остановлен и удалён | initial 94/97 exposed constraint inventory, SQL NULL and restore COPY regressions; fixed focused 3/3; full repeat 97/97 green. |
 | TASK-030 final local gate | локально | Release build 0 warnings; backend 1423/1423; format/EF drift, backup/docs/changelog/publication/workflow contracts, actionlint and full-history gitleaks green. |
 
-Эта исходная таблица команд фиксирует стартовый аудит и ранние checkpoints; позднейшие доказательства перечислены в EVID-036–092. Изолированный HOSTKEY NL S3 synthetic canary выполнен (EVID-086), VPS обследован только read-only (EVID-088/089/091), локальный synthetic schema-upgrade проверен (EVID-092), а container smoke прошёл в CI PR #309 (EVID-090). Реальный архив, Data Protection key ring и production rollout по-прежнему не проверены. Планируемые проверки следующих этапов не являются выполненными доказательствами.
+Эта исходная таблица команд фиксирует стартовый аудит и ранние checkpoints;
+позднейшие доказательства перечислены отдельно. Прежние ограничения production
+rollout и real-provider archive superseded только в объёме EVID-101–103 выше.
+Независимый DR и восстановление Data Protection integrations не подтверждены.
+Планируемые проверки следующих этапов не являются выполненными доказательствами.
