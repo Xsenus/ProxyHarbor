@@ -1,0 +1,35 @@
+[Unit]
+Description=ProxyHarbor private native PostgreSQL backup to S3
+Documentation=file:///opt/proxyharbor/docs/BACKUP_RESTORE.md
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/opt/proxyharbor
+ExecStart=/usr/bin/python3 /opt/proxyharbor/tools/NativePostgresBackup.py --config /opt/proxyharbor/.secrets/native_postgres_backup.json
+StateDirectory=proxyharbor-postgres-backups
+StateDirectoryMode=0700
+UMask=0077
+Nice=10
+IOSchedulingClass=idle
+MemoryMax=192M
+CPUQuota=50%
+TimeoutStartSec=1h
+TimeoutStopSec=150s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/proxyharbor-postgres-backups
+

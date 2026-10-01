@@ -32,6 +32,80 @@ Manifest v9 содержит согласованный repeatable-read snapshot
 
 ## Создание и доставка
 
+### Дополнительный native PostgreSQL `.backup`
+
+По явному opt-in оператора можно независимо от PHB3 включить
+`deploy/systemd/proxyharbor-postgres-backup.timer`. Он ежедневно в **03:30 UTC
+(10:30 Asia/Novosibirsk)** запускает `tools/NativePostgresBackup.py`: `pg_dump -Fc`
+в текущем PostgreSQL-контейнере создаёт согласованный custom-format архив всей
+БД, включая схему, индексы, constraints и данные. Это не переименованный PHB3.
+Для восстановления через PostgreSQL `pg_restore` или pgAdmin PHB3-ключ не нужен.
+Роли PostgreSQL уровня cluster, server configuration, серверные файлы, TLS,
+ключи шифрования и Data Protection key ring сюда не входят; protected integration
+values остаются ciphertext и требуют исходного key ring либо повторной настройки.
+
+Файл **не шифруется нашим приложением** и содержит чувствительные пользовательские
+и платёжные данные. Храните его только в закрытом S3 и в root-owned каталоге 0700;
+локальные `.backup` и metadata создаются с 0600. Перед записью данных скрипт
+выгружает случайный 32-byte privacy probe, проверяет signed GET и требует 403/404
+на anonymous GET, затем удаляет только этот probe. Это проверка доступа к точному
+объекту в момент запуска, не аудит всех bucket policies. Никаких public links не
+генерируется. Upload использует sequential multipart, SHA-256 частей и
+`If-None-Match: *` при Complete; окончательное подтверждение требует HEAD и полного
+GET SHA-256. При неоднозначном исходе PUT повтор вслепую не выполняется, а при
+ошибке abort-ится только собственный upload ID, не опубликованный объект.
+
+Конфигурация находится вне Git, в
+`/opt/proxyharbor/.secrets/native_postgres_backup.json`, owner root, mode 0600:
+
+```json
+{
+  "endpoint": "https://s3-nl.hostkey.com",
+  "region": "nl",
+  "bucket": "YOUR_PRIVATE_BUCKET",
+  "prefix": "proxyharbor-postgres-backups",
+  "access_key": "YOUR_ACCESS_KEY",
+  "secret_key": "YOUR_SECRET_KEY",
+  "container": "proxyharbor-postgres-1",
+  "directory": "/var/lib/proxyharbor-postgres-backups",
+  "allow_unencrypted": true,
+  "retention_days": 7,
+  "max_archive_bytes": 2147483648
+}
+```
+
+После проверки конфигурации и CI установите units и выполните:
+
+```bash
+install -m 0644 deploy/systemd/proxyharbor-postgres-backup.service /etc/systemd/system/
+install -m 0644 deploy/systemd/proxyharbor-postgres-backup.timer /etc/systemd/system/
+systemd-analyze verify /etc/systemd/system/proxyharbor-postgres-backup.service /etc/systemd/system/proxyharbor-postgres-backup.timer
+systemctl daemon-reload
+systemctl start proxyharbor-postgres-backup.service
+systemctl enable --now proxyharbor-postgres-backup.timer
+systemctl list-timers proxyharbor-postgres-backup.timer
+journalctl -u proxyharbor-postgres-backup.service --no-pager
+```
+
+Systemd создаёт private state directory, ограничивает uploader 192 MiB RAM,
+0.5 CPU и одним часом; `pg_dump` запускается внутри существующего PostgreSQL
+container и подчиняется **его**, а не uploader, ресурсным лимитам. Схема и данные
+production не меняются, контейнер не пересоздаётся. Exclusive lock исключает
+параллельные запуски. Перед dump требуется 3 GiB свободного диска; максимальный
+архив ограничен 2 GiB. `last-success.json` обновляется только после full GET.
+Локальная retention удаляет только собственные старые архивы с verified metadata
+и совпавшим hash; неуспешные/неподтверждённые копии остаются для диагностики.
+**S3 archives автоматически не удаляются**: для удалённой retention нужна отдельная
+согласованная policy. Проверяйте failed service, актуальность last-success и
+свободный диск; эта отдельная задача не входит в PHB3 admin history и его metrics.
+Успешный GET не заменяет изолированный полный restore drill.
+
+Восстанавливайте только в отдельную остановленную целевую БД, никогда не в живую
+production: например `pg_restore --exit-on-error --no-owner --no-acl --dbname=<isolated-target> <file.backup>`.
+Используйте PostgreSQL tooling той же или более новой версии, чем writer.
+После restore проверьте таблицы/счётчики и запуск приложения. Старые PHB3,
+Telegram delivery, rollback dumps и keys остаются без изменений.
+
 Snapshot сериализуется в ZIP-поток и сразу шифруется в PHB3: plaintext ZIP не записывается в backup volume. Результат проверяется и атомарно публикуется. При выключенном routing сохраняется прежняя последовательная S3/Telegram-доставка. При включённом routing completed snapshot и отдельные destination copies/jobs фиксируются одной PostgreSQL-транзакцией, а bounded worker повторно использует те же immutable bytes. S3 становится `verified` только после `PUT`+`HEAD` с совпавшими размером/SHA-256; Telegram delivery без independent verify не удовлетворяет protection quorum.
 
 Production запуск требует backup key и хотя бы один внешний канал: S3-совместимое хранилище либо активного получателя из CRM основного Telegram-бота. Для больших архивов S3 является основным каналом. Endpoint обязан быть HTTPS; bucket должен быть непубличным, с versioning и по возможности Object Lock. Access/secret key защищаются ASP.NET Core Data Protection и никогда не возвращаются в браузер. В legacy-режиме ошибка любого включённого канала завершает audit неуспешно. В routing-режиме отказ одного destination не блокирует jobs остальных; protection определяется verified independent copies, а не успехом всех каналов.

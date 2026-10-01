@@ -79,6 +79,8 @@ jobs:
         run: bash ./tools/Test-PredeployBackupRetention.sh
       - name: Verify private predeploy backup creation contracts
         run: bash ./tools/Test-PredeployBackupCreation.sh
+      - name: Verify native PostgreSQL backup safety and S3 contracts
+        run: python3 -m unittest discover -s tools -p Test_NativePostgresBackup.py -v
       - name: Verify production secret preflight contracts
         run: bash ./tools/Test-ProductionSecrets.sh
       - name: Verify source-audit evidence contracts
