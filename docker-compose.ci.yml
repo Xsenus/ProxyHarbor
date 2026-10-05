@@ -2,10 +2,23 @@
 # CI создаёт эти короткоживущие файлы перед smoke-тестом и удаляет в cleanup.
 services:
   api:
+    build:
+      labels:
+        org.opencontainers.image.revision: ${PROXYHARBOR_SOURCE_REVISION:-unknown}
     environment:
       # Runtime image всегда Production и обязан иметь bounded Host allowlist даже
       # в базовом (не TLS) smoke-профиле.
       AllowedHosts: ${PUBLIC_HOST:-localhost};127.0.0.1;api
+
+  web:
+    build:
+      labels:
+        org.opencontainers.image.revision: ${PROXYHARBOR_SOURCE_REVISION:-unknown}
+
+  restore:
+    build:
+      labels:
+        org.opencontainers.image.revision: ${PROXYHARBOR_SOURCE_REVISION:-unknown}
 
 secrets:
   postgres_password: !override

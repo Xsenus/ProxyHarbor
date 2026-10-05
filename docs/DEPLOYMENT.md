@@ -197,6 +197,22 @@ curl --fail https://proxy.example.com/health/ready
 
 ### Сборка на VPS с небольшим объёмом RAM
 
+Для обычного обновления используйте artifact `runtime-images-<full-commit-sha>`
+из успешного CI run на `main`. Дождитесь успешного завершения всего CI и CodeQL
+для этого commit: наличие artifact само по себе не подтверждает остальные jobs.
+Artifact хранится семь дней и содержит ровно API, web и restore images, прошедшие
+container smoke и Trivy; PostgreSQL продолжает работать в прежнем контейнере.
+CI secrets монтируются только в тестовые контейнеры и не входят в image archive.
+
+Скачайте artifact через `gh run download <run-id> -n runtime-images-<sha>`.
+Перед `docker load --input runtime-images.tar.gz` проверьте `sha256sum -c SHA256SUMS`
+и совпадение всех `revision` в `runtime-images.json` с выбранным полным commit SHA.
+После загрузки сравните image IDs и OCI label `org.opencontainers.image.revision`
+с manifest; сохраните образы под commit tags. Загрузка обновляет локальные `latest`
+tags, поэтому rollback tags нужно сохранить заранее. Запущенные контейнеры при
+`docker load` не заменяются. Затем примените обычный порядок обновления API/web,
+проверки health и backup, описанный ниже.
+
 Не запускайте параллельную сборку `api web restore` на production VPS с 2 ГБ RAM:
 компиляторы конкурируют с PostgreSQL и API, заполняют swap и вызывают тайм-ауты.
 Предпочтителен проверенный опубликованный release image. Если требуется локальная
