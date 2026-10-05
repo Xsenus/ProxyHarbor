@@ -603,6 +603,30 @@ staging. `LATERAL` выполняет locking lookup по PK только для
 занятой порции, повтор в следующем цикле, уменьшение при медленном UPDATE, точный
 подсчёт без rollback-строк и failed audit при timeout единственного кандидата.
 
+## VPN import и профиль VPS с 2 ГБ памяти
+
+Production-проверка 5 октября 2026 года выявила отдельное ожидание VPN mutation-lock:
+`INSERT ... ON CONFLICT` нескольких минут обрабатывал уже имеющиеся endpoint,
+а следующая попытка начинала всю атомарную транзакцию заново. Последующие update
+и provenance также зависели от плана соединения больших staging-таблиц.
+
+Перед conflict guard выполняется anti-join по полной natural identity
+`Host / Port / Protocol / Transport`. Для feed более 10 000 кандидатов после
+`ANALYZE` используются локальные `work_mem=64MB`, hash join и отключённые
+nested/merge join. Настройки сбрасываются при завершении транзакции. Все source health,
+выбор preferred URI и provenance по-прежнему коммитятся атомарно под mutation-lock.
+Conflict guard остаётся для конкурентных вставок. PostgreSQL-регрессия с 20 000
+кандидатов проверяет 15 000 уникальных endpoint, 20 000 provenance-связей, приоритет
+источника, нулевой повторный INSERT и отсутствие лишних MVCC-версий.
+
+Для общего VPS с 2 CPU и 2 ГБ RAM рабочий стартовый профиль ограничивает сбор
+100 000 кандидатами за цикл и 5000 с каждого источника, source concurrency — 2,
+proxy/VPN validation concurrency — по 100, validation batch — по 800.
+Это эксплуатационный профиль конкретного сервера, а не новый default приложения.
+Большие feed могут усекаться; существующие endpoint сохраняются и продолжают
+проверяться. Профиль следует расширять только после замера памяти, IO, успешных
+циклов и latency API. Увеличение SQL/heartbeat timeout не заменяет такой замер.
+
 ## Country flags без watcher-зависимости
 
 SVG из установленного `flag-icons/flags/4x3` подготавливаются скриптом
