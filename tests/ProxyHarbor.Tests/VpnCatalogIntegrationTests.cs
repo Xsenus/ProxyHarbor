@@ -721,6 +721,100 @@ public sealed class VpnCatalogIntegrationTests
         LastSeenAt = DateTimeOffset.UtcNow
     };
 
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
+    public async Task LargeDuplicateImportPreservesPriorityProvenanceAndUnchangedVersions()
+    {
+        var connectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
+        if (string.IsNullOrWhiteSpace(connectionString)) return;
+        var schema = $"proxyharbor_vpn_hash_{Guid.NewGuid():N}";
+        var builder = new NpgsqlConnectionStringBuilder(connectionString) { SearchPath = schema };
+        await using var admin = new NpgsqlConnection(connectionString);
+        await admin.OpenAsync();
+        await using (var create = new NpgsqlCommand($"CREATE SCHEMA {schema}", admin))
+            await create.ExecuteNonQueryAsync();
+        try
+        {
+            var factory = new TestDbFactory(new DbContextOptionsBuilder<ProxyHarborDbContext>()
+                .UseNpgsql(builder.ConnectionString, pg => pg.EnableRetryOnFailure()).Options);
+            var preferredId = Guid.NewGuid();
+            await using (var seed = await factory.CreateDbContextAsync())
+            {
+                await seed.Database.MigrateAsync();
+                seed.VpnSources.AddRange(new VpnSource
+                {
+                    Id = preferredId,
+                    Name = "Preferred bulk feed",
+                    Provider = "Integration",
+                    Url = "https://8.8.8.8/preferred.txt",
+                    DefaultProtocol = VpnProtocol.Vless,
+                    Priority = 10,
+                    License = "MIT"
+                }, new VpnSource
+                {
+                    Name = "Secondary bulk feed",
+                    Provider = "Integration",
+                    Url = "https://8.8.4.4/secondary.txt",
+                    DefaultProtocol = VpnProtocol.Vless,
+                    Priority = 20,
+                    License = "MIT"
+                });
+                await seed.SaveChangesAsync();
+            }
+            using var clients = new TestHttpClientFactory(new DelegateHandler(request =>
+            {
+                var preferred = request.RequestUri!.AbsolutePath.Contains("preferred", StringComparison.Ordinal);
+                var marker = preferred ? "preferred" : "secondary";
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(string.Join('\n', Enumerable.Range(preferred ? 1 : 5001, 10_000)
+                        .Select(port => $"vless://{marker}@1.1.1.1:{port}?type=tcp#{marker}")))
+                };
+            }));
+            var service = new VpnCatalogService(factory, clients, Options.Create(new CollectorOptions
+            {
+                SourceConcurrency = 2,
+                SourceTimeoutSeconds = 5,
+                SourceRetryCount = 0,
+                MaxProxiesPerSource = 10_000,
+                LastSeenRefreshMinutes = 360
+            }), NullLogger<VpnCatalogService>.Instance);
+            var first = await service.CollectAsync(forceAllSources: true);
+            Assert.Equal(20_000, first.Candidates);
+            Assert.Equal(15_000, first.Added);
+            Guid overlapId;
+            await using (var verify = await factory.CreateDbContextAsync())
+            {
+                Assert.Equal(15_000, await verify.VpnEndpoints.CountAsync());
+                Assert.Equal(20_000, await verify.VpnEndpointSources.CountAsync());
+                var overlap = await verify.VpnEndpoints.SingleAsync(x => x.Port == 7500);
+                overlapId = overlap.Id;
+                Assert.Equal(preferredId, overlap.FirstSourceId);
+                Assert.Contains("preferred", overlap.ConnectionUri, StringComparison.Ordinal);
+                Assert.All(await verify.VpnSources.AsNoTracking().ToArrayAsync(), source =>
+                {
+                    Assert.NotNull(source.LastSucceededAt);
+                    Assert.Equal(10_000, source.LastItemCount);
+                });
+            }
+            var before = await ReadCatalogVersionsAsync(builder.ConnectionString, overlapId, preferredId);
+            var duplicate = await service.CollectAsync(forceAllSources: true);
+            Assert.Equal(0, duplicate.Added);
+            Assert.Equal(20_000, duplicate.Candidates);
+            Assert.Equal(before, await ReadCatalogVersionsAsync(builder.ConnectionString, overlapId, preferredId));
+            await using var final = await factory.CreateDbContextAsync();
+            Assert.Equal(15_000, await final.VpnEndpoints.CountAsync());
+            Assert.Equal(20_000, await final.VpnEndpointSources.CountAsync());
+            Assert.Contains("preferred", (await final.VpnEndpoints.SingleAsync(x => x.Id == overlapId)).ConnectionUri,
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            await using var drop = new NpgsqlCommand($"DROP SCHEMA IF EXISTS {schema} CASCADE", admin);
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
+
     private sealed class TestDbFactory(DbContextOptions<ProxyHarborDbContext> options)
         : IDbContextFactory<ProxyHarborDbContext>
     {

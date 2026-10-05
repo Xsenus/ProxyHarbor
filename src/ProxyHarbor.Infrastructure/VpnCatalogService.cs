@@ -207,6 +207,19 @@ public sealed class VpnCatalogService(
             """, connection, transaction))
             await prepareEndpoints.ExecuteNonQueryAsync(token);
 
+        if (results.Sum(result => result.Candidates.Count) > 10_000)
+        {
+            // A large duplicate feed must scan the registry once rather than perform
+            // thousands of random unique-index probes under the VPN mutation lock.
+            // This budget and planner choice are local to the atomic import transaction.
+            await using var planner = new NpgsqlCommand("""
+                SET LOCAL work_mem = '64MB';
+                SET LOCAL enable_nestloop = off;
+                SET LOCAL enable_mergejoin = off
+                """, connection, transaction);
+            await planner.ExecuteNonQueryAsync(token);
+        }
+
         await using var insert = new NpgsqlCommand("""
             INSERT INTO "VpnEndpoints"
                 ("Id", "Host", "Port", "Protocol", "Transport", "CountryCode", "ConnectionUri",
@@ -215,6 +228,10 @@ public sealed class VpnCatalogService(
             SELECT gen_random_uuid(), i.host, i.port, i.protocol, i.transport, NULL, i.connection_uri,
                    0, NULL, i.seen_at, i.seen_at, NULL, NULL, 0, 0, NULL, i.source_id
             FROM vpn_import_endpoints i
+            WHERE NOT EXISTS (
+                SELECT 1 FROM "VpnEndpoints" endpoint
+                WHERE endpoint."Host" = i.host AND endpoint."Port" = i.port
+                  AND endpoint."Protocol" = i.protocol AND endpoint."Transport" = i.transport)
             ON CONFLICT ("Host", "Port", "Protocol", "Transport") DO NOTHING
             """, connection, transaction);
         var added = await insert.ExecuteNonQueryAsync(token);
