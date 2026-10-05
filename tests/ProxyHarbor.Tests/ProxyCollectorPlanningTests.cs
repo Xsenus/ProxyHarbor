@@ -6,7 +6,7 @@ public sealed class ProxyCollectorPlanningTests
 {
     [Fact]
     public void LastSeenRefreshUsesBoundedTransactions() =>
-        Assert.Equal(10_000, ProxyCollector.LastSeenRefreshBatchSize);
+        Assert.Equal(1_000, ProxyCollector.LastSeenRefreshBatchSize);
 
     [Theory]
     [InlineData(0, false)]

@@ -22,7 +22,7 @@ public sealed class ProxyCollector(
 {
     private const int MaxSourceBytes = 10_000_000;
     internal const int HashImportCandidateThreshold = 10_000;
-    internal const int LastSeenRefreshBatchSize = 10_000;
+    internal const int LastSeenRefreshBatchSize = 1_000;
     private static readonly TimeSpan AuditWriteTimeout = TimeSpan.FromSeconds(15);
     private static readonly Action<ILogger, string, Exception?> SourceFailed =
         LoggerMessage.Define<string>(LogLevel.Warning, new EventId(1001, "SourceFailed"), "Не удалось получить источник {Source}");
@@ -596,17 +596,30 @@ public sealed class ProxyCollector(
             // Занятые валидатором строки безопасно пропускаются и обновятся при следующем
             // появлении в feed. Коммит каждой bounded-партии быстро освобождает остальные locks.
             var refreshStarted = Stopwatch.GetTimestamp();
+            var refreshBatchSize = Math.Min(LastSeenRefreshBatchSize, candidateCount);
             while (true)
             {
-                await using var refreshTransaction = await connection.BeginTransactionAsync(token);
-                await using var refresh = new NpgsqlCommand("""
-                    WITH locked AS MATERIALIZED (
-                        SELECT p."Id", i.preferred
-                        FROM proxy_import i
-                        JOIN "Proxies" p ON p."Id" = i.proxy_id
-                        ORDER BY p."Id"
+                try
+                {
+                    await using var refreshTransaction = await connection.BeginTransactionAsync(token);
+                    await using (var timeout = new NpgsqlCommand(
+                        "SET LOCAL statement_timeout = '3s'", connection, refreshTransaction))
+                        await timeout.ExecuteNonQueryAsync(token);
+                    await using var refresh = new NpgsqlCommand("""
+                    WITH candidates AS MATERIALIZED (
+                        SELECT proxy_id, preferred
+                        FROM proxy_import
+                        ORDER BY proxy_id
                         LIMIT @batch_size
-                        FOR UPDATE OF p SKIP LOCKED
+                    ), locked AS MATERIALIZED (
+                        SELECT endpoint."Id", candidate.preferred
+                        FROM candidates candidate
+                        CROSS JOIN LATERAL (
+                            SELECT p."Id"
+                            FROM "Proxies" p
+                            WHERE p."Id" = candidate.proxy_id
+                            FOR UPDATE SKIP LOCKED
+                        ) endpoint
                     ), updated AS (
                         UPDATE "Proxies" p
                         SET "LastSeenAt" = @seen_at,
@@ -614,19 +627,41 @@ public sealed class ProxyCollector(
                         FROM locked
                         WHERE p."Id" = locked."Id"
                         RETURNING p."Id"
+                    ), removed AS (
+                        DELETE FROM proxy_import i
+                        USING candidates
+                        WHERE i.proxy_id = candidates.proxy_id
+                        RETURNING i.proxy_id
                     )
-                    DELETE FROM proxy_import i
-                    USING updated
-                    WHERE i.proxy_id = updated."Id"
+                    SELECT (SELECT count(*) FROM updated), (SELECT count(*) FROM removed)
                     """, connection, refreshTransaction);
-                refresh.Parameters.AddWithValue("batch_size", NpgsqlDbType.Integer, LastSeenRefreshBatchSize);
-                refresh.Parameters.AddWithValue("seen_at", NpgsqlDbType.TimestampTz, now);
-                refresh.Parameters.AddWithValue("priority_at", NpgsqlDbType.TimestampTz,
-                    PaidProxySourceCatalog.ImmediateValidationMarker);
-                var batchRefreshed = await refresh.ExecuteNonQueryAsync(token);
-                await refreshTransaction.CommitAsync(token);
-                refreshed += batchRefreshed;
-                if (batchRefreshed < LastSeenRefreshBatchSize) break;
+                    refresh.Parameters.AddWithValue("batch_size", NpgsqlDbType.Integer, refreshBatchSize);
+                    refresh.Parameters.AddWithValue("seen_at", NpgsqlDbType.TimestampTz, now);
+                    refresh.Parameters.AddWithValue("priority_at", NpgsqlDbType.TimestampTz,
+                        PaidProxySourceCatalog.ImmediateValidationMarker);
+                    long batchRefreshed;
+                    long batchProcessed;
+                    await using (var reader = await refresh.ExecuteReaderAsync(token))
+                    {
+                        await reader.ReadAsync(token);
+                        batchRefreshed = reader.GetInt64(0);
+                        batchProcessed = reader.GetInt64(1);
+                    }
+                    await refreshTransaction.CommitAsync(token);
+                    refreshed += checked((int)batchRefreshed);
+                    // Locked/deleted endpoints leave this staging batch as well: they
+                    // retry next feed cycle without starving later unlocked candidates.
+                    if (batchProcessed < refreshBatchSize) break;
+                }
+                catch (PostgresException exception) when (
+                    !token.IsCancellationRequested && refreshBatchSize > 1 &&
+                    exception.SqlState == PostgresErrorCodes.QueryCanceled &&
+                    exception.MessageText.Contains("statement timeout", StringComparison.OrdinalIgnoreCase))
+                {
+                    // The failed transaction rolled back both registry and staging.
+                    // Retry its candidates in a smaller transaction on slow VPS disks.
+                    refreshBatchSize = Math.Max(1, refreshBatchSize / 2);
+                }
             }
             refreshMs = (long)Stopwatch.GetElapsedTime(refreshStarted).TotalMilliseconds;
         }
