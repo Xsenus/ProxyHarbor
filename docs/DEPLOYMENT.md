@@ -207,8 +207,17 @@ CI secrets монтируются только в тестовые контей�
 Скачайте artifact через `gh run download <run-id> -n runtime-images-<sha>`.
 Перед `docker load --input runtime-images.tar.gz` проверьте `sha256sum -c SHA256SUMS`
 и совпадение всех `revision` в `runtime-images.json` с выбранным полным commit SHA.
-После загрузки сравните image IDs и OCI label `org.opencontainers.image.revision`
-с manifest; сохраните образы под commit tags. Загрузка обновляет локальные `latest`
+После загрузки проверьте OCI label `org.opencontainers.image.revision` и identity
+образов. В classic image store `docker image inspect .Id` — config digest из CI
+manifest; containerd image store возвращает digest OCI manifest. Во втором случае
+найдите соответствующий `blobs/sha256/<digest>` внутри архива, проверьте SHA-256
+его bytes и равенство `config.digest` значению `id` из `runtime-images.json`.
+Проверьте также hash config blob, revision в его labels и совпадение
+`rootfs.diff_ids` с `docker image inspect .RootFS.Layers`. Различие между config
+и manifest digest само по себе не означает изменение image; пропускать проверку
+содержимого нельзя. Поведение containerd описано в
+[Docker image inspect implementation](https://github.com/moby/moby/blob/master/daemon/containerd/image_inspect.go).
+Сохраните проверенные образы под commit tags. Загрузка обновляет локальные `latest`
 tags, поэтому rollback tags нужно сохранить заранее. Запущенные контейнеры при
 `docker load` не заменяются. Затем примените обычный порядок обновления API/web,
 проверки health и backup, описанный ниже.
