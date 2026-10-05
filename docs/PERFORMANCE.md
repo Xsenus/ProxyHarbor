@@ -549,3 +549,44 @@ IP-литералы обходят этот ограничитель, но пр�
 ([Dns.RunAsync](https://github.com/dotnet/runtime/blob/v10.0.0/src/libraries/System.Net.NameResolution/src/System/Net/Dns.cs),
 [NameResolutionPal.Unix](https://github.com/dotnet/runtime/blob/v10.0.0/src/libraries/System.Net.NameResolution/src/System/Net/NameResolutionPal.Unix.cs));
 это не проверка точного исходного кода установленного patch-релиза.
+
+## Ограничение транзакций proxy retention
+
+Диагностика production 5 октября 2026 года показала повторяющиеся 180-секундные
+таймауты полного `DELETE FROM "Proxies"`. Очистка удерживала общий advisory claim-lock,
+а локальные и распределённые валидаторы ожидали его в `pg_advisory_xact_lock`.
+Одновременно VPS с 2 CPU и 1,9 ГБ RAM активно использовал swap. Проверка lifetime-lock
+сессии API также превышала таймаут, что инициировало controlled shutdown и перезапуск.
+
+Поиск не более 10 000 кандидатов теперь выполняется до захвата claim-lock. Добавление
+индекса на постоянно обновляемый `LastSeenAt` не требуется: существующий HOT refresh
+сохраняется. Каждая порция не более 250 UUID удаляется отдельной транзакцией;
+`SET LOCAL statement_timeout = '3s'` ограничивает каждый SQL statement внутри неё,
+включая ожидание claim-lock. Таймаут откатывает текущую порцию и освобождает блокировку;
+ранее завершённые порции сохраняются. Полный цикл и поиск кандидатов не имеют общего
+трёхсекундного лимита. Ожидающий claim получает блокировку между транзакциями очистки.
+
+Перед DELETE под блокировкой повторно проверяются status, отсутствие успешных проверок,
+`FirstAliveAt`, возраст `LastSeenAt` и отсутствие любой lease, включая просроченную.
+Поэтому обновлённый, когда-либо работавший или получивший lease после предварительного
+поиска endpoint сохраняется. PostgreSQL-тесты проверяют отдельные transaction ID порций,
+лимит кандидатов, сброс локального timeout, эти гонки, rollback при заблокированной строке
+и получение claim между порциями. Lifetime-lock heartbeat и защита restore не ослабляются.
+
+Улучшение latency и количества production-перезапусков требует замера после развёртывания;
+локальные проверки не подтверждают устранение всей нагрузки VPS.
+
+## Country flags без watcher-зависимости
+
+SVG из установленного `flag-icons/flags/4x3` подготавливаются скриптом
+`prepare-country-flags.mjs` перед `npm run dev` и `npm run build`. Vite обслуживает
+их из generated `public/flags` в development и копирует в `dist/flags` при сборке.
+Публичные URL и отдельное кэширование SVG сохраняются. Generated directory исключён
+из Git; в репозитории остаётся воспроизводимый package lock, а не копия всей библиотеки.
+
+Удалён `vite-plugin-static-copy`: для этого фиксированного набора файлов не нужны
+его glob parser и отдельный watcher. Это удаляет 15 npm packages, включая уязвимую
+цепочку `chokidar`/`braces`, без понижения npm audit gate. Скрипт копирует только
+обычные SVG-файлы стран и регионов; отсутствующий или пустой пакет останавливает
+подготовку assets. Node.js-тесты входят в `npm test` и проверяют имена, содержимое,
+повторную подготовку и отказ при отсутствии пригодных flags.

@@ -1,14 +1,11 @@
 /// <reference types="vitest/config" />
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
-import { viteStaticCopy } from 'vite-plugin-static-copy'
 
 // В разработке API прозрачно проксируется в ASP.NET Core; в Docker всё объединяет nginx.
 export default defineConfig({
   plugins: [
     react(),
-    // Флаги остаются отдельными кэшируемыми SVG и загружаются только для стран на текущей странице.
-    viteStaticCopy({targets:[{src:'node_modules/flag-icons/flags/4x3/*.svg',dest:'flags'}]}),
   ],
   test: {
     environment: 'jsdom',

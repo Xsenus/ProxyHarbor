@@ -15,38 +15,63 @@ internal static class OperationalRetention
     // большую транзакцию и постепенно освобождает историю без всплеска WAL/IO.
     internal const int RunCleanupBatchSize = 10_000;
 
+    internal const int ProxyCleanupBatchSize = 250;
+
     internal static async Task<int> PruneProxyMembershipAsync(
         ProxyHarborDbContext db,
         DateTimeOffset now,
         int retentionDays,
-        CancellationToken token)
+        CancellationToken token,
+        int maximumRows = RunCleanupBatchSize)
     {
         var cutoff = now.AddDays(-Math.Max(1, retentionDays));
-        return await db.Database.CreateExecutionStrategy().ExecuteAsync(async () =>
+        var rowLimit = Math.Clamp(maximumRows, 1, RunCleanupBatchSize);
+        // Полный поиск по LastSeenAt не должен удерживать claim-lock: этот столбец
+        // намеренно не индексируется ради HOT updates массового refresh каталога.
+        var candidates = await db.Proxies
+            .Where(proxy =>
+                (proxy.Status == ProxyStatus.Pending || proxy.Status == ProxyStatus.Dead) &&
+                proxy.FirstAliveAt == null && proxy.SuccessfulChecks == 0 &&
+                proxy.LastSeenAt < cutoff &&
+                !db.ProxyValidationLeases.Any(lease => lease.ProxyId == proxy.Id))
+            .Select(proxy => proxy.Id)
+            .Take(rowLimit)
+            .ToArrayAsync(token);
+
+        var deleted = 0;
+        foreach (var batch in candidates.Chunk(ProxyCleanupBatchSize))
         {
-            await using var transaction = await db.Database.BeginTransactionAsync(token);
-            var connection = (NpgsqlConnection)db.Database.GetDbConnection();
-            await PostgresAdvisoryLock.AcquireTransactionAsync(
-                connection,
-                (NpgsqlTransaction)transaction.GetDbTransaction(),
-                PostgresAdvisoryLock.ProxyValidationClaimKey,
-                token);
-            // Сериализация с claim закрывает окно между NOT EXISTS и FK INSERT:
-            // stale proxy либо удаляется первым, либо уже имеет lease и пропускается.
-            var deleted = await db.Proxies.Where(proxy =>
-                    (proxy.Status == ProxyStatus.Pending || proxy.Status == ProxyStatus.Dead) &&
-                    // Любой когда-либо работавший endpoint остаётся исторической записью.
-                    // Retention удаляет только кандидатов, ни разу не прошедших проверку.
-                    proxy.FirstAliveAt == null && proxy.SuccessfulChecks == 0 &&
-                    proxy.LastSeenAt < cutoff &&
-                    // Любая lease-строка, даже уже просроченная, исключает обратный
-                    // порядок proxy -> lease с completion. Следующий claim сначала
-                    // заменит и завершит ownership, после чего новый цикл удалит proxy.
-                    !db.ProxyValidationLeases.Any(lease => lease.ProxyId == proxy.Id))
-                .ExecuteDeleteAsync(token);
-            await transaction.CommitAsync(token);
-            return deleted;
-        });
+            token.ThrowIfCancellationRequested();
+            deleted += await db.Database.CreateExecutionStrategy().ExecuteAsync(async () =>
+            {
+                await using var transaction = await db.Database.BeginTransactionAsync(token);
+                // Только эта транзакция получает короткий серверный timeout. Отмена
+                // DELETE откатывает её и освобождает claim-lock, а не ждёт 180 секунд.
+                await db.Database.ExecuteSqlRawAsync(
+                    "SET LOCAL statement_timeout = '3s'", token);
+                var connection = (NpgsqlConnection)db.Database.GetDbConnection();
+                await PostgresAdvisoryLock.AcquireTransactionAsync(
+                    connection,
+                    (NpgsqlTransaction)transaction.GetDbTransaction(),
+                    PostgresAdvisoryLock.ProxyValidationClaimKey,
+                    token);
+                // Кандидат мог получить lease, обновиться или успешно пройти проверку
+                // после поиска. Повторная проверка под claim-lock закрывает эту гонку.
+                // Любая lease, включая expired, сохраняет прежний порядок FK locks.
+                var batchDeleted = await db.Proxies.Where(proxy =>
+                        batch.Contains(proxy.Id) &&
+                        (proxy.Status == ProxyStatus.Pending || proxy.Status == ProxyStatus.Dead) &&
+                        proxy.FirstAliveAt == null && proxy.SuccessfulChecks == 0 &&
+                        proxy.LastSeenAt < cutoff &&
+                        !db.ProxyValidationLeases.Any(lease => lease.ProxyId == proxy.Id))
+                    .ExecuteDeleteAsync(token);
+                await transaction.CommitAsync(token);
+                return batchDeleted;
+            });
+            // Между транзакциями queued claim получает блокировку раньше следующей
+            // порции cleanup. Общий объём одного цикла ограничен 10 000 строками.
+        }
+        return deleted;
     }
 
     internal static async Task<(int CollectionRuns, int ValidationRuns)> PruneRunHistoryAsync(
