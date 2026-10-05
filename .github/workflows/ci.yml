@@ -311,6 +311,7 @@ jobs:
             --verify.receivers=proxyharbor-api severity=warning alertname=WarningTest
       - name: Container smoke test
         env:
+          PROXYHARBOR_SOURCE_REVISION: ${{ github.sha }}
           POSTGRES_DB: proxyharbor
           POSTGRES_USER: proxyharbor
           POSTGRES_PASSWORD: ci-password
@@ -720,6 +721,28 @@ jobs:
           curl --fail --silent --request POST --header 'Content-Type: application/json' \
             --data "[{\"labels\":{\"alertname\":\"ProxyHarborCiSynthetic\",\"severity\":\"warning\"},\"startsAt\":\"$synthetic_start\",\"endsAt\":\"$synthetic_start\"}]" \
             http://127.0.0.1:9093/api/v2/alerts
+
+      - name: Export tested runtime images for VPS deployment
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          bundle="$RUNNER_TEMP/runtime-images"
+          mkdir -p "$bundle"
+          images=(proxyharbor-api:latest proxyharbor-web:latest proxyharbor-restore:latest)
+          docker image inspect "${images[@]}" | jq --arg revision "$GITHUB_SHA" \
+            'map({id: .Id, tags: .RepoTags, revision: .Config.Labels["org.opencontainers.image.revision"]}) |
+             if all(.[]; .revision == $revision) then . else error("Image revision mismatch") end' \
+            > "$bundle/runtime-images.json"
+          docker image save "${images[@]}" | gzip -1 > "$bundle/runtime-images.tar.gz"
+          (cd "$bundle" && sha256sum runtime-images.tar.gz > SHA256SUMS)
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        with:
+          name: runtime-images-${{ github.sha }}
+          path: ${{ runner.temp }}/runtime-images/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
 
   postgres-integration:
     runs-on: ubuntu-latest

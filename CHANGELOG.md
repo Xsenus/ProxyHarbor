@@ -5,6 +5,8 @@
 
 ## [Unreleased]
 
+- Успешный CI на `main` сохраняет проверенные API/web/restore images с SHA revision, manifest image IDs и SHA-256 архива на семь дней. VPS может загружать готовые образы вместо компиляции рядом с production PostgreSQL.
+
 - При сборке web-образа обновляется также `pcre2`, устраняя найденную container audit уязвимость CVE-2026-103111 в закреплённом Nginx base image.
 
 - Копирование country flags переведено на встроенные Node.js/Vite public assets: удалён `vite-plugin-static-copy` и его уязвимая цепочка `chokidar`/`braces`; адреса `/flags/*.svg` сохранены, отсутствующий пакет останавливает сборку.
