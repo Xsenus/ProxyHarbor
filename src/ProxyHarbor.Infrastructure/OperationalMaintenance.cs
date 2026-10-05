@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Hosting;
@@ -22,7 +23,8 @@ internal static class OperationalRetention
         DateTimeOffset now,
         int retentionDays,
         CancellationToken token,
-        int maximumRows = RunCleanupBatchSize)
+        int maximumRows = RunCleanupBatchSize,
+        TimeSpan? timeBudget = null)
     {
         var cutoff = now.AddDays(-Math.Max(1, retentionDays));
         var rowLimit = Math.Clamp(maximumRows, 1, RunCleanupBatchSize);
@@ -38,38 +40,62 @@ internal static class OperationalRetention
             .Take(rowLimit)
             .ToArrayAsync(token);
 
+        var budget = timeBudget ?? TimeSpan.FromMinutes(1);
+        if (budget < TimeSpan.Zero || budget > TimeSpan.FromMinutes(1))
+            throw new ArgumentOutOfRangeException(nameof(timeBudget));
+        var elapsed = Stopwatch.StartNew();
         var deleted = 0;
-        foreach (var batch in candidates.Chunk(ProxyCleanupBatchSize))
+        var offset = 0;
+        var batchSize = ProxyCleanupBatchSize;
+        while (offset < candidates.Length && elapsed.Elapsed < budget)
         {
             token.ThrowIfCancellationRequested();
-            deleted += await db.Database.CreateExecutionStrategy().ExecuteAsync(async () =>
+            var batch = candidates.Skip(offset).Take(batchSize).ToArray();
+            try
             {
-                await using var transaction = await db.Database.BeginTransactionAsync(token);
-                // Только эта транзакция получает короткий серверный timeout. Отмена
-                // DELETE откатывает её и освобождает claim-lock, а не ждёт 180 секунд.
-                await db.Database.ExecuteSqlRawAsync(
-                    "SET LOCAL statement_timeout = '3s'", token);
-                var connection = (NpgsqlConnection)db.Database.GetDbConnection();
-                await PostgresAdvisoryLock.AcquireTransactionAsync(
-                    connection,
-                    (NpgsqlTransaction)transaction.GetDbTransaction(),
-                    PostgresAdvisoryLock.ProxyValidationClaimKey,
-                    token);
-                // Кандидат мог получить lease, обновиться или успешно пройти проверку
-                // после поиска. Повторная проверка под claim-lock закрывает эту гонку.
-                // Любая lease, включая expired, сохраняет прежний порядок FK locks.
-                var batchDeleted = await db.Proxies.Where(proxy =>
-                        batch.Contains(proxy.Id) &&
-                        (proxy.Status == ProxyStatus.Pending || proxy.Status == ProxyStatus.Dead) &&
-                        proxy.FirstAliveAt == null && proxy.SuccessfulChecks == 0 &&
-                        proxy.LastSeenAt < cutoff &&
-                        !db.ProxyValidationLeases.Any(lease => lease.ProxyId == proxy.Id))
-                    .ExecuteDeleteAsync(token);
-                await transaction.CommitAsync(token);
-                return batchDeleted;
-            });
+                deleted += await db.Database.CreateExecutionStrategy().ExecuteAsync(async () =>
+                {
+                    await using var transaction = await db.Database.BeginTransactionAsync(token);
+                    // Ожидание чужой claim-lock не удерживает её: отдельный lock timeout
+                    // позволяет пройти обычную очередь, не расходуя DELETE deadline.
+                    await db.Database.ExecuteSqlRawAsync(
+                        "SET LOCAL lock_timeout = '30s'", token);
+                    var connection = (NpgsqlConnection)db.Database.GetDbConnection();
+                    await PostgresAdvisoryLock.AcquireTransactionAsync(
+                        connection,
+                        (NpgsqlTransaction)transaction.GetDbTransaction(),
+                        PostgresAdvisoryLock.ProxyValidationClaimKey,
+                        token);
+                    // Ограничиваем именно DELETE под уже полученной claim-lock.
+                    await db.Database.ExecuteSqlRawAsync(
+                        "SET LOCAL statement_timeout = '3s'", token);
+                    // Кандидат мог получить lease, обновиться или успешно пройти проверку
+                    // после поиска. Повторная проверка под claim-lock закрывает эту гонку.
+                    // Любая lease, включая expired, сохраняет прежний порядок FK locks.
+                    var batchDeleted = await db.Proxies.Where(proxy =>
+                            batch.Contains(proxy.Id) &&
+                            (proxy.Status == ProxyStatus.Pending || proxy.Status == ProxyStatus.Dead) &&
+                            proxy.FirstAliveAt == null && proxy.SuccessfulChecks == 0 &&
+                            proxy.LastSeenAt < cutoff &&
+                            !db.ProxyValidationLeases.Any(lease => lease.ProxyId == proxy.Id))
+                        .ExecuteDeleteAsync(token);
+                    await transaction.CommitAsync(token);
+                    return batchDeleted;
+                });
+                offset += batch.Length;
+            }
+            catch (PostgresException exception) when (
+                !token.IsCancellationRequested && batch.Length > 1 &&
+                exception.SqlState == PostgresErrorCodes.QueryCanceled &&
+                exception.MessageText.Contains("statement timeout", StringComparison.OrdinalIgnoreCase))
+            {
+                // FK/heap IO на небольшой VPS может не уложить 250 строк в 3s.
+                // Транзакция уже откатилась; повторяем те же IDs меньшей порцией.
+                // Ошибка даже одной строки остаётся ошибкой maintenance.
+                batchSize = Math.Max(1, batch.Length / 2);
+            }
             // Между транзакциями queued claim получает блокировку раньше следующей
-            // порции cleanup. Общий объём одного цикла ограничен 10 000 строками.
+            // порции cleanup. Весь цикл ограничен объёмом и минутным IO budget.
         }
         return deleted;
     }

@@ -119,6 +119,121 @@ public sealed class OperationalMaintenanceIntegrationTests
 
     [Fact]
     [Trait("Category", "PostgresIntegration")]
+    public async Task ProxyCleanupShrinksTimedOutBatchesWithoutDoubleCountingRolledBackRows()
+    {
+        var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
+        if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
+
+        await WithSchemaAsync(baseConnectionString, async factory =>
+        {
+            var now = DateTimeOffset.UtcNow;
+            const int total = 150;
+            await using var seed = await factory.CreateDbContextAsync();
+            seed.Proxies.AddRange(Enumerable.Range(0, total)
+                .Select(index => Proxy($"adaptive-{index}.example", ProxyStatus.Pending, now.AddDays(-30))));
+            await seed.SaveChangesAsync();
+            await seed.Database.ExecuteSqlRawAsync("""
+                CREATE TABLE cleanup_batches (row_count integer);
+                CREATE FUNCTION slow_large_cleanup() RETURNS trigger LANGUAGE plpgsql AS $$
+                DECLARE deleted_count integer;
+                BEGIN
+                  SELECT count(*) INTO deleted_count FROM deleted_proxies;
+                  INSERT INTO cleanup_batches VALUES (deleted_count);
+                  IF deleted_count > 64 THEN PERFORM pg_sleep(3.2); END IF;
+                  RETURN NULL;
+                END;
+                $$;
+                CREATE TRIGGER slow_large_cleanup AFTER DELETE ON "Proxies"
+                REFERENCING OLD TABLE AS deleted_proxies
+                FOR EACH STATEMENT EXECUTE FUNCTION slow_large_cleanup();
+                """);
+
+            await using var cleanup = await factory.CreateDbContextAsync();
+            Assert.Equal(total, await OperationalRetention.PruneProxyMembershipAsync(
+                cleanup, now, 3, CancellationToken.None));
+            Assert.Empty(await cleanup.Proxies.ToArrayAsync());
+            var batches = await cleanup.Database.SqlQueryRaw<int>(
+                "SELECT row_count AS \"Value\" FROM cleanup_batches").ToArrayAsync();
+            Assert.Equal(total, batches.Sum());
+            Assert.All(batches, count => Assert.InRange(count, 1, 37));
+        });
+    }
+
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
+    public async Task ProxyCleanupWaitsForClaimQueueWithoutUsingDeleteDeadline()
+    {
+        var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
+        if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
+
+        await WithSchemaAsync(baseConnectionString, async factory =>
+        {
+            var now = DateTimeOffset.UtcNow;
+            await using var seed = await factory.CreateDbContextAsync();
+            seed.Proxies.Add(Proxy("claim-wait.example", ProxyStatus.Pending, now.AddDays(-30)));
+            await seed.SaveChangesAsync();
+            await using var blocker = new NpgsqlConnection(seed.Database.GetConnectionString());
+            await blocker.OpenAsync();
+            await using var transaction = await blocker.BeginTransactionAsync();
+            await PostgresAdvisoryLock.AcquireTransactionAsync(blocker, transaction,
+                PostgresAdvisoryLock.ProxyValidationClaimKey, CancellationToken.None);
+            await using var cleanup = await factory.CreateDbContextAsync();
+            var application = $"retention-long-claim-{Guid.NewGuid():N}";
+            var connection = (NpgsqlConnection)cleanup.Database.GetDbConnection();
+            connection.ConnectionString = new NpgsqlConnectionStringBuilder(connection.ConnectionString)
+            {
+                ApplicationName = application
+            }.ConnectionString;
+            var cleanupTask = OperationalRetention.PruneProxyMembershipAsync(cleanup, now, 3, CancellationToken.None);
+            await using var observer = new NpgsqlConnection(seed.Database.GetConnectionString());
+            await observer.OpenAsync();
+            Assert.True(await WaitForLockAsync(observer, application, "%pg_advisory_xact_lock%"));
+            await Task.Delay(TimeSpan.FromSeconds(3.5));
+            Assert.False(cleanupTask.IsCompleted);
+            await transaction.CommitAsync();
+            Assert.Equal(1, await cleanupTask.WaitAsync(TimeSpan.FromSeconds(10)));
+            var restored = await cleanup.Database.SqlQueryRaw<string>(
+                "SELECT current_setting('lock_timeout') AS \"Value\"").SingleAsync();
+            Assert.Equal("0", restored);
+        });
+    }
+
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
+    public async Task ProxyCleanupTimeBudgetPreservesCommittedProgressAndRemainingRows()
+    {
+        var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
+        if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
+
+        await WithSchemaAsync(baseConnectionString, async factory =>
+        {
+            var now = DateTimeOffset.UtcNow;
+            var total = OperationalRetention.ProxyCleanupBatchSize + 2;
+            await using var seed = await factory.CreateDbContextAsync();
+            seed.Proxies.AddRange(Enumerable.Range(0, total)
+                .Select(index => Proxy($"budget-{index}.example", ProxyStatus.Pending, now.AddDays(-30))));
+            await seed.SaveChangesAsync();
+            await seed.Database.ExecuteSqlRawAsync("""
+                CREATE FUNCTION delay_cleanup_batch() RETURNS trigger LANGUAGE plpgsql AS $$
+                BEGIN
+                  PERFORM pg_sleep(0.2);
+                  RETURN NULL;
+                END;
+                $$;
+                CREATE TRIGGER delay_cleanup_batch AFTER DELETE ON "Proxies"
+                FOR EACH STATEMENT EXECUTE FUNCTION delay_cleanup_batch();
+                """);
+            await using var cleanup = await factory.CreateDbContextAsync();
+            Assert.Equal(OperationalRetention.ProxyCleanupBatchSize,
+                await OperationalRetention.PruneProxyMembershipAsync(cleanup, now, 3, CancellationToken.None,
+                    timeBudget: TimeSpan.FromMilliseconds(100)));
+            Assert.Equal(2, await cleanup.Proxies.CountAsync());
+            Assert.Equal(2, await OperationalRetention.PruneProxyMembershipAsync(cleanup, now, 3, CancellationToken.None));
+        });
+    }
+
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
     public async Task ProxyCleanupTimeoutRollsBackAndReleasesClaimLock()
     {
         var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");

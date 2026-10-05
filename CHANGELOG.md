@@ -5,6 +5,8 @@
 
 ## [Unreleased]
 
+- Retention отдельно ограничивает ожидание claim-lock до 30 секунд и DELETE до 3 секунд, уменьшает порцию после SQL timeout и проверяет минутный IO budget между транзакциями. Уже зафиксированные удаления сохраняются; timeout одной строки и отмена остаются ошибками.
+
 - Успешный CI на `main` сохраняет проверенные API/web/restore images с SHA revision, manifest image IDs и SHA-256 архива на семь дней. VPS может загружать готовые образы вместо компиляции рядом с production PostgreSQL.
 
 - При сборке web-образа обновляется также `pcre2`, устраняя найденную container audit уязвимость CVE-2026-103111 в закреплённом Nginx base image.
