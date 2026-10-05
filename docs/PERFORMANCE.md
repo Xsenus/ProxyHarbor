@@ -627,6 +627,10 @@ VPN refresh превышал SQL timeout, а proxy import требовал по�
 source concurrency — 2, proxy/VPN validation concurrency — 50/25,
 validation batch — по 400. Общий `MaxCandidatesPerRun` ограничивает proxy-сбор;
 VPN-сбор ограничивается отдельно на каждом источнике.
+Для PostgreSQL увеличен лимит контейнера с 512 до 768 MiB и с 1 до 1,5 CPU:
+registry и индексы не помещались в прежний бюджет, создавая постоянный disk I/O.
+Изменение применено через `docker update` без перезапуска БД и закреплено в
+серверном `.env` (`POSTGRES_MEMORY_LIMIT=768m`, `POSTGRES_CPU_LIMIT=1.5`).
 Это эксплуатационный профиль конкретного сервера, а не новый default приложения.
 Большие feed могут усекаться; существующие endpoint сохраняются и продолжают
 проверяться. Профиль следует расширять только после замера памяти, IO, успешных
