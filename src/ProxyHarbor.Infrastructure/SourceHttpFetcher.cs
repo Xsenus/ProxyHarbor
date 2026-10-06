@@ -19,7 +19,8 @@ internal static class SourceHttpFetcher
         CancellationToken token,
         Action<string?>? ensureSupportedMediaType = null,
         Func<TimeSpan, CancellationToken, Task>? delayAsync = null,
-        bool sameOriginRedirectsOnly = false)
+        bool sameOriginRedirectsOnly = false,
+        bool respectRateLimit = false)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumBytes);
         delayAsync ??= static (delay, cancellationToken) => Task.Delay(delay, cancellationToken);
@@ -36,6 +37,14 @@ internal static class SourceHttpFetcher
                 using var response = await GetWithSafeRedirectsAsync(
                     client, url, httpETag, requestLastModifiedAt,
                     sameOriginRedirectsOnly, timeout.Token);
+                if (respectRateLimit && (int)response.StatusCode is 429 or 503)
+                {
+                    var now = DateTimeOffset.UtcNow;
+                    var retryAt = response.Headers.RetryAfter?.Date ??
+                        (response.Headers.RetryAfter?.Delta is { } delta ? now.Add(delta) : (DateTimeOffset?)null);
+                    if ((int)response.StatusCode == 429 || retryAt > now)
+                        throw new SourceRateLimitException(retryAt > now ? retryAt.Value : now.AddHours(1), response.StatusCode);
+                }
                 if (((int)response.StatusCode == 429 || (int)response.StatusCode >= 500) && attempt < retries)
                 {
                     var retryAfter = response.Headers.RetryAfter?.Delta ??
@@ -77,7 +86,7 @@ internal static class SourceHttpFetcher
                     responseLastModifiedAt);
             }
             catch (Exception exception) when (
-                attempt < retries && SourceHttpRetry.IsRetryable(exception, token))
+                exception is not SourceRateLimitException && attempt < retries && SourceHttpRetry.IsRetryable(exception, token))
             {
                 await delayAsync(
                     TimeSpan.FromMilliseconds(400 * (attempt + 1) + Random.Shared.Next(50, 250)), token);
