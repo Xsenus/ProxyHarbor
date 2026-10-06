@@ -81,6 +81,8 @@ public sealed class DatabaseInvariantIntegrationTests
         "CK_ProxySourceCredentials_Status",
         "CK_ProxySourceImportStates_Cursor",
         "CK_ProxySourceImportStates_Payload",
+        "CK_VpnSourceImportStates_Cursor",
+        "CK_VpnSourceImportStates_Payload",
         "CK_ReferralRelationships_DifferentUsers",
         "CK_ReferralRelationships_Slot",
         "CK_ReferralRewards_Days",
