@@ -89,4 +89,55 @@ public sealed class JsonProxyFeedParserTests
             """, ProxyProtocol.Https);
         Assert.Equal(("2606:4700:4700::1111", 443, ProxyProtocol.Https), Assert.Single(parsed));
     }
+
+    [Theory]
+    [InlineData("{\"ip\":null,\"port\":80}")]
+    [InlineData("{\"ip\":123,\"port\":80}")]
+    [InlineData("{\"ip\":\"8.8.8.8\"}")]
+    [InlineData("{\"ip\":\"8.8.8.8\",\"port\":null}")]
+    [InlineData("{\"ip\":\"8.8.8.8\",\"port\":true}")]
+    [InlineData("{\"ip\":\"8.8.8.8\",\"port\":[]}")]
+    [InlineData("{\"ip\":\"8.8.8.8\",\"port\":80.5}")]
+    [InlineData("{\"ip\":\"8.8.8.8\",\"port\":0}")]
+    [InlineData("{\"ip\":\"8.8.8.8\",\"port\":65536}")]
+    [InlineData("{\"ip\":\"8.8.8.8\",\"port\":\"+80\"}")]
+    [InlineData("{\"ip\":\"8.8.8.8\",\"port\":\" 80\"}")]
+    [InlineData("{\"ip\":\"8.8.8.8\",\"port\":80,\"user\":false}")]
+    [InlineData("{\"ip\":\"8.8.8.8\",\"port\":80,\"pass\":123}")]
+    public void InvalidRecordDoesNotDiscardHealthyNeighbor(string invalidRecord)
+    {
+        var parsed = SourceFeedParser.ParseRequired(
+            $"[{invalidRecord},{{\"ip\":\"1.1.1.1\",\"port\":443}}]", ProxyProtocol.Https);
+        Assert.Equal(("1.1.1.1", 443, ProxyProtocol.Https), Assert.Single(parsed));
+    }
+
+    [Theory]
+    [InlineData("null")]
+    [InlineData("\"http\"")]
+    [InlineData("{}")]
+    [InlineData("[]")]
+    [InlineData("[null,123,false,\"unsupported\"]")]
+    public void ExplicitInvalidProtocolListDoesNotUseFallback(string protocols)
+    {
+        var body = $"[{{\"ip\":\"8.8.8.8\",\"port\":80,\"protocols\":{protocols}}}]";
+        Assert.Throws<InvalidDataException>(() => SourceFeedParser.ParseRequired(body, ProxyProtocol.Http));
+    }
+
+    [Fact]
+    public void ProtocolListSkipsInvalidEntriesAndKeepsSupportedProtocol()
+    {
+        var parsed = SourceFeedParser.ParseRequired("""
+            [{"ip":"8.8.8.8","port":1080,"protocols":[null,123,false,"vmess","socks5"]}]
+            """, ProxyProtocol.Http);
+        Assert.Equal(("8.8.8.8", 1080, ProxyProtocol.Socks5), Assert.Single(parsed));
+    }
+
+    [Fact]
+    public void TypeAliasAndEmptyCredentialAliasesRemainPublic()
+    {
+        var parsed = SourceFeedParser.ParseRequired("""
+            [{"ip":"8.8.8.8","port":1080,"type":"socks4","user":null,"pass":""}]
+            """, ProxyProtocol.Http);
+        Assert.Equal(("8.8.8.8", 1080, ProxyProtocol.Socks4), Assert.Single(parsed));
+    }
 }

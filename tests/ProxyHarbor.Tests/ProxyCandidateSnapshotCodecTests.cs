@@ -132,6 +132,83 @@ public sealed class ProxyCandidateSnapshotCodecTests
             ProxyCandidateSnapshotCodec.ReadWindow(snapshot.Payload, 1, 1, _ => throw new InvalidOperationException()));
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    [InlineData(1_000_001)]
+    public void CorruptedSnapshotCountsCannotProduceSuccessfulAdmission(int count)
+    {
+        var snapshot = ProxyCandidateSnapshotCodec.Encode("8.8.8.8:80", ProxyProtocol.Http);
+        BinaryPrimitives.WriteInt32LittleEndian(snapshot.Payload.AsSpan(4), count);
+        var calls = 0;
+        Assert.Throws<InvalidDataException>(() =>
+            ProxyCandidateSnapshotCodec.ReadWindow(snapshot.Payload, 0, 1, _ => { calls++; return true; }));
+        Assert.Equal(0, calls);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    [InlineData(42_000)]
+    [InlineData(20)]
+    public void InvalidCompressedPageLengthsCannotReadBeyondPayload(int length)
+    {
+        var payload = new byte[12];
+        BinaryPrimitives.WriteInt32LittleEndian(payload, ProxyCandidateSnapshotCodec.Magic);
+        BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(4), 1);
+        BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(8), length);
+        Assert.Throws<InvalidDataException>(() =>
+            ProxyCandidateSnapshotCodec.ReadWindow(payload, 0, 1, _ => true));
+    }
+
+    [Theory]
+    [InlineData(8)]
+    [InlineData(9)]
+    [InlineData(11)]
+    public void MissingPageHeaderFailsBeforeAdmission(int length)
+    {
+        var payload = new byte[length];
+        BinaryPrimitives.WriteInt32LittleEndian(payload, ProxyCandidateSnapshotCodec.Magic);
+        BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(4), 1);
+        Assert.Throws<InvalidDataException>(() =>
+            ProxyCandidateSnapshotCodec.ReadWindow(payload, 0, 1, _ => true));
+    }
+
+    [Theory]
+    [InlineData("8.8.8.8", 2)]
+    [InlineData("::ffff:8.8.8.8", 1)]
+    [InlineData("fc00::1", 1)]
+    [InlineData("2606:4700:4700::1111", 0)]
+    public void CacheCannotAliasAddressFamiliesOrImportPrivateIpv6(string host, byte family)
+    {
+        var address = System.Net.IPAddress.Parse(host).GetAddressBytes();
+        var record = new byte[20];
+        address.CopyTo(record, 16 - address.Length);
+        BinaryPrimitives.WriteUInt16BigEndian(record.AsSpan(16), 443);
+        record[19] = family;
+        Assert.Throws<InvalidDataException>(() =>
+            ProxyCandidateSnapshotCodec.ReadWindow(WrapRecord(record), 0, 1, _ => true));
+    }
+
+    [Fact]
+    public void CacheRejectsAnIpv4RecordWithHighAddressBits()
+    {
+        var record = new byte[20];
+        BinaryPrimitives.WriteUInt64BigEndian(record.AsSpan(8), 0x100000008UL);
+        BinaryPrimitives.WriteUInt16BigEndian(record.AsSpan(16), 80);
+        Assert.Throws<InvalidDataException>(() =>
+            ProxyCandidateSnapshotCodec.ReadWindow(WrapRecord(record), 0, 1, _ => true));
+    }
+
+    [Fact]
+    public void OversizedBodiesAndPayloadsAreRejectedBeforeParsing()
+    {
+        Assert.Throws<InvalidDataException>(() =>
+            ProxyCandidateSnapshotCodec.Encode(new string(' ', 10_000_001), ProxyProtocol.Http));
+        Assert.Throws<InvalidDataException>(() =>
+            ProxyCandidateSnapshotCodec.ReadWindow(new byte[ProxyCandidateSnapshotCodec.MaxPayloadBytes + 1], 0, 1, _ => true));
+    }
+
     private static byte[] WrapRecord(byte[] record)
     {
         var compressed = new byte[BrotliEncoder.GetMaxCompressedLength(record.Length)];
