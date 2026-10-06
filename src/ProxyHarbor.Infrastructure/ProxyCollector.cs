@@ -345,8 +345,7 @@ public sealed class ProxyCollector(
                     try
                     {
                         fetched = await FetchPaidSourceStateAsync(
-                            client, source, apiKey, forceAllSources || importState is null ||
-                                importState.NextIndex < importState.CandidateCount, collectionStartedAt, token);
+                            client, source, apiKey, forceAllSources || importState is null, collectionStartedAt, token);
                         credentialCheckedAt = DateTimeOffset.UtcNow;
                         credentialStatus = "active";
                         try
@@ -382,10 +381,7 @@ public sealed class ProxyCollector(
                 else
                 {
                     // Admin force-run является полным аудитом и требует новый body.
-                    // Пока хвост pending, предыдущий HTTP body мог не получить global-квоту
-                    // либо ждать своей очереди. 304 потерял бы повтор свежего окна.
-                    var useValidators = !forceAllSources && importState is not null &&
-                        importState.NextIndex == importState.CandidateCount && SourceConditionalFetchPolicy.ShouldUseValidators(
+                    var useValidators = !forceAllSources && importState is not null && SourceConditionalFetchPolicy.ShouldUseValidators(
                         source.LastContentFetchedAt,
                         source.LastSucceededAt,
                         source.LastItemCount,
@@ -421,8 +417,15 @@ public sealed class ProxyCollector(
                     // Health описывает текущий body; bounded свежий prefix получает
                     // долю той же source-квоты после проверки актуальности конфигурации.
                     var hash = ProxyCandidateSnapshotCodec.HashBody(content);
-                    var freshLimit = Math.Max(1, options.Value.MaxProxiesPerSource / 2);
-                    if (importState.PreferFresh && !hash.AsSpan().SequenceEqual(importState.FreshBodyHash))
+                    var unchanged = hash.AsSpan().SequenceEqual(importState.FreshBodyHash);
+                    // Не сохраняем validators неизвестного свежего окна до его commit.
+                    // Иначе следующий 304 потеряет повтор при global pressure/смене lane.
+                    // Исходный body уже целиком сохранён в snapshot и допускает 304.
+                    if (!unchanged)
+                        fetched = fetched with { HttpETag = null, HttpLastModifiedAt = null };
+                    var freshLimit = Math.Min(options.Value.MaxCandidatesPerRun,
+                        Math.Max(1, options.Value.MaxProxiesPerSource / 2));
+                    if (importState.PreferFresh && !unchanged)
                     {
                         freshBodyHash = hash;
                         freshCandidates = new List<ProxyCandidateKey>(Math.Min(freshLimit, 4_096));

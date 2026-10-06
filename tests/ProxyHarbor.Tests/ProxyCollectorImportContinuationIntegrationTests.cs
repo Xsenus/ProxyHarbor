@@ -279,6 +279,44 @@ public sealed class ProxyCollectorImportContinuationIntegrationTests
 
     [Fact]
     [Trait("Category", "PostgresIntegration")]
+    public async Task UnacknowledgedFreshBodyDoesNotKeepValidatorsThatWouldHideReplay()
+    {
+        await using var database = await SnapshotDatabase.CreateAsync();
+        if (database is null) return;
+        _ = await database.AddSourceAsync("fresh-validators");
+        var requests = 0;
+        using var clients = new FeedClients(new FeedHandler(_ => "unused", request =>
+        {
+            requests++;
+            if (requests == 2) Assert.Single(request.Headers.IfNoneMatch);
+            else Assert.Empty(request.Headers.IfNoneMatch);
+            return requests switch
+            {
+                1 => "8.8.8.8:80\n8.8.8.8:81\n8.8.8.8:82",
+                2 => "1.1.1.1:99",
+                _ => "1.1.1.1:100"
+            };
+        }, sendETag: true));
+        for (var cycle = 1; cycle <= 5; cycle++)
+        {
+            using var collector = Collector(database, clients);
+            var run = await collector.CollectAsync(CancellationToken.None);
+            Assert.Equal(1, run.NewProxies);
+            await using var db = database.Factory.CreateDbContext();
+            var source = await db.Sources.SingleAsync();
+            if (cycle is >= 2 and <= 4) Assert.Null(source.HttpETag);
+            else Assert.NotNull(source.HttpETag);
+            if (cycle == 3)
+            {
+                Assert.False(await db.Proxies.AnyAsync(proxy => proxy.Port == 100));
+                Assert.True((await db.ProxySourceImportStates.SingleAsync()).PreferFresh);
+            }
+            if (cycle == 4) Assert.True(await db.Proxies.AnyAsync(proxy => proxy.Port == 100));
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
     public async Task MissingImportStateForcesBodyDespiteRestoredSuccessfulHttpValidators()
     {
         await using var database = await SnapshotDatabase.CreateAsync();
@@ -318,16 +356,19 @@ public sealed class ProxyCollectorImportContinuationIntegrationTests
         public void Dispose() => _client.Dispose();
     }
 
-    private sealed class FeedHandler(Func<int, string> content, Func<HttpRequestMessage, string>? bySource = null) : HttpMessageHandler
+    private sealed class FeedHandler(
+        Func<int, string> content, Func<HttpRequestMessage, string>? bySource = null, bool sendETag = false) : HttpMessageHandler
     {
         internal int Requests { get; private set; }
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             Requests++;
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(bySource?.Invoke(request) ?? content(Requests))
-            });
+            };
+            if (sendETag) response.Headers.ETag = new System.Net.Http.Headers.EntityTagHeaderValue($"\"body-{Requests}\"");
+            return Task.FromResult(response);
         }
     }
 }
