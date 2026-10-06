@@ -13,6 +13,102 @@ public sealed class DatabaseSeederIntegrationTests
 {
     [Fact]
     [Trait("Category", "PostgresIntegration")]
+    public async Task RepeatedStartupPreservesEveryActiveCatalogSourceAndPendingSnapshot()
+    {
+        var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
+        if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
+
+        var schema = $"proxyharbor_catalog_restart_{Guid.NewGuid():N}";
+        var builder = new NpgsqlConnectionStringBuilder(baseConnectionString) { SearchPath = schema };
+        await using var admin = new NpgsqlConnection(baseConnectionString);
+        await admin.OpenAsync();
+        await using (var create = new NpgsqlCommand($"CREATE SCHEMA {schema}", admin))
+            await create.ExecuteNonQueryAsync();
+
+        try
+        {
+            var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+                .UseNpgsql(builder.ConnectionString).Options;
+            var observedAt = new DateTimeOffset(2026, 10, 6, 12, 0, 0, TimeSpan.Zero);
+            var catalogUrls = BuiltInSourceCatalog.Sources.Select(source => source.Url).ToArray();
+            Dictionary<string, Guid> previousIds;
+            Guid snapshotId;
+            const string stormUrl = "https://raw.githubusercontent.com/stormsia/proxy-list/main/http.txt";
+            await using (var first = new ProxyHarborDbContext(options))
+            {
+                await DatabaseSeeder.InitializeAsync(first);
+                var sources = await first.Sources.Where(source => catalogUrls.Contains(source.Url)).ToArrayAsync();
+                Assert.Equal(catalogUrls.Length, sources.Length);
+                previousIds = sources.ToDictionary(source => source.Url, source => source.Id, StringComparer.Ordinal);
+                foreach (var source in sources)
+                {
+                    source.Enabled = false;
+                    source.LastFetchedAt = observedAt;
+                    source.LastSucceededAt = observedAt.AddMinutes(-10);
+                    source.LastContentFetchedAt = observedAt.AddMinutes(-20);
+                    source.HttpETag = "\"saved-body\"";
+                    source.LastItemCount = 200;
+                    source.LastResultTruncated = true;
+                    source.ConsecutiveFailures = 2;
+                    source.NextFetchAt = observedAt.AddHours(1);
+                    source.LastError = "temporary feed failure";
+                }
+                var snapshot = ProxyCandidateSnapshotCodec.Encode("1.1.1.1:8080\n8.8.8.8:1080", ProxyProtocol.Http);
+                var state = new ProxySourceImportState
+                {
+                    ProxySourceId = previousIds[stormUrl],
+                    SourceUrl = stormUrl,
+                    SourceProtocol = ProxyProtocol.Http,
+                    CandidateCount = snapshot.Count,
+                    NextIndex = 1,
+                    Payload = snapshot.Payload,
+                    PayloadHash = System.Security.Cryptography.SHA256.HashData(snapshot.Payload),
+                    CreatedAt = observedAt,
+                    LastProgressAt = observedAt
+                };
+                snapshotId = state.SnapshotId;
+                first.ProxySourceImportStates.Add(state);
+                await first.SaveChangesAsync();
+            }
+
+            for (var pass = 0; pass < 2; pass++)
+            {
+                await using var restart = new ProxyHarborDbContext(options);
+                await DatabaseSeeder.InitializeAsync(restart);
+                var sources = await restart.Sources.Where(source => catalogUrls.Contains(source.Url)).ToArrayAsync();
+                Assert.Equal(previousIds.Count, sources.Length);
+                foreach (var source in sources)
+                {
+                    Assert.Equal(previousIds[source.Url], source.Id);
+                    Assert.False(source.Enabled);
+                    Assert.Equal(observedAt, source.LastFetchedAt);
+                    Assert.Equal(observedAt.AddMinutes(-10), source.LastSucceededAt);
+                    Assert.Equal(observedAt.AddMinutes(-20), source.LastContentFetchedAt);
+                    Assert.Equal("\"saved-body\"", source.HttpETag);
+                    Assert.Equal(200, source.LastItemCount);
+                    Assert.True(source.LastResultTruncated);
+                    Assert.Equal(2, source.ConsecutiveFailures);
+                    Assert.Equal(observedAt.AddHours(1), source.NextFetchAt);
+                    Assert.Equal("temporary feed failure", source.LastError);
+                }
+                var state = await restart.ProxySourceImportStates.SingleAsync();
+                Assert.Equal(previousIds[stormUrl], state.ProxySourceId);
+                Assert.Equal(snapshotId, state.SnapshotId);
+                Assert.Equal(2, state.CandidateCount);
+                Assert.Equal(1, state.NextIndex);
+                Assert.Equal(observedAt, state.LastProgressAt);
+            }
+        }
+        finally
+        {
+            await using var drop = new NpgsqlCommand($"DROP SCHEMA {schema} CASCADE", admin);
+            await drop.ExecuteNonQueryAsync();
+            NpgsqlConnection.ClearAllPools();
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
     public async Task StartupUpgradesProxiflyTlsProfilesWithoutResettingSourceIdentityOrHistory()
     {
         var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
