@@ -130,16 +130,48 @@ public sealed class BuiltInSourceCatalogTests
     }
 
     [Fact]
-    public void CatalogCoversEveryLegacyProtocolAndDoesNotAutomaticallyOptIntoUnverifiedProxyTls()
+    public void CatalogCoversEveryLegacyProtocolAndLimitsUnverifiedProxyTlsToAuditedProxiflyFeeds()
     {
         ProxyProtocol[] legacyProtocols = [ProxyProtocol.Http, ProxyProtocol.Https, ProxyProtocol.Socks4, ProxyProtocol.Socks5];
         Assert.All(legacyProtocols, protocol =>
             Assert.Contains(BuiltInSourceCatalog.Sources, source => source.Protocol == protocol));
         Assert.All(BuiltInSourceCatalog.Sources, source => Assert.True(Enum.IsDefined(source.Protocol)));
-        // New TLS profiles are explicitly selectable for user sources. No built-in
-        // feed has yet been admitted with evidence for its TLS certificate policy.
-        Assert.DoesNotContain(BuiltInSourceCatalog.Sources, source =>
-            source.Protocol is ProxyProtocol.HttpTls or ProxyProtocol.HttpTlsUnverified);
+        var tlsFeeds = BuiltInSourceCatalog.Sources.Where(source =>
+            source.Protocol is ProxyProtocol.HttpTls or ProxyProtocol.HttpTlsUnverified).ToArray();
+        Assert.Equal(36, tlsFeeds.Length);
+        Assert.All(tlsFeeds, source =>
+        {
+            Assert.Equal("Proxifly", source.Provider);
+            Assert.Equal(ProxyProtocol.HttpTlsUnverified, source.Protocol);
+            Assert.True(source.Name == "Proxifly HTTPS" ||
+                source.Name.StartsWith("Proxifly country ", StringComparison.Ordinal));
+        });
+        Assert.Equal(35, tlsFeeds.Count(source => source.Name.StartsWith("Proxifly country ", StringComparison.Ordinal)));
+        Assert.Single(tlsFeeds, source => source.Name == "Proxifly HTTPS");
+    }
+
+    [Fact]
+    public void ProxiflyMixedCountryFeedRetainsExplicitTransportsThroughCompleteSnapshot()
+    {
+        const string content = """
+            http://8.8.8.8:8080
+            https://8.8.8.8:8080
+            socks4://8.8.8.8:8080
+            socks5://8.8.8.8:8080
+            """;
+        var country = BuiltInSourceCatalog.Sources.First(source => source.Name == "Proxifly country RU");
+        var snapshot = ProxyCandidateSnapshotCodec.Encode(content, country.Protocol);
+        var decoded = new List<ProxyProtocol>();
+        var window = ProxyCandidateSnapshotCodec.ReadWindow(snapshot.Payload, 0, snapshot.Count, key =>
+        {
+            decoded.Add(key.ToEndpoint().Protocol);
+            return true;
+        });
+        Assert.True(window.Completed);
+        Assert.Equal(4, window.NextIndex);
+        Assert.Equal(4, snapshot.Count);
+        ProxyProtocol[] expected = [ProxyProtocol.Http, ProxyProtocol.Socks4, ProxyProtocol.Socks5, ProxyProtocol.HttpTlsUnverified];
+        Assert.Equal(expected, decoded.OrderBy(protocol => protocol));
     }
 
     [Fact]

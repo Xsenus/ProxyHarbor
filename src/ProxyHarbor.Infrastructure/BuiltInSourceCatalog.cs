@@ -31,7 +31,9 @@ public static class BuiltInSourceCatalog
         Feed(3, "OpenProxyList HTTP", "OpenProxyList", "https://openproxylist.xyz/http.txt", ProxyProtocol.Http),
         Feed(4, "OpenProxyList HTTPS", "OpenProxyList", "https://openproxylist.xyz/https.txt", ProxyProtocol.Https),
         Feed(5, "Proxifly HTTP", "Proxifly", "https://raw.githubusercontent.com/proxifly/free-proxy-list/refs/heads/main/proxies/protocols/http/data.txt", ProxyProtocol.Http),
-        Feed(6, "Proxifly HTTPS", "Proxifly", "https://raw.githubusercontent.com/proxifly/free-proxy-list/refs/heads/main/proxies/protocols/https/data.txt", ProxyProtocol.Https),
+        // Proxifly publishes https:// endpoints as TLS-to-proxy. This source-specific
+        // policy permits an unverified proxy certificate; destination TLS remains strict.
+        Feed(6, "Proxifly HTTPS", "Proxifly", "https://raw.githubusercontent.com/proxifly/free-proxy-list/refs/heads/main/proxies/protocols/https/data.txt", ProxyProtocol.HttpTlsUnverified),
         Feed(7, "TheSpeedX HTTP", "TheSpeedX", "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt", ProxyProtocol.Http),
         Feed(8, "IPLocate HTTP", "IPLocate", "https://raw.githubusercontent.com/iplocate/free-proxy-list/refs/heads/main/protocols/http.txt", ProxyProtocol.Http),
         Feed(9, "Databay HTTP", "Databay Labs", "https://raw.githubusercontent.com/databay-labs/free-proxy-list/master/http.txt", ProxyProtocol.Http),
@@ -370,7 +372,8 @@ public static class BuiltInSourceCatalog
         foreach (var country in proxiflyCountries.Split(' ', StringSplitOptions.RemoveEmptyEntries))
             yield return Feed(rank++, $"Proxifly country {country}", "Proxifly",
                 $"https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/countries/{country}/data.txt",
-                ProxyProtocol.Http);
+                // Explicit http/socks schemes retain their transport in these mixed feeds.
+                ProxyProtocol.HttpTlsUnverified);
     }
 
     private static IEnumerable<BuiltInSource> IndependentProviderFeeds()
