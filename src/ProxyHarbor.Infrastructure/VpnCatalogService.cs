@@ -22,9 +22,7 @@ public sealed class VpnCatalogService(
     // Лимит 32 MiB оставляет небольшой запас, но по-прежнему жёстко ограничивает
     // память при загрузке недоверенного внешнего содержимого.
     private const int MaximumFeedBytes = 32 * 1024 * 1024;
-    // Один источник не должен монополизировать память и весь каталог. Даже при общем
-    // proxy-лимите 500k для VPN сохраняем до 10k уникальных endpoint с каждого feed;
-    // источники обновляются часто, поэтому выборка остаётся широкой и актуальной.
+    // Верхняя граница одной партии из источника; полный остаток хранится в очереди.
     private const int MaximumCandidatesPerVpnSource = 10_000;
     private static readonly Action<ILogger, Guid, Exception?> SourceFailed =
         LoggerMessage.Define<Guid>(LogLevel.Warning, new EventId(1161, "VpnSourceFailed"), "VPN source {SourceId} failed");
@@ -35,11 +33,16 @@ public sealed class VpnCatalogService(
     {
         await using var operationLock = await PostgresAdvisoryLock.TryAcquireAsync(dbFactory, PostgresAdvisoryLock.VpnCollectionKey, token);
         if (operationLock is null) throw new OperationAlreadyRunningException("VPN collection уже выполняется другой репликой.");
+        var importStore = new VpnSourceImportStore(dbFactory);
+        await importStore.CleanupAsync(token);
         await using var readDb = await dbFactory.CreateDbContextAsync(token);
         var collectionStartedAt = DateTimeOffset.UtcNow;
         var sources = await readDb.VpnSources.AsNoTracking().Where(x => x.Enabled &&
-                (forceAllSources || x.NextFetchAt == null || x.NextFetchAt <= collectionStartedAt))
-            .OrderBy(x => x.Priority).ToArrayAsync(token);
+                (forceAllSources || x.NextFetchAt == null || x.NextFetchAt <= collectionStartedAt ||
+                 readDb.VpnSourceImportStates.Any(state => state.VpnSourceId == x.Id && state.NextIndex < state.CandidateCount)))
+            .OrderBy(x => readDb.VpnSourceImportStates.Where(state => state.VpnSourceId == x.Id)
+                .Select(state => state.LastProgressAt).FirstOrDefault() ?? DateTimeOffset.MinValue)
+            .ThenBy(x => x.Priority).ThenBy(x => x.Id).ToArrayAsync(token);
         if (sources.Length == 0)
             return new VpnCollectionResult(0, 0, 0, 0, 0, 0);
         var results = await ParallelFetchAsync(sources, forceAllSources, collectionStartedAt, token);
@@ -72,7 +75,8 @@ public sealed class VpnCatalogService(
         var trackedSources = await db.VpnSources.Where(source => resultSourceIds.Contains(source.Id))
             .ToDictionaryAsync(x => x.Id, token);
         var now = DateTimeOffset.UtcNow;
-        var acceptedResults = new List<FetchResult>(results.Length);
+        var acceptedBatches = new List<VpnImportBatch>();
+        var cachedCandidates = 0;
         var succeededResults = new List<FetchResult>(results.Length);
         foreach (var result in results)
         {
@@ -84,10 +88,26 @@ public sealed class VpnCatalogService(
                 !string.Equals(source.Url, result.Source.Url, StringComparison.Ordinal) ||
                 source.DefaultProtocol != result.Source.DefaultProtocol)
                 continue;
+            // CAS is checked before health or candidates enter this atomic import.
+            if (result.Progress is { } progress)
+            {
+                if (progress.NextIndex != progress.State.NextIndex || progress.PreferFresh != progress.State.PreferFresh)
+                {
+                    if (!await VpnSourceImportStore.AcknowledgeAsync(db, progress.State, progress.NextIndex,
+                        now, token, progress.FreshBodyHash, progress.PreferFresh)) continue;
+                }
+                else if (!await db.VpnSourceImportStates.AnyAsync(state => state.VpnSourceId == source.Id &&
+                    state.SnapshotId == progress.State.SnapshotId && state.NextIndex == progress.State.NextIndex &&
+                    state.PreferFresh == progress.State.PreferFresh, token)) continue;
+            }
+            acceptedBatches.AddRange(result.Batches.Select(batch => batch with { Source = source }));
+            if (!result.FetchObserved || result.Error is not null)
+                cachedCandidates += result.Batches.Sum(batch => batch.Candidates.Count);
+            if (!result.FetchObserved) continue;
             source.LastFetchedAt = now;
             if (result.Error is not null)
             {
-                source.ConsecutiveFailures++;
+                source.ConsecutiveFailures = (int)Math.Min((long)source.ConsecutiveFailures + 1, int.MaxValue);
                 source.LastError = result.Error[..Math.Min(result.Error.Length, 500)];
                 source.NextFetchAt = SourceFetchSchedule.NextAttempt(
                     collectionStartedAt,
@@ -105,9 +125,7 @@ public sealed class VpnCatalogService(
             source.LastError = null;
             source.NextFetchAt = null;
             succeededResults.Add(result);
-            // Для выбора preferred URI используем актуальный priority из БД, а не снимок,
-            // с которым HTTP-запрос стартовал.
-            if (result.ContentFetched) acceptedResults.Add(result with { Source = source });
+
         }
 
         // Source health и импорт составляют одну транзакцию: успешный источник не должен
@@ -115,8 +133,7 @@ public sealed class VpnCatalogService(
         await db.SaveChangesAsync(token);
         var added = await BulkUpsertAsync(
             db,
-            acceptedResults.Select(result => new VpnImportBatch(
-                result.Source, result.Candidates, result.ObservedAt)).ToArray(),
+            acceptedBatches,
             now,
             options.Value.LastSeenRefreshMinutes,
             token);
@@ -126,7 +143,7 @@ public sealed class VpnCatalogService(
         return new(
             sourceCount,
             succeeded,
-            succeededResults.Sum(result => result.ConfirmedCandidateCount),
+            succeededResults.Sum(result => result.ConfirmedCandidateCount) + cachedCandidates,
             added,
             contentFetched,
             succeeded - contentFetched);
@@ -521,79 +538,108 @@ public sealed class VpnCatalogService(
         CancellationToken token)
     {
         var results = new System.Collections.Concurrent.ConcurrentBag<FetchResult>();
-        // HttpClient потокобезопасен, а factory уже управляет сроком жизни handler'а.
-        // Один экземпляр на цикл исключает сотни короткоживущих wrapper-объектов.
-        var client = httpClientFactory.CreateClient("sources");
-        await Parallel.ForEachAsync(sources, new ParallelOptions { MaxDegreeOfParallelism = options.Value.SourceConcurrency, CancellationToken = token },
-            async (source, cancellationToken) =>
+        using var client = httpClientFactory.CreateClient("sources");
+        var importStore = new VpnSourceImportStore(dbFactory);
+        var sourceLimit = Math.Min(options.Value.MaxProxiesPerSource, MaximumCandidatesPerVpnSource);
+        var admissions = new VpnSnapshotAdmission(sourceLimit, options.Value.MaxCandidatesPerRun);
+        await Parallel.ForEachAsync(sources, new ParallelOptions
+        {
+            MaxDegreeOfParallelism = options.Value.SourceConcurrency,
+            CancellationToken = token
+        }, async (source, cancellationToken) =>
+        {
+            VpnSourceImportState? state = null;
+            VpnCandidateSnapshot? fresh = null;
+            List<VpnCandidate> tail = [];
+            var fetchedObserved = SourceFetchSchedule.IsDue(source.NextFetchAt, collectionStartedAt, forceAllSources);
+            var contentFetched = false;
+            var confirmedCount = source.LastItemCount;
+            var etag = source.HttpETag;
+            var modified = source.HttpLastModifiedAt;
+            string? error = null;
+            try
             {
-                try
+                state = await importStore.LoadAsync(source, cancellationToken);
+                if (state is not null && state.NextIndex < state.CandidateCount)
                 {
-                    var useValidators = !forceAllSources && SourceConditionalFetchPolicy.ShouldUseValidators(
-                        source.LastContentFetchedAt,
-                        source.LastSucceededAt,
-                        source.LastItemCount,
-                        collectionStartedAt,
-                        options.Value.DeadRetentionDays);
-                    var fetched = await SourceHttpFetcher.FetchAsync(
-                        client,
-                        source.Url,
+                    try { tail = ReadTail(state); }
+                    catch (InvalidDataException)
+                    {
+                        await importStore.DiscardAsync(VpnSourceImportCheckpoint.Capture(state), cancellationToken);
+                        state = null;
+                    }
+                }
+                if (fetchedObserved)
+                {
+                    // A 304 for a newer body cannot replace its unsaved tail after the old queue completes.
+                    var completeBodyKnown = state is not null && (state.NextIndex < state.CandidateCount ||
+                        state.SnapshotBodyHash.AsSpan().SequenceEqual(state.FreshBodyHash));
+                    var useValidators = !forceAllSources && completeBodyKnown && SourceConditionalFetchPolicy.ShouldUseValidators(
+                        source.LastContentFetchedAt, source.LastSucceededAt, source.LastItemCount,
+                        collectionStartedAt, options.Value.DeadRetentionDays);
+                    var fetched = await SourceHttpFetcher.FetchAsync(client, source.Url,
                         useValidators ? source.HttpETag : null,
                         useValidators ? source.HttpLastModifiedAt : null,
-                        MaximumFeedBytes,
-                        options.Value.SourceTimeoutSeconds,
-                        options.Value.SourceRetryCount,
-                        cancellationToken,
-                        SourceFeedParser.EnsureSupportedMediaType);
+                        MaximumFeedBytes, options.Value.SourceTimeoutSeconds, options.Value.SourceRetryCount,
+                        cancellationToken, SourceFeedParser.EnsureSupportedMediaType);
+                    etag = fetched.HttpETag;
+                    modified = fetched.HttpLastModifiedAt;
                     if (fetched.NotModified)
                     {
-                        if (source.LastSucceededAt is null || source.LastContentFetchedAt is null || source.LastItemCount <= 0)
-                            throw new InvalidDataException("VPN feed вернул 304 без подтверждённого полного снимка.");
-                        results.Add(new(
-                            source,
-                            [],
-                            source.LastItemCount,
-                            ContentFetched: false,
-                            fetched.HttpETag,
-                            fetched.HttpLastModifiedAt,
-                            Error: null,
-                            ObservedAt: collectionStartedAt));
-                        return;
+                        if (!completeBodyKnown || source.LastSucceededAt is null || source.LastItemCount <= 0)
+                            throw new InvalidDataException("VPN feed вернул 304 без сохранённого полного снимка.");
                     }
+                    else
+                    {
+                        // Canonicalize the complete body before taking a bounded fresh window.
+                        fresh = VpnCandidateSnapshotCodec.Encode(
+                            fetched.Content ?? throw new InvalidDataException("VPN feed не вернул тело."), source.DefaultProtocol);
+                        contentFetched = true;
+                        confirmedCount = fresh.UniqueCount;
+                        state = await importStore.BeginAsync(source, fresh, collectionStartedAt, cancellationToken);
+                        tail = [];
+                        if (state is not null && state.NextIndex < state.CandidateCount) tail = ReadTail(state);
+                        if (state is not null && !fresh.BodyHash.AsSpan().SequenceEqual(state.FreshBodyHash))
+                        {
+                            // Validators are only retained after a fresh window was committed in a preceding run.
+                            etag = null;
+                            modified = null;
+                        }
+                    }
+                }
+            }
+            catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+            {
+                fresh = null;
+                contentFetched = false;
+                error = exception.Message;
+                OperationalLogBoundary.Write(() => SourceFailed(logger, source.Id, exception));
+            }
 
-                    var maximumCandidates = Math.Min(options.Value.MaxProxiesPerSource, MaximumCandidatesPerVpnSource);
-                    var candidates = VpnFeedParser.Parse(
-                        fetched.Content ?? throw new InvalidDataException("VPN feed не вернул тело."),
-                        source.DefaultProtocol,
-                        maximumCandidates);
-                    results.Add(new(
-                        source,
-                        candidates,
-                        candidates.Count,
-                        ContentFetched: true,
-                        fetched.HttpETag,
-                        fetched.HttpLastModifiedAt,
-                        Error: null,
-                        ObservedAt: collectionStartedAt));
-                }
-                catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
-                {
-                    OperationalLogBoundary.Write(() => SourceFailed(logger, source.Id, exception));
-                    results.Add(new(source, [], 0, false, null, null, exception.Message, collectionStartedAt));
-                }
-            });
+            var admission = state is null ? null : admissions.Admit(source, state, tail, fresh, collectionStartedAt);
+            results.Add(new(source, admission?.Batches ?? [], confirmedCount, contentFetched, etag, modified,
+                error, fetchedObserved, admission?.Progress));
+
+            List<VpnCandidate> ReadTail(VpnSourceImportState snapshot)
+            {
+                var candidates = new List<VpnCandidate>();
+                VpnSourceImportStore.ReadWindow(snapshot, sourceLimit, candidate => { candidates.Add(candidate); return true; });
+                return candidates;
+            }
+        });
         return results.ToArray();
     }
 
     private sealed record FetchResult(
         VpnSource Source,
-        IReadOnlyList<VpnCandidate> Candidates,
+        IReadOnlyList<VpnImportBatch> Batches,
         int ConfirmedCandidateCount,
         bool ContentFetched,
         string? HttpETag,
         DateTimeOffset? HttpLastModifiedAt,
         string? Error,
-        DateTimeOffset ObservedAt);
+        bool FetchObserved,
+        VpnSourceImportProgress? Progress);
 }
 
 /// <summary>Партия URI с фактическим временем наблюдения тела feed.</summary>
@@ -623,7 +669,7 @@ public sealed record VpnCollectionResult
     public int Added { get; }
     /// <summary>Источников, вернувших и заново разобравших полное тело.</summary>
     public int ContentFetched { get; }
-    /// <summary>Источников, подтверждённых HTTP 304 без импорта каталога.</summary>
+    /// <summary>Источников, подтверждённых HTTP 304; сохранённый остаток может импортироваться.</summary>
     public int NotModified { get; }
 }
 

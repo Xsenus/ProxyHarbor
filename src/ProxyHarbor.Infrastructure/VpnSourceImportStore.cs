@@ -13,6 +13,30 @@ internal sealed class VpnSourceImportStore(
 {
     internal const long MaxStoredBytes = 512L * 1024 * 1024;
 
+    internal async Task CleanupAsync(CancellationToken token)
+    {
+        await using var strategyDb = await dbFactory.CreateDbContextAsync(token);
+        await strategyDb.Database.CreateExecutionStrategy().ExecuteAsync(async () =>
+        {
+            await using var db = await dbFactory.CreateDbContextAsync(token);
+            await using var transaction = await db.Database.BeginTransactionAsync(token);
+            await PostgresAdvisoryLock.AcquireTransactionAsync((NpgsqlConnection)db.Database.GetDbConnection(),
+                (NpgsqlTransaction)transaction.GetDbTransaction(), PostgresAdvisoryLock.VpnMutationKey, token);
+            await db.VpnSourceImportStates.Where(state => !db.VpnSources.Any(source => source.Id == state.VpnSourceId &&
+                source.Enabled && source.Url == state.SourceUrl && source.DefaultProtocol == state.SourceProtocol))
+                .ExecuteDeleteAsync(token);
+            await transaction.CommitAsync(token);
+        });
+    }
+
+    internal async Task DiscardAsync(VpnSourceImportCheckpoint state, CancellationToken token)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(token);
+        await db.VpnSourceImportStates.Where(item => item.VpnSourceId == state.VpnSourceId &&
+            item.SnapshotId == state.SnapshotId && item.NextIndex == state.NextIndex && item.PreferFresh == state.PreferFresh)
+            .ExecuteDeleteAsync(token);
+    }
+
     internal async Task<VpnSourceImportState?> LoadAsync(VpnSource source, CancellationToken token)
     {
         await using var db = await dbFactory.CreateDbContextAsync(token);

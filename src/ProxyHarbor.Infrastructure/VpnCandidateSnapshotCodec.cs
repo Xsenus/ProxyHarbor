@@ -15,6 +15,7 @@ internal static class VpnCandidateSnapshotCodec
     internal const int MaxPageBytes = 256 * 1024;
     internal const int MaxPageRecords = 2_048;
     private const int MaxUriBytes = 65_536;
+    private const int MaxUriCharacters = 16_384;
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
 
     internal static VpnCandidateSnapshot Encode(string content, VpnProtocol fallback)
@@ -37,7 +38,8 @@ internal static class VpnCandidateSnapshotCodec
         {
             var hostBytes = StrictUtf8.GetByteCount(candidate.Host);
             var uriBytes = candidate.ConnectionUri is null ? -1 : StrictUtf8.GetByteCount(candidate.ConnectionUri);
-            if (hostBytes is < 1 or > 253 || uriBytes > MaxUriBytes) throw InvalidSnapshot();
+            if (hostBytes is < 1 or > 253 || uriBytes > MaxUriBytes || candidate.ConnectionUri?.Length > MaxUriCharacters)
+                throw InvalidSnapshot();
             var recordBytes = 10 + hostBytes + Math.Max(0, uriBytes);
             if (pageRecords == MaxPageRecords || used + recordBytes > MaxPageBytes) FlushPage();
             var identity = (candidate.Host, candidate.Port, candidate.Protocol, candidate.Transport);
@@ -190,7 +192,7 @@ internal static class VpnCandidateSnapshotCodec
         var uri = uriBytes < 0 ? null : ReadText(page.Slice(position, uriBytes));
         position += Math.Max(0, uriBytes);
         var candidate = new VpnCandidate(host, port, protocol, transportByte == 1 ? "udp" : "tcp", uri);
-        if (!VpnFeedParser.IsSafe(candidate) || host.Any(char.IsUpper) || uri?.Length > 16_384)
+        if (!VpnFeedParser.IsSafe(candidate) || host.Any(char.IsUpper) || uri?.Length > MaxUriCharacters)
             throw InvalidSnapshot();
         // Revalidate URI provenance independently of the serialized endpoint: a corrupt
         // cache cannot pair a public host with a private or different ready-to-import URI.

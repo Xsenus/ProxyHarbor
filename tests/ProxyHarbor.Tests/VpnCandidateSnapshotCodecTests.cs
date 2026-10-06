@@ -78,6 +78,25 @@ public sealed class VpnCandidateSnapshotCodecTests
         Assert.Equal(VpnFeedParser.Parse(content, VpnProtocol.Vless), received);
     }
 
+    [Theory]
+    [InlineData(16_384, true)]
+    [InlineData(16_385, false)]
+    public void SnapshotEncodingHonorsDatabaseUriCharacterLimitBeforePersisting(int length, bool accepted)
+    {
+        const string prefix = "vless://id@8.8.8.8:443#";
+        var uri = prefix + new string('x', length - prefix.Length);
+        if (!accepted)
+        {
+            Assert.Throws<InvalidDataException>(() => VpnCandidateSnapshotCodec.Encode(uri, VpnProtocol.Vless));
+            return;
+        }
+        var snapshot = VpnCandidateSnapshotCodec.Encode(uri, VpnProtocol.Vless);
+        var received = new List<VpnCandidate>();
+        Assert.True(VpnCandidateSnapshotCodec.ReadWindow(snapshot.Payload, 0, 1,
+            candidate => { received.Add(candidate); return true; }).Completed);
+        Assert.Equal(uri, Assert.Single(received).ConnectionUri);
+    }
+
     [Fact]
     public void RejectedAdmissionLeavesCursorAtUncommittedRecord()
     {

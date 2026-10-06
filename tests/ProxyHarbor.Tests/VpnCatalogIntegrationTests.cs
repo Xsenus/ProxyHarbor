@@ -827,15 +827,14 @@ public sealed class VpnCatalogIntegrationTests
 
     private sealed class TestHttpClientFactory(HttpMessageHandler handler) : IHttpClientFactory, IDisposable
     {
-        private readonly HttpClient client = new(handler) { Timeout = Timeout.InfiniteTimeSpan };
         private int createCalls;
         internal int CreateCalls => Volatile.Read(ref createCalls);
         public HttpClient CreateClient(string name)
         {
             Interlocked.Increment(ref createCalls);
-            return client;
+            return new HttpClient(handler, disposeHandler: false) { Timeout = Timeout.InfiniteTimeSpan };
         }
-        public void Dispose() => client.Dispose();
+        public void Dispose() => handler.Dispose();
     }
 
     private sealed class SequencedHandler : HttpMessageHandler
