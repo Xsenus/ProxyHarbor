@@ -9,6 +9,29 @@ namespace ProxyHarbor.Tests;
 
 public sealed class VpnCandidateSnapshotCodecTests
 {
+    [Fact]
+    public void LegacyShadowsocksRoundTripsWithModernDuplicateAcrossBoundedWindows()
+    {
+        var legacy = "ss://" + Convert.ToBase64String(Encoding.UTF8.GetBytes("aes-256-gcm:old@8.8.8.8:443")) + "#old,,";
+        const string modern = "ss://aes-256-gcm:new@8.8.8.8:443#new";
+        var other = "ss://" + Convert.ToBase64String(Encoding.UTF8.GetBytes("aes-256-gcm:other@1.1.1.1:8388"));
+        var unsafeUri = "ss://" + Convert.ToBase64String(Encoding.UTF8.GetBytes("aes-256-gcm:private@127.0.0.1:443"));
+        var body = JsonSerializer.Serialize(legacy) + ",\n" + other + "\n" + modern + "\n" + unsafeUri;
+        var snapshot = VpnCandidateSnapshotCodec.Encode(body, VpnProtocol.Shadowsocks);
+        Assert.Equal(2, snapshot.UniqueCount);
+        Assert.Equal(3, snapshot.RecordCount);
+        var received = new List<VpnCandidate>();
+        var first = VpnCandidateSnapshotCodec.ReadWindow(snapshot.Payload, 0, 1,
+            candidate => { received.Add(candidate); return true; });
+        Assert.False(first.Completed);
+        Assert.Equal(modern, Assert.Single(received).ConnectionUri);
+        var last = VpnCandidateSnapshotCodec.ReadWindow(snapshot.Payload, first.NextIndex, 1,
+            candidate => { received.Add(candidate); return true; });
+        Assert.True(last.Completed);
+        Assert.Equal(other, received[1].ConnectionUri);
+        Assert.Equal(VpnFeedParser.Parse(body, VpnProtocol.Shadowsocks), received);
+    }
+
     [Theory]
     [InlineData("#label,,", false)]
     [InlineData("?alpn=h2,http/1.1,", false)]

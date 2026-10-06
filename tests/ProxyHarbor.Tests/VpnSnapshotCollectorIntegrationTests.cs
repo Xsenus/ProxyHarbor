@@ -1,5 +1,6 @@
 using System.Net;
 using System.Security.Cryptography;
+using System.Text;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -13,6 +14,35 @@ namespace ProxyHarbor.Tests;
 [Collection(PostgresIntegrationGroup.Name)]
 public sealed class VpnSnapshotCollectorIntegrationTests
 {
+    [Fact, Trait("Category", "PostgresIntegration")]
+    public async Task LegacyShadowsocksPersistsOriginalUriAndDrainsCachedTailOn304()
+    {
+        await using var database = await SnapshotDatabase.CreateAsync();
+        if (database is null) return;
+        await AddSourceAsync(database, "legacy-shadowsocks");
+        var first = "ss://" + Convert.ToBase64String(Encoding.UTF8.GetBytes("aes-256-gcm:old@8.8.8.8:443")) + "#old,,";
+        var last = "ss://" + Convert.ToBase64String(Encoding.UTF8.GetBytes("aes-256-gcm:new@8.8.8.8:443")) + "#new,,";
+        var neighbour = "ss://" + Convert.ToBase64String(Encoding.UTF8.GetBytes("aes-256-gcm:other@1.1.1.1:8388"));
+        var unsafeUri = "ss://" + Convert.ToBase64String(Encoding.UTF8.GetBytes("aes-256-gcm:private@127.0.0.1:443"));
+        using var clients = new FeedClients(_ => first + "\n" + last + "\n" + unsafeUri + "\n" + neighbour);
+        var service = Service(database, clients, Settings(1));
+        Assert.Equal(1, (await service.CollectAsync()).Added);
+        var resumed = await service.CollectAsync();
+        Assert.Equal(1, resumed.Added);
+        Assert.Equal(1, resumed.NotModified);
+        await using var db = database.Factory.CreateDbContext();
+        Assert.Null((await db.VpnSources.SingleAsync()).LastError);
+        var endpoints = await db.VpnEndpoints.ToArrayAsync();
+        Assert.Equal(2, endpoints.Length);
+        Assert.All(endpoints, endpoint => Assert.Equal(VpnProtocol.Shadowsocks, endpoint.Protocol));
+        Assert.Equal(last, endpoints.Single(endpoint => endpoint.Port == 443).ConnectionUri);
+        Assert.Equal(neighbour, endpoints.Single(endpoint => endpoint.Port == 8388).ConnectionUri);
+        Assert.Equal(2, await db.VpnEndpointSources.CountAsync());
+        var state = await db.VpnSourceImportStates.SingleAsync();
+        Assert.Equal(2, state.NextIndex);
+        Assert.Empty(state.Payload);
+    }
+
     [Theory, Trait("Category", "PostgresIntegration")]
     [InlineData(false)]
     [InlineData(true)]
