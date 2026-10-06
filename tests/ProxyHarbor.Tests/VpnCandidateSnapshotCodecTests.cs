@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.IO.Compression;
 using System.Text;
+using System.Text.Json;
 using ProxyHarbor.Domain;
 using ProxyHarbor.Infrastructure;
 
@@ -8,6 +9,27 @@ namespace ProxyHarbor.Tests;
 
 public sealed class VpnCandidateSnapshotCodecTests
 {
+    [Theory]
+    [InlineData("#label,,", false)]
+    [InlineData("?alpn=h2,http/1.1,", false)]
+    [InlineData("#label,", true)]
+    [InlineData("#label\"", true)]
+    public void SupersededUriPunctuationCannotInvalidatePageContainingCanonicalRecord(string suffix, bool quoted)
+    {
+        var first = "vless://first@8.8.8.8:443" + suffix;
+        const string last = "vless://last@8.8.8.8:443#new";
+        var body = (quoted ? JsonSerializer.Serialize(first) + "," : first) + "\n" + last;
+        var records = new List<VpnCandidate>();
+        Assert.Equal(2, VpnFeedParser.ParseRecordsTo(body, VpnProtocol.Vless, 10, records.Add));
+        Assert.Equal(first, records[0].ConnectionUri);
+        var snapshot = VpnCandidateSnapshotCodec.Encode(body, VpnProtocol.Vless);
+        Assert.Equal(2, snapshot.RecordCount);
+        var received = new List<VpnCandidate>();
+        Assert.True(VpnCandidateSnapshotCodec.ReadWindow(snapshot.Payload, 0, 1,
+            candidate => { received.Add(candidate); return true; }).Completed);
+        Assert.Equal(last, Assert.Single(received).ConnectionUri);
+    }
+
     [Fact]
     public void RepeatedBoundedWindowsReachEveryRecordBeyondCollectorPrefix()
     {

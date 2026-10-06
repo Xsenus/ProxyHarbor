@@ -79,10 +79,18 @@ public static class VpnFeedParser
             // JSON-массивы часто добавляют к строке внешние кавычки и запятую. Запятые
             // внутри query VPN URI при этом являются частью конфигурации и не могут быть
             // глобальным разделителем строк.
-            if (lineSpan.EndsWith(",", StringComparison.Ordinal)) lineSpan = lineSpan[..^1].TrimEnd();
-            lineSpan = lineSpan.Trim('"');
-            if (lineSpan.Length is 0 or > 16_384 || lineSpan[0] == '#') continue;
-            var line = lineSpan.ToString();
+            // Allow two outer JSON quotes and one separator without reducing the URI limit.
+            if (lineSpan.Length is 0 or > 16_387 || lineSpan[0] == '#') continue;
+            string line;
+            if (lineSpan[0] == '"')
+            {
+                if (lineSpan.EndsWith(",", StringComparison.Ordinal)) lineSpan = lineSpan[..^1].TrimEnd();
+                try { line = JsonSerializer.Deserialize<string>(lineSpan) ?? string.Empty; }
+                catch (JsonException) { continue; }
+            }
+            else line = lineSpan.ToString();
+            if (line.AsSpan().IndexOfAny('\r', '\n', '\0') >= 0) continue;
+            line = line.Trim();
             if (line.Length is 0 or > 16_384 || line[0] == '#') continue;
             if (line.StartsWith("vmess://", StringComparison.OrdinalIgnoreCase))
             {

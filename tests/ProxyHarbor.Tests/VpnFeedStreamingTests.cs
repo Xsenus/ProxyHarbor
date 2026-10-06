@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using ProxyHarbor.Domain;
 using ProxyHarbor.Infrastructure;
 
@@ -6,6 +7,61 @@ namespace ProxyHarbor.Tests;
 
 public sealed class VpnFeedStreamingTests
 {
+    [Fact]
+    public void QuotedUriUsesSameBoundaryWhitespaceNormalizationAsPlainFeed()
+    {
+        const string uri = "vless://id@8.8.8.8:443#label,,";
+        var body = JsonSerializer.Serialize(" \t" + uri + " \t") + ",";
+        var candidate = Assert.Single(VpnFeedParser.Parse(body, VpnProtocol.Vless));
+        Assert.Equal(uri, candidate.ConnectionUri);
+        Assert.Equal(candidate, Assert.Single(VpnFeedParser.Parse(uri, VpnProtocol.Vless)));
+    }
+
+    [Theory]
+    [InlineData(16_384, true)]
+    [InlineData(16_385, false)]
+    public void JsonWrapperDoesNotReduceReadyUriLengthLimit(int length, bool accepted)
+    {
+        const string prefix = "vless://id@8.8.8.8:443#";
+        var uri = prefix + new string('a', length - prefix.Length);
+        var parsed = VpnFeedParser.Parse(JsonSerializer.Serialize(uri) + ",", VpnProtocol.Vless);
+        if (accepted) Assert.Equal(uri, Assert.Single(parsed).ConnectionUri);
+        else Assert.Empty(parsed);
+    }
+
+    [Theory]
+    [InlineData("#label,", false)]
+    [InlineData("#label,,", false)]
+    [InlineData("?alpn=h2,http/1.1,", false)]
+    [InlineData("#label\"", false)]
+    [InlineData("#label,", true)]
+    [InlineData("#label\"", true)]
+    public void ReadyUriPunctuationIsPreservedAndReparsesExactly(string suffix, bool quoted)
+    {
+        var uri = "vless://id@8.8.8.8:443" + suffix;
+        var body = quoted ? JsonSerializer.Serialize(uri) + "," : uri;
+        var candidate = Assert.Single(VpnFeedParser.Parse(body, VpnProtocol.Vless));
+        Assert.Equal(uri, candidate.ConnectionUri);
+        Assert.Equal(candidate, Assert.Single(VpnFeedParser.Parse(uri, candidate.Protocol)));
+    }
+
+    [Theory]
+    [InlineData("\n")]
+    [InlineData("\r")]
+    [InlineData("\0")]
+    public void QuotedUriCannotInjectDecodedControlCharacters(string control)
+    {
+        var body = JsonSerializer.Serialize("vless://id@8.8.8.8:443#label" + control + "vless://id@127.0.0.1:443");
+        Assert.Empty(VpnFeedParser.Parse(body, VpnProtocol.Vless));
+    }
+
+    [Fact]
+    public void MalformedQuotedUriDoesNotDiscardHealthyNeighbour()
+    {
+        var body = "\"vless://id@8.8.8.8:443#bad\\x\",\nvless://id@9.9.9.9:443#healthy";
+        Assert.Equal("9.9.9.9", Assert.Single(VpnFeedParser.Parse(body, VpnProtocol.Vless)).Host);
+    }
+
     [Fact]
     public void CallerIndexedStreamDecodesSubscriptionAndDeliversEveryUriOccurrence()
     {
