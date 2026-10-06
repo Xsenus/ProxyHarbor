@@ -740,6 +740,7 @@ public sealed class BackupRestoreRoundTripIntegrationTests
         Transport = "tcp",
         CountryCode = "DE",
         ConnectionUri = "vless://public-id@vpn.example.com:443?security=tls#round-trip",
+        ConnectionUriObservedAt = SnapshotTime.AddMinutes(-5),
         Status = VpnEndpointStatus.Reachable,
         LatencyMs = 87,
         FirstSeenAt = SnapshotTime.AddDays(-3),

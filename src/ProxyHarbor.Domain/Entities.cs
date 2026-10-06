@@ -78,6 +78,8 @@ public sealed class VpnEndpoint
     /// для импорта VLESS/VMess/Trojan/SS и не является внутренним секретом ProxyHarbor.
     /// </summary>
     public string? ConnectionUri { get; set; }
+    /// <summary>Время наблюдения сохранённой URI в полном теле feed, а не время импорта очереди.</summary>
+    public DateTimeOffset? ConnectionUriObservedAt { get; set; }
     /// <summary>Текущее состояние доступности.</summary>
     public VpnEndpointStatus Status { get; set; } = VpnEndpointStatus.Pending;
     /// <summary>Задержка установления TCP-соединения.</summary>
