@@ -23,6 +23,8 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
     public DbSet<VpnEndpoint> VpnEndpoints => Set<VpnEndpoint>();
     /// <summary>Разрешённые публичные VPN feed'ы.</summary>
     public DbSet<VpnSource> VpnSources => Set<VpnSource>();
+    /// <summary>Ephemeral cursor state полного VPN import.</summary>
+    public DbSet<VpnSourceImportState> VpnSourceImportStates => Set<VpnSourceImportState>();
     /// <summary>Происхождение каждого VPN endpoint.</summary>
     public DbSet<VpnEndpointSource> VpnEndpointSources => Set<VpnEndpointSource>();
     /// <summary>История циклов сбора.</summary>
@@ -492,6 +494,20 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
             table.HasCheckConstraint("CK_VpnSources_Counters", "\"LastItemCount\" >= 0 AND \"ConsecutiveFailures\" >= 0");
             table.HasCheckConstraint("CK_VpnSources_FetchTimeline", "\"LastSucceededAt\" IS NULL OR (\"LastFetchedAt\" IS NOT NULL AND \"LastSucceededAt\" <= \"LastFetchedAt\")");
             table.HasCheckConstraint("CK_VpnSources_ContentTimeline", "\"LastContentFetchedAt\" IS NULL OR (\"LastFetchedAt\" IS NOT NULL AND \"LastSucceededAt\" IS NOT NULL AND \"LastContentFetchedAt\" <= \"LastFetchedAt\" AND \"LastContentFetchedAt\" <= \"LastSucceededAt\")");
+        });
+
+        var vpnImport = builder.Entity<VpnSourceImportState>();
+        vpnImport.HasKey(x => x.VpnSourceId);
+        vpnImport.Property(x => x.SourceUrl).HasMaxLength(2048);
+        vpnImport.Property(x => x.StoredBytes).HasComputedColumnSql("octet_length(\"Payload\")", stored: true);
+        vpnImport.HasOne<VpnSource>().WithOne()
+            .HasForeignKey<VpnSourceImportState>(x => x.VpnSourceId).OnDelete(DeleteBehavior.Cascade);
+        vpnImport.ToTable(table =>
+        {
+            table.HasCheckConstraint("CK_VpnSourceImportStates_Cursor",
+                "\"CandidateCount\" BETWEEN 1 AND 1000000 AND \"NextIndex\" BETWEEN 0 AND \"CandidateCount\" AND \"SourceProtocol\" BETWEEN 0 AND 7");
+            table.HasCheckConstraint("CK_VpnSourceImportStates_Payload",
+                "octet_length(\"Payload\") <= 50331648 AND octet_length(\"SnapshotBodyHash\") = 32 AND octet_length(\"FreshBodyHash\") = 32 AND ((\"NextIndex\" < \"CandidateCount\" AND octet_length(\"Payload\") > 16 AND octet_length(\"PayloadHash\") = 32) OR (\"NextIndex\" = \"CandidateCount\" AND octet_length(\"Payload\") = 0 AND octet_length(\"PayloadHash\") = 0))");
         });
 
         var vpnEndpoint = builder.Entity<VpnEndpoint>();

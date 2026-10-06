@@ -212,6 +212,8 @@ dotnet run --project src/ProxyHarbor.Restore -- `
   --replace-existing-data
 ```
 
+Операционные очереди импорта `ProxySourceImportStates` и `VpnSourceImportStates` исключены из portable архива и очищаются в транзакции успешного restore, включая старые архивы. При ошибке или отмене восстановления очистка откатывается вместе с данными. Полный VPN-каталог, provenance и `ConnectionUriObservedAt` относятся к durable данным и сохраняются. Если исторический архив не содержит даты наблюдения URI, импорт не разрешает старому снимку перезаписать её раньше сохранённого `LastSeenAt`.
+
 После restore проверьте readiness, количество строк, несколько известных source/proxy/audit записей, отсутствие эфемерных proxy lease и создание нового backup новым экземпляром.
 
 ## Аварийная замена production-БД

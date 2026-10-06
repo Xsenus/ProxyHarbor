@@ -19,31 +19,58 @@ public static class VpnFeedParser
     {
         if (string.IsNullOrWhiteSpace(content)) return [];
         ArgumentOutOfRangeException.ThrowIfLessThan(maxResults, 1);
-        var result = new Dictionary<string, VpnCandidate>(StringComparer.OrdinalIgnoreCase);
-        ParseText(content, fallback, result, maxResults);
+        var result = new CandidateSink(maxResults);
+        ParseText(content, fallback, result);
         if (result.Count == 0 && TryDecodeBase64(content.Trim(), out var decoded))
-            ParseText(decoded, fallback, result, maxResults);
-        return result.Values.ToArray();
+            ParseText(decoded, fallback, result);
+        return result.Items;
+    }
+
+    /// <summary>Обходит полный feed, передавая каждую безопасную запись, включая обновления URI дубликатов.</summary>
+    internal static VpnParseSummary ParseAllTo(
+        string content, VpnProtocol fallback, int maxRecords, Action<VpnCandidate> accept)
+    {
+        ArgumentNullException.ThrowIfNull(content);
+        ArgumentNullException.ThrowIfNull(accept);
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxRecords, 1);
+        var result = new CandidateSink(maxRecords, accept);
+        ParseText(content, fallback, result);
+        if (result.Count == 0 && TryDecodeBase64(content.Trim(), out var decoded))
+            ParseText(decoded, fallback, result);
+        return new VpnParseSummary(result.Count, result.RecordCount);
+    }
+
+    /// <summary>Передаёт записи без второго identity-набора, когда получатель уже индексирует endpoint.</summary>
+    internal static int ParseRecordsTo(
+        string content, VpnProtocol fallback, int maxRecords, Action<VpnCandidate> accept)
+    {
+        ArgumentNullException.ThrowIfNull(content);
+        ArgumentNullException.ThrowIfNull(accept);
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxRecords, 1);
+        var result = new CandidateSink(maxRecords, accept, trackIdentities: false);
+        ParseText(content, fallback, result);
+        if (result.RecordCount == 0 && TryDecodeBase64(content.Trim(), out var decoded))
+            ParseText(decoded, fallback, result);
+        return result.RecordCount;
     }
 
     private static void ParseText(
         string content,
         VpnProtocol fallback,
-        Dictionary<string, VpnCandidate> result,
-        int maxResults)
+        CandidateSink result)
     {
         // OpenVPN-конфигурации и WireGuard INI могут занимать несколько строк.
         if (fallback == VpnProtocol.OpenVpn)
         {
-            ParseOpenVpnJson(content, result, maxResults);
-            ParseOpenVpn(content, result, maxResults);
+            ParseOpenVpnJson(content, result);
+            ParseOpenVpn(content, result);
         }
-        if (fallback == VpnProtocol.WireGuard) ParseWireGuardConfig(content, result, maxResults);
+        if (fallback == VpnProtocol.WireGuard) ParseWireGuardConfig(content, result);
 
         // Не используем string.Split: крупный публичный feed создавал массив из сотен
         // тысяч строк и кратковременно удваивал расход памяти контейнера. Здесь в памяти
         // существует только текущий сегмент, а разбор останавливается после bounded-лимита.
-        for (var start = 0; start <= content.Length && result.Count < maxResults;)
+        for (var start = 0; start <= content.Length && !result.AtLimit;)
         {
             var end = start;
             while (end < content.Length && content[end] is not ('\r' or '\n')) end++;
@@ -59,16 +86,16 @@ public static class VpnFeedParser
             if (line.Length is 0 or > 16_384 || line[0] == '#') continue;
             if (line.StartsWith("vmess://", StringComparison.OrdinalIgnoreCase))
             {
-                if (!TryParseVmess(line, result) && TryProtocolUri(line, fallback, out var candidate))
+                if (!TryParseVmess(line, result) && TryProtocolUri(line, out var candidate))
                     Add(candidate, result);
             }
-            else if (TryProtocolUri(line, fallback, out var candidate)) Add(candidate, result);
+            else if (TryProtocolUri(line, out var candidate)) Add(candidate, result);
             else if (fallback == VpnProtocol.OpenVpn && TryDecodeBase64(line, out var ovpn))
-                ParseOpenVpn(ovpn, result, maxResults);
+                ParseOpenVpn(ovpn, result);
         }
     }
 
-    private static bool TryProtocolUri(string value, VpnProtocol fallback, out VpnCandidate candidate)
+    private static bool TryProtocolUri(string value, out VpnCandidate candidate)
     {
         candidate = default;
         var separator = value.IndexOf("://", StringComparison.Ordinal);
@@ -77,13 +104,15 @@ public static class VpnFeedParser
         var protocol = scheme switch
         {
             "vless" => VpnProtocol.Vless,
+            "vmess" => VpnProtocol.Vmess,
             "trojan" => VpnProtocol.Trojan,
             "ss" => VpnProtocol.Shadowsocks,
             "hysteria2" or "hy2" => VpnProtocol.Hysteria2,
             "tuic" => VpnProtocol.Tuic,
             "wireguard" or "wg" => VpnProtocol.WireGuard,
-            _ => fallback
+            _ => (VpnProtocol)(-1)
         };
+        if (!Enum.IsDefined(protocol)) return false;
         var authorityStart = separator + 3;
         var authorityEnd = value.AsSpan(authorityStart).IndexOfAny('?', '#');
         authorityEnd = authorityEnd < 0 ? value.Length : authorityStart + authorityEnd;
@@ -99,7 +128,7 @@ public static class VpnFeedParser
         return IsSafe(candidate);
     }
 
-    private static bool TryParseVmess(string value, Dictionary<string, VpnCandidate> result)
+    private static bool TryParseVmess(string value, CandidateSink result)
     {
         var payloadEnd = value.AsSpan(8).IndexOfAny('?', '#');
         var payload = payloadEnd < 0 ? value[8..] : value[8..(8 + payloadEnd)];
@@ -108,25 +137,25 @@ public static class VpnFeedParser
         {
             using var document = JsonDocument.Parse(json, new JsonDocumentOptions { MaxDepth = 16 });
             var root = document.RootElement;
-            if (!root.TryGetProperty("add", out var address) || !root.TryGetProperty("port", out var portElement)) return false;
+            if (root.ValueKind != JsonValueKind.Object ||
+                !root.TryGetProperty("add", out var address) || address.ValueKind != JsonValueKind.String ||
+                !root.TryGetProperty("port", out var portElement) ||
+                portElement.ValueKind is not (JsonValueKind.String or JsonValueKind.Number)) return false;
             var host = address.GetString();
             var portText = portElement.ValueKind == JsonValueKind.Number ? portElement.GetRawText() : portElement.GetString();
             if (host is null || !int.TryParse(portText, out var port)) return false;
-            var before = result.Count;
-            Add(new VpnCandidate(host, port, VpnProtocol.Vmess, "tcp", value), result);
-            return result.Count > before;
+            return Add(new VpnCandidate(host, port, VpnProtocol.Vmess, "tcp", value), result);
         }
         catch (JsonException) { return false; }
     }
 
     private static void ParseOpenVpn(
         string content,
-        Dictionary<string, VpnCandidate> result,
-        int maxResults)
+        CandidateSink result)
     {
-        foreach (var raw in content.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        using var lines = new StringReader(content);
+        while (!result.AtLimit && lines.ReadLine() is { } raw)
         {
-            if (result.Count >= maxResults) return;
             var parts = raw.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
             if (parts.Length < 3 || !parts[0].Equals("remote", StringComparison.OrdinalIgnoreCase) || !int.TryParse(parts[2], out var port)) continue;
             var transport = parts.Length > 3 && parts[3].StartsWith("udp", StringComparison.OrdinalIgnoreCase) ? "udp" : "tcp";
@@ -136,8 +165,7 @@ public static class VpnFeedParser
 
     private static void ParseOpenVpnJson(
         string content,
-        Dictionary<string, VpnCandidate> result,
-        int maxResults)
+        CandidateSink result)
     {
         var trimmed = content.AsSpan().TrimStart();
         if (trimmed.IsEmpty || trimmed[0] is not ('{' or '[')) return;
@@ -149,19 +177,18 @@ public static class VpnFeedParser
             {
                 foreach (var item in document.RootElement.EnumerateArray())
                 {
-                    ParseOpenVpnJsonContainer(item, result, maxResults);
-                    if (result.Count >= maxResults) return;
+                    ParseOpenVpnJsonContainer(item, result);
+                    if (result.AtLimit) return;
                 }
             }
-            else ParseOpenVpnJsonContainer(document.RootElement, result, maxResults);
+            else ParseOpenVpnJsonContainer(document.RootElement, result);
         }
         catch (JsonException) { }
     }
 
     private static void ParseOpenVpnJsonContainer(
         JsonElement container,
-        Dictionary<string, VpnCandidate> result,
-        int maxResults)
+        CandidateSink result)
     {
         if (container.ValueKind != JsonValueKind.Object ||
             !container.TryGetProperty("servers", out var servers) ||
@@ -169,23 +196,23 @@ public static class VpnFeedParser
 
         foreach (var server in servers.EnumerateArray())
         {
-            if (result.Count >= maxResults) return;
+            if (result.AtLimit) return;
             if (server.ValueKind != JsonValueKind.Object ||
                 !server.TryGetProperty("openvpn_configdata_base64", out var encoded) ||
                 encoded.ValueKind != JsonValueKind.String ||
                 !TryDecodeBase64(encoded.GetString() ?? string.Empty, out var configuration)) continue;
-            ParseOpenVpn(configuration, result, maxResults);
+            ParseOpenVpn(configuration, result);
         }
     }
 
     private static void ParseWireGuardConfig(
         string content,
-        Dictionary<string, VpnCandidate> result,
-        int maxResults)
+        CandidateSink result)
     {
-        foreach (var raw in content.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        using var lines = new StringReader(content);
+        while (!result.AtLimit && lines.ReadLine() is { } line)
         {
-            if (result.Count >= maxResults) return;
+            var raw = line.Trim();
             if (!raw.StartsWith("Endpoint", StringComparison.OrdinalIgnoreCase)) continue;
             var value = raw[(raw.IndexOf('=') + 1)..].Trim();
             if (TryHostPort(value, out var host, out var port)) Add(new(host, port, VpnProtocol.WireGuard, "udp"), result);
@@ -200,15 +227,43 @@ public static class VpnFeedParser
         return false;
     }
 
-    private static void Add(VpnCandidate candidate, Dictionary<string, VpnCandidate> result)
+    private static bool Add(VpnCandidate candidate, CandidateSink result)
     {
-        if (!IsSafe(candidate)) return;
+        if (!IsSafe(candidate)) return false;
         var normalizedHost = candidate.Host.Trim().Trim('[', ']').ToLowerInvariant();
         var normalized = candidate with { Host = normalizedHost };
-        result[$"{normalized.Protocol}:{normalized.Transport}:{normalized.Host}:{normalized.Port}"] = normalized;
+        result.Add(normalized);
+        return true;
     }
 
-    private static bool IsSafe(VpnCandidate candidate)
+    private sealed class CandidateSink(int maximum, Action<VpnCandidate>? accept = null, bool trackIdentities = true)
+    {
+        private readonly Dictionary<CandidateIdentity, VpnCandidate>? _items = accept is null ? [] : null;
+        private readonly HashSet<CandidateIdentity>? _identities = accept is not null && trackIdentities ? [] : null;
+        internal int Count => _items?.Count ?? _identities?.Count ?? RecordCount;
+        internal int RecordCount { get; private set; }
+        internal bool AtLimit => accept is null && Count >= maximum;
+        internal IReadOnlyList<VpnCandidate> Items => _items!.Values.ToArray();
+
+        internal void Add(VpnCandidate candidate)
+        {
+            var identity = new CandidateIdentity(candidate.Host, candidate.Port, candidate.Protocol, candidate.Transport);
+            if (_items is not null)
+                _items[identity] = candidate;
+            else
+            {
+                if (RecordCount == maximum)
+                    throw new InvalidDataException("VPN feed превышает безопасное число записей снимка.");
+                _identities?.Add(identity);
+                accept!(candidate);
+            }
+            RecordCount++;
+        }
+    }
+
+    private readonly record struct CandidateIdentity(string Host, int Port, VpnProtocol Protocol, string Transport);
+
+    internal static bool IsSafe(VpnCandidate candidate)
     {
         // PostgreSQL text/json values cannot contain U+0000. Some public subscription
         // files contain binary padding inside an otherwise parseable URI; Uri.TryCreate
@@ -259,3 +314,5 @@ public readonly record struct VpnCandidate
     /// <summary>Исходная готовая URI-конфигурация для импорта клиентом.</summary>
     public string? ConnectionUri { get; init; }
 }
+
+internal readonly record struct VpnParseSummary(int UniqueCount, int RecordCount);

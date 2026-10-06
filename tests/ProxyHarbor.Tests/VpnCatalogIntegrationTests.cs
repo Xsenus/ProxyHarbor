@@ -268,9 +268,9 @@ public sealed class VpnCatalogIntegrationTests
 
             Assert.Equal(0, repeated.Added);
             Assert.Equal(3, handler.Requests);
-            // Повтор идентичного feed внутри LastSeenRefreshMinutes не создаёт новые
-            // MVCC-версии двух самых горячих таблиц каталога.
-            Assert.Equal(versionsBefore, versionsAfter);
+            // Свежий body подтверждает эпоху URI, provenance остаётся coalesced.
+            Assert.NotEqual(versionsBefore.Endpoint, versionsAfter.Endpoint);
+            Assert.Equal(versionsBefore.Provenance, versionsAfter.Provenance);
         }
         finally
         {
@@ -801,7 +801,9 @@ public sealed class VpnCatalogIntegrationTests
             var duplicate = await service.CollectAsync(forceAllSources: true);
             Assert.Equal(0, duplicate.Added);
             Assert.Equal(20_000, duplicate.Candidates);
-            Assert.Equal(before, await ReadCatalogVersionsAsync(builder.ConnectionString, overlapId, preferredId));
+            var after = await ReadCatalogVersionsAsync(builder.ConnectionString, overlapId, preferredId);
+            Assert.NotEqual(before.Endpoint, after.Endpoint);
+            Assert.Equal(before.Provenance, after.Provenance);
             await using var final = await factory.CreateDbContextAsync();
             Assert.Equal(15_000, await final.VpnEndpoints.CountAsync());
             Assert.Equal(20_000, await final.VpnEndpointSources.CountAsync());
@@ -825,15 +827,14 @@ public sealed class VpnCatalogIntegrationTests
 
     private sealed class TestHttpClientFactory(HttpMessageHandler handler) : IHttpClientFactory, IDisposable
     {
-        private readonly HttpClient client = new(handler) { Timeout = Timeout.InfiniteTimeSpan };
         private int createCalls;
         internal int CreateCalls => Volatile.Read(ref createCalls);
         public HttpClient CreateClient(string name)
         {
             Interlocked.Increment(ref createCalls);
-            return client;
+            return new HttpClient(handler, disposeHandler: false) { Timeout = Timeout.InfiniteTimeSpan };
         }
-        public void Dispose() => client.Dispose();
+        public void Dispose() => handler.Dispose();
     }
 
     private sealed class SequencedHandler : HttpMessageHandler

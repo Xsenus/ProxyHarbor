@@ -165,8 +165,8 @@ Defaults ниже соответствуют `src/ProxyHarbor.Api/appsettings.js
 | `SourceRetryCount` | 2 | 0..5 | Повторы transient failure |
 | `SourceFailureBackoffBaseMinutes` | 15 | 1..1440 | Начальный source backoff |
 | `SourceFailureBackoffMaxHours` | 24 | 1..720 | Максимальный source backoff |
-| `MaxProxiesPerSource` | 500000 | 1..1000000 | Защита от слишком большого feed |
-| `MaxCandidatesPerRun` | 500000 | 1..5000000 | Лимит объединённого цикла |
+| `MaxProxiesPerSource` | 500000 | 1..1000000 | Лимит одной порции feed; для VPN не более 10000, остаток сохраняется в очереди |
+| `MaxCandidatesPerRun` | 500000 | 1..5000000 | Лимит объединённого proxy-цикла; VPN использует отдельный такой же бюджет связей source/endpoint на цикл |
 | `LastSeenRefreshMinutes` | 360 | 1..10080 | Ограничение write amplification |
 | `DeadRetentionDays` | 3 | 1..365 | Хранение старых Pending/Dead, которые ни разу не были Alive; исторически рабочие строки не удаляются |
 | `RunRetentionDays` | 30 | 1..3650 | Хранение истории циклов сбора |

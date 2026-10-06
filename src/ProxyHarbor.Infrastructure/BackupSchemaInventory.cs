@@ -72,7 +72,8 @@ public static class BackupSchemaInventory
         Included("ValidationRuns", "database/validation-runs.json", "Validation audit."),
         Included("VpnEndpoints", "database/vpn-endpoints.json", "VPN catalog."),
         Included("VpnEndpointSources", "database/vpn-endpoint-sources.json", "VPN provenance links."),
-        Included("VpnSources", "database/vpn-sources.json", "VPN source catalog and fetch state.")
+        Included("VpnSources", "database/vpn-sources.json", "VPN source catalog and fetch state."),
+        Ephemeral("VpnSourceImportStates", "Pending VPN payload and cursor must be re-fetched after restore, without hiding restored membership.")
     ];
 
     private static BackupTableClassification Included(

@@ -270,6 +270,7 @@ internal static class RestoreApplication
             // Замена выполняется в одной транзакции: при любой ошибке старая БД остаётся целой.
             // Operational VERIFY history belongs to the target environment, not the archive.
             await db.BackupDestinationHealthOutcomes.ExecuteDeleteAsync(token);
+            await db.VpnSourceImportStates.ExecuteDeleteAsync(token);
             if (hasDestinationOrchestrationSnapshot)
             {
                 await db.BackupDeliveryJobs.ExecuteDeleteAsync(token);
