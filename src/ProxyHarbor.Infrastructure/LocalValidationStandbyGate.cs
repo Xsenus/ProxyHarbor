@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using ProxyHarbor.Domain;
 
 namespace ProxyHarbor.Infrastructure;
 
@@ -60,6 +61,22 @@ public sealed class LocalValidationStandbyGate(
                     .SumAsync(node => (long)node.Concurrency, cancellationToken);
                 var requiredConcurrency = Math.Clamp(options.Value.ValidationConcurrency, 1, 1_000);
                 var shouldStandBy = externalConcurrency >= requiredConcurrency;
+                if (shouldStandBy)
+                {
+                    var tlsConcurrency = await db.CheckerNodes
+                        .AsNoTracking()
+                        .Where(node => node.Enabled && node.SupportsTlsProxyTransport &&
+                            node.DeploymentStatus == "online" && node.LastHeartbeatAt >= heartbeatCutoff)
+                        .SumAsync(node => (long)node.Concurrency, cancellationToken);
+                    // Legacy capacity cannot drain TLS rows. Reserve the local validator
+                    // only while capable nodes can cover this work or no TLS work is due.
+                    if (tlsConcurrency < requiredConcurrency)
+                        shouldStandBy = !await db.Proxies.AsNoTracking().AnyAsync(proxy =>
+                            proxy.Protocol >= ProxyProtocol.HttpTls &&
+                            (proxy.NextCheckAt == null || proxy.NextCheckAt <= now) &&
+                            !db.ProxyValidationLeases.Any(lease => lease.ProxyId == proxy.Id && lease.LeaseUntil >= now),
+                            cancellationToken);
+                }
                 Volatile.Write(ref _snapshot, new Snapshot(shouldStandBy, now.Add(SnapshotLifetime)));
                 return shouldStandBy;
             }

@@ -78,6 +78,81 @@ public sealed class LocalValidationStandbyGateTests
         Assert.Equal(2, factory.Attempts);
     }
 
+    [Theory]
+    [InlineData(ProxyProtocol.HttpTls, null, null, false)]
+    [InlineData(ProxyProtocol.HttpTlsUnverified, null, null, false)]
+    [InlineData(ProxyProtocol.HttpTls, -1, null, false)]
+    [InlineData(ProxyProtocol.HttpTlsUnverified, 60, null, true)]
+    [InlineData(ProxyProtocol.HttpTls, null, 60, true)]
+    [InlineData(ProxyProtocol.HttpTlsUnverified, null, -1, false)]
+    public async Task LegacyCapacityCannotSuppressDueUnleasedTlsWork(
+        ProxyProtocol protocol, int? nextCheckSeconds, int? leaseSeconds, bool expectedStandby)
+    {
+        var clock = new ManualTimeProvider();
+        var factory = CreateFactory();
+        await AddNodeAsync(factory, clock.GetUtcNow(), true, "online", 80);
+        await using (var db = factory.CreateDbContext())
+        {
+            var proxy = new ProxyEndpoint
+            {
+                Host = "8.8.8.8",
+                Port = 443,
+                Protocol = protocol,
+                NextCheckAt = nextCheckSeconds.HasValue ? clock.GetUtcNow().AddSeconds(nextCheckSeconds.Value) : null
+            };
+            db.Proxies.Add(proxy);
+            if (leaseSeconds.HasValue)
+                db.ProxyValidationLeases.Add(new ProxyValidationLease
+                {
+                    ProxyId = proxy.Id,
+                    LeaseId = Guid.NewGuid(),
+                    LeaseUntil = clock.GetUtcNow().AddSeconds(leaseSeconds.Value)
+                });
+            await db.SaveChangesAsync();
+        }
+        using var gate = CreateGate(factory, clock, 80);
+        Assert.Equal(expectedStandby, await gate.ShouldStandByAsync(CancellationToken.None));
+    }
+
+    [Theory]
+    [InlineData(true, "online", 80, 0, true)]
+    [InlineData(true, "online", 79, 0, false)]
+    [InlineData(false, "online", 200, 0, false)]
+    [InlineData(true, "failed", 200, 0, false)]
+    [InlineData(true, "online", 200, -121, false)]
+    public async Task OnlyHealthyCapableCapacityCanReplaceLocalTlsValidation(
+        bool enabled, string status, int tlsConcurrency, int heartbeatSeconds, bool expectedStandby)
+    {
+        var clock = new ManualTimeProvider();
+        var factory = CreateFactory();
+        await AddNodeAsync(factory, clock.GetUtcNow(), true, "online", 200);
+        await AddNodeAsync(factory, clock.GetUtcNow().AddSeconds(heartbeatSeconds), enabled, status, tlsConcurrency, supportsTls: true);
+        await using (var db = factory.CreateDbContext())
+        {
+            db.Proxies.Add(new ProxyEndpoint { Host = "8.8.8.8", Port = 443, Protocol = ProxyProtocol.HttpTls });
+            await db.SaveChangesAsync();
+        }
+        using var gate = CreateGate(factory, clock, 80);
+        Assert.Equal(expectedStandby, await gate.ShouldStandByAsync(CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task NewTlsWorkWakesLocalReserveAfterCachedDecisionExpires()
+    {
+        var clock = new ManualTimeProvider();
+        var factory = CreateFactory();
+        await AddNodeAsync(factory, clock.GetUtcNow(), true, "online", 80);
+        using var gate = CreateGate(factory, clock, 80);
+        Assert.True(await gate.ShouldStandByAsync(CancellationToken.None));
+        await using (var db = factory.CreateDbContext())
+        {
+            db.Proxies.Add(new ProxyEndpoint { Host = "8.8.8.8", Port = 443, Protocol = ProxyProtocol.HttpTlsUnverified });
+            await db.SaveChangesAsync();
+        }
+        clock.Advance(LocalValidationStandbyGate.SnapshotLifetime.Add(TimeSpan.FromMilliseconds(1)));
+        Assert.False(await gate.ShouldStandByAsync(CancellationToken.None));
+    }
+
     private static LocalValidationStandbyGate CreateGate(
         IDbContextFactory<ProxyHarborDbContext> factory,
         TimeProvider clock,
@@ -101,7 +176,8 @@ public sealed class LocalValidationStandbyGateTests
         DateTimeOffset heartbeat,
         bool enabled,
         string status,
-        int concurrency)
+        int concurrency,
+        bool supportsTls = false)
     {
         await using var db = await factory.CreateDbContextAsync();
         db.CheckerNodes.Add(new CheckerNode
@@ -113,7 +189,8 @@ public sealed class LocalValidationStandbyGateTests
             Enabled = enabled,
             DeploymentStatus = status,
             LastHeartbeatAt = heartbeat,
-            Concurrency = concurrency
+            Concurrency = concurrency,
+            SupportsTlsProxyTransport = supportsTls
         });
         await db.SaveChangesAsync();
     }
