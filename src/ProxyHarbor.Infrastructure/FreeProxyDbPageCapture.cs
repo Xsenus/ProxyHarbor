@@ -23,6 +23,11 @@ internal sealed class FreeProxyDbPageCapture
 
     internal static bool Supports(string url) =>
         FreeProxyDbFeedFetcher.Supports(url) || string.Equals(url, VpnUrl, StringComparison.Ordinal);
+    internal static bool IsSearchUrl(string url) => Uri.TryCreate(url, UriKind.Absolute, out var uri) &&
+        uri.Host.Equals("freeproxydb.com", StringComparison.OrdinalIgnoreCase) &&
+        uri.AbsolutePath.TrimEnd('/').Equals("/api/proxy/search", StringComparison.Ordinal);
+    internal static bool IsApiOriginUrl(string url) => Uri.TryCreate(url, UriKind.Absolute, out var uri) &&
+        uri.Host.TrimEnd('.').Equals("freeproxydb.com", StringComparison.OrdinalIgnoreCase);
 
     internal FreeProxyDbCaptureStatus Inspect(int maximumBytes)
     {

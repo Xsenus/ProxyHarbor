@@ -75,6 +75,11 @@ public sealed class ProxyCollector(
                 var allSources = await db.Sources.AsNoTracking().Where(x => x.Enabled)
                     .OrderBy(x => x.Priority).ToListAsync(cancellationToken);
                 var importStore = new ProxySourceImportStore(dbFactory);
+                var apiStore = new SourceApiCaptureStore(dbFactory);
+                await apiStore.CleanupAsync(cancellationToken);
+                var completeApiSources = (await db.SourceApiCaptureStates.AsNoTracking()
+                    .Where(state => state.Complete && state.ProxySourceId != null)
+                    .Select(state => state.ProxySourceId!.Value).ToArrayAsync(cancellationToken)).ToHashSet();
                 // Старые snapshots отключённых/изменённых feed'ов не должны занимать
                 // storage-квоту постоянно; отсутствие state требует полного re-fetch.
                 await db.ProxySourceImportStates.Where(state => !db.Sources.Any(source =>
@@ -93,6 +98,7 @@ public sealed class ProxyCollector(
                     }).ToDictionaryAsync(state => state.ProxySourceId, cancellationToken);
                 var sources = allSources.Where(source =>
                         SourceFetchSchedule.IsDue(source.NextFetchAt, collectionStartedAt, forceAllSources, source.Url) ||
+                        completeApiSources.Contains(source.Id) ||
                         (importMetadata.TryGetValue(source.Id, out var state) && state.SourceUrl == source.Url &&
                             state.SourceProtocol == source.DefaultProtocol && state.NextIndex < state.CandidateCount))
                     .OrderBy(source => importMetadata.TryGetValue(source.Id, out var state) &&
@@ -126,13 +132,19 @@ public sealed class ProxyCollector(
                 {
                     var result = sourceResultById[source.Id];
                     // Cached-only импорт не является новой HTTP-проверкой источника.
-                    if (!result.FetchObserved) continue;
                     // Admin мог заменить endpoint, пока старый HTTP-запрос находился в полёте.
                     // Результат старой конфигурации нельзя приписывать новой: особенно ETag и
                     // LastContentFetchedAt, иначе новый feed способен получать ложные 304.
                     if (!string.Equals(source.Url, result.SourceUrl, StringComparison.Ordinal) ||
                         source.DefaultProtocol != result.SourceProtocol)
                         continue;
+                    if (!result.FetchObserved)
+                    {
+                        if (result.RetryNotBefore > source.NextFetchAt ||
+                            source.NextFetchAt is null && result.RetryNotBefore is not null)
+                            source.NextFetchAt = result.RetryNotBefore;
+                        continue;
+                    }
                     var fetchedAt = DateTimeOffset.UtcNow;
                     source.LastFetchedAt = fetchedAt;
                     source.LastError = result.Error?[..Math.Min(500, result.Error.Length)];
@@ -308,10 +320,14 @@ public sealed class ProxyCollector(
             ProxyCandidateSnapshot? newSnapshot = null;
             List<ProxyCandidateKey>? freshCandidates = null;
             byte[]? freshBodyHash = null;
+            SourceApiFetchResult? apiFetch = null;
             try
             {
                 importState = await importStore.LoadAsync(source, token);
-                if (!SourceFetchSchedule.IsDue(source.NextFetchAt, collectionStartedAt, forceAllSources, source.Url))
+                var apiOwner = FreeProxyDbFeedFetcher.Supports(source.Url) ? SourceApiCaptureOwner.From(source) : null;
+                var apiCheckpoint = apiOwner is null ? null : await new SourceApiCaptureStore(dbFactory).LoadAsync(apiOwner, token);
+                var apiComplete = apiCheckpoint?.Capture.Inspect(MaxSourceBytes).Complete == true;
+                if (!apiComplete && !SourceFetchSchedule.IsDue(source.NextFetchAt, collectionStartedAt, forceAllSources, source.Url))
                 {
                     sourceResults.Add(new SourceCollectionResult(
                         source.Id, source.Url, source.DefaultProtocol,
@@ -389,7 +405,16 @@ public sealed class ProxyCollector(
                         source.LastItemCount,
                         collectionStartedAt,
                         options.Value.DeadRetentionDays);
-                    fetched = await FetchSourceStateAsync(
+                    if (apiOwner is not null)
+                    {
+                        apiFetch = await new FreeProxyDbSourceApiFetcher(dbFactory).FetchAsync(apiOwner,
+                            (url, pageToken) => SourceHttpFetcher.FetchAsync(client, url, null, null,
+                                FreeProxyDbPageCapture.MaximumPageBytes, options.Value.SourceTimeoutSeconds,
+                                options.Value.SourceRetryCount, pageToken, SourceFeedParser.EnsureSupportedMediaType,
+                                sameOriginRedirectsOnly: true, respectRateLimit: true, sourceApiRequest: true), token);
+                        fetched = apiFetch.Fetch;
+                    }
+                    else fetched = await FetchSourceStateAsync(
                         client,
                         source.Url,
                         useValidators ? source.HttpETag : null,
@@ -449,32 +474,46 @@ public sealed class ProxyCollector(
                     source.Id, source.Url, source.DefaultProtocol,
                     parsed.Count, parsed.Truncated,
                     fetched.HttpETag, fetched.HttpLastModifiedAt,
-                    ContentFetched: true, Error: null,
-                    credentialStatus, credentialCheckedAt, credentialExpiresAt, credentialError));
+                    ContentFetched: apiFetch?.NetworkObserved ?? true, Error: null,
+                    credentialStatus, credentialCheckedAt, credentialExpiresAt, credentialError,
+                    FetchObserved: apiFetch?.NetworkObserved ?? true,
+                    RetryNotBefore: apiFetch?.NextRefreshAt));
             }
             catch (Exception exception) when (
                 exception is not OperationCanceledException || !token.IsCancellationRequested)
             {
                 freshCandidates = null;
                 freshBodyHash = null;
+                if (apiFetch is not null && exception is InvalidDataException)
+                    await new SourceApiCaptureStore(dbFactory).DiscardAsync(apiFetch.Checkpoint, token);
                 var paidException = exception as PaidSourceException;
                 var safeError = paidException?.Message ?? exception.Message;
-                OperationalLogBoundary.Write(() => SourceFailed(logger, source.Name, exception));
+                if (exception is not SourceApiDeferredException)
+                    OperationalLogBoundary.Write(() => SourceFailed(logger, source.Name, exception));
                 sourceResults.Add(new SourceCollectionResult(
                     source.Id, source.Url, source.DefaultProtocol,
-                    0, false, null, null, ContentFetched: false, safeError,
+                    0, false, null, null, ContentFetched: false,
+                    exception is SourceApiDeferredException ? null : safeError,
                     paidException?.Status,
                     paid ? DateTimeOffset.UtcNow : null,
                     null,
                     paidException?.Message,
-                    RetryNotBefore: (exception as SourceRateLimitException)?.RetryNotBefore));
+                    FetchObserved: exception is not SourceApiDeferredException,
+                    RetryNotBefore: (exception as SourceRateLimitException)?.RetryNotBefore ??
+                        (exception as SourceApiDeferredException)?.NotBefore));
             }
             finally
             {
                 try
                 {
                     if (newSnapshot is not null)
+                    {
                         importState = await importStore.BeginAsync(source, newSnapshot, token);
+                        if (apiFetch is not null && importState is not null &&
+                            importState.CandidateCount == newSnapshot.Count &&
+                            importState.PayloadHash.AsSpan().SequenceEqual(SHA256.HashData(newSnapshot.Payload)))
+                            await new SourceApiCaptureStore(dbFactory).DiscardAsync(apiFetch.Checkpoint, token);
+                    }
                     if (importState is not null && importState.NextIndex < importState.CandidateCount &&
                         await importStore.IsCurrentOrDiscardAsync(importState, token))
                     {
@@ -581,12 +620,8 @@ public sealed class ProxyCollector(
         CancellationToken token,
         Func<TimeSpan, CancellationToken, Task>? delayAsync = null)
     {
-        if (FreeProxyDbFeedFetcher.Supports(url))
-            return await FreeProxyDbFeedFetcher.FetchAsync(MaxSourceBytes,
-                (pageUrl, pageToken) => SourceHttpFetcher.FetchAsync(client, pageUrl,
-                    null, null, MaxSourceBytes, options.Value.SourceTimeoutSeconds,
-                    options.Value.SourceRetryCount, pageToken, SourceFeedParser.EnsureSupportedMediaType,
-                    delayAsync, sameOriginRedirectsOnly: true, respectRateLimit: true), token);
+        if (FreeProxyDbPageCapture.IsSearchUrl(url))
+            throw new InvalidDataException("FreeProxyDB Search требует канонический URL зарегистрированного источника и сохраняемую очередь страниц.");
         return await SourceHttpFetcher.FetchAsync(
             client,
             url,
@@ -924,7 +959,7 @@ internal static class SourceFetchSchedule
     {
         // Public search documents per-IP/record quotas without numeric caps.
         // Keep successful full refreshes conservative; cached imports continue.
-        if (FreeProxyDbFeedFetcher.Supports(url)) return fetchedAt.AddHours(6);
+        if (FreeProxyDbPageCapture.Supports(url)) return fetchedAt.AddHours(6);
         if (Uri.TryCreate(url, UriKind.Absolute, out var uri) &&
             uri.Host.Equals("raw.githubusercontent.com", StringComparison.OrdinalIgnoreCase) &&
             uri.AbsolutePath.StartsWith("/litportnet/free-proxy-list/", StringComparison.OrdinalIgnoreCase))
@@ -933,7 +968,7 @@ internal static class SourceFetchSchedule
     }
 
     internal static bool IsDue(DateTimeOffset? nextFetchAt, DateTimeOffset now, bool forceAllSources, string? url = null) =>
-        (forceAllSources && (url is null || !FreeProxyDbFeedFetcher.Supports(url))) ||
+        (forceAllSources && (url is null || !FreeProxyDbPageCapture.Supports(url))) ||
         nextFetchAt is null || nextFetchAt <= now;
 
     internal static DateTimeOffset NextAttempt(

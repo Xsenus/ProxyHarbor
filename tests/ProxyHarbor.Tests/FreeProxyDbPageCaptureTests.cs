@@ -128,6 +128,9 @@ public sealed class FreeProxyDbPageCaptureTests
     {
         Assert.True(FreeProxyDbPageCapture.Supports(FreeProxyDbPageCapture.VpnUrl));
         Assert.False(FreeProxyDbPageCapture.Supports(FreeProxyDbPageCapture.VpnUrl + "&key=private"));
+        Assert.True(FreeProxyDbPageCapture.IsSearchUrl(FreeProxyDbPageCapture.VpnUrl + "&key=private"));
+        Assert.True(FreeProxyDbPageCapture.IsSearchUrl("https://freeproxydb.com/api/proxy/search/?page_size=1"));
+        Assert.False(FreeProxyDbPageCapture.IsSearchUrl("https://example.com/api/proxy/search"));
         var now = DateTimeOffset.UtcNow;
         Assert.Throws<InvalidDataException>(() => new FreeProxyDbPageCapture().Append(new(2, false, now, Page(1, Row(1))), MaximumBytes));
         Assert.Throws<InvalidDataException>(() => new FreeProxyDbPageCapture().Append(new(1, true, now, Page(1, Row(1))), MaximumBytes));

@@ -20,11 +20,14 @@ internal static class SourceHttpFetcher
         Action<string?>? ensureSupportedMediaType = null,
         Func<TimeSpan, CancellationToken, Task>? delayAsync = null,
         bool sameOriginRedirectsOnly = false,
-        bool respectRateLimit = false)
+        bool respectRateLimit = false,
+        bool sourceApiRequest = false)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumBytes);
         delayAsync ??= static (delay, cancellationToken) => Task.Delay(delay, cancellationToken);
-        var retries = Math.Clamp(retryCount, 0, 5);
+        // A durable API slot authorizes exactly one request. Retries are scheduled
+        // by its persisted page queue, rather than issuing another unreserved request.
+        var retries = sourceApiRequest ? 0 : Math.Clamp(retryCount, 0, 5);
         // Старые версии могли сохранить PostgreSQL infinity, а недоверенный feed —
         // прислать далёкое будущее. Такое значение не имеет права авторизовать 304.
         var requestLastModifiedAt = NormalizeLastModified(httpLastModifiedAt, DateTimeOffset.UtcNow);
@@ -36,7 +39,7 @@ internal static class SourceHttpFetcher
                 timeout.CancelAfter(TimeSpan.FromSeconds(Math.Max(2, timeoutSeconds)));
                 using var response = await GetWithSafeRedirectsAsync(
                     client, url, httpETag, requestLastModifiedAt,
-                    sameOriginRedirectsOnly, timeout.Token);
+                    sameOriginRedirectsOnly, sourceApiRequest, timeout.Token);
                 if (respectRateLimit && (int)response.StatusCode is 429 or 503)
                 {
                     var now = DateTimeOffset.UtcNow;
@@ -100,6 +103,7 @@ internal static class SourceHttpFetcher
         string? httpETag,
         DateTimeOffset? httpLastModifiedAt,
         bool sameOriginRedirectsOnly,
+        bool sourceApiRequest,
         CancellationToken token)
     {
         EntityTagHeaderValue? parsedETag = null;
@@ -109,6 +113,10 @@ internal static class SourceHttpFetcher
         var originalOrigin = current.GetLeftPart(UriPartial.Authority);
         for (var redirect = 0; redirect <= 3; redirect++)
         {
+            // Generic aliases must not bypass the API queue/origin lease via redirects.
+            // Only the durable API fetch callback sets sourceApiRequest after reserving its slot.
+            if (!sourceApiRequest && FreeProxyDbPageCapture.IsApiOriginUrl(current.AbsoluteUri))
+                throw new InvalidDataException("FreeProxyDB Search требует сохраняемую очередь страниц и общий лимит запросов.");
             if (!await NetworkSafety.IsSafePublicHttpsUrlAsync(current.AbsoluteUri, token))
                 throw new HttpRequestException(
                     "Источник или его перенаправление ведёт в запрещённую сеть.");
@@ -142,6 +150,8 @@ internal static class SourceHttpFetcher
 
             var location = response.Headers.Location;
             response.Dispose();
+            if (sourceApiRequest)
+                throw new HttpRequestException("Канонический API endpoint перенаправил запрос; требуется проверка адаптера.");
             if (location is null)
                 throw new HttpRequestException("Перенаправление источника не содержит Location.");
             current = location.IsAbsoluteUri ? location : new Uri(current, location);
