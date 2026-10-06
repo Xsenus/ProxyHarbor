@@ -1,7 +1,8 @@
 namespace ProxyHarbor.Domain;
 
 /// <summary>Heartbeat внешнего checker-agent без чувствительных данных.</summary>
-public sealed record CheckerHeartbeatRequest(string Version, int ActiveChecks = 0, string? Error = null);
+public sealed record CheckerHeartbeatRequest(string Version, int ActiveChecks = 0, string? Error = null,
+    bool SupportsTlsProxyTransport = false);
 
 /// <summary>Минимальная неизменяемая запись прокси, передаваемая внешнему checker-agent.</summary>
 public sealed record CheckerProxyItem(Guid Id, string Host, int Port, ProxyProtocol Protocol);

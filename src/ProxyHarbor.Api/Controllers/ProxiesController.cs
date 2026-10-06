@@ -788,9 +788,12 @@ public sealed record ProxyDto(
     public static ProxyDto From(ProxyEndpoint x)
     {
         // Категория HTTPS в публичных free-list означает HTTP CONNECT, а не TLS до proxy endpoint.
-        var transportScheme = x.Protocol is ProxyProtocol.Http or ProxyProtocol.Https
-            ? "http"
-            : x.Protocol.ToString().ToLowerInvariant();
+        var transportScheme = x.Protocol switch
+        {
+            ProxyProtocol.Http or ProxyProtocol.Https => "http",
+            ProxyProtocol.HttpTls or ProxyProtocol.HttpTlsUnverified => "https",
+            _ => x.Protocol.ToString().ToLowerInvariant()
+        };
         var host = x.Host.Contains(':') ? $"[{x.Host}]" : x.Host;
         long? activeForSeconds = x.CurrentAliveSince is { } activeSince
             ? Math.Max(0, (long)(DateTimeOffset.UtcNow - activeSince).TotalSeconds)
@@ -799,6 +802,9 @@ public sealed record ProxyDto(
             x.LatencyMs, x.SuccessRate, x.ExitIp, x.CountryCode, x.LastCheckedAt,
             x.FirstAliveAt, x.LastAliveAt, x.CurrentAliveSince, activeForSeconds);
     }
+
+    /// <summary>Whether the explicitly selected transport does not authenticate the proxy-hop certificate.</summary>
+    public bool RequiresUnverifiedProxyTls => Protocol == ProxyProtocol.HttpTlsUnverified;
 }
 
 /// <summary>Доступная страна и число свежих Alive-прокси в ней.</summary>

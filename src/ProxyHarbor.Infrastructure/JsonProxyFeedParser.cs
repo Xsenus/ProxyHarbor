@@ -99,24 +99,26 @@ internal static class JsonProxyFeedParser
         {
             if (protocols.ValueKind == JsonValueKind.Array)
                 foreach (var protocol in protocols.EnumerateArray())
-                    if (TryProtocol(protocol, out var parsed)) yield return parsed;
+                    if (TryProtocol(protocol, fallback, out var parsed)) yield return parsed;
             yield break;
         }
         if (value.TryGetProperty("protocol", out var single) || value.TryGetProperty("type", out single))
         {
-            if (TryProtocol(single, out var parsed)) yield return parsed;
+            if (TryProtocol(single, fallback, out var parsed)) yield return parsed;
             yield break;
         }
         yield return fallback;
     }
 
-    private static bool TryProtocol(JsonElement value, out ProxyProtocol protocol)
+    private static bool TryProtocol(JsonElement value, ProxyProtocol fallback, out ProxyProtocol protocol)
     {
         var name = value.ValueKind == JsonValueKind.String ? value.GetString()?.ToLowerInvariant() : null;
         protocol = name switch
         {
             "http" => ProxyProtocol.Http,
-            "https" => ProxyProtocol.Https,
+            "https" => fallback is ProxyProtocol.HttpTls or ProxyProtocol.HttpTlsUnverified ? fallback : ProxyProtocol.Https,
+            "httptls" or "http+tls" => ProxyProtocol.HttpTls,
+            "httptlsunverified" or "http+tls-unverified" => ProxyProtocol.HttpTlsUnverified,
             "socks4" => ProxyProtocol.Socks4,
             "socks5" => ProxyProtocol.Socks5,
             _ => (ProxyProtocol)(-1)

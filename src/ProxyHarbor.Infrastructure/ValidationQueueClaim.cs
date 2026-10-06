@@ -21,6 +21,7 @@ internal static class ValidationQueueClaim
                    NULL::uuid AS "PreviousLeaseId", proxy."Status", proxy."LastCheckedAt"
             FROM "Proxies" AS proxy
             WHERE proxy."NextCheckAt" = @paid_priority_at
+              AND proxy."Protocol" <= @maximum_protocol
               AND NOT EXISTS (
                   SELECT 1 FROM "ProxyValidationLeases" AS lease
                   WHERE lease."ProxyId" = proxy."Id")
@@ -51,6 +52,7 @@ internal static class ValidationQueueClaim
             FROM "Proxies" AS proxy
             JOIN "ProxyValidationLeases" AS lease ON lease."ProxyId" = proxy."Id"
             WHERE CASE proxy."Status" WHEN 1 THEN 0 WHEN 0 THEN 1 ELSE 2 END = @priority
+              AND proxy."Protocol" <= @maximum_protocol
               AND (proxy."NextCheckAt" IS NULL OR proxy."NextCheckAt" <= @now)
               AND lease."LeaseUntil" < @now
             ORDER BY proxy."NextCheckAt" NULLS FIRST, proxy."LastCheckedAt" NULLS FIRST
@@ -81,6 +83,7 @@ internal static class ValidationQueueClaim
                    proxy."NextCheckAt", proxy."LastCheckedAt"
             FROM "Proxies" AS proxy
             WHERE CASE proxy."Status" WHEN 1 THEN 0 WHEN 0 THEN 1 ELSE 2 END = @priority
+              AND proxy."Protocol" <= @maximum_protocol
               AND proxy."NextCheckAt" IS NULL
               AND NOT EXISTS (
                   SELECT 1 FROM "ProxyValidationLeases" AS lease
@@ -109,6 +112,7 @@ internal static class ValidationQueueClaim
                    proxy."NextCheckAt", proxy."LastCheckedAt"
             FROM "Proxies" AS proxy
             WHERE CASE proxy."Status" WHEN 1 THEN 0 WHEN 0 THEN 1 ELSE 2 END = @priority
+              AND proxy."Protocol" <= @maximum_protocol
               AND proxy."NextCheckAt" <= @now
               AND NOT EXISTS (
                   SELECT 1 FROM "ProxyValidationLeases" AS lease
@@ -136,9 +140,12 @@ internal static class ValidationQueueClaim
         DateTimeOffset leaseUntil,
         Guid leaseId,
         ValidationClaimIdleGate? idleGate,
-        CancellationToken token)
+        CancellationToken token,
+        int maximumProtocol = (int)ProxyProtocol.HttpTlsUnverified)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(batchSize, 1);
+        if (maximumProtocol != (int)ProxyProtocol.Socks5 && maximumProtocol != (int)ProxyProtocol.HttpTlsUnverified)
+            throw new ArgumentOutOfRangeException(nameof(maximumProtocol));
         if (leaseUntil <= now)
             throw new ArgumentOutOfRangeException(nameof(leaseUntil), "Lease должен завершаться после момента claim.");
         if (db.Database.CurrentTransaction is null)
@@ -160,7 +167,7 @@ internal static class ValidationQueueClaim
         // Платный provider обновляет NextCheckAt до специального маркера. Такой
         // endpoint забирается раньше любого обычного status/due диапазона.
         claimed.AddRange(await ClaimPaidPriorityAsync(
-            db, batchSize, leaseUntil, leaseId, token));
+            db, batchSize, leaseUntil, leaseId, maximumProtocol, token));
         if (claimed.Count >= batchSize)
         {
             idleGate?.MarkClaimResult(claimed.Count, batchSize);
@@ -175,25 +182,33 @@ internal static class ValidationQueueClaim
             {
                 var remainingExpired = batchSize - claimed.Count;
                 claimed.AddRange(await ClaimRangeAsync(
-                    db, ExpiredClaimSql, priority, remainingExpired, now, leaseUntil, leaseId, token));
+                    db, ExpiredClaimSql, priority, remainingExpired, now, leaseUntil, leaseId, maximumProtocol, token));
             }
 
             if (claimed.Count >= batchSize) continue;
             var remaining = batchSize - claimed.Count;
             claimed.AddRange(await ClaimRangeAsync(
-                db, NeverCheckedClaimSql, priority, remaining, now, leaseUntil, leaseId, token));
+                db, NeverCheckedClaimSql, priority, remaining, now, leaseUntil, leaseId, maximumProtocol, token));
 
             if (claimed.Count >= batchSize) continue;
             remaining = batchSize - claimed.Count;
             claimed.AddRange(await ClaimRangeAsync(
-                db, DueClaimSql, priority, remaining, now, leaseUntil, leaseId, token));
+                db, DueClaimSql, priority, remaining, now, leaseUntil, leaseId, maximumProtocol, token));
         }
 
         // Любая недозаполненная партия уже исчерпала все status/null/due ranges
         // текущего snapshot. Не заставляем остальные VPS немедленно повторять те же
         // пустые seek: новый due/import всё равно будет замечен максимум через
         // существующий двухсекундный bounded cooldown.
-        idleGate?.MarkClaimResult(claimed.Count, batchSize);
+        // A legacy agent's filtered empty result must not suppress TLS work for
+        // capable agents or the local validator. The partial TLS due index bounds
+        // this check independently of the size of the ordinary proxy catalogue.
+        var unsupportedWorkPending = idleGate is not null && claimed.Count < batchSize &&
+            maximumProtocol < (int)ProxyProtocol.HttpTlsUnverified &&
+            await db.Proxies.AsNoTracking().AnyAsync(proxy => proxy.Protocol >= ProxyProtocol.HttpTls &&
+                (proxy.NextCheckAt == null || proxy.NextCheckAt <= now) &&
+                !db.ProxyValidationLeases.Any(lease => lease.ProxyId == proxy.Id && lease.LeaseUntil >= now), token);
+        if (!unsupportedWorkPending) idleGate?.MarkClaimResult(claimed.Count, batchSize);
         return claimed;
     }
 
@@ -214,11 +229,13 @@ internal static class ValidationQueueClaim
         DateTimeOffset now,
         DateTimeOffset leaseUntil,
         Guid leaseId,
+        int maximumProtocol,
         CancellationToken token) =>
         db.Database.SqlQueryRaw<ValidationClaimCandidate>(
             sql,
             new NpgsqlParameter<int>("priority", priority),
             new NpgsqlParameter<int>("limit", limit),
+            new NpgsqlParameter<int>("maximum_protocol", maximumProtocol),
             new NpgsqlParameter<DateTimeOffset>("now", now),
             new NpgsqlParameter<DateTimeOffset>("lease_until", leaseUntil),
             new NpgsqlParameter<Guid>("lease_id", leaseId))
@@ -229,10 +246,12 @@ internal static class ValidationQueueClaim
         int limit,
         DateTimeOffset leaseUntil,
         Guid leaseId,
+        int maximumProtocol,
         CancellationToken token) =>
         db.Database.SqlQueryRaw<ValidationClaimCandidate>(
             PaidPriorityClaimSql,
             new NpgsqlParameter<int>("limit", limit),
+            new NpgsqlParameter<int>("maximum_protocol", maximumProtocol),
             new NpgsqlParameter<DateTimeOffset>("paid_priority_at",
                 PaidProxySourceCatalog.ImmediateValidationMarker),
             new NpgsqlParameter<DateTimeOffset>("lease_until", leaseUntil),

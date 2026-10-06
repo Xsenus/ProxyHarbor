@@ -3,7 +3,7 @@
 ## Общие правила
 
 - Base path: `/api/v1`.
-- JSON использует camelCase; enum сериализуются строками (`Http`, `Https`, `Socks4`, `Socks5`).
+- JSON использует camelCase; enum сериализуются строками (`Http`, `Https`, `Socks4`, `Socks5`, `HttpTls`, `HttpTlsUnverified`).
 - Публично возвращаются только свежие объективно проверенные Alive-прокси.
 - Ошибки валидации, конфликтов и throttling возвращаются как `application/problem+json`/`ProblemDetails`.
 - OpenAPI текущего процесса доступен по `/openapi/v1.json` и является authoritative контрактом generated clients.
@@ -32,13 +32,15 @@
 
 Категория `Https` во free-proxy feed обычно означает HTTP proxy с CONNECT, поэтому готовый transport URL имеет схему `http://`; поле `protocol` при этом остаётся `Https`.
 
+`HttpTls` устанавливает TLS до самого прокси, проверяет его сертификат системным trust store, затем выполняет CONNECT и отдельный HTTPS-запрос с проверкой сертификата сайта назначения. `HttpTlsUnverified` явно выбирает шифрование первого участка без проверки личности прокси, в том числе для опубликованных self-signed proxy endpoint. Этот режим не отключает проверку сертификата сайта назначения. Для обоих транспортов `url` имеет схему `https://`; JSON-поле `requiresUnverifiedProxyTls` равно `true` только для `HttpTlsUnverified`. Клиент должен отдельно и явно разрешить недоверенный сертификат прокси (например, `curl --proxy-insecure`), сохранив строгую проверку сайта. TXT содержит только URL; протокол и политика сертификата доступны в JSON/CSV/XML и в выбранном фильтре экспорта.
+
 ## Фильтры
 
 Одинаковые фильтры поддерживают list, seek и export:
 
 | Параметр | Тип | Значение |
 |---|---|---|
-| `protocol` | enum | `Http`, `Https`, `Socks4`, `Socks5` |
+| `protocol` | enum | `Http`, `Https`, `Socks4`, `Socks5`, `HttpTls`, `HttpTlsUnverified` |
 | `maxLatencyMs` | integer ≥ 1 | Верхняя граница измеренной latency |
 | `minSuccessRate` | decimal 0..100 | Минимальная доля успешных объективных проверок |
 | `country` | повторяемый ISO alpha-2 | Одна или несколько стран: `country=DE&country=NL`; также принимается `DE,NL` |
@@ -475,6 +477,8 @@ Host должен быть публичным IP. Пароль не сохран
 ### Agent API
 
 Маршруты `/api/v1/checker-agent/heartbeat`, `/lease`, `/lease/{leaseId}/renew` и `/lease/{leaseId}/results` предназначены только для checker-агента. Аутентификация требует одновременно UUID в `X-Checker-Node` и Bearer token. Lease выдаётся атомарно, продлевается heartbeat и принимается только с полным набором результатов. Bulk-результаты, завершение audit run и освобождение узла фиксируются одним PostgreSQL commit; при ошибке любой части весь completion откатывается. Эти маршруты не являются пользовательским API.
+
+Heartbeat объявляет `supportsTlsProxyTransport: true` только у агента, поддерживающего `HttpTls` и `HttpTlsUnverified`. Отсутствующий флаг означает `false`: старый агент получает только прежние HTTP/HTTPS/SOCKS-протоколы. Флаг сохраняется при обычном heartbeat и продлении lease. Пустая отфильтрованная очередь старого агента не устанавливает общий idle cooldown, пока TLS-задания доступны другим исполнителям.
 
 ## POST `/api/v1/admin/backup`
 

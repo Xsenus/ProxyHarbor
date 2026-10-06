@@ -9,8 +9,26 @@ function Sample() {
   return <><LanguageSwitcher/><h1>{t('liveCatalog')}</h1></>
 }
 
+function TlsPolicy() {
+  const { t } = useI18n()
+  return <p role="note">{t('proxyTlsNote')} {t('proxyTlsUnverifiedLabel')}</p>
+}
+
 describe('ProxyHarbor localization', () => {
   beforeEach(() => localStorage.clear())
+
+  it.each([
+    ['ru', 'Сертификат сайта назначения проверяется.', 'сертификат прокси не проверяется'],
+    ['en', 'The destination certificate is verified.', 'unverified proxy certificate'],
+    ['de', 'Das Zertifikat der Zielwebsite wird geprüft.', 'ungeprüftes Proxy-Zertifikat'],
+    ['fr', 'Le certificat du site de destination est vérifié.', 'certificat du proxy non vérifié'],
+    ['zh', '但仍验证目标网站的证书', '不验证代理证书'],
+  ])('explains both TLS certificate policies in %s', (language, destination, proxy) => {
+    localStorage.setItem('proxyharbor.language', language)
+    render(<I18nProvider><TlsPolicy/></I18nProvider>)
+    expect(screen.getByRole('note')).toHaveTextContent(destination)
+    expect(screen.getByRole('note')).toHaveTextContent(proxy)
+  })
 
   it('switches the UI immediately and persists the selected language', () => {
     render(<I18nProvider><Sample/></I18nProvider>)

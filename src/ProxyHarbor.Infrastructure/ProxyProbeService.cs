@@ -65,12 +65,21 @@ public sealed class ProxyProbeService(IOptions<CollectorOptions> options, Origin
                     "SOCKS4/SOCKS4a не поддерживает IPv6 literal назначения.");
 
             using var tcp = await _connectAsync(proxyHost, proxyPort, timeout.Token);
-            var stream = tcp.GetStream();
+            Stream stream = tcp.GetStream();
+            await using var proxyTls = proxyProtocol is ProxyProtocol.HttpTls or ProxyProtocol.HttpTlsUnverified
+                ? await ProxyTlsTransport.AuthenticateAsync(stream, proxyHost,
+                    proxyProtocol == ProxyProtocol.HttpTls
+                        ? ProxyTlsCertificatePolicy.SystemTrust
+                        : ProxyTlsCertificatePolicy.EncryptionOnly, timeout.Token)
+                : null;
+            if (proxyTls is not null) stream = proxyTls;
 
             switch (proxyProtocol)
             {
                 case ProxyProtocol.Http:
                 case ProxyProtocol.Https:
+                case ProxyProtocol.HttpTls:
+                case ProxyProtocol.HttpTlsUnverified:
                     await ProxyTunnelProtocol.EstablishHttpConnectAsync(
                         stream, control.Host, control.Port, timeout.Token);
                     break;

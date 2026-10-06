@@ -10,7 +10,11 @@ public enum ProxyProtocol
     /// <summary>Прокси протокола SOCKS4/SOCKS4a.</summary>
     Socks4,
     /// <summary>Прокси протокола SOCKS5.</summary>
-    Socks5
+    Socks5,
+    /// <summary>HTTP CONNECT over TLS to the proxy with system certificate validation.</summary>
+    HttpTls,
+    /// <summary>HTTP CONNECT over TLS without authenticating the proxy certificate; destination TLS remains strict.</summary>
+    HttpTlsUnverified
 }
 
 /// <summary>Текущее состояние прокси по результатам последней проверки.</summary>
@@ -411,6 +415,8 @@ public sealed class CheckerNode
     public DateTimeOffset? CurrentLeaseUntil { get; set; }
     /// <summary>Версия подключённого контейнера.</summary>
     public string? AgentVersion { get; set; }
+    /// <summary>Explicit capability advertised by a checker implementing TLS-to-proxy transports.</summary>
+    public bool SupportsTlsProxyTransport { get; set; }
     /// <summary>Фактический адрес последнего HTTPS-запроса агента.</summary>
     public string? RemoteAddress { get; set; }
     /// <summary>Состояние provisioning: pending/deploying/starting/failed.</summary>

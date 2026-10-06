@@ -15,7 +15,10 @@ public sealed class BuiltInSourceCatalogTests
         {
             var feeds = BuiltInSourceCatalog.Sources.Where(source => source.Provider == publisher).ToArray();
             Assert.Equal(4, feeds.Length);
-            Assert.Equal(Enum.GetValues<ProxyProtocol>(), feeds.Select(source => source.Protocol));
+            // These publishers document four legacy feed categories. TLS-to-proxy
+            // is an independent opt-in transport and must not relabel their HTTPS lists.
+            ProxyProtocol[] publishedProtocols = [ProxyProtocol.Http, ProxyProtocol.Https, ProxyProtocol.Socks4, ProxyProtocol.Socks5];
+            Assert.Equal(publishedProtocols, feeds.Select(source => source.Protocol));
             Assert.All(feeds, source => Assert.EndsWith(".txt", source.Url, StringComparison.Ordinal));
         }
         Assert.All(BuiltInSourceCatalog.Sources.Where(source => source.Provider == "Litport"), source =>
@@ -127,10 +130,16 @@ public sealed class BuiltInSourceCatalogTests
     }
 
     [Fact]
-    public void CatalogCoversEverySupportedProtocol()
+    public void CatalogCoversEveryLegacyProtocolAndDoesNotAutomaticallyOptIntoUnverifiedProxyTls()
     {
-        Assert.All(Enum.GetValues<ProxyProtocol>(), protocol =>
+        ProxyProtocol[] legacyProtocols = [ProxyProtocol.Http, ProxyProtocol.Https, ProxyProtocol.Socks4, ProxyProtocol.Socks5];
+        Assert.All(legacyProtocols, protocol =>
             Assert.Contains(BuiltInSourceCatalog.Sources, source => source.Protocol == protocol));
+        Assert.All(BuiltInSourceCatalog.Sources, source => Assert.True(Enum.IsDefined(source.Protocol)));
+        // New TLS profiles are explicitly selectable for user sources. No built-in
+        // feed has yet been admitted with evidence for its TLS certificate policy.
+        Assert.DoesNotContain(BuiltInSourceCatalog.Sources, source =>
+            source.Protocol is ProxyProtocol.HttpTls or ProxyProtocol.HttpTlsUnverified);
     }
 
     [Fact]
