@@ -74,8 +74,8 @@ jobs:
             -ApiBaseUrl http://127.0.0.1:5080 \
             -AdminKey source-audit-admin-key-at-least-24-chars \
             -ReportPath source-audit.json \
-            -ExpectedBuiltInSources 543 \
-            -ExpectedProviders 283 || source_status=$?
+            -ExpectedBuiltInSources 547 \
+            -ExpectedProviders 281 || source_status=$?
           validation_status=0
           pwsh -NoProfile -File ./tools/Audit-Validation.ps1 \
             -ApiBaseUrl http://127.0.0.1:5080 \

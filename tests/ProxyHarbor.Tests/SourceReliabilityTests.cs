@@ -11,6 +11,18 @@ namespace ProxyHarbor.Tests;
 public sealed class SourceReliabilityTests
 {
     [Fact]
+    public void LitportPollingRespectsMinimumIntervalEvenWithShortWorkerSchedule()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var next = SourceFetchSchedule.NextSuccessAttempt(
+            "https://raw.githubusercontent.com/litportnet/free-proxy-list/live/proxies/http.txt", now);
+        Assert.Equal(now.AddMinutes(5), next);
+        Assert.False(SourceFetchSchedule.IsDue(next, now.AddMinutes(1), forceAllSources: false));
+        Assert.True(SourceFetchSchedule.IsDue(next, now.AddMinutes(5), forceAllSources: false));
+        Assert.Null(SourceFetchSchedule.NextSuccessAttempt("https://example.com/litportnet/free-proxy-list/http.txt", now));
+    }
+
+    [Fact]
     public void ParserRejectsSuccessfulHttpResponseWithoutAnyProxy()
     {
         var exception = Assert.Throws<InvalidDataException>(() =>

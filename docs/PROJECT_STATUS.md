@@ -6,7 +6,7 @@
 
 | Область | Реализовано |
 |---|---|
-| Источники | 543 встроенных proxy-feed от 283 providers и 270 VPN-feed от 33 providers, seed/synchronization и admin CRUD пользовательских feed |
+| Источники | 547 встроенных proxy-feed от 281 providers и 248 VPN-feed от 32 providers, seed/synchronization и admin CRUD пользовательских feed |
 | Сбор | Bounded parallel downloads, retry/backoff, conditional HTTP, лимиты размера/полноты, parser и глобальная дедупликация |
 | Хранение | PostgreSQL, EF Core migrations, constraints, индексы, COPY-ingestion и audit runs |
 | Проверка | HTTP CONNECT, SOCKS4a и SOCKS5 tunnel, TLS validation, exit IP, latency, success rate и Alive/Dead/Deferred evidence |
@@ -21,10 +21,10 @@
 
 ## Текущие проверенные свидетельства
 
-- Каталог release: 543 proxy-feed/283 providers и 270 VPN-feed/33 providers; URL/content-аудит выполнен 14.09.2026, полный сетевой CI-аудит обязателен перед production.
-- Collection audit: 888 116 разобранных строк и 290 217 уникальных кандидатов за 4,965 секунды.
+- Каталог рабочей ветки: 547 proxy-feed/281 origin identities и 248 VPN-feed/32 providers. Полный proxy source gate на отдельной локальной БД 06.10.2026 прошёл для всех 547 feed без усечения и пропусков. После исправления 27 устаревших VPN URL повторный URL/content-аудит прошёл для всех 248 текущих feed; пять замен Black Crow дополнительно проверены production parser. Сетевая проверка endpoint и CI-gates обязательны перед production.
+- Collection audit 06.10.2026: 1 186 145 уникальных proxy-кандидатов за 109,651 секунды на существующей локальной БД; 1 590 новых строк. Завершённые snapshots не содержат pending-кандидатов или payload. Эти цифры не измеряют сетевую работоспособность адресов или производительность VPS.
 - Validation sample: 1 600/1 600 объективных результатов без `Deferred`; Alive-множество совпало во всех export formats.
-- Backend: 1169 tests; обязательные unit- и PostgreSQL coverage-gates выполняются в CI и release workflow.
+- Backend: обязательные полные unit- и PostgreSQL suites и coverage-gates выполняются в CI и release workflow; результаты должны относиться к точной публикуемой версии.
 - Frontend: 66 tests, ESLint, TypeScript/Vite production build и axe-core accessibility checks.
 - Release build: warnings-as-errors, XML documentation и OpenAPI contracts.
 - Полная Git history проверялась Gitleaks; CI повторяет scan с закреплённым scanner archive hash.

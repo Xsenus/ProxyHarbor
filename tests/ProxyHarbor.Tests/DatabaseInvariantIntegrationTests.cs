@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
@@ -78,6 +79,8 @@ public sealed class DatabaseInvariantIntegrationTests
         "CK_PaymentOrders_Timeline",
         "CK_ProxyAccessBuckets_Counters",
         "CK_ProxySourceCredentials_Status",
+        "CK_ProxySourceImportStates_Cursor",
+        "CK_ProxySourceImportStates_Payload",
         "CK_ReferralRelationships_DifferentUsers",
         "CK_ReferralRelationships_Slot",
         "CK_ReferralRewards_Days",
@@ -348,6 +351,15 @@ public sealed class DatabaseInvariantIntegrationTests
                 LastSucceededAt = DateTimeOffset.UtcNow.AddHours(-2),
                 LastContentFetchedAt = DateTimeOffset.UtcNow
             }));
+            var snapshot = ProxyCandidateSnapshotCodec.Encode("8.8.8.8:80", ProxyProtocol.Http);
+            var hash = SHA256.HashData(snapshot.Payload);
+            await AssertRejectedAsync(options, db => AddImportState(db, 0, 0, [], []), "CK_ProxySourceImportStates_Cursor");
+            await AssertRejectedAsync(options, db => AddImportState(db, -1, 1, snapshot.Payload, hash), "CK_ProxySourceImportStates_Cursor");
+            await AssertRejectedAsync(options, db => AddImportState(db, 0, 1, [], []), "CK_ProxySourceImportStates_Payload");
+            await AssertRejectedAsync(options, db => AddImportState(db, 1, 1, snapshot.Payload, hash), "CK_ProxySourceImportStates_Payload");
+            await AssertRejectedAsync(options, db => AddImportState(db, 0, 1, snapshot.Payload, hash[..^1]), "CK_ProxySourceImportStates_Payload");
+            await AssertRejectedAsync(options, db => AddImportState(db, 0, 1,
+                new byte[ProxyCandidateSnapshotCodec.MaxPayloadBytes + 1], hash), "CK_ProxySourceImportStates_Payload");
             await AssertRejectedAsync(options, db => db.Runs.Add(new CollectionRun
             {
                 Status = "completed"
@@ -374,7 +386,8 @@ public sealed class DatabaseInvariantIntegrationTests
 
     private static async Task AssertRejectedAsync(
         DbContextOptions<ProxyHarborDbContext> options,
-        Action<ProxyHarborDbContext> addInvalidEntity)
+        Action<ProxyHarborDbContext> addInvalidEntity,
+        string? expectedConstraint = null)
     {
         await using var db = new ProxyHarborDbContext(options);
         addInvalidEntity(db);
@@ -382,6 +395,22 @@ public sealed class DatabaseInvariantIntegrationTests
         var exception = await Assert.ThrowsAsync<DbUpdateException>(() => db.SaveChangesAsync());
         var postgres = Assert.IsType<PostgresException>(exception.InnerException);
         Assert.Equal(PostgresErrorCodes.CheckViolation, postgres.SqlState);
+        if (expectedConstraint is not null) Assert.Equal(expectedConstraint, postgres.ConstraintName);
+    }
+
+    private static void AddImportState(ProxyHarborDbContext db, int nextIndex, int count, byte[] payload, byte[] hash)
+    {
+        var source = new ProxySource { Name = "Invalid import state", Url = $"https://example.org/import/{Guid.NewGuid():N}" };
+        db.Sources.Add(source);
+        db.ProxySourceImportStates.Add(new ProxySourceImportState
+        {
+            ProxySourceId = source.Id,
+            SourceUrl = source.Url,
+            CandidateCount = count,
+            NextIndex = nextIndex,
+            Payload = payload,
+            PayloadHash = hash
+        });
     }
 
     private static string WithSearchPath(string connectionString, string schema)

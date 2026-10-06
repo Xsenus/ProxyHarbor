@@ -199,15 +199,31 @@ public sealed class VpnFeedParserTests
 public sealed class BuiltInVpnSourceCatalogTests
 {
     [Fact]
+    public void BlackCrowUsesPublishedSubscriptionPathsAndRetiresUnavailableAlexant()
+    {
+        var feeds = BuiltInVpnSourceCatalog.Sources.Where(source => source.Provider == "nukcrow/black-crow").ToArray();
+        Assert.Equal(5, feeds.Length);
+        Assert.All(feeds, source =>
+        {
+            Assert.Contains("/sub/general/", source.Url, StringComparison.Ordinal);
+            Assert.Equal("Public subscription links (SUBSCRIPTIONS.md)", source.License);
+        });
+        Assert.Contains(feeds, source => source.Name == "Black Crow mixed" &&
+            source.Url.EndsWith("/all_configs.txt", StringComparison.Ordinal) && source.Protocol == VpnProtocol.Vless);
+        Assert.DoesNotContain(feeds, source => source.Protocol == VpnProtocol.Hysteria2);
+        Assert.DoesNotContain(BuiltInVpnSourceCatalog.Sources, source => source.Provider == "alexantSWE/V2ray-Config");
+    }
+
+    [Fact]
     public void SourcesAreUniqueHttpsLicensedAndCoverSupportedFamilies()
     {
         var sources = BuiltInVpnSourceCatalog.Sources;
 
-        Assert.Equal(270, sources.Count);
+        Assert.Equal(248, sources.Count);
         Assert.Equal(new DateOnly(2026, 9, 14), BuiltInVpnSourceCatalog.LastAuditedOn);
-        Assert.Equal(33, BuiltInVpnSourceCatalog.ProviderCount);
+        Assert.Equal(32, BuiltInVpnSourceCatalog.ProviderCount);
         Assert.Equal(sources.Count, sources.Select(x => x.Url).Distinct(StringComparer.Ordinal).Count());
-        Assert.Equal(33, sources.Select(x => x.Provider).Distinct(StringComparer.Ordinal).Count());
+        Assert.Equal(32, sources.Select(x => x.Provider).Distinct(StringComparer.Ordinal).Count());
         Assert.All(sources, source =>
         {
             Assert.StartsWith("https://", source.Url, StringComparison.Ordinal);
@@ -234,10 +250,11 @@ public sealed class BuiltInVpnSourceCatalogTests
             source.Name.StartsWith("Telegram collector country ", StringComparison.Ordinal) ||
             source.Name.StartsWith("Au1rxx country ", StringComparison.Ordinal)).ToArray();
 
-        Assert.Equal(96, sources.Length);
+        Assert.Equal(92, sources.Length);
         Assert.All(sources, source => Assert.Equal("MIT", source.License));
         Assert.DoesNotContain(sources, source => source.Name is
-            "Au1rxx country AF" or "Au1rxx country MU" or "Au1rxx country BE" or "Au1rxx country EG");
+            "Au1rxx country AF" or "Au1rxx country MU" or "Au1rxx country BE" or "Au1rxx country EG" or
+            "Au1rxx country MD" or "Au1rxx country UZ" or "Au1rxx country DK" or "Au1rxx country MO");
         Assert.Contains(BuiltInVpnSourceCatalog.Sources, source =>
             source.Provider == "lanzm/MetaFetch" && source.License == "MIT");
     }

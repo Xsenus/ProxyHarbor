@@ -46,12 +46,16 @@ public sealed class BackupRestoreRoundTripIntegrationTests
             {
                 await DatabaseSeeder.InitializeAsync(source);
                 await SeedRepresentativeSnapshotAsync(source);
+                source.ProxySourceImportStates.Add(ImportSnapshotFor(
+                    await source.Sources.OrderBy(item => item.Priority).FirstAsync()));
+                await source.SaveChangesAsync();
             }
             await using (var target = new ProxyHarborDbContext(targetOptions))
             {
                 await DatabaseSeeder.InitializeAsync(target);
                 var targetSourceMarker = await target.Sources.OrderBy(source => source.Priority).FirstAsync();
                 targetSourceMarker.Name = "Target metadata must survive failed restore";
+                target.ProxySourceImportStates.Add(ImportSnapshotFor(targetSourceMarker));
                 target.Proxies.Add(new ProxyEndpoint { Host = "9.9.9.9", Port = 9_999 });
                 var destination = new BackupDestination
                 {
@@ -352,6 +356,24 @@ public sealed class BackupRestoreRoundTripIntegrationTests
             "Target metadata must survive failed restore",
             await unchanged.Sources.OrderBy(source => source.Priority).Select(source => source.Name).FirstAsync());
         Assert.Single(await unchanged.BackupDestinationHealthOutcomes.ToArrayAsync());
+        var pendingImport = await unchanged.ProxySourceImportStates.SingleAsync();
+        Assert.Equal(1, pendingImport.NextIndex);
+        Assert.NotEmpty(pendingImport.Payload);
+    }
+
+    private static ProxySourceImportState ImportSnapshotFor(ProxySource source)
+    {
+        var snapshot = ProxyCandidateSnapshotCodec.Encode("8.8.8.8:80\n1.1.1.1:443", source.DefaultProtocol);
+        return new ProxySourceImportState
+        {
+            ProxySourceId = source.Id,
+            SourceUrl = source.Url,
+            SourceProtocol = source.DefaultProtocol,
+            CandidateCount = snapshot.Count,
+            NextIndex = 1,
+            Payload = snapshot.Payload,
+            PayloadHash = SHA256.HashData(snapshot.Payload)
+        };
     }
 
     private static async Task VerifySettingsSnapshotAsync(string encryptedPath, string directory)
@@ -466,6 +488,7 @@ public sealed class BackupRestoreRoundTripIntegrationTests
     {
         await using var db = new ProxyHarborDbContext(options);
         Assert.Empty(await db.BackupDestinationHealthOutcomes.ToArrayAsync());
+        Assert.Empty(await db.ProxySourceImportStates.ToArrayAsync());
         var proxy = await db.Proxies.AsNoTracking().SingleAsync();
         var expectedRestoredProxy = ExpectedProxy();
         expectedRestoredProxy.CheckLeaseId = null;

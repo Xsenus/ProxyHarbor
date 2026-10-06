@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using ProxyHarbor.Infrastructure;
@@ -11,9 +12,11 @@ using ProxyHarbor.Infrastructure;
 namespace ProxyHarbor.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(ProxyHarborDbContext))]
-    partial class ProxyHarborDbContextModelSnapshot : ModelSnapshot
+    [Migration("20261006034146_AddProxySourceImportSnapshots")]
+    partial class AddProxySourceImportSnapshots
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -1078,10 +1081,6 @@ namespace ProxyHarbor.Infrastructure.Persistence.Migrations
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
-                    b.Property<byte[]>("FreshBodyHash")
-                        .IsRequired()
-                        .HasColumnType("bytea");
-
                     b.Property<DateTimeOffset?>("LastProgressAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -1095,9 +1094,6 @@ namespace ProxyHarbor.Infrastructure.Persistence.Migrations
                     b.Property<byte[]>("PayloadHash")
                         .IsRequired()
                         .HasColumnType("bytea");
-
-                    b.Property<bool>("PreferFresh")
-                        .HasColumnType("boolean");
 
                     b.Property<Guid>("SnapshotId")
                         .HasColumnType("uuid");

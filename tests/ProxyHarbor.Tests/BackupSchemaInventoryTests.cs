@@ -71,7 +71,7 @@ public sealed class BackupSchemaInventoryTests
             Assert.Null(item.ArchiveEntry);
             Assert.False(string.IsNullOrWhiteSpace(item.Rationale));
         });
-        Assert.Equal(["BackupDestinationHealthOutcomes", "ProxyValidationLeases"],
+        Assert.Equal(["BackupDestinationHealthOutcomes", "ProxySourceImportStates", "ProxyValidationLeases"],
             ephemeral.Select(item => item.TableName));
         Assert.Equal(6, included.Count(item => item.IntroducedInManifestVersion == 9));
     }

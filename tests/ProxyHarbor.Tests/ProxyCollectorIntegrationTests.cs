@@ -13,9 +13,11 @@ namespace ProxyHarbor.Tests;
 [Collection(PostgresIntegrationGroup.Name)]
 public sealed class ProxyCollectorIntegrationTests
 {
-    [Fact]
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     [Trait("Category", "PostgresIntegration")]
-    public async Task PaidSourceUsesEncryptedKeyAndMarksCandidatesForImmediateValidation()
+    public async Task PaidSourceUsesEncryptedKeyAndMarksCandidatesForImmediateValidation(bool ttlUnavailable)
     {
         var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
         if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
@@ -31,6 +33,7 @@ public sealed class ProxyCollectorIntegrationTests
                 .UseNpgsql(builder.ConnectionString).Options;
             var factory = new TestDbFactory(dbOptions);
             var protection = new EphemeralDataProtectionProvider();
+            var previousExpiration = new DateTimeOffset(2027, 1, 1, 0, 0, 0, TimeSpan.Zero);
             var source = new ProxySource
             {
                 Name = PaidProxySourceCatalog.BestProxiesName,
@@ -45,13 +48,14 @@ public sealed class ProxyCollectorIntegrationTests
                 seed.ProxySourceCredentials.Add(new ProxySourceCredential
                 {
                     ProxySourceId = source.Id,
+                    ExpiresAt = previousExpiration,
                     ProtectedApiKey = ProxySourceCredentialProtection.Create(protection)
                         .Protect("paid-test-key-1234567890")
                 });
                 await seed.SaveChangesAsync();
             }
 
-            var handler = new PaidFeedHandler();
+            var handler = new PaidFeedHandler(ttlUnavailable);
             using var clients = new PaidHttpClientFactory(handler);
             using var collector = new ProxyCollector(
                 factory, clients,
@@ -73,6 +77,16 @@ public sealed class ProxyCollectorIntegrationTests
             Assert.Equal("active", credential.Status);
             Assert.NotNull(credential.CheckedAt);
             Assert.True(credential.ExpiresAt > credential.CheckedAt);
+            if (ttlUnavailable)
+            {
+                Assert.Equal(previousExpiration, credential.ExpiresAt);
+                Assert.Contains("срок действия", credential.LastError!, StringComparison.Ordinal);
+            }
+            else
+            {
+                Assert.Equal(credential.CheckedAt!.Value.AddHours(1), credential.ExpiresAt);
+                Assert.Null(credential.LastError);
+            }
             Assert.DoesNotContain("paid-test-key", credential.ProtectedApiKey, StringComparison.Ordinal);
         }
         finally
@@ -82,13 +96,17 @@ public sealed class ProxyCollectorIntegrationTests
         }
     }
 
-    [Fact]
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
     [Trait("Category", "PostgresIntegration")]
-    public async Task ExpiredPaidCredentialIsRecordedWithoutLeakingKeyAndUsesBackoff()
+    public async Task ForbiddenPaidCredentialPreservesKnownExpirationWithoutLeakingKeyAndUsesBackoff(
+        bool knownExpiration, bool legacyExpiration)
     {
         var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
         if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
-        var schema = $"proxyharbor_expired_paid_source_{Guid.NewGuid():N}";
+        var schema = $"proxyharbor_forbidden_paid_source_{Guid.NewGuid():N}";
         var builder = new NpgsqlConnectionStringBuilder(baseConnectionString) { SearchPath = schema };
         await using var admin = new NpgsqlConnection(baseConnectionString);
         await admin.OpenAsync();
@@ -100,7 +118,9 @@ public sealed class ProxyCollectorIntegrationTests
                 .UseNpgsql(builder.ConnectionString).Options;
             var factory = new TestDbFactory(dbOptions);
             var protection = new EphemeralDataProtectionProvider();
-            const string secret = "expired-test-key-1234567890";
+            var secret = Guid.NewGuid().ToString("N");
+            DateTimeOffset? previousExpiration = knownExpiration
+                ? new DateTimeOffset(2027, 1, 1, 0, 0, 0, TimeSpan.Zero) : null;
             var source = new ProxySource
             {
                 Name = PaidProxySourceCatalog.BestProxiesName,
@@ -115,12 +135,14 @@ public sealed class ProxyCollectorIntegrationTests
                 seed.ProxySourceCredentials.Add(new ProxySourceCredential
                 {
                     ProxySourceId = source.Id,
+                    ExpiresAt = previousExpiration,
+                    Status = legacyExpiration ? "expired" : "active",
                     ProtectedApiKey = ProxySourceCredentialProtection.Create(protection).Protect(secret)
                 });
                 await seed.SaveChangesAsync();
             }
 
-            using var clients = new PaidHttpClientFactory(new ExpiredPaidFeedHandler());
+            using var clients = new PaidHttpClientFactory(new ForbiddenPaidFeedHandler());
             using var collector = new ProxyCollector(
                 factory, clients,
                 Options.Create(new CollectorOptions
@@ -139,10 +161,10 @@ public sealed class ProxyCollectorIntegrationTests
             await using var verify = await factory.CreateDbContextAsync();
             var storedSource = await verify.Sources.SingleAsync(item => item.Id == source.Id);
             var credential = await verify.ProxySourceCredentials.SingleAsync();
-            Assert.Equal("expired", credential.Status);
+            Assert.Equal("error", credential.Status);
             Assert.NotNull(credential.CheckedAt);
-            Assert.NotNull(credential.ExpiresAt);
-            Assert.True(credential.ExpiresAt <= credential.CheckedAt);
+            Assert.Equal(legacyExpiration ? null : previousExpiration, credential.ExpiresAt);
+            Assert.Contains("403", credential.LastError!, StringComparison.Ordinal);
             Assert.DoesNotContain(secret, credential.LastError ?? string.Empty, StringComparison.Ordinal);
             Assert.Equal(1, storedSource.ConsecutiveFailures);
             Assert.True(storedSource.NextFetchAt >= startedAt.AddMinutes(4));
@@ -454,9 +476,11 @@ public sealed class ProxyCollectorIntegrationTests
         }
     }
 
-    [Fact]
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     [Trait("Category", "PostgresIntegration")]
-    public async Task InFlightResultCannotOverwriteAReconfiguredSource()
+    public async Task InFlightResultCannotOverwriteAReconfiguredSource(bool pendingSnapshot)
     {
         var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
         if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
@@ -496,6 +520,13 @@ public sealed class ProxyCollectorIntegrationTests
                 await seed.SaveChangesAsync();
             }
 
+            if (pendingSnapshot)
+            {
+                await using var pendingDb = await factory.CreateDbContextAsync();
+                var oldSource = await pendingDb.Sources.SingleAsync(source => source.Id == sourceId);
+                _ = await new ProxySourceImportStore(factory).BeginAsync(oldSource,
+                    ProxyCandidateSnapshotCodec.Encode("8.8.8.8:80\n8.8.8.8:81", ProxyProtocol.Http), CancellationToken.None);
+            }
             var handler = new EndpointChangingFeedHandler(async token =>
             {
                 await using var update = await factory.CreateDbContextAsync(token);
@@ -527,9 +558,10 @@ public sealed class ProxyCollectorIntegrationTests
 
             Assert.Equal("completed", run.Status);
             Assert.Equal(1, run.SourcesSucceeded);
-            Assert.Equal(1, run.CandidatesFound);
-            await validationWakeSignal.WaitAsync(TimeSpan.FromMinutes(1), CancellationToken.None)
-                .WaitAsync(TimeSpan.FromSeconds(1));
+            Assert.Equal(0, run.CandidatesFound);
+            using (var noCandidates = new CancellationTokenSource(TimeSpan.FromMilliseconds(100)))
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                    validationWakeSignal.WaitAsync(TimeSpan.FromMinutes(1), noCandidates.Token));
             await using var verify = await factory.CreateDbContextAsync();
             var source = await verify.Sources.AsNoTracking().SingleAsync(item => item.Id == sourceId);
             Assert.Equal("https://1.1.1.1/new.txt", source.Url);
@@ -539,6 +571,8 @@ public sealed class ProxyCollectorIntegrationTests
             Assert.Null(source.LastContentFetchedAt);
             Assert.Equal(0, source.LastItemCount);
             Assert.Null(source.HttpETag);
+            Assert.Empty(await verify.ProxySourceImportStates.ToArrayAsync());
+            Assert.Empty(await verify.Proxies.ToArrayAsync());
         }
         finally
         {
@@ -862,10 +896,10 @@ public sealed class ProxyCollectorIntegrationTests
                 Assert.Equal(1, unchanged.SourcesProcessed);
                 Assert.Equal(1, unchanged.SourcesSucceeded);
                 Assert.Equal(0, unchanged.SourcesFailed);
-                Assert.Equal(0, unchanged.CandidatesFound);
-                Assert.Equal(0, unchanged.NewProxies);
+                Assert.Equal(1, unchanged.CandidatesFound);
+                Assert.Equal(1, unchanged.NewProxies);
                 Assert.Equal(1, unchanged.SourcesTruncated);
-                Assert.False(unchanged.CandidateLimitReached);
+                Assert.True(unchanged.CandidateLimitReached);
             }
             await using (var unchangedContent = await factory.CreateDbContextAsync())
                 Assert.Equal(firstContentFetchedAt, (await unchangedContent.Sources.AsNoTracking()
@@ -882,8 +916,8 @@ public sealed class ProxyCollectorIntegrationTests
                 Assert.Equal("completed", forced.Status);
                 Assert.Equal(1, forced.SourcesSucceeded);
                 Assert.Equal(1, forced.CandidatesFound);
-                Assert.Equal(0, forced.NewProxies);
-                Assert.True(forced.CandidateLimitReached);
+                Assert.Equal(1, forced.NewProxies);
+                Assert.False(forced.CandidateLimitReached);
             }
 
             var staleContentFetchedAt = DateTimeOffset.UtcNow.AddDays(-2);
@@ -990,7 +1024,7 @@ public sealed class ProxyCollectorIntegrationTests
         public void Dispose() => _client.Dispose();
     }
 
-    private sealed class PaidFeedHandler : HttpMessageHandler
+    private sealed class PaidFeedHandler(bool ttlUnavailable = false) : HttpMessageHandler
     {
         internal int Requests { get; private set; }
         internal List<string> ObservedKeys { get; } = [];
@@ -1003,6 +1037,8 @@ public sealed class ProxyCollectorIntegrationTests
             var keyPart = request.RequestUri!.Query.TrimStart('?').Split('&')
                 .Single(part => part.StartsWith("key=", StringComparison.Ordinal));
             ObservedKeys.Add(Uri.UnescapeDataString(keyPart[4..]));
+            if (ttlUnavailable && request.RequestUri.AbsolutePath.EndsWith("key.txt", StringComparison.Ordinal))
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));
             var content = request.RequestUri.AbsolutePath.EndsWith("key.txt", StringComparison.Ordinal)
                 ? "3600"
                 : "http://1.1.1.1:80\nhttps://8.8.8.8:443\nsocks4://9.9.9.9:1080\nsocks5://4.4.4.4:1080";
@@ -1013,7 +1049,7 @@ public sealed class ProxyCollectorIntegrationTests
         }
     }
 
-    private sealed class ExpiredPaidFeedHandler : HttpMessageHandler
+    private sealed class ForbiddenPaidFeedHandler : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,

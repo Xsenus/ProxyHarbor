@@ -37,6 +37,20 @@ public sealed class ProxyParserTests
             ProxyCandidateKey.Parse("8.8.8.8", 80, (ProxyProtocol)999));
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    [InlineData(65_536)]
+    public void CompactKeyCannotWrapInvalidPortsIntoValidEndpoint(int port) =>
+        Assert.Throws<ArgumentOutOfRangeException>(() => ProxyCandidateKey.Parse("8.8.8.8", port, ProxyProtocol.Http));
+
+    [Fact]
+    public void CompactKeyRequiresAnActualIpAddress()
+    {
+        Assert.Throws<ArgumentException>(() => ProxyCandidateKey.Parse("example.com", 80, ProxyProtocol.Http));
+        Assert.Throws<ArgumentNullException>(() => ProxyCandidateKey.Create(null!, 80, ProxyProtocol.Http));
+    }
+
     [Fact]
     public void ParseToStreamsUniqueCandidatesAndPreservesTruncationSemantics()
     {
@@ -64,9 +78,11 @@ public sealed class ProxyParserTests
                 .Append(index & 255).Append(':').Append(1_000 + index % 60_000).Append('\n');
         var feed = content.ToString();
 
-        // Прогрев отделяет JIT/regex initialization от сравниваемых allocations.
-        _ = ProxyParser.ParseTo("8.8.8.8:80", ProxyProtocol.Http, 1, static _ => { });
-        _ = ProxyParser.ParseWithLimitStatus("8.8.8.8:80", ProxyProtocol.Http, 1);
+        // NonBacktracking строит DFA-состояния лениво для новых комбинаций входа.
+        // Прогреваем обе ветви тем же feed, чтобы первое построение состояний не
+        // попадало только в streaming measurement и не зависело от порядка тестов.
+        _ = ProxyParser.ParseTo(feed, ProxyProtocol.Http, endpointCount, static _ => { });
+        _ = ProxyParser.ParseWithLimitStatus(feed, ProxyProtocol.Http, endpointCount);
 
         var beforeStreaming = GC.GetAllocatedBytesForCurrentThread();
         var streamed = ProxyParser.ParseTo(feed, ProxyProtocol.Http, endpointCount, static _ => { });

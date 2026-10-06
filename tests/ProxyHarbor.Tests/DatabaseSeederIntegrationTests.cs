@@ -450,6 +450,14 @@ public sealed class DatabaseSeederIntegrationTests
 
         string[] retiredProxyUrls =
         [
+            "https://raw.githubusercontent.com/Akshay7273/ProxyMan-free-proxy-list/main/protocols/http.txt",
+            "https://raw.githubusercontent.com/Akshay7273/ProxyMan-free-proxy-list/main/protocols/socks4.txt",
+            "https://raw.githubusercontent.com/Akshay7273/ProxyMan-free-proxy-list/main/protocols/socks5.txt",
+            "https://raw.githubusercontent.com/iamthebestm85/Proxy-Scraper-And-Checker/main/proxy.txt",
+            "https://raw.githubusercontent.com/just-not-google/full-free-proxy/main/http.txt",
+            "https://raw.githubusercontent.com/Allaux/fresh-proxy-list/main/http.txt",
+            "https://raw.githubusercontent.com/ProTechEx/PROXY-List/master/http.txt",
+            "https://raw.githubusercontent.com/hproxy-com/free-proxy-list/main/by-country/DZ.txt",
             "https://raw.githubusercontent.com/CelestialBrain/worldpool/main/proxies/http.txt",
             "https://raw.githubusercontent.com/gproxynet/free-proxy-list/main/http.txt",
             "https://raw.githubusercontent.com/lanzm/MetaFetch/master/list.txt",
@@ -467,6 +475,28 @@ public sealed class DatabaseSeederIntegrationTests
         ];
         string[] retiredVpnUrls =
         [
+            "https://raw.githubusercontent.com/alexantSWE/V2ray-Config/main/Splitted-By-Protocol/ss.txt",
+            "https://raw.githubusercontent.com/alexantSWE/V2ray-Config/main/Splitted-By-Protocol/vless.txt",
+            "https://raw.githubusercontent.com/alexantSWE/V2ray-Config/main/Splitted-By-Protocol/vmess.txt",
+            "https://raw.githubusercontent.com/alexantSWE/V2ray-Config/main/Sub1.txt",
+            "https://raw.githubusercontent.com/alexantSWE/V2ray-Config/main/Splitted-By-Protocol/trojan.txt",
+            "https://raw.githubusercontent.com/alexantSWE/V2ray-Config/main/Sub3.txt",
+            "https://raw.githubusercontent.com/alexantSWE/V2ray-Config/main/Sub2.txt",
+            "https://raw.githubusercontent.com/alexantSWE/V2ray-Config/main/Sub4.txt",
+            "https://raw.githubusercontent.com/alexantSWE/V2ray-Config/main/Sub5.txt",
+            "https://raw.githubusercontent.com/alexantSWE/V2ray-Config/main/Sub6.txt",
+            "https://raw.githubusercontent.com/alexantSWE/V2ray-Config/main/Sub7.txt",
+            "https://raw.githubusercontent.com/alexantSWE/V2ray-Config/main/Sub9.txt",
+            "https://raw.githubusercontent.com/alexantSWE/V2ray-Config/main/Sub10.txt",
+            "https://raw.githubusercontent.com/alexantSWE/V2ray-Config/main/Sub8.txt",
+            "https://raw.githubusercontent.com/alexantSWE/V2ray-Config/main/Sub11.txt",
+            "https://raw.githubusercontent.com/alexantSWE/V2ray-Config/main/Sub12.txt",
+            "https://raw.githubusercontent.com/alexantSWE/V2ray-Config/main/Sub13.txt",
+            "https://raw.githubusercontent.com/alexantSWE/V2ray-Config/main/Sub14.txt",
+            "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/country/UZ/v2ray-base64-0001.txt",
+            "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/country/MD/v2ray-base64-0001.txt",
+            "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/country/DK/v2ray-base64-0001.txt",
+            "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/country/MO/v2ray-base64-0001.txt",
             "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/all-verified/v2ray-base64-0009.txt",
             "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/country/AF/v2ray-base64-0001.txt",
             "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/country/MU/v2ray-base64-0001.txt",
@@ -496,6 +526,14 @@ public sealed class DatabaseSeederIntegrationTests
                     DefaultProtocol = VpnProtocol.Vless,
                     License = "MIT"
                 }));
+                first.VpnSources.Add(new VpnSource
+                {
+                    Name = "Custom VPN retained",
+                    Provider = "Custom",
+                    Url = "https://example.com/custom-vpn-subscription.txt",
+                    DefaultProtocol = VpnProtocol.Vless,
+                    License = "custom"
+                });
                 await first.SaveChangesAsync();
             }
 
@@ -506,7 +544,8 @@ public sealed class DatabaseSeederIntegrationTests
             Assert.False(await verify.Sources.AnyAsync(source => retiredProxyUrls.Contains(source.Url)));
             Assert.False(await verify.VpnSources.AnyAsync(source => retiredVpnUrls.Contains(source.Url)));
             Assert.Equal(BuiltInSourceCatalog.Sources.Count + 1, await verify.Sources.CountAsync());
-            Assert.Equal(BuiltInVpnSourceCatalog.Sources.Count, await verify.VpnSources.CountAsync());
+            Assert.True(await verify.VpnSources.AnyAsync(source => source.Url == "https://example.com/custom-vpn-subscription.txt"));
+            Assert.Equal(BuiltInVpnSourceCatalog.Sources.Count + 1, await verify.VpnSources.CountAsync());
         }
         finally
         {
@@ -594,10 +633,15 @@ public sealed class DatabaseSeederIntegrationTests
     }
 
     [Theory]
-    [InlineData("https://www.vpngate.net/api/iphone/")]
-    [InlineData("https://raw.githubusercontent.com/9xN/auto-ovpn/main/configs/server_0_JP.ovpn")]
+    [InlineData("Auto OVPN catalog", "https://www.vpngate.net/api/iphone/")]
+    [InlineData("Auto OVPN catalog", "https://raw.githubusercontent.com/9xN/auto-ovpn/main/configs/server_0_JP.ovpn")]
+    [InlineData("Black Crow VLESS", "https://raw.githubusercontent.com/nukcrow/black-crow/main/sub/protocols/vless.txt")]
+    [InlineData("Black Crow VMess", "https://raw.githubusercontent.com/nukcrow/black-crow/main/sub/protocols/vmess.txt")]
+    [InlineData("Black Crow Shadowsocks", "https://raw.githubusercontent.com/nukcrow/black-crow/main/sub/protocols/ss.txt")]
+    [InlineData("Black Crow Trojan", "https://raw.githubusercontent.com/nukcrow/black-crow/main/sub/protocols/trojan.txt")]
+    [InlineData("Black Crow mixed", "https://raw.githubusercontent.com/nukcrow/black-crow/main/sub/protocols/hysteria2.txt")]
     [Trait("Category", "PostgresIntegration")]
-    public async Task StartupMigratesReplacedOpenVpnSourceAndResetsResourceState(string replacedUrl)
+    public async Task StartupMigratesReplacedVpnSourceAndResetsResourceState(string canonicalName, string replacedUrl)
     {
         var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
         if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
@@ -615,7 +659,7 @@ public sealed class DatabaseSeederIntegrationTests
                 .UseNpgsql(builder.ConnectionString)
                 .Options;
             var canonical = BuiltInVpnSourceCatalog.Sources.Single(source =>
-                source.Name == "Auto OVPN catalog");
+                source.Name == canonicalName);
             var sourceId = Guid.Empty;
             await using (var first = new ProxyHarborDbContext(options))
             {
@@ -623,6 +667,10 @@ public sealed class DatabaseSeederIntegrationTests
                 var source = await first.VpnSources.SingleAsync(item => item.Url == canonical.Url);
                 sourceId = source.Id;
                 source.Url = replacedUrl;
+                source.Name = "Legacy source name";
+                source.License = "Legacy publication terms";
+                if (replacedUrl.EndsWith("/hysteria2.txt", StringComparison.Ordinal))
+                    source.DefaultProtocol = VpnProtocol.Hysteria2;
                 source.Enabled = false;
                 source.LastFetchedAt = DateTimeOffset.UtcNow;
                 source.LastSucceededAt = source.LastFetchedAt.Value.AddHours(-1);
@@ -645,6 +693,8 @@ public sealed class DatabaseSeederIntegrationTests
             Assert.False(migrated.Enabled);
             Assert.Equal(canonical.Name, migrated.Name);
             Assert.Equal(canonical.Provider, migrated.Provider);
+            Assert.Equal(canonical.Protocol, migrated.DefaultProtocol);
+            Assert.Equal(canonical.License, migrated.License);
             Assert.Null(migrated.LastFetchedAt);
             Assert.Null(migrated.LastSucceededAt);
             Assert.Null(migrated.LastContentFetchedAt);
