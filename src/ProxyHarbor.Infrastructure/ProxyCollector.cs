@@ -196,7 +196,8 @@ public sealed class ProxyCollector(
                 // после commit endpoint'ов. Crash между ними приводит к безопасному replay.
                 foreach (var progress in importProgress)
                     _ = await importStore.AcknowledgeCommittedImportAsync(
-                        progress.State, progress.NextIndex, DateTimeOffset.UtcNow, cancellationToken);
+                        progress.State, progress.NextIndex, DateTimeOffset.UtcNow, cancellationToken,
+                        progress.FreshBodyHash, progress.PreferFresh);
                 // Bounded signal не накапливает по событию на каждый feed/endpoint:
                 // одного wake достаточно, чтобы validator немедленно начал draining due-очереди.
                 if (candidates.Count > 0) validationWakeSignal?.Pulse();
@@ -303,6 +304,8 @@ public sealed class ProxyCollector(
             var paid = PaidProxySourceCatalog.IsPaid(source);
             ProxySourceImportState? importState = null;
             ProxyCandidateSnapshot? newSnapshot = null;
+            List<ProxyCandidateKey>? freshCandidates = null;
+            byte[]? freshBodyHash = null;
             try
             {
                 importState = await importStore.LoadAsync(source, token);
@@ -342,7 +345,8 @@ public sealed class ProxyCollector(
                     try
                     {
                         fetched = await FetchPaidSourceStateAsync(
-                            client, source, apiKey, forceAllSources || importState is null, collectionStartedAt, token);
+                            client, source, apiKey, forceAllSources || importState is null ||
+                                importState.NextIndex < importState.CandidateCount, collectionStartedAt, token);
                         credentialCheckedAt = DateTimeOffset.UtcNow;
                         credentialStatus = "active";
                         try
@@ -378,7 +382,10 @@ public sealed class ProxyCollector(
                 else
                 {
                     // Admin force-run является полным аудитом и требует новый body.
-                    var useValidators = !forceAllSources && importState is not null && SourceConditionalFetchPolicy.ShouldUseValidators(
+                    // Пока хвост pending, предыдущий HTTP body мог не получить global-квоту
+                    // либо ждать своей очереди. 304 потерял бы повтор свежего окна.
+                    var useValidators = !forceAllSources && importState is not null &&
+                        importState.NextIndex == importState.CandidateCount && SourceConditionalFetchPolicy.ShouldUseValidators(
                         source.LastContentFetchedAt,
                         source.LastSucceededAt,
                         source.LastItemCount,
@@ -411,10 +418,21 @@ public sealed class ProxyCollector(
                 ProxyParseSummary parsed;
                 if (importState is not null && importState.NextIndex < importState.CandidateCount)
                 {
-                    // Текущий body используется для HTTP-health, а незавершённый
-                    // immutable snapshot продолжает импортироваться без сброса cursor.
+                    // Health описывает текущий body; bounded свежий prefix получает
+                    // долю той же source-квоты после проверки актуальности конфигурации.
+                    var hash = ProxyCandidateSnapshotCodec.HashBody(content);
+                    var freshLimit = Math.Max(1, options.Value.MaxProxiesPerSource / 2);
+                    if (importState.PreferFresh && !hash.AsSpan().SequenceEqual(importState.FreshBodyHash))
+                    {
+                        freshBodyHash = hash;
+                        freshCandidates = new List<ProxyCandidateKey>(Math.Min(freshLimit, 4_096));
+                    }
                     parsed = SourceFeedParser.ParseBoundedToRequired(content,
-                        source.DefaultProtocol, options.Value.MaxProxiesPerSource, static _ => { });
+                        source.DefaultProtocol, options.Value.MaxProxiesPerSource, candidate =>
+                        {
+                            if (freshCandidates is not null && freshCandidates.Count < freshLimit)
+                                freshCandidates.Add(candidate);
+                        });
                 }
                 else
                 {
@@ -432,6 +450,8 @@ public sealed class ProxyCollector(
             catch (Exception exception) when (
                 exception is not OperationCanceledException || !token.IsCancellationRequested)
             {
+                freshCandidates = null;
+                freshBodyHash = null;
                 var paidException = exception as PaidSourceException;
                 var safeError = paidException?.Message ?? exception.Message;
                 OperationalLogBoundary.Write(() => SourceFailed(logger, source.Name, exception));
@@ -452,11 +472,23 @@ public sealed class ProxyCollector(
                     if (importState is not null && importState.NextIndex < importState.CandidateCount &&
                         await importStore.IsCurrentOrDiscardAsync(importState, token))
                     {
-                        var window = ProxySourceImportStore.ReadWindow(importState,
-                            options.Value.MaxProxiesPerSource, candidate => candidates.TryAccept(candidate, paid));
-                        if (window.NextIndex > importState.NextIndex)
+                        var acceptedFresh = 0;
+                        if (freshCandidates is not null)
+                            foreach (var candidate in freshCandidates)
+                            {
+                                if (!candidates.TryAccept(candidate, paid)) break;
+                                acceptedFresh++;
+                            }
+                        var remaining = options.Value.MaxProxiesPerSource - acceptedFresh;
+                        var nextIndex = importState.NextIndex;
+                        if (remaining > 0)
+                            nextIndex = ProxySourceImportStore.ReadWindow(importState,
+                                remaining, candidate => candidates.TryAccept(candidate, paid)).NextIndex;
+                        if (nextIndex > importState.NextIndex || acceptedFresh > 0)
                             importProgress.Add(new SourceImportProgress(
-                                ProxySourceImportCheckpoint.Capture(importState), window.NextIndex));
+                                ProxySourceImportCheckpoint.Capture(importState), nextIndex,
+                                acceptedFresh > 0 && acceptedFresh == freshCandidates?.Count ? freshBodyHash : null,
+                                nextIndex > importState.NextIndex));
                     }
                 }
                 catch (Exception exception) when (
@@ -766,7 +798,8 @@ public sealed class ProxyCollector(
         return candidateCount > HashImportCandidateThreshold;
     }
 
-    private sealed record SourceImportProgress(ProxySourceImportCheckpoint State, int NextIndex);
+    private sealed record SourceImportProgress(
+        ProxySourceImportCheckpoint State, int NextIndex, byte[]? FreshBodyHash, bool PreferFresh);
 
     private sealed record SourceCollectionResult(
         Guid Id,

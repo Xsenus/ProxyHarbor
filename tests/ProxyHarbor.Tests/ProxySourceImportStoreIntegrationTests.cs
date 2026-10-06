@@ -11,6 +11,36 @@ public sealed class ProxySourceImportStoreIntegrationTests
 {
     [Fact]
     [Trait("Category", "PostgresIntegration")]
+    public async Task FreshOnlyAcknowledgementRejectsDuplicateAndStaleLane()
+    {
+        await using var database = await SnapshotDatabase.CreateAsync();
+        if (database is null) return;
+        var source = await database.AddSourceAsync("fresh-cas");
+        var store = new ProxySourceImportStore(database.Factory);
+        var state = Assert.IsType<ProxySourceImportState>(await store.BeginAsync(source,
+            ProxyCandidateSnapshotCodec.Encode("8.8.8.8:80\n8.8.8.8:81", ProxyProtocol.Http), CancellationToken.None));
+        var checkpoint = ProxySourceImportCheckpoint.Capture(state);
+        var hash = ProxyCandidateSnapshotCodec.HashBody("1.1.1.1:99");
+        var at = DateTimeOffset.UtcNow;
+        Assert.True(await store.AcknowledgeCommittedImportAsync(checkpoint, 0, at,
+            CancellationToken.None, hash, preferFresh: false));
+        Assert.False(await store.AcknowledgeCommittedImportAsync(checkpoint, 0, at.AddMinutes(1),
+            CancellationToken.None, hash, preferFresh: false));
+        Assert.False(await store.AcknowledgeCommittedImportAsync(checkpoint, 1, at.AddMinutes(1),
+            CancellationToken.None));
+        var fresh = Assert.IsType<ProxySourceImportState>(await store.LoadAsync(source, CancellationToken.None));
+        Assert.Equal(0, fresh.NextIndex);
+        Assert.False(fresh.PreferFresh);
+        Assert.Equal(hash, fresh.FreshBodyHash);
+        Assert.NotNull(fresh.LastProgressAt);
+        Assert.True(await store.AcknowledgeCommittedImportAsync(fresh, 1, at.AddMinutes(2), CancellationToken.None));
+        var tail = Assert.IsType<ProxySourceImportState>(await store.LoadAsync(source, CancellationToken.None));
+        Assert.True(tail.PreferFresh);
+        Assert.Equal(hash, tail.FreshBodyHash);
+    }
+
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
     public async Task SnapshotSurvivesRestartAndChangingFeedUntilCommittedTail()
     {
         await using var database = await SnapshotDatabase.CreateAsync();

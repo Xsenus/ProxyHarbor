@@ -23,6 +23,10 @@ public sealed class ProxySourceImportState
     public byte[] Payload { get; set; } = [];
     /// <summary>SHA-256 pending payload; очищается после завершения снимка.</summary>
     public byte[] PayloadHash { get; set; } = [];
+    /// <summary>SHA-256 последнего успешно принятого свежего окна либо исходного body.</summary>
+    public byte[] FreshBodyHash { get; set; } = [];
+    /// <summary>Чередование свежего окна и старого хвоста при минимальной source-квоте.</summary>
+    public bool PreferFresh { get; set; } = true;
     /// <summary>Вычисляемый PostgreSQL размер для общего bounded-бюджета хранилища.</summary>
     public int StoredBytes { get; private set; }
 }

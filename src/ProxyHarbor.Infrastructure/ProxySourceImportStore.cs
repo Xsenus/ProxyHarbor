@@ -45,7 +45,8 @@ internal sealed class ProxySourceImportStore(
             SourceProtocol = source.DefaultProtocol,
             CandidateCount = snapshot.Count,
             Payload = snapshot.Payload,
-            PayloadHash = SHA256.HashData(snapshot.Payload)
+            PayloadHash = SHA256.HashData(snapshot.Payload),
+            FreshBodyHash = snapshot.BodyHash
         };
         if (!ValidPayload(state)) throw new InvalidDataException("Некорректный снимок proxy-источника.");
         await using var db = await dbFactory.CreateDbContextAsync(token);
@@ -103,22 +104,29 @@ internal sealed class ProxySourceImportStore(
         => AcknowledgeCommittedImportAsync(ProxySourceImportCheckpoint.Capture(state), nextIndex, committedAt, token);
 
     internal async Task<bool> AcknowledgeCommittedImportAsync(
-        ProxySourceImportCheckpoint state, int nextIndex, DateTimeOffset committedAt, CancellationToken token)
+        ProxySourceImportCheckpoint state, int nextIndex, DateTimeOffset committedAt, CancellationToken token,
+        byte[]? freshBodyHash = null, bool? preferFresh = null)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(nextIndex, state.NextIndex);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(nextIndex, state.CandidateCount);
-        if (nextIndex == state.NextIndex) return false;
+        if (freshBodyHash is not null && freshBodyHash.Length != SHA256.HashSizeInBytes)
+            throw new ArgumentException("Некорректный hash свежего body.", nameof(freshBodyHash));
+        if (nextIndex == state.NextIndex && preferFresh == state.PreferFresh) return false;
+        if (nextIndex == state.NextIndex && preferFresh is null) return false;
         var completed = nextIndex == state.CandidateCount;
         await using var db = await dbFactory.CreateDbContextAsync(token);
         var updated = await db.ProxySourceImportStates.Where(item =>
                 item.ProxySourceId == state.ProxySourceId && item.SnapshotId == state.SnapshotId &&
                 item.NextIndex == state.NextIndex && item.CandidateCount == state.CandidateCount &&
+                item.PreferFresh == state.PreferFresh &&
                 item.SourceUrl == state.SourceUrl && item.SourceProtocol == state.SourceProtocol &&
                 db.Sources.Any(source => source.Id == item.ProxySourceId && source.Enabled &&
                     source.Url == item.SourceUrl && source.DefaultProtocol == item.SourceProtocol))
             .ExecuteUpdateAsync(setters => setters
                 .SetProperty(item => item.NextIndex, nextIndex)
                 .SetProperty(item => item.LastProgressAt, committedAt)
+                .SetProperty(item => item.PreferFresh, preferFresh ?? true)
+                .SetProperty(item => item.FreshBodyHash, item => freshBodyHash == null ? item.FreshBodyHash : freshBodyHash)
                 .SetProperty(item => item.Payload, item => completed ? Array.Empty<byte>() : item.Payload)
                 .SetProperty(item => item.PayloadHash, item => completed ? Array.Empty<byte>() : item.PayloadHash), token);
         return updated == 1;
@@ -140,9 +148,9 @@ internal sealed class ProxySourceImportStore(
 /// <summary>После admission сохраняются только узкие metadata; payload не удерживается до конца всего run.</summary>
 internal sealed record ProxySourceImportCheckpoint(
     Guid ProxySourceId, string SourceUrl, ProxyProtocol SourceProtocol,
-    Guid SnapshotId, int CandidateCount, int NextIndex)
+    Guid SnapshotId, int CandidateCount, int NextIndex, bool PreferFresh)
 {
     internal static ProxySourceImportCheckpoint Capture(ProxySourceImportState state) => new(
         state.ProxySourceId, state.SourceUrl, state.SourceProtocol,
-        state.SnapshotId, state.CandidateCount, state.NextIndex);
+        state.SnapshotId, state.CandidateCount, state.NextIndex, state.PreferFresh);
 }

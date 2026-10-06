@@ -37,8 +37,11 @@ internal static class ProxyCandidateSnapshotCodec
         if (used > 0) WritePage(writer, page.AsSpan(0, used * RecordBytes));
         output.Position = sizeof(int);
         writer.Write(parsed.Count);
-        return new ProxyCandidateSnapshot(output.ToArray(), parsed.Count);
+        return new ProxyCandidateSnapshot(output.ToArray(), parsed.Count, HashBody(content));
     }
+
+    internal static byte[] HashBody(string content) =>
+        System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(content));
 
     internal static ProxySnapshotWindow ReadWindow(
         byte[] payload, int startIndex, int maxResults, Func<ProxyCandidateKey, bool> accept)
@@ -129,5 +132,5 @@ internal static class ProxyCandidateSnapshotCodec
         new("Сохранённый снимок proxy-источника повреждён или имеет неподдерживаемый формат.");
 }
 
-internal sealed record ProxyCandidateSnapshot(byte[] Payload, int Count);
+internal sealed record ProxyCandidateSnapshot(byte[] Payload, int Count, byte[] BodyHash);
 internal readonly record struct ProxySnapshotWindow(int Count, int NextIndex, bool Completed);
