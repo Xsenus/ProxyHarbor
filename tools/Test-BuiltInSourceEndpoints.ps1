@@ -35,11 +35,19 @@ foreach ($countrySet in @(
     if (-not $assignment.Success) { throw "Не найден набор $($countrySet.Variable)." }
     $countries = ([regex]::Matches($assignment.Groups['body'].Value, '"(?<value>[^"]*)"') |
         ForEach-Object { $_.Groups['value'].Value }) -join ''
+    # Read the fallback from the same country generator instead of assuming HTTP.
+    # Country lists can contain explicit TLS-to-proxy records as well as HTTP/SOCKS.
+    $protocolDefinition = [regex]::Match(
+        $catalogText,
+        'foreach\s*\(var country in ' + [regex]::Escape($countrySet.Variable) +
+            '\.Split\(.*?yield return Feed\(.*?ProxyProtocol\.(?<protocol>\w+)\);',
+        [Text.RegularExpressions.RegexOptions]::Singleline)
+    if (-not $protocolDefinition.Success) { throw "Не найден протокол $($countrySet.Variable)." }
     foreach ($country in $countries.Split(' ', [StringSplitOptions]::RemoveEmptyEntries)) {
         $definitions += [pscustomobject]@{
             Provider = $countrySet.Provider
             Url = "$($countrySet.Prefix)$country$($countrySet.Suffix)"
-            Protocol = 'Http'
+            Protocol = $protocolDefinition.Groups['protocol'].Value
         }
     }
 }
@@ -93,11 +101,16 @@ if (@($feeds | Group-Object ProviderIdentity | Where-Object {
 }
 
 if ($CatalogOnly) {
+    $protocolCounts = [ordered]@{}
+    foreach ($group in ($feeds | Group-Object Protocol | Sort-Object Name)) {
+        $protocolCounts[$group.Name] = $group.Count
+    }
     $catalogReport = [ordered]@{
         auditedAt = [DateTimeOffset]::UtcNow.ToString('O')
         feeds = $feeds.Count
         providers = @($feeds.ProviderIdentity | Sort-Object -Unique).Count
         networkSkipped = $true
+        protocols = $protocolCounts
         failures = @()
     } | ConvertTo-Json -Depth 3
     Write-Output $catalogReport

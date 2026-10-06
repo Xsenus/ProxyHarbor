@@ -13,6 +13,97 @@ public sealed class DatabaseSeederIntegrationTests
 {
     [Fact]
     [Trait("Category", "PostgresIntegration")]
+    public async Task StartupUpgradesProxiflyTlsProfilesWithoutResettingSourceIdentityOrHistory()
+    {
+        var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
+        if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
+
+        var schema = $"proxyharbor_proxifly_tls_{Guid.NewGuid():N}";
+        var builder = new NpgsqlConnectionStringBuilder(baseConnectionString) { SearchPath = schema };
+        await using var admin = new NpgsqlConnection(baseConnectionString);
+        await admin.OpenAsync();
+        await using (var create = new NpgsqlCommand($"CREATE SCHEMA {schema}", admin))
+            await create.ExecuteNonQueryAsync();
+
+        try
+        {
+            var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+                .UseNpgsql(builder.ConnectionString).Options;
+            var fetchedAt = new DateTimeOffset(2026, 10, 6, 12, 0, 0, TimeSpan.Zero);
+            var previousIds = new Dictionary<string, Guid>(StringComparer.Ordinal);
+            var customId = Guid.NewGuid();
+            await using (var first = new ProxyHarborDbContext(options))
+            {
+                await DatabaseSeeder.InitializeAsync(first);
+                var sources = await first.Sources.Where(source =>
+                    source.Name == "Proxifly HTTPS" || source.Name.StartsWith("Proxifly country ")).ToArrayAsync();
+                Assert.Equal(36, sources.Length);
+                foreach (var source in sources)
+                {
+                    previousIds.Add(source.Url, source.Id);
+                    source.DefaultProtocol = source.Name == "Proxifly HTTPS" ? ProxyProtocol.Https : ProxyProtocol.Http;
+                    source.Enabled = false;
+                    source.LastFetchedAt = fetchedAt;
+                    source.LastSucceededAt = fetchedAt.AddMinutes(-10);
+                    source.LastContentFetchedAt = fetchedAt.AddMinutes(-20);
+                    source.NextFetchAt = fetchedAt.AddHours(1);
+                    source.HttpETag = "\"existing-body\"";
+                    source.HttpLastModifiedAt = fetchedAt.AddMinutes(-30);
+                    source.LastItemCount = 123;
+                    source.LastResultTruncated = true;
+                    source.ConsecutiveFailures = 2;
+                    source.LastError = "source temporarily unavailable";
+                }
+                first.Sources.Add(new ProxySource
+                {
+                    Id = customId,
+                    Name = "custom HTTPS",
+                    Url = "https://example.com/custom-https.txt",
+                    DefaultProtocol = ProxyProtocol.Https,
+                    Enabled = false
+                });
+                await first.SaveChangesAsync();
+            }
+
+            // Exercise repeated startup, including a database already upgraded once.
+            for (var pass = 0; pass < 2; pass++)
+            {
+                await using var restart = new ProxyHarborDbContext(options);
+                await DatabaseSeeder.InitializeAsync(restart);
+            }
+
+            await using var verify = new ProxyHarborDbContext(options);
+            foreach (var (url, id) in previousIds)
+            {
+                var source = await verify.Sources.AsNoTracking().SingleAsync(source => source.Url == url);
+                Assert.Equal(id, source.Id);
+                Assert.Equal(ProxyProtocol.HttpTlsUnverified, source.DefaultProtocol);
+                Assert.False(source.Enabled);
+                Assert.Equal(fetchedAt, source.LastFetchedAt);
+                Assert.Equal(fetchedAt.AddMinutes(-10), source.LastSucceededAt);
+                Assert.Equal(fetchedAt.AddMinutes(-20), source.LastContentFetchedAt);
+                Assert.Equal(fetchedAt.AddHours(1), source.NextFetchAt);
+                Assert.Equal("\"existing-body\"", source.HttpETag);
+                Assert.Equal(fetchedAt.AddMinutes(-30), source.HttpLastModifiedAt);
+                Assert.Equal(123, source.LastItemCount);
+                Assert.True(source.LastResultTruncated);
+                Assert.Equal(2, source.ConsecutiveFailures);
+                Assert.Equal("source temporarily unavailable", source.LastError);
+            }
+            var custom = await verify.Sources.AsNoTracking().SingleAsync(source => source.Id == customId);
+            Assert.Equal(ProxyProtocol.Https, custom.DefaultProtocol);
+            Assert.False(custom.Enabled);
+            Assert.Equal(BuiltInSourceCatalog.Sources.Count + 2, await verify.Sources.CountAsync());
+        }
+        finally
+        {
+            await using var drop = new NpgsqlCommand($"DROP SCHEMA IF EXISTS {schema} CASCADE", admin);
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
     public async Task LeaseMigrationPreservesInFlightOwnershipAndSupportsRollback()
     {
         var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");

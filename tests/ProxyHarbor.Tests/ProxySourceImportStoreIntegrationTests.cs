@@ -9,6 +9,44 @@ namespace ProxyHarbor.Tests;
 [Collection(PostgresIntegrationGroup.Name)]
 public sealed class ProxySourceImportStoreIntegrationTests
 {
+    [Theory]
+    [InlineData(ProxyProtocol.Http)]
+    [InlineData(ProxyProtocol.Https)]
+    [Trait("Category", "PostgresIntegration")]
+    public async Task TlsProfileUpgradeDiscardsLegacySnapshotForTheSameSourceUrl(ProxyProtocol previousProtocol)
+    {
+        await using var database = await SnapshotDatabase.CreateAsync();
+        if (database is null) return;
+        var source = await database.AddSourceAsync("tls-upgrade");
+        source.DefaultProtocol = previousProtocol;
+        await using (var db = database.Factory.CreateDbContext())
+            await db.Sources.Where(item => item.Id == source.Id).ExecuteUpdateAsync(
+                setters => setters.SetProperty(item => item.DefaultProtocol, previousProtocol));
+        var store = new ProxySourceImportStore(database.Factory);
+        const string content = "https://8.8.8.8:443\nhttps://1.1.1.1:443";
+        var old = Assert.IsType<ProxySourceImportState>(await store.BeginAsync(source,
+            ProxyCandidateSnapshotCodec.Encode(content, previousProtocol), CancellationToken.None));
+        source.DefaultProtocol = ProxyProtocol.HttpTlsUnverified;
+        await using (var db = database.Factory.CreateDbContext())
+            await db.Sources.Where(item => item.Id == source.Id).ExecuteUpdateAsync(
+                setters => setters.SetProperty(item => item.DefaultProtocol, source.DefaultProtocol));
+
+        Assert.Null(await store.LoadAsync(source, CancellationToken.None));
+        Assert.False(await store.AcknowledgeCommittedImportAsync(old, 1, DateTimeOffset.UtcNow, CancellationToken.None));
+        var updated = Assert.IsType<ProxySourceImportState>(await store.BeginAsync(source,
+            ProxyCandidateSnapshotCodec.Encode(content, source.DefaultProtocol), CancellationToken.None));
+        Assert.NotEqual(old.SnapshotId, updated.SnapshotId);
+        var protocols = new List<ProxyProtocol>();
+        var window = ProxySourceImportStore.ReadWindow(updated, 2, candidate =>
+        {
+            protocols.Add(candidate.ToEndpoint().Protocol);
+            return true;
+        });
+        Assert.True(window.Completed);
+        Assert.Equal(2, protocols.Count);
+        Assert.All(protocols, protocol => Assert.Equal(ProxyProtocol.HttpTlsUnverified, protocol));
+    }
+
     [Fact]
     [Trait("Category", "PostgresIntegration")]
     public async Task FreshOnlyAcknowledgementRejectsDuplicateAndStaleLane()
