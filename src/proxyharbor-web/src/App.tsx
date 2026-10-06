@@ -72,7 +72,7 @@ type SiteVisitorPage = PagedResult<SiteVisitor> & {summary:{pageViews:number;uni
 type SiteVisit = {id:number;ipAddress:string;userId?:string;userName?:string;email?:string;displayName?:string;page:string;visitedAt:string}
 type SiteVisitPage = PagedResult<SiteVisit> & {retentionDays:number}
 type SourceDraft = { name: string; url: string; protocol: Protocol; priority: number; enabled: boolean }
-type VpnProtocol = 'OpenVpn'|'WireGuard'|'Vless'|'Vmess'|'Trojan'|'Shadowsocks'|'Hysteria2'|'Tuic'
+type VpnProtocol = 'OpenVpn'|'WireGuard'|'Vless'|'Vmess'|'Trojan'|'Shadowsocks'|'Hysteria2'|'Tuic'|'MtProto'
 type VpnStatus = 'Pending'|'Reachable'|'Unreachable'|'UnsupportedTransport'
 type VpnEndpoint = {id:string;host:string;port:number;countryCode?:string;protocol:VpnProtocol;transport:'tcp'|'udp';status:VpnStatus;latencyMs?:number;firstSeenAt:string;lastSeenAt:string;lastCheckedAt?:string;nextCheckAt?:string;successfulChecks:number;failedChecks:number;successRate:number;knownForSeconds:number;lastError?:string;connectionUri?:string}
 const emptySourceDraft: SourceDraft = { name: '', url: '', protocol: 'Http', priority: 100, enabled: true }
@@ -841,7 +841,7 @@ function NotFoundPage() {
 /** Публичный VPN-каталог отдаёт готовые опубликованные URI без раскрытия внутренних feed. */
 function PublicVpnCatalog() {
   const { t } = useI18n()
-  const protocols: VpnProtocol[] = ['OpenVpn','WireGuard','Vless','Vmess','Trojan','Shadowsocks','Hysteria2','Tuic']
+  const protocols: VpnProtocol[] = ['OpenVpn','WireGuard','Vless','Vmess','Trojan','Shadowsocks','Hysteria2','Tuic','MtProto']
   const [items,setItems] = useState<VpnEndpoint[]>([])
   const [countries,setCountries] = useState<ProxyCountry[]>([])
   const [selectedCountries,setSelectedCountries] = useState<string[]>([])

@@ -42,7 +42,7 @@ public sealed class VpnSourceImportStoreIntegrationTests
         {
             case "count": state.CandidateCount = 0; break;
             case "cursor": state.NextIndex = 2; break;
-            case "protocol": state.SourceProtocol = (VpnProtocol)8; break;
+            case "protocol": state.SourceProtocol = (VpnProtocol)9; break;
             case "empty": state.Payload = []; break;
             case "complete": state.NextIndex = 1; break;
             case "hash": state.PayloadHash = []; break;

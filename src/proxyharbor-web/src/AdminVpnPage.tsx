@@ -6,7 +6,7 @@ import { ToastSignal } from './components/Toasts'
 
 type ProxyCountry = { code: string; count: number }
 type PagedResult<T> = { items: T[]; page: number; pageSize: number; total: number }
-type VpnProtocol = 'OpenVpn'|'WireGuard'|'Vless'|'Vmess'|'Trojan'|'Shadowsocks'|'Hysteria2'|'Tuic'
+type VpnProtocol = 'OpenVpn'|'WireGuard'|'Vless'|'Vmess'|'Trojan'|'Shadowsocks'|'Hysteria2'|'Tuic'|'MtProto'
 type VpnStatus = 'Pending'|'Reachable'|'Unreachable'|'UnsupportedTransport'
 type VpnEndpoint = {id:string;host:string;port:number;countryCode?:string;protocol:VpnProtocol;transport:'tcp'|'udp';status:VpnStatus;latencyMs?:number;firstSeenAt:string;lastSeenAt:string;lastCheckedAt?:string;nextCheckAt?:string;successfulChecks:number;failedChecks:number;successRate:number;knownForSeconds:number;lastError?:string;connectionUri?:string}
 type AdminVpnPageData = PagedResult<VpnEndpoint> & {summary:{total:number;reachable:number;pending:number;unreachable:number;unsupportedTransport:number;everReachable:number;averageReachableLatencyMs?:number;countries:number;longestKnownSeconds?:number};countries:ProxyCountry[]}
@@ -15,7 +15,7 @@ type VpnSource = {id:string;name:string;provider:string;url:string;defaultProtoc
 const API = import.meta.env.VITE_API_URL ?? ''
 
 export default function AdminVpnPage() {
-  const protocols: VpnProtocol[] = ['OpenVpn','WireGuard','Vless','Vmess','Trojan','Shadowsocks','Hysteria2','Tuic']
+  const protocols: VpnProtocol[] = ['OpenVpn','WireGuard','Vless','Vmess','Trojan','Shadowsocks','Hysteria2','Tuic','MtProto']
   const [tab,setTab] = useState<'endpoints'|'sources'>(() => new URLSearchParams(window.location.search).get('tab') === 'sources' ? 'sources' : 'endpoints')
   const [endpointData,setEndpointData] = useState<AdminVpnPageData|null>(null)
   const [sources,setSources] = useState<VpnSource[]>([])
