@@ -49,6 +49,7 @@ public sealed class BackupRestoreRoundTripIntegrationTests
                 source.ProxySourceImportStates.Add(ImportSnapshotFor(
                     await source.Sources.OrderBy(item => item.Priority).FirstAsync()));
                 source.VpnSourceImportStates.Add(VpnImportSnapshotFor(await source.VpnSources.OrderBy(item => item.Priority).FirstAsync()));
+                await SeedApiOperationalStateAsync(source);
                 await source.SaveChangesAsync();
             }
             await using (var target = new ProxyHarborDbContext(targetOptions))
@@ -58,6 +59,7 @@ public sealed class BackupRestoreRoundTripIntegrationTests
                 targetSourceMarker.Name = "Target metadata must survive failed restore";
                 target.ProxySourceImportStates.Add(ImportSnapshotFor(targetSourceMarker));
                 target.VpnSourceImportStates.Add(VpnImportSnapshotFor(await target.VpnSources.OrderBy(item => item.Priority).FirstAsync()));
+                await SeedApiOperationalStateAsync(target);
                 target.Proxies.Add(new ProxyEndpoint { Host = "9.9.9.9", Port = 9_999 });
                 var destination = new BackupDestination
                 {
@@ -364,6 +366,42 @@ public sealed class BackupRestoreRoundTripIntegrationTests
         var pendingVpn = await unchanged.VpnSourceImportStates.SingleAsync();
         Assert.Equal(0, pendingVpn.NextIndex);
         Assert.NotEmpty(pendingVpn.Payload);
+        var pendingApi = await unchanged.SourceApiCaptureStates.ToArrayAsync();
+        Assert.Equal(2, pendingApi.Length);
+        Assert.All(pendingApi, state => Assert.Equal(SHA256.HashData(state.Payload), state.PayloadHash));
+        Assert.Single(await unchanged.SourceApiOriginStates.ToArrayAsync());
+    }
+
+    private static async Task SeedApiOperationalStateAsync(ProxyHarborDbContext db)
+    {
+        var proxy = await db.Sources.OrderBy(source => source.Priority).FirstAsync();
+        var vpn = await db.VpnSources.OrderBy(source => source.Priority).FirstAsync();
+        var capture = new FreeProxyDbPageCapture().Append(new(1, false, DateTimeOffset.UtcNow,
+            "{\"status\":1,\"data\":{\"total_count\":2,\"data\":[{\"id\":1}]}}"), 100_000);
+        var payload = FreeProxyDbPageCaptureCodec.Encode(capture, 100_000);
+        db.SourceApiCaptureStates.Add(new SourceApiCaptureState
+        {
+            ProxySourceId = proxy.Id,
+            SourceUrl = proxy.Url,
+            SourceProtocol = (int)proxy.DefaultProtocol,
+            Payload = payload,
+            PayloadHash = SHA256.HashData(payload),
+            UpdatedAt = DateTimeOffset.UtcNow
+        });
+        db.SourceApiCaptureStates.Add(new SourceApiCaptureState
+        {
+            VpnSourceId = vpn.Id,
+            SourceUrl = vpn.Url,
+            SourceProtocol = (int)vpn.DefaultProtocol,
+            Payload = payload,
+            PayloadHash = SHA256.HashData(payload),
+            UpdatedAt = DateTimeOffset.UtcNow
+        });
+        db.SourceApiOriginStates.Add(new SourceApiOriginState
+        {
+            Origin = SourceApiOriginGate.Origin,
+            NotBefore = DateTimeOffset.UtcNow.AddHours(2)
+        });
     }
 
     private static VpnSourceImportState VpnImportSnapshotFor(VpnSource source)
@@ -512,6 +550,8 @@ public sealed class BackupRestoreRoundTripIntegrationTests
         Assert.Empty(await db.BackupDestinationHealthOutcomes.ToArrayAsync());
         Assert.Empty(await db.ProxySourceImportStates.ToArrayAsync());
         Assert.Empty(await db.VpnSourceImportStates.ToArrayAsync());
+        Assert.Empty(await db.SourceApiCaptureStates.ToArrayAsync());
+        Assert.Empty(await db.SourceApiOriginStates.ToArrayAsync());
         var proxy = await db.Proxies.AsNoTracking().SingleAsync();
         var expectedRestoredProxy = ExpectedProxy();
         expectedRestoredProxy.CheckLeaseId = null;

@@ -25,6 +25,10 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
     public DbSet<VpnSource> VpnSources => Set<VpnSource>();
     /// <summary>Ephemeral cursor state полного VPN import.</summary>
     public DbSet<VpnSourceImportState> VpnSourceImportStates => Set<VpnSourceImportState>();
+    /// <summary>Validated pending API pages, kept until the full body is admitted.</summary>
+    public DbSet<SourceApiCaptureState> SourceApiCaptureStates => Set<SourceApiCaptureState>();
+    /// <summary>Shared durable API request deadlines.</summary>
+    public DbSet<SourceApiOriginState> SourceApiOriginStates => Set<SourceApiOriginState>();
     /// <summary>Происхождение каждого VPN endpoint.</summary>
     public DbSet<VpnEndpointSource> VpnEndpointSources => Set<VpnEndpointSource>();
     /// <summary>История циклов сбора.</summary>
@@ -465,6 +469,27 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
             table.HasCheckConstraint("CK_ProxySourceImportStates_Payload",
                 "octet_length(\"Payload\") <= 24000000 AND ((\"NextIndex\" < \"CandidateCount\" AND octet_length(\"Payload\") > 8 AND octet_length(\"PayloadHash\") = 32) OR (\"NextIndex\" = \"CandidateCount\" AND octet_length(\"Payload\") = 0 AND octet_length(\"PayloadHash\") = 0))");
         });
+
+        var apiCapture = builder.Entity<SourceApiCaptureState>();
+        apiCapture.HasKey(x => x.Id);
+        apiCapture.HasIndex(x => x.ProxySourceId).IsUnique();
+        apiCapture.HasIndex(x => x.VpnSourceId).IsUnique();
+        apiCapture.Property(x => x.SourceUrl).HasMaxLength(2048);
+        apiCapture.Property(x => x.StoredBytes).HasComputedColumnSql("octet_length(\"Payload\")", stored: true);
+        apiCapture.HasOne<ProxySource>().WithOne().HasForeignKey<SourceApiCaptureState>(x => x.ProxySourceId)
+            .OnDelete(DeleteBehavior.Cascade);
+        apiCapture.HasOne<VpnSource>().WithOne().HasForeignKey<SourceApiCaptureState>(x => x.VpnSourceId)
+            .OnDelete(DeleteBehavior.Cascade);
+        apiCapture.ToTable(table =>
+        {
+            table.HasCheckConstraint("CK_SourceApiCaptureStates_Owner",
+                "(\"ProxySourceId\" IS NOT NULL AND \"VpnSourceId\" IS NULL AND \"SourceProtocol\" BETWEEN 0 AND 3) OR (\"ProxySourceId\" IS NULL AND \"VpnSourceId\" IS NOT NULL AND \"SourceProtocol\" BETWEEN 0 AND 7)");
+            table.HasCheckConstraint("CK_SourceApiCaptureStates_Payload",
+                "octet_length(\"Payload\") BETWEEN 8 AND 34554432 AND octet_length(\"PayloadHash\") = 32");
+        });
+        var apiOrigin = builder.Entity<SourceApiOriginState>();
+        apiOrigin.HasKey(x => x.Origin);
+        apiOrigin.Property(x => x.Origin).HasMaxLength(256);
 
         var sourceCredential = builder.Entity<ProxySourceCredential>();
         sourceCredential.HasKey(x => x.ProxySourceId);

@@ -271,6 +271,8 @@ internal static class RestoreApplication
             // Operational VERIFY history belongs to the target environment, not the archive.
             await db.BackupDestinationHealthOutcomes.ExecuteDeleteAsync(token);
             await db.VpnSourceImportStates.ExecuteDeleteAsync(token);
+            await db.SourceApiCaptureStates.ExecuteDeleteAsync(token);
+            await db.SourceApiOriginStates.ExecuteDeleteAsync(token);
             if (hasDestinationOrchestrationSnapshot)
             {
                 await db.BackupDeliveryJobs.ExecuteDeleteAsync(token);

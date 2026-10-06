@@ -35,11 +35,13 @@ public sealed class VpnCatalogService(
         if (operationLock is null) throw new OperationAlreadyRunningException("VPN collection уже выполняется другой репликой.");
         var importStore = new VpnSourceImportStore(dbFactory);
         await importStore.CleanupAsync(token);
+        await new SourceApiCaptureStore(dbFactory).CleanupAsync(token);
         await using var readDb = await dbFactory.CreateDbContextAsync(token);
         var collectionStartedAt = DateTimeOffset.UtcNow;
         var sources = await readDb.VpnSources.AsNoTracking().Where(x => x.Enabled &&
                 (forceAllSources || x.NextFetchAt == null || x.NextFetchAt <= collectionStartedAt ||
-                 readDb.VpnSourceImportStates.Any(state => state.VpnSourceId == x.Id && state.NextIndex < state.CandidateCount)))
+                 readDb.VpnSourceImportStates.Any(state => state.VpnSourceId == x.Id && state.NextIndex < state.CandidateCount) ||
+                 readDb.SourceApiCaptureStates.Any(state => state.VpnSourceId == x.Id && state.Complete)))
             .OrderBy(x => readDb.VpnSourceImportStates.Where(state => state.VpnSourceId == x.Id)
                 .Select(state => state.LastProgressAt).FirstOrDefault() ?? DateTimeOffset.MinValue)
             .ThenBy(x => x.Priority).ThenBy(x => x.Id).ToArrayAsync(token);
@@ -103,7 +105,13 @@ public sealed class VpnCatalogService(
             acceptedBatches.AddRange(result.Batches.Select(batch => batch with { Source = source }));
             if (!result.FetchObserved || result.Error is not null)
                 cachedCandidates += result.Batches.Sum(batch => batch.Candidates.Count);
-            if (!result.FetchObserved) continue;
+            if (!result.FetchObserved)
+            {
+                if (result.RetryNotBefore > source.NextFetchAt ||
+                    source.NextFetchAt is null && result.RetryNotBefore is not null)
+                    source.NextFetchAt = result.RetryNotBefore;
+                continue;
+            }
             source.LastFetchedAt = now;
             if (result.Error is not null)
             {
@@ -114,6 +122,8 @@ public sealed class VpnCatalogService(
                     source.ConsecutiveFailures,
                     options.Value.SourceFailureBackoffBaseMinutes,
                     options.Value.SourceFailureBackoffMaxHours);
+                if (result.RetryNotBefore > source.NextFetchAt)
+                    source.NextFetchAt = result.RetryNotBefore;
                 continue;
             }
             source.LastSucceededAt = now;
@@ -123,7 +133,7 @@ public sealed class VpnCatalogService(
             if (result.ContentFetched) source.LastContentFetchedAt = now;
             source.ConsecutiveFailures = 0;
             source.LastError = null;
-            source.NextFetchAt = null;
+            source.NextFetchAt = SourceFetchSchedule.NextSuccessAttempt(source.Url, now);
             succeededResults.Add(result);
 
         }
@@ -550,8 +560,11 @@ public sealed class VpnCatalogService(
         {
             VpnSourceImportState? state = null;
             VpnCandidateSnapshot? fresh = null;
+            SourceApiFetchResult? apiFetch = null;
             List<VpnCandidate> tail = [];
-            var fetchedObserved = SourceFetchSchedule.IsDue(source.NextFetchAt, collectionStartedAt, forceAllSources);
+            var fetchedObserved = SourceFetchSchedule.IsDue(source.NextFetchAt, collectionStartedAt, forceAllSources, source.Url);
+            var observedAt = collectionStartedAt;
+            DateTimeOffset? retryNotBefore = null;
             var contentFetched = false;
             var confirmedCount = source.LastItemCount;
             var etag = source.HttpETag;
@@ -569,7 +582,11 @@ public sealed class VpnCatalogService(
                         state = null;
                     }
                 }
-                if (fetchedObserved)
+                var apiOwner = string.Equals(source.Url, FreeProxyDbPageCapture.VpnUrl, StringComparison.Ordinal)
+                    ? SourceApiCaptureOwner.From(source) : null;
+                var apiCheckpoint = apiOwner is null ? null : await new SourceApiCaptureStore(dbFactory).LoadAsync(apiOwner, cancellationToken);
+                var apiComplete = apiCheckpoint?.Capture.Inspect(MaximumFeedBytes).Complete == true;
+                if (fetchedObserved || apiComplete)
                 {
                     // A 304 for a newer body cannot replace its unsaved tail after the old queue completes.
                     var completeBodyKnown = state is not null && (state.NextIndex < state.CandidateCount ||
@@ -577,11 +594,29 @@ public sealed class VpnCatalogService(
                     var useValidators = !forceAllSources && completeBodyKnown && SourceConditionalFetchPolicy.ShouldUseValidators(
                         source.LastContentFetchedAt, source.LastSucceededAt, source.LastItemCount,
                         collectionStartedAt, options.Value.DeadRetentionDays);
-                    var fetched = await SourceHttpFetcher.FetchAsync(client, source.Url,
+                    SourceFetchResult fetched;
+                    if (apiOwner is not null)
+                    {
+                        apiFetch = await new FreeProxyDbSourceApiFetcher(dbFactory).FetchAsync(apiOwner,
+                            (url, pageToken) => SourceHttpFetcher.FetchAsync(client, url, null, null,
+                                FreeProxyDbPageCapture.MaximumPageBytes, options.Value.SourceTimeoutSeconds,
+                                options.Value.SourceRetryCount, pageToken, SourceFeedParser.EnsureSupportedMediaType,
+                                sameOriginRedirectsOnly: true, respectRateLimit: true, sourceApiRequest: true), cancellationToken);
+                        fetched = apiFetch.Fetch;
+                        fetchedObserved = apiFetch.NetworkObserved;
+                        observedAt = apiFetch.ObservedAt;
+                        retryNotBefore = apiFetch.NextRefreshAt;
+                    }
+                    else
+                    {
+                        if (FreeProxyDbPageCapture.IsSearchUrl(source.Url))
+                            throw new InvalidDataException("FreeProxyDB VPN Search требует канонический URL сохраняемой очереди страниц.");
+                        fetched = await SourceHttpFetcher.FetchAsync(client, source.Url,
                         useValidators ? source.HttpETag : null,
                         useValidators ? source.HttpLastModifiedAt : null,
                         MaximumFeedBytes, options.Value.SourceTimeoutSeconds, options.Value.SourceRetryCount,
                         cancellationToken, SourceFeedParser.EnsureSupportedMediaType);
+                    }
                     etag = fetched.HttpETag;
                     modified = fetched.HttpLastModifiedAt;
                     if (fetched.NotModified)
@@ -594,9 +629,12 @@ public sealed class VpnCatalogService(
                         // Canonicalize the complete body before taking a bounded fresh window.
                         fresh = VpnCandidateSnapshotCodec.Encode(
                             fetched.Content ?? throw new InvalidDataException("VPN feed не вернул тело."), source.DefaultProtocol);
-                        contentFetched = true;
+                        contentFetched = apiFetch?.NetworkObserved ?? true;
                         confirmedCount = fresh.UniqueCount;
-                        state = await importStore.BeginAsync(source, fresh, collectionStartedAt, cancellationToken);
+                        state = await importStore.BeginAsync(source, fresh, observedAt, cancellationToken);
+                        if (apiFetch is not null && state is not null &&
+                            state.SnapshotBodyHash.AsSpan().SequenceEqual(fresh.BodyHash))
+                            await new SourceApiCaptureStore(dbFactory).DiscardAsync(apiFetch.Checkpoint, cancellationToken);
                         tail = [];
                         if (state is not null && state.NextIndex < state.CandidateCount) tail = ReadTail(state);
                         if (state is not null && !fresh.BodyHash.AsSpan().SequenceEqual(state.FreshBodyHash))
@@ -610,15 +648,21 @@ public sealed class VpnCatalogService(
             }
             catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
             {
+                if (apiFetch is not null && fresh is null && exception is InvalidDataException)
+                    await new SourceApiCaptureStore(dbFactory).DiscardAsync(apiFetch.Checkpoint, cancellationToken);
                 fresh = null;
                 contentFetched = false;
-                error = exception.Message;
-                OperationalLogBoundary.Write(() => SourceFailed(logger, source.Id, exception));
+                error = exception is SourceApiDeferredException ? null : exception.Message;
+                if (exception is SourceApiDeferredException) fetchedObserved = false;
+                retryNotBefore = (exception as SourceRateLimitException)?.RetryNotBefore ??
+                    (exception as SourceApiDeferredException)?.NotBefore;
+                if (exception is not SourceApiDeferredException)
+                    OperationalLogBoundary.Write(() => SourceFailed(logger, source.Id, exception));
             }
 
-            var admission = state is null ? null : admissions.Admit(source, state, tail, fresh, collectionStartedAt);
+            var admission = state is null ? null : admissions.Admit(source, state, tail, fresh, observedAt);
             results.Add(new(source, admission?.Batches ?? [], confirmedCount, contentFetched, etag, modified,
-                error, fetchedObserved, admission?.Progress));
+                error, fetchedObserved, admission?.Progress, retryNotBefore));
 
             List<VpnCandidate> ReadTail(VpnSourceImportState snapshot)
             {
@@ -639,7 +683,8 @@ public sealed class VpnCatalogService(
         DateTimeOffset? HttpLastModifiedAt,
         string? Error,
         bool FetchObserved,
-        VpnSourceImportProgress? Progress);
+        VpnSourceImportProgress? Progress,
+        DateTimeOffset? RetryNotBefore = null);
 }
 
 /// <summary>Партия URI с фактическим временем наблюдения тела feed.</summary>

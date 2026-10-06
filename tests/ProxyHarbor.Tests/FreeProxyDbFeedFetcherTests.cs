@@ -133,6 +133,21 @@ public sealed class FreeProxyDbFeedFetcherTests
 
     private static Task<SourceFetchResult> Fetch(Queue<string> bodies) => FreeProxyDbFeedFetcher.FetchAsync(100_000,
         (_, _) => Task.FromResult(new SourceFetchResult(bodies.Dequeue(), false, null, null)), CancellationToken.None);
+
+    [Theory]
+    [InlineData(429)]
+    [InlineData(503)]
+    public async Task HttpDateRetryAfterPreservesFullProviderDeadline(int status)
+    {
+        var deadline = DateTimeOffset.UtcNow.AddHours(2);
+        var handler = new RateLimitedHandler(status, true, deadline);
+        using var client = new HttpClient(handler);
+        var error = await Assert.ThrowsAsync<SourceRateLimitException>(() => SourceHttpFetcher.FetchAsync(
+            client, "https://1.1.1.1/feed", null, null, 1000, 2, 3, CancellationToken.None, respectRateLimit: true));
+        Assert.InRange(error.RetryNotBefore, deadline.AddSeconds(-1), deadline.AddSeconds(1));
+        Assert.Equal(1, handler.Requests);
+        Assert.True(handler.ContentDisposed);
+    }
     private static string Page(int total, params object[] rows) => JsonSerializer.Serialize(new
     {
         status = 1,
@@ -141,7 +156,7 @@ public sealed class FreeProxyDbFeedFetcherTests
     private static object Row(int id, string? ip = null, string protocol = "http", int speed = 1) =>
         new { id, ip = ip ?? $"8.8.8.{id}", port = 8080, protocol, speed };
 
-    private sealed class RateLimitedHandler(int status, bool hasHeader) : HttpMessageHandler
+    private sealed class RateLimitedHandler(int status, bool hasHeader, DateTimeOffset? deadline = null) : HttpMessageHandler
     {
         internal int Requests { get; private set; }
         internal bool ContentDisposed { get; private set; }
@@ -149,7 +164,8 @@ public sealed class FreeProxyDbFeedFetcherTests
         {
             Requests++;
             var response = new HttpResponseMessage((HttpStatusCode)status) { Content = new TrackedContent(() => ContentDisposed = true) };
-            if (hasHeader) response.Headers.RetryAfter = new RetryConditionHeaderValue(TimeSpan.FromMinutes(30));
+            if (hasHeader) response.Headers.RetryAfter = deadline is { } date
+                ? new RetryConditionHeaderValue(date) : new RetryConditionHeaderValue(TimeSpan.FromMinutes(30));
             return Task.FromResult(response);
         }
     }

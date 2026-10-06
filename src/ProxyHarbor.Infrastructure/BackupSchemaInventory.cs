@@ -59,6 +59,8 @@ public static class BackupSchemaInventory
         Included("SiteConfigurations", "database/site-configuration.json", "Public-site runtime configuration."),
         Included("SiteVisitLogs", "database/site-visit-logs.json", "Durable first-party visit audit."),
         Included("Sources", "database/sources.json", "Proxy source catalog and fetch state."),
+        Ephemeral("SourceApiCaptureStates", "Pending external API pages must be re-fetched after restore."),
+        Ephemeral("SourceApiOriginStates", "Request deadlines belong to the current environment and must not survive restore."),
         Included("SubscriptionAdminActions", "database/subscription-admin-actions.json", "Administrative subscription audit."),
         Included("Subscriptions", "database/subscriptions.json", "Current account entitlements."),
         Included("TelegramBotConfigurations", "database/telegram-bot-configuration.json", "Protected Telegram runtime configuration."),

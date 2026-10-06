@@ -33,6 +33,7 @@ public sealed class FreeProxyDbCollectorIntegrationTests
             {
                 await using var db = database.Factory.CreateDbContext();
                 await db.Sources.ExecuteUpdateAsync(setters => setters.SetProperty(item => item.NextFetchAt, DateTimeOffset.UtcNow.AddMinutes(-1)));
+                await db.SourceApiOriginStates.ExecuteUpdateAsync(setters => setters.SetProperty(item => item.NotBefore, DateTimeOffset.UtcNow.AddMinutes(-1)));
             }
             using var collector = new ProxyCollector(database.Factory, clients,
                 Options.Create(new CollectorOptions { MaxProxiesPerSource = 1, MaxCandidatesPerRun = 10, SourceRetryCount = 2 }),
@@ -62,7 +63,7 @@ public sealed class FreeProxyDbCollectorIntegrationTests
             if (cycle == 2) Assert.Empty(state.Payload);
         }
         // Forced collection cannot defeat provider cooldown, including Retry-After.
-        Assert.Equal(rateLimitRefresh ? 4 : 2, handler.Requests);
+        Assert.Equal(rateLimitRefresh ? 4 : 3, handler.Requests);
     }
 
     private sealed class ApiClients(ApiHandler handler) : IHttpClientFactory
