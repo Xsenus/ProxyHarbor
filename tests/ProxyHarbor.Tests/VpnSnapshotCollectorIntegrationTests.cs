@@ -13,6 +13,34 @@ namespace ProxyHarbor.Tests;
 [Collection(PostgresIntegrationGroup.Name)]
 public sealed class VpnSnapshotCollectorIntegrationTests
 {
+    [Theory, Trait("Category", "PostgresIntegration")]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task UriPunctuationInSupersededRecordDoesNotBlockImportOr304Continuation(bool quoted)
+    {
+        await using var database = await SnapshotDatabase.CreateAsync();
+        if (database is null) return;
+        await AddSourceAsync(database, "punctuation");
+        const string first = "vless://first@8.8.8.8:1#old,,";
+        const string last = "vless://last@8.8.8.8:1#new";
+        const string neighbour = "vless://id@8.8.8.8:2#kept,,";
+        var body = (quoted ? System.Text.Json.JsonSerializer.Serialize(first) + "," : first) + "\n" + last + "\n" + neighbour;
+        using var clients = new FeedClients(_ => body);
+        var service = Service(database, clients, Settings(1));
+        Assert.Equal(1, (await service.CollectAsync()).Added);
+        var resumed = await service.CollectAsync();
+        Assert.Equal(1, resumed.Added);
+        Assert.Equal(1, resumed.NotModified);
+        await using var db = database.Factory.CreateDbContext();
+        Assert.Null((await db.VpnSources.SingleAsync()).LastError);
+        Assert.Equal(last, (await db.VpnEndpoints.SingleAsync(x => x.Port == 1)).ConnectionUri);
+        Assert.Equal(neighbour, (await db.VpnEndpoints.SingleAsync(x => x.Port == 2)).ConnectionUri);
+        Assert.Equal(2, await db.VpnEndpointSources.CountAsync());
+        var state = await db.VpnSourceImportStates.SingleAsync();
+        Assert.Equal(2, state.NextIndex);
+        Assert.Empty(state.Payload);
+    }
+
     [Fact, Trait("Category", "PostgresIntegration")]
     public async Task SmallQuotaPersistsWholeFeedAnd304DrainsBeyondTenThousandWithCanonicalLatestUri()
     {
