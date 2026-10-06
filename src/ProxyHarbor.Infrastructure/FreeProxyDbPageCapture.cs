@@ -12,6 +12,7 @@ namespace ProxyHarbor.Infrastructure;
 internal sealed class FreeProxyDbPageCapture
 {
     internal const string VpnUrl = "https://freeproxydb.com/api/proxy/search?protocol=vless,vmess,trojan,ss,hysteria2&page_size=100&page_index=1&order_by=id&order_dir=desc";
+    internal const string MtProtoUrl = "https://freeproxydb.com/api/proxy/search?protocol=mtproto&page_size=100&page_index=1&order_by=id&order_dir=desc";
     internal const int MaximumPages = 10_000;
     internal const int MaximumPageBytes = 2_000_000;
     internal const int MaximumCaptureBytes = 32 * 1024 * 1024;
@@ -22,7 +23,9 @@ internal sealed class FreeProxyDbPageCapture
     internal IReadOnlyList<FreeProxyDbCapturedPage> Pages => Array.AsReadOnly(_pages);
 
     internal static bool Supports(string url) =>
-        FreeProxyDbFeedFetcher.Supports(url) || string.Equals(url, VpnUrl, StringComparison.Ordinal);
+        FreeProxyDbFeedFetcher.Supports(url) || SupportsVpn(url);
+    internal static bool SupportsVpn(string url) => string.Equals(url, VpnUrl, StringComparison.Ordinal) ||
+        string.Equals(url, MtProtoUrl, StringComparison.Ordinal);
     internal static bool IsSearchUrl(string url) => Uri.TryCreate(url, UriKind.Absolute, out var uri) &&
         uri.Host.Equals("freeproxydb.com", StringComparison.OrdinalIgnoreCase) &&
         uri.AbsolutePath.TrimEnd('/').Equals("/api/proxy/search", StringComparison.Ordinal);

@@ -42,7 +42,9 @@ public enum VpnProtocol
     /// <summary>URI протокола Hysteria 2.</summary>
     Hysteria2,
     /// <summary>URI протокола TUIC.</summary>
-    Tuic
+    Tuic,
+    /// <summary>Публичная ссылка Telegram MTProxy.</summary>
+    MtProto
 }
 
 /// <summary>Результат безопасной проверки доступности VPN endpoint без использования опубликованных credentials.</summary>

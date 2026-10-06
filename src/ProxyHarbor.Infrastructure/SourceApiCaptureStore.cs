@@ -126,8 +126,8 @@ internal sealed record SourceApiCaptureOwner(Guid SourceId, bool Vpn, string Url
     internal static SourceApiCaptureOwner From(VpnSource source) => new(source.Id, true, source.Url, (int)source.DefaultProtocol);
     internal void EnsureSupported()
     {
-        if (SourceId == Guid.Empty || Protocol < 0 || Protocol > (Vpn ? 7 : 3) ||
-            !string.Equals(Url, Vpn ? FreeProxyDbPageCapture.VpnUrl : FreeProxyDbFeedFetcher.Url, StringComparison.Ordinal))
+        if (SourceId == Guid.Empty || Protocol < 0 || Protocol > (Vpn ? 8 : 3) ||
+            !(Vpn ? FreeProxyDbPageCapture.SupportsVpn(Url) : FreeProxyDbFeedFetcher.Supports(Url)))
             throw new InvalidDataException("Unsupported public API source configuration.");
     }
 }

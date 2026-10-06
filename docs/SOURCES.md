@@ -1,5 +1,9 @@
 # Каталог источников ProxyHarbor
 
+Пользовательские Telegram MTProto-источники поддерживают опубликованные `tg://proxy?server=...&port=...&secret=...`, `tg:proxy?...` и HTTPS-ссылки `/proxy` на `t.me`, `telegram.me`, `telegram.dog`. Адрес берётся из `server`, а не из домена ссылки Telegram; непубличные endpoint и повреждённые secret отклоняются. Поддерживаются 16-байтные secret, варианты `dd` и `ee` в hex или Base64, как в TDLib. JSON допускает массив ссылок/объектов либо обёртку `proxies`; объект содержит `link` или отдельные `server`, `port`, `secret`. Для такого JSON выберите `MtProto` в редакторе VPN-источника. Это Telegram-прокси, а не HTTP/SOCKS-прокси общего назначения.
+
+Канонический MTProto Search URL: `https://freeproxydb.com/api/proxy/search?protocol=mtproto&page_size=100&page_index=1&order_by=id&order_dir=desc`. Он использует сохранение страниц, общую квоту и повторную проверку начала списка наравне с каноническим VPN Search URL. Очерёдность VPN-импорта учитывает возраст сохранённого API capture до приоритета источника, чтобы готовые очереди получали доступ к ограниченному бюджету по очереди.
+
 Операторская таблица всех провайдеров с прямыми ссылками вынесена в [`SOURCE_CATALOG.md`](SOURCE_CATALOG.md); главная страница намеренно не раскрывает источники. Этот документ описывает эксплуатационные гарантии и воспроизводимый аудит.
 
 Встроенный каталог содержит **547 proxy-feed и 281 техническую origin identity** с потоками HTTP/HTTPS/SOCKS4/SOCKS5. VPN-каталог содержит **248 HTTPS feed от 32 провайдеров** для OpenVPN, WireGuard, VLESS, VMess, Trojan, Shadowsocks, Hysteria2 и TUIC.

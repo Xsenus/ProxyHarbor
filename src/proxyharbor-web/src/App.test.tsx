@@ -533,6 +533,15 @@ describe('ProxyHarbor UI', () => {
     await waitFor(()=>expect(vi.mocked(fetch).mock.calls.some(([input])=>String(input).includes('sort=quality&order=desc'))).toBe(true))
     fireEvent.click(screen.getByRole('button',{name:'Следующая страница'}))
     await waitFor(()=>expect(vi.mocked(fetch).mock.calls.some(([input])=>String(input).includes('page=2'))).toBe(true))
+    fireEvent.keyDown(screen.getByRole('button',{name:'VPN протокол'}),{key:'ArrowDown'})
+    await waitFor(()=>expect(screen.getByRole('option',{name:'Все протоколы'})).toHaveFocus())
+    fireEvent.keyDown(screen.getByRole('option',{name:'Все протоколы'}),{key:'End'})
+    await waitFor(()=>expect(screen.getByRole('option',{name:'MtProto'})).toHaveFocus())
+    fireEvent.click(screen.getByRole('option',{name:'MtProto'}))
+    await waitFor(()=>expect(vi.mocked(fetch).mock.calls.some(([input])=>{
+      const request=new URL(String(input),'https://example.test')
+      return request.pathname.endsWith('/api/v1/admin/vpn/endpoints')&&request.searchParams.get('protocol')==='MtProto'&&request.searchParams.get('page')==='1'
+    })).toBe(true))
     expect(screen.getByRole('button',{name:'Копировать конфигурацию VPN'})).toHaveAttribute('data-tooltip','Копировать полную конфигурацию')
   })
 
@@ -570,6 +579,36 @@ describe('ProxyHarbor UI', () => {
       const request=new URL(String(input),'https://example.test')
       return request.pathname.endsWith('/api/v1/admin/vpn/sources')&&!request.searchParams.has('search')
     })).toBe(true))
+  })
+
+  it('saves a Telegram feed with the selected MTProto protocol', async () => {
+    window.history.replaceState({}, '', '/admin/vpn?tab=sources')
+    vi.mocked(fetch).mockImplementation(async (input, options) => {
+      const url = String(input)
+      if (url.endsWith('/api/v1/admin/vpn/sources') && options?.method === 'POST') return jsonResponse({}, 201)
+      if (url.includes('/api/v1/admin/vpn/sources?') || url.includes('/api/v1/admin/sources'))
+        return jsonResponse({ items: [], page: 1, pageSize: 10, total: 0 })
+      if (url.includes('/api/v1/admin/diagnostics'))
+        return jsonResponse({ serverTime: new Date().toISOString(), databaseBytes: 0, validationQueue: { total: 0, due: 0 }, recentRuns: [], recentValidationRuns: [], recentBackups: [] })
+      return jsonResponse({ title: 'Unexpected request' }, 500)
+    })
+    const { container } = render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Добавить feed' }))
+    fireEvent.change(screen.getByRole('textbox', { name: 'Название' }), { target: { value: 'Telegram public feed' } })
+    fireEvent.change(screen.getByRole('textbox', { name: 'Провайдер' }), { target: { value: 'Public publisher' } })
+    fireEvent.change(screen.getByRole('textbox', { name: 'HTTPS URL' }), { target: { value: 'https://example.test/telegram.txt' } })
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Протокол VPN feed' }), { key: 'ArrowDown' })
+    await waitFor(() => expect(screen.getByRole('option', { name: 'Vless' })).toHaveFocus())
+    fireEvent.keyDown(screen.getByRole('option', { name: 'Vless' }), { key: 'End' })
+    await waitFor(() => expect(screen.getByRole('option', { name: 'MtProto' })).toHaveFocus())
+    fireEvent.click(screen.getByRole('option', { name: 'MtProto' }))
+    expect(container.querySelector('select')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Сохранить' }))
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([input, options]) =>
+      String(input).endsWith('/api/v1/admin/vpn/sources') && options?.method === 'POST' &&
+      JSON.parse(String(options.body)).protocol === 'MtProto' && options.credentials === 'include'
+    )).toBe(true))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
   })
 
   it('shows the actionable checker deployment error returned by the API', async () => {

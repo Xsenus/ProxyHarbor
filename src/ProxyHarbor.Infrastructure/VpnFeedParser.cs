@@ -60,6 +60,12 @@ public static class VpnFeedParser
         VpnProtocol fallback,
         CandidateSink result)
     {
+        if (fallback == VpnProtocol.MtProto && MtProtoLinkParser.TryReadJson(content, candidate =>
+            {
+                if (result.AtLimit) return false;
+                Add(candidate, result);
+                return !result.AtLimit;
+            })) return;
         // OpenVPN-конфигурации и WireGuard INI могут занимать несколько строк.
         if (fallback == VpnProtocol.OpenVpn)
         {
@@ -93,7 +99,8 @@ public static class VpnFeedParser
             if (line.AsSpan().IndexOfAny('\r', '\n', '\0') >= 0) continue;
             line = line.Trim();
             if (line.Length is 0 or > 16_384 || line[0] == '#') continue;
-            if (line.StartsWith("vmess://", StringComparison.OrdinalIgnoreCase))
+            if (MtProtoLinkParser.TryParse(line, out var telegramCandidate)) Add(telegramCandidate, result);
+            else if (line.StartsWith("vmess://", StringComparison.OrdinalIgnoreCase))
             {
                 if (!TryParseVmess(line, result) && TryProtocolUri(line, out var candidate))
                     Add(candidate, result);

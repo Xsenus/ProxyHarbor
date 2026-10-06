@@ -171,7 +171,7 @@ public sealed class SourceApiCaptureStoreIntegrationTests
             State(proxy.SourceId, null, [], SHA256.HashData(payload)),
             State(proxy.SourceId, null, payload, new byte[31]),
             State(proxy.SourceId, null, payload, SHA256.HashData(payload), 4),
-            State(null, vpn.SourceId, payload, SHA256.HashData(payload), 8),
+            State(null, vpn.SourceId, payload, SHA256.HashData(payload), 9),
         })
         {
             await using var db = database.Factory.CreateDbContext();

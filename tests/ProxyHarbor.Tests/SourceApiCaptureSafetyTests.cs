@@ -37,7 +37,7 @@ public sealed class SourceApiCaptureSafetyTests
     [InlineData(false, -1)]
     [InlineData(false, 4)]
     [InlineData(true, -1)]
-    [InlineData(true, 8)]
+    [InlineData(true, 9)]
     public void ProtocolOutsideOwnerContractCannotReachStorage(bool vpn, int protocol)
     {
         var owner = Owner with { Vpn = vpn, Protocol = protocol, Url = vpn ? FreeProxyDbPageCapture.VpnUrl : Owner.Url };

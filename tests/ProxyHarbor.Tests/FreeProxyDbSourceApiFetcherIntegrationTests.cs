@@ -13,6 +13,76 @@ namespace ProxyHarbor.Tests;
 public sealed class FreeProxyDbSourceApiFetcherIntegrationTests
 {
     [Fact, Trait("Category", "PostgresIntegration")]
+    public async Task ApiCaptureAgeRotatesVpnAdmissionBeforeSourcePriority()
+    {
+        await using var database = await SnapshotDatabase.CreateAsync();
+        if (database is null) return;
+        var newer = await AddVpnAsync(database);
+        var older = new VpnSource
+        {
+            Name = "API Telegram",
+            Provider = "Test fixture",
+            License = "Test fixture",
+            Url = FreeProxyDbPageCapture.MtProtoUrl,
+            DefaultProtocol = VpnProtocol.MtProto,
+            Priority = 100
+        };
+        await using (var db = database.Factory.CreateDbContext())
+        {
+            db.VpnSources.Add(older);
+            await db.SaveChangesAsync();
+        }
+        await PrimeAsync(database, SourceApiCaptureOwner.From(newer), Page(1,
+            new { id = 1, protocol = "vless", connect_string = "vless://user@8.8.8.8:443" }), DateTimeOffset.UtcNow.AddHours(-1));
+        await PrimeAsync(database, SourceApiCaptureOwner.From(older), Page(1,
+            new { id = 1, protocol = "mtproto", connect_string = TelegramLink("1.1.1.1") }), DateTimeOffset.UtcNow.AddHours(-2));
+        await using (var db = database.Factory.CreateDbContext())
+            await db.SourceApiCaptureStates.Where(state => state.VpnSourceId == older.Id).ExecuteUpdateAsync(setters =>
+                setters.SetProperty(state => state.UpdatedAt, DateTimeOffset.UtcNow.AddHours(-2)));
+        var clients = new NoHttpClients();
+        var service = new VpnCatalogService(database.Factory, clients, Options.Create(Settings()), NullLogger<VpnCatalogService>.Instance);
+        await service.CollectAsync(true);
+        await using (var db = database.Factory.CreateDbContext())
+            Assert.Equal(VpnProtocol.MtProto, (await db.VpnEndpoints.SingleAsync()).Protocol);
+        await service.CollectAsync(true);
+        await using var final = database.Factory.CreateDbContext();
+        Assert.Equal(2, await final.VpnEndpoints.CountAsync());
+        Assert.Equal(0, clients.Requests);
+    }
+
+    [Fact, Trait("Category", "PostgresIntegration")]
+    public async Task MtProtoApiCaptureAndNativeCandidatePersistWithNewProtocol()
+    {
+        await using var database = await SnapshotDatabase.CreateAsync();
+        if (database is null) return;
+        var source = await AddVpnAsync(database);
+        source.Url = FreeProxyDbPageCapture.MtProtoUrl;
+        source.DefaultProtocol = VpnProtocol.MtProto;
+        await using (var db = database.Factory.CreateDbContext())
+        {
+            await db.VpnSources.Where(item => item.Id == source.Id).ExecuteUpdateAsync(setters =>
+                setters.SetProperty(item => item.Url, source.Url).SetProperty(item => item.DefaultProtocol, source.DefaultProtocol));
+        }
+        var uri = TelegramLink("8.8.8.8");
+        var owner = SourceApiCaptureOwner.From(source);
+        var fetcher = new FreeProxyDbSourceApiFetcher(database.Factory);
+        await Assert.ThrowsAsync<SourceApiDeferredException>(() => fetcher.FetchAsync(owner,
+            (_, _) => Task.FromResult(Response(Page(1, new { id = 42, connect_string = uri }))), CancellationToken.None, 1));
+        await ElapsePacingAsync(database);
+        var completed = await fetcher.FetchAsync(owner,
+            (_, _) => Task.FromResult(Response(Page(1, new { id = 42, connect_string = uri }))), CancellationToken.None, 1);
+        Assert.True(completed.Checkpoint.Capture.Inspect(owner.MaximumBytes).Complete);
+        using var clients = new NoHttpClients();
+        await new VpnCatalogService(database.Factory, clients, Options.Create(Settings()), NullLogger<VpnCatalogService>.Instance).CollectAsync(true);
+        await using var check = database.Factory.CreateDbContext();
+        var endpoint = await check.VpnEndpoints.SingleAsync();
+        Assert.Equal(VpnProtocol.MtProto, endpoint.Protocol);
+        Assert.Equal(uri, endpoint.ConnectionUri);
+        Assert.False(await check.SourceApiCaptureStates.AnyAsync());
+        Assert.Equal(0, clients.Requests);
+    }
+
+    [Fact, Trait("Category", "PostgresIntegration")]
     public async Task PartialPagesAnd429ResumeWithoutRefetchingPrefixAndCooldownIsSharedWithVpn()
     {
         await using var database = await SnapshotDatabase.CreateAsync();
@@ -220,6 +290,12 @@ public sealed class FreeProxyDbSourceApiFetcherIntegrationTests
         Assert.Empty(await final.SourceApiCaptureStates.ToArrayAsync());
         Assert.Empty(await final.SourceApiOriginStates.ToArrayAsync());
         Assert.Equal(0, clients.Requests);
+    }
+    private static string TelegramLink(string host)
+    {
+        var secret = Convert.ToHexString(
+            new byte[] { 1, 35, 69, 103, 137, 171, 205, 239, 1, 35, 69, 103, 137, 171, 205, 239 }).ToLowerInvariant();
+        return $"tg://proxy?server={host}&port=443&secret={secret}";
     }
     private static SourceFetchResult Response(string body) => new(body, false, null, null);
     private static object HttpRow(int id, string ip) => new { id, ip, port = 80, protocol = "http" };

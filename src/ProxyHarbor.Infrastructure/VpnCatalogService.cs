@@ -43,7 +43,9 @@ public sealed class VpnCatalogService(
                  readDb.VpnSourceImportStates.Any(state => state.VpnSourceId == x.Id && state.NextIndex < state.CandidateCount) ||
                  readDb.SourceApiCaptureStates.Any(state => state.VpnSourceId == x.Id && state.Complete)))
             .OrderBy(x => readDb.VpnSourceImportStates.Where(state => state.VpnSourceId == x.Id)
-                .Select(state => state.LastProgressAt).FirstOrDefault() ?? DateTimeOffset.MinValue)
+                .Select(state => state.LastProgressAt).FirstOrDefault() ??
+                readDb.SourceApiCaptureStates.Where(state => state.VpnSourceId == x.Id)
+                    .Select(state => (DateTimeOffset?)state.UpdatedAt).FirstOrDefault() ?? DateTimeOffset.MinValue)
             .ThenBy(x => x.Priority).ThenBy(x => x.Id).ToArrayAsync(token);
         if (sources.Length == 0)
             return new VpnCollectionResult(0, 0, 0, 0, 0, 0);
@@ -582,7 +584,7 @@ public sealed class VpnCatalogService(
                         state = null;
                     }
                 }
-                var apiOwner = string.Equals(source.Url, FreeProxyDbPageCapture.VpnUrl, StringComparison.Ordinal)
+                var apiOwner = FreeProxyDbPageCapture.SupportsVpn(source.Url)
                     ? SourceApiCaptureOwner.From(source) : null;
                 var apiCheckpoint = apiOwner is null ? null : await new SourceApiCaptureStore(dbFactory).LoadAsync(apiOwner, cancellationToken);
                 var apiComplete = apiCheckpoint?.Capture.Inspect(MaximumFeedBytes).Complete == true;

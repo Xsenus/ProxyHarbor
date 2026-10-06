@@ -200,6 +200,8 @@ CSV нейтрализует spreadsheet formula injection и содержит `
 
 ## VPN API
 
+Протоколы VPN API: `OpenVpn`, `WireGuard`, `Vless`, `Vmess`, `Trojan`, `Shadowsocks`, `Hysteria2`, `Tuic`, `MtProto`. MTProto используется для Telegram; его `connectionUri` сохраняет опубликованную ссылку `tg://proxy` либо HTTPS-ссылку Telegram. Проверка `Reachable` подтверждает доступность TCP endpoint, а не успешную авторизацию или передачу трафика через Telegram.
+
 - `GET /api/v1/vpn` — проверенные VPN endpoint с `countryCode` и готовым `connectionUri`; фильтры `protocol`, `status`, `country`, `page`, `pageSize`.
 - `GET /api/v1/vpn/countries` — двухбуквенные ISO-коды и число доступных VPN по странам.
 - `GET /api/v1/vpn/export/json` и `/txt` — готовые URI для импорта в клиент.
