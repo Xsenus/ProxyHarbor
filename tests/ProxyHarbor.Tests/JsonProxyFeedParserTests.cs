@@ -140,4 +140,43 @@ public sealed class JsonProxyFeedParserTests
             """, ProxyProtocol.Http);
         Assert.Equal(("8.8.8.8", 1080, ProxyProtocol.Socks4), Assert.Single(parsed));
     }
+
+    [Theory]
+    [InlineData("[8.8.8.8]:80\n9.9.9.9:80")]
+    [InlineData("[not-a-host]:80\n9.9.9.9:80")]
+    public void InvalidBracketedEnvelopeCannotFallBackToEmbeddedAddresses(string body) =>
+        Assert.Throws<InvalidDataException>(() => SourceFeedParser.ParseRequired(body, ProxyProtocol.Http));
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("\uFEFF \t\r\n")]
+    public void EmptyFeedCannotReportSuccessOrInvokeAdmission(string body)
+    {
+        var calls = 0;
+        Assert.Throws<InvalidDataException>(() => SourceFeedParser.ParseBoundedToRequired(body, ProxyProtocol.Http, 10, _ => calls++));
+        Assert.Equal(0, calls);
+    }
+
+    [Fact]
+    public void NonRecordsAndDiagnosticMetadataDoNotHideHealthyEnvelopeRecords()
+    {
+        var parsed = SourceFeedParser.ParseRequired("""
+            {"results":[null,17,false,{"message":"8.8.8.8:80","info":["8.8.8.8:80"]},
+            {"ip":"1.1.1.1","port":443}],"next":"https://8.8.8.8:80/list"}
+            """, ProxyProtocol.Https);
+        Assert.Equal(("1.1.1.1", 443, ProxyProtocol.Https), Assert.Single(parsed));
+    }
+
+    [Fact]
+    public void ConsumerFailureStopsJsonStreamWithoutReportingSuccessfulParse()
+    {
+        const string body = """[{"ip":"8.8.8.8","port":80,"protocols":["http","https"]}]""";
+        var calls = 0;
+        Assert.Throws<IOException>(() => SourceFeedParser.ParseBoundedToRequired(body, ProxyProtocol.Http, 10, _ =>
+        {
+            calls++;
+            throw new IOException("consumer failed");
+        }));
+        Assert.Equal(1, calls);
+    }
 }
