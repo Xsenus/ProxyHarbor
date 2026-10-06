@@ -92,7 +92,7 @@ public sealed class ProxyCollector(
                         state.LastProgressAt
                     }).ToDictionaryAsync(state => state.ProxySourceId, cancellationToken);
                 var sources = allSources.Where(source =>
-                        SourceFetchSchedule.IsDue(source.NextFetchAt, collectionStartedAt, forceAllSources) ||
+                        SourceFetchSchedule.IsDue(source.NextFetchAt, collectionStartedAt, forceAllSources, source.Url) ||
                         (importMetadata.TryGetValue(source.Id, out var state) && state.SourceUrl == source.Url &&
                             state.SourceProtocol == source.DefaultProtocol && state.NextIndex < state.CandidateCount))
                     .OrderBy(source => importMetadata.TryGetValue(source.Id, out var state) &&
@@ -158,6 +158,8 @@ public sealed class ProxyCollector(
                             source.ConsecutiveFailures,
                             options.Value.SourceFailureBackoffBaseMinutes,
                             options.Value.SourceFailureBackoffMaxHours);
+                        if (result.RetryNotBefore > source.NextFetchAt)
+                            source.NextFetchAt = result.RetryNotBefore;
                     }
                 }
 
@@ -309,7 +311,7 @@ public sealed class ProxyCollector(
             try
             {
                 importState = await importStore.LoadAsync(source, token);
-                if (!SourceFetchSchedule.IsDue(source.NextFetchAt, collectionStartedAt, forceAllSources))
+                if (!SourceFetchSchedule.IsDue(source.NextFetchAt, collectionStartedAt, forceAllSources, source.Url))
                 {
                     sourceResults.Add(new SourceCollectionResult(
                         source.Id, source.Url, source.DefaultProtocol,
@@ -464,7 +466,8 @@ public sealed class ProxyCollector(
                     paidException?.Status,
                     paid ? DateTimeOffset.UtcNow : null,
                     null,
-                    paidException?.Message));
+                    paidException?.Message,
+                    RetryNotBefore: (exception as SourceRateLimitException)?.RetryNotBefore));
             }
             finally
             {
@@ -577,7 +580,14 @@ public sealed class ProxyCollector(
         DateTimeOffset? httpLastModifiedAt,
         CancellationToken token,
         Func<TimeSpan, CancellationToken, Task>? delayAsync = null)
-        => await SourceHttpFetcher.FetchAsync(
+    {
+        if (FreeProxyDbFeedFetcher.Supports(url))
+            return await FreeProxyDbFeedFetcher.FetchAsync(MaxSourceBytes,
+                (pageUrl, pageToken) => SourceHttpFetcher.FetchAsync(client, pageUrl,
+                    null, null, MaxSourceBytes, options.Value.SourceTimeoutSeconds,
+                    options.Value.SourceRetryCount, pageToken, SourceFeedParser.EnsureSupportedMediaType,
+                    delayAsync, sameOriginRedirectsOnly: true, respectRateLimit: true), token);
+        return await SourceHttpFetcher.FetchAsync(
             client,
             url,
             httpETag,
@@ -588,6 +598,7 @@ public sealed class ProxyCollector(
             token,
             SourceFeedParser.EnsureSupportedMediaType,
             delayAsync);
+    }
 
     private async Task<int> BulkUpsertAsync(
         ProxyHarborDbContext db,
@@ -818,7 +829,8 @@ public sealed class ProxyCollector(
         DateTimeOffset? CredentialCheckedAt = null,
         DateTimeOffset? CredentialExpiresAt = null,
         string? CredentialError = null,
-        bool FetchObserved = true);
+        bool FetchObserved = true,
+        DateTimeOffset? RetryNotBefore = null);
 
     private sealed class PaidSourceException(
         string status,
@@ -910,6 +922,9 @@ internal static class SourceFetchSchedule
     /// <summary>Соблюдает документированную нижнюю границу polling нового публичного провайдера.</summary>
     internal static DateTimeOffset? NextSuccessAttempt(string url, DateTimeOffset fetchedAt)
     {
+        // Public search documents per-IP/record quotas without numeric caps.
+        // Keep successful full refreshes conservative; cached imports continue.
+        if (FreeProxyDbFeedFetcher.Supports(url)) return fetchedAt.AddHours(6);
         if (Uri.TryCreate(url, UriKind.Absolute, out var uri) &&
             uri.Host.Equals("raw.githubusercontent.com", StringComparison.OrdinalIgnoreCase) &&
             uri.AbsolutePath.StartsWith("/litportnet/free-proxy-list/", StringComparison.OrdinalIgnoreCase))
@@ -917,8 +932,9 @@ internal static class SourceFetchSchedule
         return null;
     }
 
-    internal static bool IsDue(DateTimeOffset? nextFetchAt, DateTimeOffset now, bool forceAllSources) =>
-        forceAllSources || nextFetchAt is null || nextFetchAt <= now;
+    internal static bool IsDue(DateTimeOffset? nextFetchAt, DateTimeOffset now, bool forceAllSources, string? url = null) =>
+        (forceAllSources && (url is null || !FreeProxyDbFeedFetcher.Supports(url))) ||
+        nextFetchAt is null || nextFetchAt <= now;
 
     internal static DateTimeOffset NextAttempt(
         DateTimeOffset failedAt,
