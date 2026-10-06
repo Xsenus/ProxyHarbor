@@ -10,6 +10,7 @@ public static class VpnFeedParser
 {
     private const int MaxDecodedLength = 8 * 1024 * 1024;
     private const int DefaultMaximumResults = 50_000;
+    private static readonly UTF8Encoding StrictUtf8 = new(false, true);
 
     /// <summary>Разбирает bounded feed и возвращает дедуплицированные endpoint.</summary>
     public static IReadOnlyList<VpnCandidate> Parse(
@@ -130,9 +131,46 @@ public static class VpnFeedParser
         var pathOffset = value.AsSpan(hostStart, authorityEnd - hostStart).IndexOf('/');
         var hostEnd = pathOffset < 0 ? authorityEnd : hostStart + pathOffset;
         if (!TryHostPort(value[hostStart..hostEnd], out var host, out var port))
-            return false;
+            return protocol == VpnProtocol.Shadowsocks && userInfoEnd < authorityStart &&
+                TryLegacyShadowsocks(value, value[authorityStart..authorityEnd], out candidate);
         var transport = protocol is VpnProtocol.WireGuard or VpnProtocol.Hysteria2 or VpnProtocol.Tuic ? "udp" : "tcp";
         candidate = new VpnCandidate(host, port, protocol, transport, value);
+        return IsSafe(candidate);
+    }
+
+    private static bool TryLegacyShadowsocks(string original, string payload, out VpnCandidate candidate)
+    {
+        candidate = default;
+        // Older Shadowsocks clients encode the whole method:password@host:port,
+        // whereas SIP002 encodes only userinfo. Keep the published URI unchanged.
+        if (payload.Length == 0 || payload.Any(character =>
+            !char.IsAsciiLetterOrDigit(character) && character is not ('+' or '/' or '=' or '-' or '_')))
+            return false;
+        string decoded;
+        try
+        {
+            var normalized = payload.Replace('-', '+').Replace('_', '/');
+            normalized = normalized.PadRight((normalized.Length + 3) / 4 * 4, '=');
+            decoded = StrictUtf8.GetString(Convert.FromBase64String(normalized));
+        }
+        catch (FormatException) { return false; }
+        catch (DecoderFallbackException) { return false; }
+        if (decoded.Any(char.IsControl)) return false;
+        var userInfoEnd = decoded.LastIndexOf('@');
+        var methodEnd = decoded.IndexOf(':');
+        if (methodEnd <= 0 || userInfoEnd <= methodEnd ||
+            decoded.AsSpan(0, methodEnd).Contains('@') ||
+            decoded[..methodEnd].Any(char.IsWhiteSpace)) return false;
+        var endpoint = decoded[(userInfoEnd + 1)..];
+        // Uri.TryCreate alone can silently discard a path/query or unescape a host.
+        // A decoded legacy authority must contain only the complete host and port.
+        if (endpoint.Any(character => char.IsWhiteSpace(character) ||
+            character is '/' or '\\' or '?' or '#' or '@' or '%')) return false;
+        var portStart = endpoint.LastIndexOf(':') + 1;
+        if (portStart <= 1 || portStart == endpoint.Length ||
+            endpoint.AsSpan(portStart).IndexOfAnyExceptInRange('0', '9') >= 0 ||
+            !TryHostPort(endpoint, out var host, out var port)) return false;
+        candidate = new VpnCandidate(host, port, VpnProtocol.Shadowsocks, "tcp", original);
         return IsSafe(candidate);
     }
 

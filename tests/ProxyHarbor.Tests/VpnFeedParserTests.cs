@@ -7,6 +7,78 @@ namespace ProxyHarbor.Tests;
 /// <summary>Проверяет endpoint и сохранение готовых URI для публичной выдачи.</summary>
 public sealed class VpnFeedParserTests
 {
+    [Theory]
+    [InlineData("aes-256-gcm:password@8.8.8.8:443", "8.8.8.8", false)]
+    [InlineData("chacha20-ietf-poly1305:pass@word@Example.COM:8388", "example.com", true)]
+    [InlineData("aes-128-gcm:@[2606:4700:4700::1111]:443", "2606:4700:4700::1111", false)]
+    [InlineData("aes-256-gcm:密码 ☃@one.one.one.one:443", "one.one.one.one", true)]
+    public void LegacyShadowsocksPreservesOriginalUri(string decoded, string host, bool urlSafe)
+    {
+        var encoded = Convert.ToBase64String(Encoding.UTF8.GetBytes(decoded));
+        if (urlSafe) encoded = encoded.TrimEnd('=').Replace('+', '-').Replace('/', '_');
+        var uri = "ss://" + encoded + "?plugin=obfs-local#node,,";
+
+        var candidate = Assert.Single(VpnFeedParser.Parse(uri, VpnProtocol.Vless));
+
+        Assert.Equal(host, candidate.Host);
+        Assert.Equal(VpnProtocol.Shadowsocks, candidate.Protocol);
+        Assert.Equal("tcp", candidate.Transport);
+        Assert.Equal(uri, candidate.ConnectionUri);
+    }
+
+    [Theory]
+    [InlineData("aes-256-gcm:password@127.0.0.1:443")]
+    [InlineData("aes-256-gcm:password@10.0.0.1:443")]
+    [InlineData("aes-256-gcm:password@[::1]:443")]
+    [InlineData("aes-256-gcm:password@localhost:443")]
+    [InlineData("aes-256-gcm:password@bad_host:443")]
+    [InlineData("aes-256-gcm:password@8.8.8.8:0")]
+    [InlineData("aes-256-gcm:password@8.8.8.8:65536")]
+    [InlineData("aes-256-gcm:password@8.8.8.8:443/path")]
+    [InlineData("aes-256-gcm:password@8.8.8.8:443?query")]
+    [InlineData("aes-256-gcm:password@8.8.8.8:443#fragment")]
+    [InlineData("aes-256-gcm:password@%38.8.8.8:443")]
+    [InlineData("aes-256-gcm:password@8.8.8.8:+443")]
+    [InlineData("aes-256-gcm:password@8.8.8.8:443 ")]
+    [InlineData("aes-256-gcm:pass\tword@8.8.8.8:443")]
+    [InlineData("aes-256-gcm:pass\0word@8.8.8.8:443")]
+    [InlineData(":password@8.8.8.8:443")]
+    [InlineData("aes-256-gcm@8.8.8.8:443")]
+    public void LegacyShadowsocksRejectsUnsafeDecodedAuthorities(string decoded)
+    {
+        var uri = "ss://" + Convert.ToBase64String(Encoding.UTF8.GetBytes(decoded));
+        const string healthy = "ss://aes-256-gcm:healthy@1.1.1.1:8388";
+
+        Assert.Equal(healthy, Assert.Single(VpnFeedParser.Parse(uri + "\n" + healthy,
+            VpnProtocol.Shadowsocks)).ConnectionUri);
+    }
+
+    [Fact]
+    public void LegacyShadowsocksRejectsInvalidUtf8AndBase64()
+    {
+        var bytes = Encoding.UTF8.GetBytes("aes-256-gcm:x@8.8.8.8:443");
+        bytes[12] = 0xff;
+        var invalidUtf8 = "ss://" + Convert.ToBase64String(bytes);
+        Assert.Empty(VpnFeedParser.Parse(invalidUtf8, VpnProtocol.Shadowsocks));
+        Assert.Empty(VpnFeedParser.Parse("ss://not!base64#node", VpnProtocol.Shadowsocks));
+    }
+
+    [Fact]
+    public void LegacyAndSip002ShadowsocksUseSameIdentityAndLastPublishedUri()
+    {
+        var legacy = "ss://" + Convert.ToBase64String(Encoding.UTF8.GetBytes("aes-256-gcm:old@8.8.8.8:443"));
+        var modern = "ss://" + Convert.ToBase64String(Encoding.UTF8.GetBytes("aes-256-gcm:new")) + "@8.8.8.8:443#new";
+        Assert.Equal(modern, Assert.Single(VpnFeedParser.Parse(legacy + "\n" + modern,
+            VpnProtocol.Shadowsocks)).ConnectionUri);
+    }
+
+    [Fact]
+    public void ShadowsocksEndpointOnlySyntaxRemainsCompatible()
+    {
+        const string uri = "ss://8.8.8.8:443#existing";
+        Assert.Equal(uri, Assert.Single(VpnFeedParser.Parse(uri, VpnProtocol.Shadowsocks)).ConnectionUri);
+    }
+
     [Fact]
     public void ParseStopsAtConfiguredResultLimit()
     {
