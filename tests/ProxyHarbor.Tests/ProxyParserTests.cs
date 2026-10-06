@@ -118,12 +118,14 @@ public sealed class ProxyParserTests
             https://8.8.8.8:8080
             socks4://8.8.8.8:8080
             socks5://8.8.8.8:8080
+            http+tls://8.8.8.8:8080
+            http+tls-unverified://8.8.8.8:8080
             1.1.1.1:1080
             """;
 
         var result = ProxyParser.Parse(content, ProxyProtocol.Socks5);
 
-        Assert.Equal(5, result.Count);
+        Assert.Equal(7, result.Count);
         Assert.All(Enum.GetValues<ProxyProtocol>(), protocol =>
             Assert.Contains(result, proxy => proxy.Host == "8.8.8.8" && proxy.Protocol == protocol));
         Assert.Contains(result, proxy =>

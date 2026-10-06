@@ -170,7 +170,7 @@ public sealed class SourceApiCaptureStoreIntegrationTests
             State(proxy.SourceId, vpn.SourceId, payload, SHA256.HashData(payload)),
             State(proxy.SourceId, null, [], SHA256.HashData(payload)),
             State(proxy.SourceId, null, payload, new byte[31]),
-            State(proxy.SourceId, null, payload, SHA256.HashData(payload), 4),
+            State(proxy.SourceId, null, payload, SHA256.HashData(payload), (int)ProxyProtocol.HttpTlsUnverified + 1),
             State(null, vpn.SourceId, payload, SHA256.HashData(payload), 9),
         })
         {

@@ -379,6 +379,9 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
 
         var proxy = builder.Entity<ProxyEndpoint>();
         proxy.HasIndex(x => new { x.Host, x.Port, x.Protocol }).IsUnique();
+        proxy.HasIndex(x => x.NextCheckAt)
+            .HasDatabaseName("IX_Proxies_Tls_NextCheckAt")
+            .HasFilter("\"Protocol\" >= 4");
         // Публичная выдача читает только Alive. Частичные индексы не раздуваются
         // сотнями тысяч Pending/Dead строк и точно повторяют стабильный API order.
         proxy.HasIndex(x => new { x.LatencyMs, x.SuccessfulChecks, x.Id, x.LastCheckedAt })
@@ -418,7 +421,7 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
         proxy.Property(x => x.LastError).HasMaxLength(500);
         proxy.ToTable(table =>
         {
-            table.HasCheckConstraint("CK_Proxies_Identity", "\"Port\" BETWEEN 1 AND 65535 AND \"Protocol\" BETWEEN 0 AND 3 AND \"Status\" BETWEEN 0 AND 2");
+            table.HasCheckConstraint("CK_Proxies_Identity", "\"Port\" BETWEEN 1 AND 65535 AND \"Protocol\" BETWEEN 0 AND 5 AND \"Status\" BETWEEN 0 AND 2");
             table.HasCheckConstraint("CK_Proxies_Timeline", "\"LastSeenAt\" >= \"FirstSeenAt\"");
             table.HasCheckConstraint("CK_Proxies_AliveTimeline", "(\"FirstAliveAt\" IS NULL) = (\"LastAliveAt\" IS NULL) AND (\"FirstAliveAt\" IS NULL OR (\"FirstAliveAt\" >= \"FirstSeenAt\" AND \"LastAliveAt\" >= \"FirstAliveAt\")) AND (\"CurrentAliveSince\" IS NULL OR (\"Status\" = 1 AND \"FirstAliveAt\" IS NOT NULL AND \"CurrentAliveSince\" >= \"FirstAliveAt\" AND \"LastAliveAt\" >= \"CurrentAliveSince\"))");
             table.HasCheckConstraint("CK_Proxies_Latency", "\"LatencyMs\" IS NULL OR \"LatencyMs\" >= 0");
@@ -450,7 +453,7 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
         source.Property(x => x.LastError).HasMaxLength(500);
         source.ToTable(table =>
         {
-            table.HasCheckConstraint("CK_Sources_ProtocolPriority", "\"DefaultProtocol\" BETWEEN 0 AND 3 AND \"Priority\" BETWEEN -10000 AND 10000");
+            table.HasCheckConstraint("CK_Sources_ProtocolPriority", "\"DefaultProtocol\" BETWEEN 0 AND 5 AND \"Priority\" BETWEEN -10000 AND 10000");
             table.HasCheckConstraint("CK_Sources_Counters", "\"LastItemCount\" >= 0 AND \"ConsecutiveFailures\" >= 0");
             table.HasCheckConstraint("CK_Sources_FetchTimeline", "\"LastSucceededAt\" IS NULL OR (\"LastFetchedAt\" IS NOT NULL AND \"LastSucceededAt\" <= \"LastFetchedAt\")");
             table.HasCheckConstraint("CK_Sources_ContentTimeline", "\"LastContentFetchedAt\" IS NULL OR (\"LastFetchedAt\" IS NOT NULL AND \"LastSucceededAt\" IS NOT NULL AND \"LastContentFetchedAt\" <= \"LastFetchedAt\" AND \"LastContentFetchedAt\" <= \"LastSucceededAt\")");
@@ -465,7 +468,7 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
         sourceImport.ToTable(table =>
         {
             table.HasCheckConstraint("CK_ProxySourceImportStates_Cursor",
-                "\"CandidateCount\" BETWEEN 1 AND 1000000 AND \"NextIndex\" BETWEEN 0 AND \"CandidateCount\" AND \"SourceProtocol\" BETWEEN 0 AND 3");
+                "\"CandidateCount\" BETWEEN 1 AND 1000000 AND \"NextIndex\" BETWEEN 0 AND \"CandidateCount\" AND \"SourceProtocol\" BETWEEN 0 AND 5");
             table.HasCheckConstraint("CK_ProxySourceImportStates_Payload",
                 "octet_length(\"Payload\") <= 24000000 AND ((\"NextIndex\" < \"CandidateCount\" AND octet_length(\"Payload\") > 8 AND octet_length(\"PayloadHash\") = 32) OR (\"NextIndex\" = \"CandidateCount\" AND octet_length(\"Payload\") = 0 AND octet_length(\"PayloadHash\") = 0))");
         });
@@ -483,7 +486,7 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
         apiCapture.ToTable(table =>
         {
             table.HasCheckConstraint("CK_SourceApiCaptureStates_Owner",
-                "(\"ProxySourceId\" IS NOT NULL AND \"VpnSourceId\" IS NULL AND \"SourceProtocol\" BETWEEN 0 AND 3) OR (\"ProxySourceId\" IS NULL AND \"VpnSourceId\" IS NOT NULL AND \"SourceProtocol\" BETWEEN 0 AND 8)");
+                "(\"ProxySourceId\" IS NOT NULL AND \"VpnSourceId\" IS NULL AND \"SourceProtocol\" BETWEEN 0 AND 5) OR (\"ProxySourceId\" IS NULL AND \"VpnSourceId\" IS NOT NULL AND \"SourceProtocol\" BETWEEN 0 AND 8)");
             table.HasCheckConstraint("CK_SourceApiCaptureStates_Payload",
                 "octet_length(\"Payload\") BETWEEN 8 AND 34554432 AND octet_length(\"PayloadHash\") = 32");
         });

@@ -5,6 +5,29 @@ import { StyledSelect } from './StyledSelect'
 describe('StyledSelect', () => {
   afterEach(() => { cleanup(); vi.restoreAllMocks() })
 
+  it('opens at either end and keeps Escape inside an open menu', async () => {
+    const outerKeyDown=vi.fn()
+    render(<div onKeyDown={outerKeyDown}><StyledSelect ariaLabel="Протокол" value="one" onChange={()=>undefined}
+      options={[["one","Первый"],["two","Второй"],["three","Последний"]]}/></div>)
+    const trigger=screen.getByRole('button',{name:'Протокол'})
+    fireEvent.keyDown(trigger,{key:'End'})
+    const last=screen.getByRole('option',{name:'Последний'})
+    await waitFor(()=>expect(last).toHaveFocus())
+    outerKeyDown.mockClear()
+    fireEvent.keyDown(last,{key:'Escape'})
+    expect(outerKeyDown).not.toHaveBeenCalled()
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument()
+    await waitFor(()=>expect(trigger).toHaveFocus())
+    fireEvent.keyDown(trigger,{key:'Home'})
+    await waitFor(()=>expect(screen.getByRole('option',{name:'Первый'})).toHaveFocus())
+    outerKeyDown.mockClear()
+    fireEvent.keyDown(trigger,{key:'Escape'})
+    expect(outerKeyDown).not.toHaveBeenCalled()
+    await waitFor(()=>expect(trigger).toHaveFocus())
+    fireEvent.keyDown(trigger,{key:'Escape'})
+    expect(outerKeyDown).toHaveBeenCalledOnce()
+  })
+
   it('opens upward when a scroll container clips the space below', () => {
     const original=HTMLElement.prototype.getBoundingClientRect
     const rect=(top:number,bottom:number):DOMRect => ({top,bottom,left:0,right:300,width:300,height:bottom-top,x:0,y:top,toJSON:()=>({})})

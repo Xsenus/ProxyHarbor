@@ -65,7 +65,10 @@ public sealed class DistributedProxyValidationService(
             node.CurrentLeaseUntil = null;
             var batchSize = Math.Clamp(node.BatchSize, 1, 10_000);
             claimed.AddRange(await ValidationQueueClaim.ClaimAndLeaseAsync(
-                db, batchSize, now, leaseUntil, leaseId, idleGate, token));
+                db, batchSize, now, leaseUntil, leaseId,
+                idleGate, token,
+                maximumProtocol: node.SupportsTlsProxyTransport
+                    ? (int)ProxyProtocol.HttpTlsUnverified : (int)ProxyProtocol.Socks5));
 
             var expiredLeaseIds = claimed
                 .Where(x => x.PreviousLeaseId.HasValue)
@@ -170,6 +173,7 @@ public sealed class DistributedProxyValidationService(
             node.LastHeartbeatAt = now;
             node.CurrentLeaseUntil = until;
             node.AgentVersion = Bounded(heartbeat.Version, 80);
+            node.SupportsTlsProxyTransport = heartbeat.SupportsTlsProxyTransport;
             node.LastError = Bounded(heartbeat.Error, 1000);
             await db.SaveChangesAsync(token);
             await transaction.CommitAsync(token);
@@ -277,6 +281,7 @@ public sealed class DistributedProxyValidationService(
         await db.CheckerNodes.Where(x => x.Id == nodeId && x.Enabled).ExecuteUpdateAsync(setters => setters
             .SetProperty(x => x.LastHeartbeatAt, now)
             .SetProperty(x => x.AgentVersion, Bounded(heartbeat.Version, 80))
+            .SetProperty(x => x.SupportsTlsProxyTransport, heartbeat.SupportsTlsProxyTransport)
             .SetProperty(x => x.RemoteAddress, Bounded(remoteAddress, 64))
             .SetProperty(x => x.DeploymentStatus, "online")
             .SetProperty(x => x.LastError, Bounded(heartbeat.Error, 1000)), token);

@@ -147,6 +147,8 @@ public static partial class ProxyParser
         var prefix = content.AsSpan(0, match.Index);
         if (!prefix.IsEmpty && !prefix.Equals("http://", StringComparison.OrdinalIgnoreCase) &&
             !prefix.Equals("https://", StringComparison.OrdinalIgnoreCase) &&
+            !prefix.Equals("http+tls://", StringComparison.OrdinalIgnoreCase) &&
+            !prefix.Equals("http+tls-unverified://", StringComparison.OrdinalIgnoreCase) &&
             !prefix.Equals("socks4://", StringComparison.OrdinalIgnoreCase) &&
             !prefix.Equals("socks5://", StringComparison.OrdinalIgnoreCase)) return false;
         return TryReadCandidate(content, match, fallback, out candidate);
@@ -177,7 +179,10 @@ public static partial class ProxyParser
 
     private static ProxyProtocol ParseProtocolBefore(ReadOnlySpan<char> prefix, ProxyProtocol fallback) =>
         prefix.EndsWith("http://", StringComparison.OrdinalIgnoreCase) ? ProxyProtocol.Http :
-        prefix.EndsWith("https://", StringComparison.OrdinalIgnoreCase) ? ProxyProtocol.Https :
+        prefix.EndsWith("http+tls://", StringComparison.OrdinalIgnoreCase) ? ProxyProtocol.HttpTls :
+        prefix.EndsWith("http+tls-unverified://", StringComparison.OrdinalIgnoreCase) ? ProxyProtocol.HttpTlsUnverified :
+        prefix.EndsWith("https://", StringComparison.OrdinalIgnoreCase)
+            ? fallback is ProxyProtocol.HttpTls or ProxyProtocol.HttpTlsUnverified ? fallback : ProxyProtocol.Https :
         prefix.EndsWith("socks4://", StringComparison.OrdinalIgnoreCase) ? ProxyProtocol.Socks4 :
         prefix.EndsWith("socks5://", StringComparison.OrdinalIgnoreCase) ? ProxyProtocol.Socks5 :
         fallback;

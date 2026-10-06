@@ -55,19 +55,19 @@ export function StyledSelect({value,onChange,options,ariaLabel,disabled=false,le
   const closeAndFocus=()=>{setOpen(false);window.setTimeout(()=>trigger.current?.focus(),0)}
   const choose=(next:string)=>{onChange(next);closeAndFocus()}
   const onTriggerKeyDown=(event:KeyboardEvent<HTMLButtonElement>)=>{
-    if(event.key==='ArrowDown'||event.key==='ArrowUp'){
+    if(event.key==='ArrowDown'||event.key==='ArrowUp'||event.key==='Home'||event.key==='End'){
       event.preventDefault()
       if(disabled)return
       setOpen(true)
-      focusOption(event.key==='ArrowDown'?selectedIndex:Math.max(0,options.length-1))
-    }else if(event.key==='Escape'&&open){event.preventDefault();closeAndFocus()}
+      focusOption(event.key==='Home'?0:event.key==='ArrowDown'?selectedIndex:Math.max(0,options.length-1))
+    }else if(event.key==='Escape'&&open){event.preventDefault();event.stopPropagation();closeAndFocus()}
   }
   const onOptionKeyDown=(event:KeyboardEvent<HTMLButtonElement>,index:number)=>{
     if(event.key==='ArrowDown'){event.preventDefault();focusOption((index+1)%options.length)}
     else if(event.key==='ArrowUp'){event.preventDefault();focusOption((index-1+options.length)%options.length)}
     else if(event.key==='Home'){event.preventDefault();focusOption(0)}
     else if(event.key==='End'){event.preventDefault();focusOption(options.length-1)}
-    else if(event.key==='Escape'){event.preventDefault();closeAndFocus()}
+    else if(event.key==='Escape'){event.preventDefault();event.stopPropagation();closeAndFocus()}
     else if(event.key==='Tab')setOpen(false)
   }
 

@@ -215,7 +215,8 @@ public sealed class CheckerAgentWorker(
                 try
                 {
                     using var request = Request(HttpMethod.Post, $"api/v1/checker-agent/leases/{leaseId}/heartbeat");
-                    request.Content = JsonContent.Create(new CheckerHeartbeatRequest(version, activeChecks), options: JsonOptions);
+                    request.Content = JsonContent.Create(new CheckerHeartbeatRequest(version, activeChecks,
+                        SupportsTlsProxyTransport: true), options: JsonOptions);
                     using var response = await clients.CreateClient("control-plane").SendAsync(request, token);
                     if (response.StatusCode is HttpStatusCode.Conflict or HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
                     {
@@ -294,7 +295,8 @@ public sealed class CheckerAgentWorker(
     private async Task SendHeartbeatAsync(string? error, CancellationToken token)
     {
         using var request = Request(HttpMethod.Post, "api/v1/checker-agent/heartbeat");
-        request.Content = JsonContent.Create(new CheckerHeartbeatRequest(version, Error: error), options: JsonOptions);
+        request.Content = JsonContent.Create(new CheckerHeartbeatRequest(version, Error: error,
+            SupportsTlsProxyTransport: true), options: JsonOptions);
         using var response = await clients.CreateClient("control-plane").SendAsync(request, token);
         response.EnsureSuccessStatusCode();
     }

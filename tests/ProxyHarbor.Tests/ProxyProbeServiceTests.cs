@@ -18,6 +18,7 @@ public sealed class ProxyProbeServiceTests
     [InlineData(ProxyProtocol.Http, "1.1.1.1", true)]
     [InlineData(ProxyProtocol.Http, "8.8.8.8", false)]
     [InlineData(ProxyProtocol.Https, "1.1.1.1", true)]
+    [InlineData(ProxyProtocol.HttpTlsUnverified, "1.1.1.1", true)]
     [InlineData(ProxyProtocol.Socks4, "1.1.1.1", true)]
     [InlineData(ProxyProtocol.Socks5, "1.1.1.1", true)]
     public async Task SupportedTunnelTlsProbePublishesOnlyValidatedExitIp(
@@ -77,8 +78,11 @@ public sealed class ProxyProbeServiceTests
         Assert.Null(result.Error);
     }
 
-    [Fact]
-    public async Task SystemTlsValidationRejectsUntrustedProxyCertificate()
+    [Theory]
+    [InlineData(ProxyProtocol.Http)]
+    [InlineData(ProxyProtocol.HttpTls)]
+    [InlineData(ProxyProtocol.HttpTlsUnverified)]
+    public async Task SystemTlsValidationRejectsUntrustedProxyCertificate(ProxyProtocol protocol)
     {
         using var originClients = new StubHttpClientFactory("{\"ip\":\"8.8.8.8\"}");
         var settings = Options.Create(new CollectorOptions
@@ -97,7 +101,7 @@ public sealed class ProxyProbeServiceTests
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         var releaseConnection = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var server = ServeProxyOnceAsync(
-            listener, certificate, "1.1.1.1", releaseConnection.Task, ProxyProtocol.Http, timeout.Token);
+            listener, certificate, "1.1.1.1", releaseConnection.Task, protocol, timeout.Token);
         // Callback намеренно отсутствует: этот internal-конструктор проходит тем же
         // системным certificate validation path, что публичный production-конструктор.
         var probe = new ProxyProbeService(
@@ -109,7 +113,7 @@ public sealed class ProxyProbeServiceTests
         Exception? serverFailure = null;
         try
         {
-            result = await probe.CheckAsync(Proxy(), timeout.Token);
+            result = await probe.CheckAsync(Proxy(protocol), timeout.Token);
         }
         finally
         {
@@ -250,9 +254,19 @@ public sealed class ProxyProbeServiceTests
     {
         using var client = await listener.AcceptTcpClientAsync(token);
         await using var transport = client.GetStream();
-        await EstablishTunnelAsync(transport, protocol, token);
+        await using var proxyTls = protocol is ProxyProtocol.HttpTls or ProxyProtocol.HttpTlsUnverified
+            ? new SslStream(transport, leaveInnerStreamOpen: true)
+            : null;
+        if (proxyTls is not null)
+            await proxyTls.AuthenticateAsServerAsync(new SslServerAuthenticationOptions
+            {
+                ServerCertificate = certificate,
+                EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13
+            }, token);
+        Stream proxyTransport = proxyTls is not null ? proxyTls : transport;
+        await EstablishTunnelAsync(proxyTransport, protocol, token);
 
-        await using var tls = new SslStream(transport, leaveInnerStreamOpen: false);
+        await using var tls = new SslStream(proxyTransport, leaveInnerStreamOpen: false);
         await tls.AuthenticateAsServerAsync(new SslServerAuthenticationOptions
         {
             ServerCertificate = certificate,
@@ -281,6 +295,8 @@ public sealed class ProxyProbeServiceTests
         {
             case ProxyProtocol.Http:
             case ProxyProtocol.Https:
+            case ProxyProtocol.HttpTls:
+            case ProxyProtocol.HttpTlsUnverified:
                 var connectRequest = await ReadHeadersAsync(transport, token);
                 Assert.StartsWith(
                     "CONNECT probe.example:8443 HTTP/1.1\r\n",
