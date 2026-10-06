@@ -56,31 +56,11 @@ public static partial class ProxyParser
         ArgumentOutOfRangeException.ThrowIfLessThan(maxResults, 1);
         var unique = new HashSet<ProxyCandidateKey>(Math.Min(maxResults, 4_096));
 
-        foreach (Match match in EndpointRegex().Matches(content))
+        // MatchCollection удерживает все найденные Match до конца feed. NextMatch
+        // позволяет разобрать полный snapshot без накопления regex-объектов.
+        for (var match = EndpointRegex().Match(content); match.Success; match = match.NextMatch())
         {
-            // Regex ищет кандидата внутри свободного текста, поэтому границы проверяются
-            // отдельно без unsupported lookaround в NonBacktracking engine. Иначе хвост
-            // пятиоктетного IPv4 или первые пять цифр шестизначного порта становились
-            // самостоятельным ложным endpoint.
-            if (!HasTokenBoundaries(content, match.Index, match.Length)) continue;
-            var host = match.Groups["host"].ValueSpan;
-            if (host.Length >= 2 && host[0] == '[' && host[^1] == ']') host = host[1..^1];
-            var portText = match.Groups["port"].ValueSpan;
-            if (!int.TryParse(portText, out var port) || port is < 1 or > 65535)
-                continue;
-
-            // IPAddress.TryParse исторически понимает ведущий ноль IPv4 как octal:
-            // 010.0.0.1 превращается в 8.0.0.1. Feed обязан содержать однозначные
-            // canonical decimal octets, чтобы parser не менял фактический destination.
-            if (host.IndexOf('.') >= 0 && !HasCanonicalIpv4Octets(host)) continue;
-
-            // Regex даже не выделяет доменные endpoints: их исключение блокирует DNS rebinding.
-            if (!IPAddress.TryParse(host, out var ip) || !NetworkSafety.IsPublicAddress(ip)) continue;
-
-            // Scheme находится непосредственно перед IP, но намеренно не включён в regex:
-            // так URL/временные метки в заголовке feed'а не влияют на поиск следующего endpoint.
-            var protocol = ParseProtocolBefore(content.AsSpan(0, match.Index), defaultProtocol);
-            var candidate = ProxyCandidateKey.Create(ip, port, protocol);
+            if (!TryReadCandidate(content, match, defaultProtocol, out var candidate)) continue;
             if (unique.Count < maxResults)
             {
                 if (!unique.Add(candidate)) continue;
@@ -94,6 +74,82 @@ public static partial class ProxyParser
         }
 
         return new ProxyParseSummary(unique.Count, Truncated: false);
+    }
+
+    /// <summary>
+    /// Разбирает bounded-окно неизменившегося body. Курсор указывает на первый ещё
+    /// не принятый endpoint; вызывающий код сохраняет его только после commit импорта.
+    /// </summary>
+    internal static ProxyParseWindow ParseWindowTo(
+        string content,
+        ProxyProtocol defaultProtocol,
+        int startOffset,
+        int maxResults,
+        Func<ProxyCandidateKey, bool> accept)
+    {
+        ArgumentNullException.ThrowIfNull(content);
+        ArgumentNullException.ThrowIfNull(accept);
+        ArgumentOutOfRangeException.ThrowIfLessThan(startOffset, 0);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(startOffset, content.Length);
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxResults, 1);
+        var unique = new HashSet<ProxyCandidateKey>(Math.Min(maxResults, 4_096));
+        for (var match = EndpointRegex().Match(content, startOffset); match.Success; match = match.NextMatch())
+        {
+            if (!TryReadCandidate(content, match, defaultProtocol, out var candidate) || unique.Contains(candidate))
+                continue;
+            if (unique.Count == maxResults || !accept(candidate))
+                return new ProxyParseWindow(unique.Count, match.Index, Completed: false);
+            unique.Add(candidate);
+        }
+        return new ProxyParseWindow(unique.Count, content.Length, Completed: true);
+    }
+
+    private static bool TryReadCandidate(
+        string content,
+        Match match,
+        ProxyProtocol defaultProtocol,
+        out ProxyCandidateKey candidate)
+    {
+        candidate = default;
+        // Regex ищет кандидата внутри свободного текста, поэтому границы проверяются
+        // отдельно без unsupported lookaround в NonBacktracking engine. Иначе хвост
+        // пятиоктетного IPv4 или первые пять цифр шестизначного порта становились
+        // самостоятельным ложным endpoint.
+        if (!HasTokenBoundaries(content, match.Index, match.Length)) return false;
+        var host = match.Groups["host"].ValueSpan;
+        if (host.Length >= 2 && host[0] == '[' && host[^1] == ']') host = host[1..^1];
+        var portText = match.Groups["port"].ValueSpan;
+        if (!int.TryParse(portText, out var port) || port is < 1 or > 65535)
+            return false;
+
+        // IPAddress.TryParse исторически понимает ведущий ноль IPv4 как octal:
+        // 010.0.0.1 превращается в 8.0.0.1. Feed обязан содержать однозначные
+        // canonical decimal octets, чтобы parser не менял фактический destination.
+        if (host.IndexOf('.') >= 0 && !HasCanonicalIpv4Octets(host)) return false;
+
+        // Regex даже не выделяет доменные endpoints: их исключение блокирует DNS rebinding.
+        if (!IPAddress.TryParse(host, out var ip) || !NetworkSafety.IsPublicAddress(ip)) return false;
+
+        // Scheme находится непосредственно перед IP, но намеренно не включён в regex:
+        // так URL/временные метки в заголовке feed'а не влияют на поиск следующего endpoint.
+        var protocol = ParseProtocolBefore(content.AsSpan(0, match.Index), defaultProtocol);
+        candidate = ProxyCandidateKey.Create(ip, port, protocol);
+        return true;
+    }
+
+    /// <summary>Разбирает ровно один JSON endpoint, не принимая diagnostic-текст вокруг него.</summary>
+    internal static bool TryParseEndpoint(string text, ProxyProtocol fallback, out ProxyCandidateKey candidate)
+    {
+        var content = text.Trim();
+        var match = EndpointRegex().Match(content);
+        candidate = default;
+        if (!match.Success || match.Index + match.Length != content.Length) return false;
+        var prefix = content.AsSpan(0, match.Index);
+        if (!prefix.IsEmpty && !prefix.Equals("http://", StringComparison.OrdinalIgnoreCase) &&
+            !prefix.Equals("https://", StringComparison.OrdinalIgnoreCase) &&
+            !prefix.Equals("socks4://", StringComparison.OrdinalIgnoreCase) &&
+            !prefix.Equals("socks5://", StringComparison.OrdinalIgnoreCase)) return false;
+        return TryReadCandidate(content, match, fallback, out candidate);
     }
 
     private static bool HasTokenBoundaries(string content, int index, int length) =>
@@ -198,3 +254,6 @@ internal sealed record ProxyParseResult(
 
 /// <summary>Итог потокового разбора без materialized списка endpoint'ов.</summary>
 internal readonly record struct ProxyParseSummary(int Count, bool Truncated);
+
+/// <summary>Позиция продолжения в том же body; completion относится к обходу, а не HTTP.</summary>
+internal readonly record struct ProxyParseWindow(int Count, int NextOffset, bool Completed);

@@ -4,7 +4,8 @@ namespace ProxyHarbor.Infrastructure;
 
 /// <summary>
 /// Проверенный список публичных VPN feed'ов. В каталог включаются только официальные
-/// страницы и репозитории с явной открытой лицензией; пользовательские URL добавляются отдельно.
+/// страницы и репозитории с открытой лицензией либо опубликованными subscription links;
+/// пользовательские URL добавляются отдельно.
 /// </summary>
 public static class BuiltInVpnSourceCatalog
 {
@@ -39,24 +40,6 @@ public static class BuiltInVpnSourceCatalog
         new("PyroConfig trojan", "0xAbolfazl/PyroConfig", "https://raw.githubusercontent.com/0xAbolfazl/PyroConfig/main/Configs/trojan.txt", VpnProtocol.Trojan, "MIT"),
         new("PyroConfig vless", "0xAbolfazl/PyroConfig", "https://raw.githubusercontent.com/0xAbolfazl/PyroConfig/main/Configs/vless.txt", VpnProtocol.Vless, "MIT"),
         new("PyroConfig vmess", "0xAbolfazl/PyroConfig", "https://raw.githubusercontent.com/0xAbolfazl/PyroConfig/main/Configs/vmess.txt", VpnProtocol.Vmess, "MIT"),
-        new("Alexant ss", "alexantSWE/V2ray-Config", "https://raw.githubusercontent.com/alexantSWE/V2ray-Config/main/Splitted-By-Protocol/ss.txt", VpnProtocol.Shadowsocks, "MIT"),
-        new("Alexant trojan", "alexantSWE/V2ray-Config", "https://raw.githubusercontent.com/alexantSWE/V2ray-Config/main/Splitted-By-Protocol/trojan.txt", VpnProtocol.Trojan, "MIT"),
-        new("Alexant vless", "alexantSWE/V2ray-Config", "https://raw.githubusercontent.com/alexantSWE/V2ray-Config/main/Splitted-By-Protocol/vless.txt", VpnProtocol.Vless, "MIT"),
-        new("Alexant vmess", "alexantSWE/V2ray-Config", "https://raw.githubusercontent.com/alexantSWE/V2ray-Config/main/Splitted-By-Protocol/vmess.txt", VpnProtocol.Vmess, "MIT"),
-        new("Alexant mixed 1", "alexantSWE/V2ray-Config", "https://raw.githubusercontent.com/alexantSWE/V2ray-Config/main/Sub1.txt", VpnProtocol.Vless, "MIT"),
-        new("Alexant mixed 2", "alexantSWE/V2ray-Config", "https://raw.githubusercontent.com/alexantSWE/V2ray-Config/main/Sub2.txt", VpnProtocol.Vless, "MIT"),
-        new("Alexant mixed 3", "alexantSWE/V2ray-Config", "https://raw.githubusercontent.com/alexantSWE/V2ray-Config/main/Sub3.txt", VpnProtocol.Vless, "MIT"),
-        new("Alexant mixed 4", "alexantSWE/V2ray-Config", "https://raw.githubusercontent.com/alexantSWE/V2ray-Config/main/Sub4.txt", VpnProtocol.Vless, "MIT"),
-        new("Alexant mixed 5", "alexantSWE/V2ray-Config", "https://raw.githubusercontent.com/alexantSWE/V2ray-Config/main/Sub5.txt", VpnProtocol.Vless, "MIT"),
-        new("Alexant mixed 6", "alexantSWE/V2ray-Config", "https://raw.githubusercontent.com/alexantSWE/V2ray-Config/main/Sub6.txt", VpnProtocol.Vless, "MIT"),
-        new("Alexant mixed 7", "alexantSWE/V2ray-Config", "https://raw.githubusercontent.com/alexantSWE/V2ray-Config/main/Sub7.txt", VpnProtocol.Vless, "MIT"),
-        new("Alexant mixed 8", "alexantSWE/V2ray-Config", "https://raw.githubusercontent.com/alexantSWE/V2ray-Config/main/Sub8.txt", VpnProtocol.Vless, "MIT"),
-        new("Alexant mixed 9", "alexantSWE/V2ray-Config", "https://raw.githubusercontent.com/alexantSWE/V2ray-Config/main/Sub9.txt", VpnProtocol.Vless, "MIT"),
-        new("Alexant mixed 10", "alexantSWE/V2ray-Config", "https://raw.githubusercontent.com/alexantSWE/V2ray-Config/main/Sub10.txt", VpnProtocol.Vless, "MIT"),
-        new("Alexant mixed 11", "alexantSWE/V2ray-Config", "https://raw.githubusercontent.com/alexantSWE/V2ray-Config/main/Sub11.txt", VpnProtocol.Vless, "MIT"),
-        new("Alexant mixed 12", "alexantSWE/V2ray-Config", "https://raw.githubusercontent.com/alexantSWE/V2ray-Config/main/Sub12.txt", VpnProtocol.Vless, "MIT"),
-        new("Alexant mixed 13", "alexantSWE/V2ray-Config", "https://raw.githubusercontent.com/alexantSWE/V2ray-Config/main/Sub13.txt", VpnProtocol.Vless, "MIT"),
-        new("Alexant mixed 14", "alexantSWE/V2ray-Config", "https://raw.githubusercontent.com/alexantSWE/V2ray-Config/main/Sub14.txt", VpnProtocol.Vless, "MIT"),
         new("Freedom V2Ray ss", "MahanKenway/Freedom-V2Ray", "https://raw.githubusercontent.com/MahanKenway/Freedom-V2Ray/main/configs/ss.txt", VpnProtocol.Shadowsocks, "MIT"),
         new("Freedom V2Ray trojan", "MahanKenway/Freedom-V2Ray", "https://raw.githubusercontent.com/MahanKenway/Freedom-V2Ray/main/configs/trojan.txt", VpnProtocol.Trojan, "MIT"),
         new("Freedom V2Ray vless", "MahanKenway/Freedom-V2Ray", "https://raw.githubusercontent.com/MahanKenway/Freedom-V2Ray/main/configs/vless.txt", VpnProtocol.Vless, "MIT"),
@@ -165,11 +148,11 @@ public static class BuiltInVpnSourceCatalog
         new("Nexus Nodes mixed", "ninjastrikers/nexus-nodes", "https://raw.githubusercontent.com/ninjastrikers/nexus-nodes/main/configs/all.txt", VpnProtocol.Vless, "MIT"),
         new("Nexus Nodes VLESS", "ninjastrikers/nexus-nodes", "https://raw.githubusercontent.com/ninjastrikers/nexus-nodes/main/configs/vless.txt", VpnProtocol.Vless, "MIT"),
         new("Nexus Nodes VMess", "ninjastrikers/nexus-nodes", "https://raw.githubusercontent.com/ninjastrikers/nexus-nodes/main/configs/vmess.txt", VpnProtocol.Vmess, "MIT"),
-        new("Black Crow VLESS", "nukcrow/black-crow", "https://raw.githubusercontent.com/nukcrow/black-crow/main/sub/protocols/vless.txt", VpnProtocol.Vless, "MIT"),
-        new("Black Crow VMess", "nukcrow/black-crow", "https://raw.githubusercontent.com/nukcrow/black-crow/main/sub/protocols/vmess.txt", VpnProtocol.Vmess, "MIT"),
-        new("Black Crow Shadowsocks", "nukcrow/black-crow", "https://raw.githubusercontent.com/nukcrow/black-crow/main/sub/protocols/ss.txt", VpnProtocol.Shadowsocks, "MIT"),
-        new("Black Crow Trojan", "nukcrow/black-crow", "https://raw.githubusercontent.com/nukcrow/black-crow/main/sub/protocols/trojan.txt", VpnProtocol.Trojan, "MIT"),
-        new("Black Crow Hysteria2", "nukcrow/black-crow", "https://raw.githubusercontent.com/nukcrow/black-crow/main/sub/protocols/hysteria2.txt", VpnProtocol.Hysteria2, "MIT"),
+        new("Black Crow VLESS", "nukcrow/black-crow", "https://raw.githubusercontent.com/nukcrow/black-crow/main/sub/general/vless.txt", VpnProtocol.Vless, "Public subscription links (SUBSCRIPTIONS.md)"),
+        new("Black Crow VMess", "nukcrow/black-crow", "https://raw.githubusercontent.com/nukcrow/black-crow/main/sub/general/vmess.txt", VpnProtocol.Vmess, "Public subscription links (SUBSCRIPTIONS.md)"),
+        new("Black Crow Shadowsocks", "nukcrow/black-crow", "https://raw.githubusercontent.com/nukcrow/black-crow/main/sub/general/ss.txt", VpnProtocol.Shadowsocks, "Public subscription links (SUBSCRIPTIONS.md)"),
+        new("Black Crow Trojan", "nukcrow/black-crow", "https://raw.githubusercontent.com/nukcrow/black-crow/main/sub/general/trojan.txt", VpnProtocol.Trojan, "Public subscription links (SUBSCRIPTIONS.md)"),
+        new("Black Crow mixed", "nukcrow/black-crow", "https://raw.githubusercontent.com/nukcrow/black-crow/main/sub/general/all_configs.txt", VpnProtocol.Vless, "Public subscription links (SUBSCRIPTIONS.md)"),
 
         // Российские и зарубежные каталоги, live-проверенные 01.09.2026. Включены
         // только поддерживаемые URI/base64-feed с явной лицензией репозитория.
@@ -213,8 +196,8 @@ public static class BuiltInVpnSourceCatalog
             "Costa Rica|Curacao|Indonesia|Iran|Israel|Malaysia|Mexico|New Zealand|Pakistan|Peru|Philippines|" +
             "Saudi Arabia|Seychelles|South Africa|South Korea|Taiwan|Thailand|United Arab Emirates";
         const string au1rxxCountries =
-            "RU UA KZ AM MD UZ AL AT BG CH DE DK EE ES FI FR GB GR IE IT LT LV NL NO PL RO SE TR CZ " +
-            "AE AR AU BR CA CN HK ID IL IN JP KR MO MX MY NG PH";
+            "RU UA KZ AM AL AT BG CH DE EE ES FI FR GB GR IE IT LT LV NL NO PL RO SE TR CZ " +
+            "AE AR AU BR CA CN HK ID IL IN JP KR MX MY NG PH";
 
         foreach (var country in telegramCountries.Split('|', StringSplitOptions.RemoveEmptyEntries))
             yield return new($"Telegram collector country {country}",

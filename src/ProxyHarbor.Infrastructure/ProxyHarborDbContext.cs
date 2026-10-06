@@ -17,6 +17,8 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
     public DbSet<ProxySource> Sources => Set<ProxySource>();
     /// <summary>Отделённые от источников Data Protection ciphertext ключей платных proxy provider.</summary>
     public DbSet<ProxySourceCredential> ProxySourceCredentials => Set<ProxySourceCredential>();
+    /// <summary>Изолированный bounded-кэш незавершённых снимков и подтверждённые import cursors.</summary>
+    public DbSet<ProxySourceImportState> ProxySourceImportStates => Set<ProxySourceImportState>();
     /// <summary>Найденные VPN endpoint и опубликованные ссылки подключения.</summary>
     public DbSet<VpnEndpoint> VpnEndpoints => Set<VpnEndpoint>();
     /// <summary>Разрешённые публичные VPN feed'ы.</summary>
@@ -446,6 +448,20 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
             table.HasCheckConstraint("CK_Sources_Counters", "\"LastItemCount\" >= 0 AND \"ConsecutiveFailures\" >= 0");
             table.HasCheckConstraint("CK_Sources_FetchTimeline", "\"LastSucceededAt\" IS NULL OR (\"LastFetchedAt\" IS NOT NULL AND \"LastSucceededAt\" <= \"LastFetchedAt\")");
             table.HasCheckConstraint("CK_Sources_ContentTimeline", "\"LastContentFetchedAt\" IS NULL OR (\"LastFetchedAt\" IS NOT NULL AND \"LastSucceededAt\" IS NOT NULL AND \"LastContentFetchedAt\" <= \"LastFetchedAt\" AND \"LastContentFetchedAt\" <= \"LastSucceededAt\")");
+        });
+
+        var sourceImport = builder.Entity<ProxySourceImportState>();
+        sourceImport.HasKey(x => x.ProxySourceId);
+        sourceImport.Property(x => x.SourceUrl).HasMaxLength(2048);
+        sourceImport.Property(x => x.StoredBytes).HasComputedColumnSql("octet_length(\"Payload\")", stored: true);
+        sourceImport.HasOne<ProxySource>().WithOne()
+            .HasForeignKey<ProxySourceImportState>(x => x.ProxySourceId).OnDelete(DeleteBehavior.Cascade);
+        sourceImport.ToTable(table =>
+        {
+            table.HasCheckConstraint("CK_ProxySourceImportStates_Cursor",
+                "\"CandidateCount\" BETWEEN 1 AND 1000000 AND \"NextIndex\" BETWEEN 0 AND \"CandidateCount\" AND \"SourceProtocol\" BETWEEN 0 AND 3");
+            table.HasCheckConstraint("CK_ProxySourceImportStates_Payload",
+                "octet_length(\"Payload\") <= 24000000 AND ((\"NextIndex\" < \"CandidateCount\" AND octet_length(\"Payload\") > 8 AND octet_length(\"PayloadHash\") = 32) OR (\"NextIndex\" = \"CandidateCount\" AND octet_length(\"Payload\") = 0 AND octet_length(\"PayloadHash\") = 0))");
         });
 
         var sourceCredential = builder.Entity<ProxySourceCredential>();

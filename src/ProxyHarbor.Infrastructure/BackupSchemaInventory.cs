@@ -51,6 +51,7 @@ public static class BackupSchemaInventory
         Included("Proxies", "database/proxies.json", "Proxy catalog."),
         Included("ProxyAccessBuckets", "database/proxy-access-buckets.json", "Durable access accounting."),
         Included("ProxySourceCredentials", "database/proxy-source-credentials.json", "Protected paid-provider credentials and status."),
+        Ephemeral("ProxySourceImportStates", "Pending snapshots are re-fetched after restore; import cursors must not hide missing restored membership."),
         Ephemeral("ProxyValidationLeases", "Validation ownership expires and must never survive restore."),
         Included("ReferralRelationships", "database/referral-relationships.json", "Immutable referral ownership."),
         Included("ReferralRewards", "database/referral-rewards.json", "Idempotent subscription rewards."),

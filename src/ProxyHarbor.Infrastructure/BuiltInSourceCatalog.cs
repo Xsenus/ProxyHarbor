@@ -6,13 +6,27 @@ namespace ProxyHarbor.Infrastructure;
 public static class BuiltInSourceCatalog
 {
     /// <summary>Дата последнего полного URL/live-аудита всех канонических feed'ов.</summary>
-    public static DateOnly LastAuditedOn => new(2026, 9, 12);
+    public static DateOnly LastAuditedOn => new(2026, 10, 6);
 
     /// <summary>Источники ранжированы по свежести, объёму, стабильности ответа и разнообразию провайдеров.</summary>
     public static IReadOnlyList<BuiltInSource> Sources { get; } = RankSources(
     [
         // HTTP/HTTPS и смешанные feed'ы.
         Feed(1, "ProxyScrape V4 Mixed", "ProxyScrape", "https://api.proxyscrape.com/v4/free-proxy-list/get?request=display_proxies&proxy_format=protocolipport&format=text", ProxyProtocol.Http),
+        // October discovery: documented aggregate feeds, not country/archive mirrors.
+        // Litport publishes the five-minute feed on live; main is a daily snapshot.
+        Feed(1001, "Litport HTTP", "Litport", "https://raw.githubusercontent.com/litportnet/free-proxy-list/live/proxies/http.txt", ProxyProtocol.Http),
+        Feed(1002, "Litport HTTPS", "Litport", "https://raw.githubusercontent.com/litportnet/free-proxy-list/live/proxies/https.txt", ProxyProtocol.Https),
+        Feed(1003, "Litport SOCKS4", "Litport", "https://raw.githubusercontent.com/litportnet/free-proxy-list/live/proxies/socks4.txt", ProxyProtocol.Socks4),
+        Feed(1004, "Litport SOCKS5", "Litport", "https://raw.githubusercontent.com/litportnet/free-proxy-list/live/proxies/socks5.txt", ProxyProtocol.Socks5),
+        Feed(1005, "Maximilian Feix HTTP", "Maximilian Feix", "https://raw.githubusercontent.com/maximilianfeix/free-proxy-list/main/http.txt", ProxyProtocol.Http),
+        Feed(1006, "Maximilian Feix HTTPS", "Maximilian Feix", "https://raw.githubusercontent.com/maximilianfeix/free-proxy-list/main/https.txt", ProxyProtocol.Https),
+        Feed(1007, "Maximilian Feix SOCKS4", "Maximilian Feix", "https://raw.githubusercontent.com/maximilianfeix/free-proxy-list/main/socks4.txt", ProxyProtocol.Socks4),
+        Feed(1008, "Maximilian Feix SOCKS5", "Maximilian Feix", "https://raw.githubusercontent.com/maximilianfeix/free-proxy-list/main/socks5.txt", ProxyProtocol.Socks5),
+        Feed(1009, "ProxyWhirl HTTP", "ProxyWhirl", "https://raw.githubusercontent.com/wyattowalsh/proxywhirl/main/docs/proxy-lists/http.txt", ProxyProtocol.Http),
+        Feed(1010, "ProxyWhirl HTTPS", "ProxyWhirl", "https://raw.githubusercontent.com/wyattowalsh/proxywhirl/main/docs/proxy-lists/https.txt", ProxyProtocol.Https),
+        Feed(1011, "ProxyWhirl SOCKS4", "ProxyWhirl", "https://raw.githubusercontent.com/wyattowalsh/proxywhirl/main/docs/proxy-lists/socks4.txt", ProxyProtocol.Socks4),
+        Feed(1012, "ProxyWhirl SOCKS5", "ProxyWhirl", "https://raw.githubusercontent.com/wyattowalsh/proxywhirl/main/docs/proxy-lists/socks5.txt", ProxyProtocol.Socks5),
         Feed(2, "ProxyScrape V2 HTTP", "ProxyScrape", "https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http", ProxyProtocol.Http),
         Feed(3, "OpenProxyList HTTP", "OpenProxyList", "https://openproxylist.xyz/http.txt", ProxyProtocol.Http),
         Feed(4, "OpenProxyList HTTPS", "OpenProxyList", "https://openproxylist.xyz/https.txt", ProxyProtocol.Https),
@@ -106,9 +120,6 @@ public static class BuiltInSourceCatalog
         Feed(83, "RelayGlass HTTPS", "RelayGlass", "https://raw.githubusercontent.com/relayglass/free-proxy-list/main/protocol/https/https.txt", ProxyProtocol.Https),
         Feed(84, "RelayGlass SOCKS4", "RelayGlass", "https://raw.githubusercontent.com/relayglass/free-proxy-list/main/protocol/socks4/socks4.txt", ProxyProtocol.Socks4),
         Feed(85, "RelayGlass SOCKS5", "RelayGlass", "https://raw.githubusercontent.com/relayglass/free-proxy-list/main/protocol/socks5/socks5.txt", ProxyProtocol.Socks5),
-        Feed(86, "ProxyMan HTTP", "ProxyMan", "https://raw.githubusercontent.com/Akshay7273/ProxyMan-free-proxy-list/main/protocols/http.txt", ProxyProtocol.Http),
-        Feed(87, "ProxyMan SOCKS4", "ProxyMan", "https://raw.githubusercontent.com/Akshay7273/ProxyMan-free-proxy-list/main/protocols/socks4.txt", ProxyProtocol.Socks4),
-        Feed(88, "ProxyMan SOCKS5", "ProxyMan", "https://raw.githubusercontent.com/Akshay7273/ProxyMan-free-proxy-list/main/protocols/socks5.txt", ProxyProtocol.Socks5),
         Feed(89, "Dinoz HTTP", "Dinoz", "https://raw.githubusercontent.com/dinoz0rg/proxy-list/main/checked_proxies/http.txt", ProxyProtocol.Http),
         Feed(90, "Dinoz SOCKS4", "Dinoz", "https://raw.githubusercontent.com/dinoz0rg/proxy-list/main/checked_proxies/socks4.txt", ProxyProtocol.Socks4),
         Feed(91, "Dinoz SOCKS5", "Dinoz", "https://raw.githubusercontent.com/dinoz0rg/proxy-list/main/checked_proxies/socks5.txt", ProxyProtocol.Socks5),
@@ -347,7 +358,7 @@ public static class BuiltInSourceCatalog
     {
         const string hProxyCountries =
             "RU UA BY KZ AM AZ GE KG MD UZ AL AT BA BE BG CY DK EE GR HR HU IE LT LV ME PT RO RS SI SK TR XK " +
-            "AE AF AO AR BD BF BI BJ BO BT BW CD CG CI CL CM CN CO CR DO DZ EC EG GA GH GM GQ GT HK";
+            "AE AF AO AR BD BF BI BJ BO BT BW CD CG CI CL CM CN CO CR DO EC EG GA GH GM GQ GT HK";
         const string proxiflyCountries =
             "RU UA KZ AM GE AL AT BG CH DE DK EE ES FI FR GB GR HR HU IE IT LT LV ME NL NO PL PT RO RS SE SI SK TR CZ";
 
@@ -365,7 +376,6 @@ public static class BuiltInSourceCatalog
     private static IEnumerable<BuiltInSource> IndependentProviderFeeds()
     {
         var rank = 421;
-        yield return Feed(rank++, "Just Not Google HTTP", "just-not-google", "https://raw.githubusercontent.com/just-not-google/full-free-proxy/main/http.txt", ProxyProtocol.Http);
         yield return Feed(rank++, "NDT Proxy Scraper HTTP", "nguyenduytan", "https://raw.githubusercontent.com/nguyenduytan/NDT-Proxy-Scraper/main/http.txt", ProxyProtocol.Http);
         yield return Feed(rank++, "ProxyScraper HTTP", "ProxyScraper", "https://raw.githubusercontent.com/ProxyScraper/ProxyScraper/main/http.txt", ProxyProtocol.Http);
         yield return Feed(rank++, "Proxy List Gamt HTTP", "Denisyoya", "https://raw.githubusercontent.com/Denisyoya/Proxy-List-Gamt/main/proxy/http.txt", ProxyProtocol.Http);
@@ -402,7 +412,6 @@ public static class BuiltInSourceCatalog
     {
         var rank = 452;
         yield return Feed(rank++, "HankNovic SOCKS5", "HankNovic", "https://raw.githubusercontent.com/HankNovic/ProxyClean/main/SOCKS5.txt", ProxyProtocol.Socks5);
-        yield return Feed(rank++, "Allaux HTTP", "Allaux", "https://raw.githubusercontent.com/Allaux/fresh-proxy-list/main/http.txt", ProxyProtocol.Http);
         yield return Feed(rank, "Mahdi Proxies Mixed", "MAHDI-143", "https://raw.githubusercontent.com/MAHDI-143/proxies/main/proxies.txt", ProxyProtocol.Http);
     }
 
@@ -476,7 +485,6 @@ public static class BuiltInSourceCatalog
             MeDawideK|https://raw.githubusercontent.com/MeDawideK/proxy-list/main/proxy.txt|Http
             cybblog|https://raw.githubusercontent.com/cybblog/proxy-list/main/https.txt|Https
             Okenwa899|https://raw.githubusercontent.com/Okenwa899/PROXY-LIST/main/http.txt|Http
-            ProTechEx|https://raw.githubusercontent.com/ProTechEx/PROXY-List/master/http.txt|Http
             khoivutru|https://raw.githubusercontent.com/khoivutru/proxy-list/main/http.txt|Http
             rolandmccarthy13|https://raw.githubusercontent.com/rolandmccarthy13/free-proxy-list/master/http.txt|Http
             MFTEAM1|https://raw.githubusercontent.com/MFTEAM1/PROXY-List/main/http.txt|Http
@@ -617,7 +625,6 @@ public static class BuiltInSourceCatalog
     {
         const string feeds = """
             Serhiiilnytskyi|https://raw.githubusercontent.com/Serhiiilnytskyi/proxy_scraper/main/proxies.txt|Http
-            iamthebestm85|https://raw.githubusercontent.com/iamthebestm85/Proxy-Scraper-And-Checker/main/proxy.txt|Http
             NelFeast|https://raw.githubusercontent.com/NelFeast/ProxyScraper/main/proxies.txt|Http
             xavierontop|https://raw.githubusercontent.com/xavierontop/proxy-scraper/main/proxies.txt|Http
             morpheous2333|https://raw.githubusercontent.com/morpheous2333/Simple-Proxy-Scraper-Discord-/main/http.txt|Http

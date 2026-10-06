@@ -74,10 +74,35 @@ public sealed class ProxyCollector(
                 var collectionStartedAt = DateTimeOffset.UtcNow;
                 var allSources = await db.Sources.AsNoTracking().Where(x => x.Enabled)
                     .OrderBy(x => x.Priority).ToListAsync(cancellationToken);
+                var importStore = new ProxySourceImportStore(dbFactory);
+                // Старые snapshots отключённых/изменённых feed'ов не должны занимать
+                // storage-квоту постоянно; отсутствие state требует полного re-fetch.
+                await db.ProxySourceImportStates.Where(state => !db.Sources.Any(source =>
+                        source.Id == state.ProxySourceId && source.Enabled && source.Url == state.SourceUrl &&
+                        source.DefaultProtocol == state.SourceProtocol))
+                    .ExecuteDeleteAsync(cancellationToken);
+                var importMetadata = await db.ProxySourceImportStates.AsNoTracking()
+                    .Select(state => new
+                    {
+                        state.ProxySourceId,
+                        state.SourceUrl,
+                        state.SourceProtocol,
+                        state.NextIndex,
+                        state.CandidateCount,
+                        state.LastProgressAt
+                    }).ToDictionaryAsync(state => state.ProxySourceId, cancellationToken);
                 var sources = allSources.Where(source =>
-                    SourceFetchSchedule.IsDue(source.NextFetchAt, collectionStartedAt, forceAllSources)).ToList();
+                        SourceFetchSchedule.IsDue(source.NextFetchAt, collectionStartedAt, forceAllSources) ||
+                        (importMetadata.TryGetValue(source.Id, out var state) && state.SourceUrl == source.Url &&
+                            state.SourceProtocol == source.DefaultProtocol && state.NextIndex < state.CandidateCount))
+                    .OrderBy(source => importMetadata.TryGetValue(source.Id, out var state) &&
+                        state.SourceUrl == source.Url && state.SourceProtocol == source.DefaultProtocol
+                            ? state.LastProgressAt : null)
+                    .ThenBy(source => source.Priority).ThenBy(source => source.Id).ToList();
                 var candidates = new BoundedProxyCandidateSet(options.Value.MaxCandidatesPerRun);
                 var sourceResults = new ConcurrentBag<SourceCollectionResult>();
+                var importProgress = new ConcurrentBag<SourceImportProgress>();
+                var importFailures = new ConcurrentBag<Exception>();
                 var eligibleSourceIds = sources.Select(source => source.Id).ToArray();
                 var credentials = await db.ProxySourceCredentials.AsNoTracking()
                     .Where(item => eligibleSourceIds.Contains(item.ProxySourceId))
@@ -89,10 +114,10 @@ public sealed class ProxyCollector(
                 // миллионами кандидатов бесплатных feed'ов текущего цикла.
                 await CollectSourcesAsync(
                     paidSources, credentials, candidates, sourceResults,
-                    collectionStartedAt, forceAllSources, cancellationToken);
+                    importStore, importProgress, importFailures, collectionStartedAt, forceAllSources, cancellationToken);
                 await CollectSourcesAsync(
                     publicSources, credentials, candidates, sourceResults,
-                    collectionStartedAt, forceAllSources, cancellationToken);
+                    importStore, importProgress, importFailures, collectionStartedAt, forceAllSources, cancellationToken);
 
                 var sourceResultById = sourceResults.ToDictionary(result => result.Id);
                 var sourceIds = sourceResultById.Keys.ToArray();
@@ -100,6 +125,8 @@ public sealed class ProxyCollector(
                 foreach (var source in trackedSources)
                 {
                     var result = sourceResultById[source.Id];
+                    // Cached-only импорт не является новой HTTP-проверкой источника.
+                    if (!result.FetchObserved) continue;
                     // Admin мог заменить endpoint, пока старый HTTP-запрос находился в полёте.
                     // Результат старой конфигурации нельзя приписывать новой: особенно ETag и
                     // LastContentFetchedAt, иначе новый feed способен получать ложные 304.
@@ -118,7 +145,7 @@ public sealed class ProxyCollector(
                         source.LastResultTruncated = result.Truncated;
                         source.LastSucceededAt = fetchedAt;
                         source.ConsecutiveFailures = 0;
-                        source.NextFetchAt = null;
+                        source.NextFetchAt = SourceFetchSchedule.NextSuccessAttempt(source.Url, fetchedAt);
                         source.HttpETag = result.HttpETag;
                         source.HttpLastModifiedAt = result.HttpLastModifiedAt;
                         if (result.ContentFetched) source.LastContentFetchedAt = fetchedAt;
@@ -145,9 +172,15 @@ public sealed class ProxyCollector(
                     foreach (var result in paidResults)
                     {
                         if (!trackedCredentials.TryGetValue(result.Id, out var credential)) continue;
+                        // Older versions marked every 403 as expired and wrote the run
+                        // timestamp as ExpiresAt. That date was never provider evidence.
+                        if (credential.Status == "expired") credential.ExpiresAt = null;
                         credential.Status = result.CredentialStatus!;
                         credential.CheckedAt = result.CredentialCheckedAt;
-                        credential.ExpiresAt = result.CredentialExpiresAt;
+                        // HTTP-отказ или сбой TTL не доказывает новый срок действия.
+                        // Замена самого ключа сбрасывает предыдущую дату в admin endpoint.
+                        if (result.CredentialExpiresAt is not null)
+                            credential.ExpiresAt = result.CredentialExpiresAt;
                         credential.LastError = result.CredentialError;
                     }
                 }
@@ -159,9 +192,19 @@ public sealed class ProxyCollector(
                 var added = await BulkUpsertAsync(
                     db, candidates.ImportItems, candidates.Count, now,
                     options.Value.LastSeenRefreshMinutes, cancellationToken);
+                // Snapshot сохранялся до admission, но cursor подтверждается только
+                // после commit endpoint'ов. Crash между ними приводит к безопасному replay.
+                foreach (var progress in importProgress)
+                    _ = await importStore.AcknowledgeCommittedImportAsync(
+                        progress.State, progress.NextIndex, DateTimeOffset.UtcNow, cancellationToken);
                 // Bounded signal не накапливает по событию на каждый feed/endpoint:
                 // одного wake достаточно, чтобы validator немедленно начал draining due-очереди.
                 if (candidates.Count > 0) validationWakeSignal?.Pulse();
+                // Сначала подтверждаем остальные snapshots и освобождаем место:
+                // storage pressure не должен создавать deadlock с заполненным cache.
+                if (!importFailures.IsEmpty)
+                    throw new InvalidOperationException("Не удалось завершить возобновляемый импорт proxy-источников.",
+                        new AggregateException(importFailures));
 
                 var sourcesProcessed = sourceResults.Count;
                 var sourcesSucceeded = sourceResults.Count(x => x.Error is null);
@@ -240,6 +283,9 @@ public sealed class ProxyCollector(
         Dictionary<Guid, ProxySourceCredential> credentials,
         BoundedProxyCandidateSet candidates,
         ConcurrentBag<SourceCollectionResult> sourceResults,
+        ProxySourceImportStore importStore,
+        ConcurrentBag<SourceImportProgress> importProgress,
+        ConcurrentBag<Exception> importFailures,
         DateTimeOffset collectionStartedAt,
         bool forceAllSources,
         CancellationToken cancellationToken)
@@ -255,8 +301,22 @@ public sealed class ProxyCollector(
         }, async (source, token) =>
         {
             var paid = PaidProxySourceCatalog.IsPaid(source);
+            ProxySourceImportState? importState = null;
+            ProxyCandidateSnapshot? newSnapshot = null;
             try
             {
+                importState = await importStore.LoadAsync(source, token);
+                if (!SourceFetchSchedule.IsDue(source.NextFetchAt, collectionStartedAt, forceAllSources))
+                {
+                    sourceResults.Add(new SourceCollectionResult(
+                        source.Id, source.Url, source.DefaultProtocol,
+                        source.LastItemCount, source.LastResultTruncated,
+                        source.HttpETag, source.HttpLastModifiedAt,
+                        ContentFetched: false,
+                        Error: importState is null ? "Снимок импорта утрачен; требуется повторная загрузка по расписанию." : null,
+                        FetchObserved: false));
+                    return;
+                }
                 var credentialStatus = (string?)null;
                 var credentialCheckedAt = (DateTimeOffset?)null;
                 var credentialExpiresAt = (DateTimeOffset?)null;
@@ -282,7 +342,7 @@ public sealed class ProxyCollector(
                     try
                     {
                         fetched = await FetchPaidSourceStateAsync(
-                            client, source, apiKey, forceAllSources, collectionStartedAt, token);
+                            client, source, apiKey, forceAllSources || importState is null, collectionStartedAt, token);
                         credentialCheckedAt = DateTimeOffset.UtcNow;
                         credentialStatus = "active";
                         try
@@ -311,20 +371,14 @@ public sealed class ProxyCollector(
                     }
                     catch (HttpRequestException exception)
                     {
-                        var state = exception.StatusCode switch
-                        {
-                            System.Net.HttpStatusCode.Unauthorized => "invalid",
-                            System.Net.HttpStatusCode.Forbidden => "expired",
-                            System.Net.HttpStatusCode.TooManyRequests => "rate_limited",
-                            _ => "error"
-                        };
-                        throw new PaidSourceException(state, PaidSourceError(state), exception);
+                        var failure = PaidSourceHttpFailure.From(exception.StatusCode);
+                        throw new PaidSourceException(failure.Status, failure.Message, exception);
                     }
                 }
                 else
                 {
                     // Admin force-run является полным аудитом и требует новый body.
-                    var useValidators = !forceAllSources && SourceConditionalFetchPolicy.ShouldUseValidators(
+                    var useValidators = !forceAllSources && importState is not null && SourceConditionalFetchPolicy.ShouldUseValidators(
                         source.LastContentFetchedAt,
                         source.LastSucceededAt,
                         source.LastItemCount,
@@ -340,9 +394,9 @@ public sealed class ProxyCollector(
 
                 if (fetched.NotModified)
                 {
-                    if (source.LastSucceededAt is null || source.LastItemCount <= 0)
+                    if (source.LastSucceededAt is null || source.LastItemCount <= 0 || importState is null)
                         throw new InvalidDataException(
-                            "Источник вернул 304 без сохранённого успешного непустого результата.");
+                            "Источник вернул 304 без сохранённого успешного результата и import state.");
                     sourceResults.Add(new SourceCollectionResult(
                         source.Id, source.Url, source.DefaultProtocol,
                         source.LastItemCount, source.LastResultTruncated,
@@ -354,17 +408,20 @@ public sealed class ProxyCollector(
 
                 var content = fetched.Content ??
                     throw new InvalidDataException("Успешный ответ источника не содержит body.");
-                var publishCandidates = true;
-                var parsed = SourceFeedParser.ParseBoundedToRequired(
-                    content,
-                    source.DefaultProtocol,
-                    options.Value.MaxProxiesPerSource,
-                    candidate =>
-                    {
-                        if (!publishCandidates) return;
-                        _ = candidates.TryAdd(candidate, paid);
-                        if (candidates.LimitReached) publishCandidates = false;
-                    });
+                ProxyParseSummary parsed;
+                if (importState is not null && importState.NextIndex < importState.CandidateCount)
+                {
+                    // Текущий body используется для HTTP-health, а незавершённый
+                    // immutable snapshot продолжает импортироваться без сброса cursor.
+                    parsed = SourceFeedParser.ParseBoundedToRequired(content,
+                        source.DefaultProtocol, options.Value.MaxProxiesPerSource, static _ => { });
+                }
+                else
+                {
+                    newSnapshot = ProxyCandidateSnapshotCodec.Encode(content, source.DefaultProtocol);
+                    parsed = new ProxyParseSummary(Math.Min(newSnapshot.Count, options.Value.MaxProxiesPerSource),
+                        newSnapshot.Count > options.Value.MaxProxiesPerSource);
+                }
                 sourceResults.Add(new SourceCollectionResult(
                     source.Id, source.Url, source.DefaultProtocol,
                     parsed.Count, parsed.Truncated,
@@ -383,8 +440,30 @@ public sealed class ProxyCollector(
                     0, false, null, null, ContentFetched: false, safeError,
                     paidException?.Status,
                     paid ? DateTimeOffset.UtcNow : null,
-                    paidException?.Status == "expired" ? collectionStartedAt : null,
+                    null,
                     paidException?.Message));
+            }
+            finally
+            {
+                try
+                {
+                    if (newSnapshot is not null)
+                        importState = await importStore.BeginAsync(source, newSnapshot, token);
+                    if (importState is not null && importState.NextIndex < importState.CandidateCount &&
+                        await importStore.IsCurrentOrDiscardAsync(importState, token))
+                    {
+                        var window = ProxySourceImportStore.ReadWindow(importState,
+                            options.Value.MaxProxiesPerSource, candidate => candidates.TryAccept(candidate, paid));
+                        if (window.NextIndex > importState.NextIndex)
+                            importProgress.Add(new SourceImportProgress(
+                                ProxySourceImportCheckpoint.Capture(importState), window.NextIndex));
+                    }
+                }
+                catch (Exception exception) when (
+                    exception is not OperationCanceledException || !token.IsCancellationRequested)
+                {
+                    importFailures.Add(exception);
+                }
             }
         });
     }
@@ -416,14 +495,6 @@ public sealed class ProxyCollector(
             delayAsync: null,
             sameOriginRedirectsOnly: true);
     }
-
-    private static string PaidSourceError(string state) => state switch
-    {
-        "invalid" => "Ключ платного источника недействителен.",
-        "expired" => "Срок действия ключа платного источника закончился или ключ не активирован.",
-        "rate_limited" => "Платный provider временно ограничил частоту запросов.",
-        _ => "Платный provider временно недоступен."
-    };
 
     private async Task FinishUnsuccessfulRunAuditAsync(Guid id, Exception exception, string status)
     {
@@ -695,6 +766,8 @@ public sealed class ProxyCollector(
         return candidateCount > HashImportCandidateThreshold;
     }
 
+    private sealed record SourceImportProgress(ProxySourceImportCheckpoint State, int NextIndex);
+
     private sealed record SourceCollectionResult(
         Guid Id,
         string SourceUrl,
@@ -708,7 +781,8 @@ public sealed class ProxyCollector(
         string? CredentialStatus = null,
         DateTimeOffset? CredentialCheckedAt = null,
         DateTimeOffset? CredentialExpiresAt = null,
-        string? CredentialError = null);
+        string? CredentialError = null,
+        bool FetchObserved = true);
 
     private sealed class PaidSourceException(
         string status,
@@ -734,11 +808,7 @@ internal static class SourceFeedParser
         ProxyProtocol defaultProtocol,
         int maxResults = int.MaxValue)
     {
-        EnsureNotHtmlEnvelope(content);
-        var parsed = ProxyParser.Parse(content, defaultProtocol, maxResults);
-        if (parsed.Count == 0)
-            throw new InvalidDataException("Источник не содержит распознаваемых прокси.");
-        return parsed;
+        return ParseBoundedRequired(content, defaultProtocol, maxResults).Items;
     }
 
     /// <summary>Проверяет непустой feed и сохраняет точный сигнал индивидуального усечения.</summary>
@@ -747,11 +817,9 @@ internal static class SourceFeedParser
         ProxyProtocol defaultProtocol,
         int maxResults)
     {
-        EnsureNotHtmlEnvelope(content);
-        var parsed = ProxyParser.ParseWithLimitStatus(content, defaultProtocol, maxResults);
-        if (parsed.Items.Count == 0)
-            throw new InvalidDataException("Источник не содержит распознаваемых прокси.");
-        return parsed;
+        var items = new List<(string Host, int Port, ProxyProtocol Protocol)>(Math.Min(maxResults, 4_096));
+        var parsed = ParseBoundedToRequired(content, defaultProtocol, maxResults, candidate => items.Add(candidate.ToEndpoint()));
+        return new ProxyParseResult(items, parsed.Truncated);
     }
 
     /// <summary>Collector-path без materialized списка строк для каждого параллельного feed'а.</summary>
@@ -762,7 +830,8 @@ internal static class SourceFeedParser
         Action<ProxyCandidateKey> accept)
     {
         EnsureNotHtmlEnvelope(content);
-        var parsed = ProxyParser.ParseTo(content, defaultProtocol, maxResults, accept);
+        var parsed = JsonProxyFeedParser.TryParseTo(content, defaultProtocol, maxResults, accept)
+            ?? ProxyParser.ParseTo(content, defaultProtocol, maxResults, accept);
         if (parsed.Count == 0)
             throw new InvalidDataException("Источник не содержит распознаваемых прокси.");
         return parsed;
@@ -802,6 +871,16 @@ internal static class SourceHttpRetry
 /// <summary>Рассчитывает bounded exponential backoff для недоступного free-feed.</summary>
 internal static class SourceFetchSchedule
 {
+    /// <summary>Соблюдает документированную нижнюю границу polling нового публичного провайдера.</summary>
+    internal static DateTimeOffset? NextSuccessAttempt(string url, DateTimeOffset fetchedAt)
+    {
+        if (Uri.TryCreate(url, UriKind.Absolute, out var uri) &&
+            uri.Host.Equals("raw.githubusercontent.com", StringComparison.OrdinalIgnoreCase) &&
+            uri.AbsolutePath.StartsWith("/litportnet/free-proxy-list/", StringComparison.OrdinalIgnoreCase))
+            return fetchedAt.AddMinutes(5);
+        return null;
+    }
+
     internal static bool IsDue(DateTimeOffset? nextFetchAt, DateTimeOffset now, bool forceAllSources) =>
         forceAllSources || nextFetchAt is null || nextFetchAt <= now;
 

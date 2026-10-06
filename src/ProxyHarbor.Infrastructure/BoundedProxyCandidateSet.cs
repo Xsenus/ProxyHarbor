@@ -11,6 +11,7 @@ namespace ProxyHarbor.Infrastructure;
 internal sealed class BoundedProxyCandidateSet
 {
     private readonly ConcurrentDictionary<ProxyCandidateKey, byte> _items;
+    private readonly object _admissionGate = new();
     private readonly int _limit;
     private int _count;
     private int _limitReached;
@@ -33,27 +34,38 @@ internal sealed class BoundedProxyCandidateSet
 
     /// <summary>Горячий collector-path не материализует каноническую IP-строку.</summary>
     internal bool TryAdd(ProxyCandidateKey candidate, bool preferred = false)
+        => Admit(candidate, preferred) == CandidateAdmission.Added;
+
+    /// <summary>Дубликат уже гарантированно принят; только отказ из-за квоты запрещает продвижение курсора.</summary>
+    internal bool TryAccept(ProxyCandidateKey candidate, bool preferred = false)
+        => Admit(candidate, preferred) != CandidateAdmission.Full;
+
+    private CandidateAdmission Admit(ProxyCandidateKey candidate, bool preferred)
     {
         var marker = preferred ? (byte)1 : (byte)0;
-        if (!_items.TryAdd(candidate, marker))
+        // Короткая critical section не публикует временную запись сверх квоты:
+        // другой producer не должен принять её за подтверждённый дубликат и
+        // продвинуть свой курсор перед последующим удалением этой записи.
+        lock (_admissionGate)
         {
-            if (preferred)
-                _items.AddOrUpdate(candidate, marker, static (_, existing) =>
-                    existing == 0 ? (byte)1 : existing);
-            return false;
+            if (_items.TryGetValue(candidate, out var existing))
+            {
+                if (preferred && existing == 0) _items[candidate] = marker;
+                return CandidateAdmission.Duplicate;
+            }
+            if (_count >= _limit)
+            {
+                Interlocked.Exchange(ref _limitReached, 1);
+                return CandidateAdmission.Full;
+            }
+            if (!_items.TryAdd(candidate, marker))
+                throw new InvalidOperationException("Нарушена атомарность bounded-набора кандидатов.");
+            Interlocked.Increment(ref _count);
+            return CandidateAdmission.Added;
         }
-
-        var count = Interlocked.Increment(ref _count);
-        if (count <= _limit) return true;
-
-        // Удаляется только элемент, который успешно добавил текущий поток. Другой
-        // поток не может владеть тем же ключом, пока эта запись присутствует.
-        if (!_items.TryRemove(candidate, out _))
-            throw new InvalidOperationException("Нарушена атомарность bounded-набора кандидатов.");
-        Interlocked.Decrement(ref _count);
-        Interlocked.Exchange(ref _limitReached, 1);
-        return false;
     }
+
+    private enum CandidateAdmission { Added, Duplicate, Full }
 
     /// <summary>Точное число сохранённых уникальных кандидатов после завершения producers.</summary>
     internal int Count => Volatile.Read(ref _count);

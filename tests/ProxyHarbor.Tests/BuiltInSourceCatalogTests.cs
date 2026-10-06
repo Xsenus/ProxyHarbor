@@ -8,14 +8,29 @@ namespace ProxyHarbor.Tests;
 public sealed class BuiltInSourceCatalogTests
 {
     [Fact]
+    public void OctoberSourcesUseDocumentedAggregatePathsAndLiveLitportBranch()
+    {
+        string[] publishers = ["Litport", "Maximilian Feix", "ProxyWhirl"];
+        foreach (var publisher in publishers)
+        {
+            var feeds = BuiltInSourceCatalog.Sources.Where(source => source.Provider == publisher).ToArray();
+            Assert.Equal(4, feeds.Length);
+            Assert.Equal(Enum.GetValues<ProxyProtocol>(), feeds.Select(source => source.Protocol));
+            Assert.All(feeds, source => Assert.EndsWith(".txt", source.Url, StringComparison.Ordinal));
+        }
+        Assert.All(BuiltInSourceCatalog.Sources.Where(source => source.Provider == "Litport"), source =>
+            Assert.Contains("/free-proxy-list/live/proxies/", source.Url, StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void CatalogContainsExpectedUniqueFeedsAndProviders()
     {
-        Assert.Equal(543, BuiltInSourceCatalog.Sources.Count);
-        Assert.Equal(543, BuiltInSourceCatalog.Sources.Select(x => x.Url).Distinct(StringComparer.OrdinalIgnoreCase).Count());
-        Assert.Equal(283, BuiltInSourceCatalog.Sources.Select(x => x.Provider).Distinct(StringComparer.OrdinalIgnoreCase).Count());
-        Assert.Equal(283, BuiltInSourceCatalog.Sources.Select(x => x.ProviderIdentity).Distinct(StringComparer.Ordinal).Count());
-        Assert.Equal(283, BuiltInSourceCatalog.ProviderCount);
-        Assert.Equal(Enumerable.Range(1, 543), BuiltInSourceCatalog.Sources.Select(x => x.Rank));
+        Assert.Equal(547, BuiltInSourceCatalog.Sources.Count);
+        Assert.Equal(547, BuiltInSourceCatalog.Sources.Select(x => x.Url).Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        Assert.Equal(281, BuiltInSourceCatalog.Sources.Select(x => x.Provider).Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        Assert.Equal(281, BuiltInSourceCatalog.Sources.Select(x => x.ProviderIdentity).Distinct(StringComparer.Ordinal).Count());
+        Assert.Equal(281, BuiltInSourceCatalog.ProviderCount);
+        Assert.Equal(Enumerable.Range(1, 547), BuiltInSourceCatalog.Sources.Select(x => x.Rank));
     }
 
     [Fact]
@@ -23,6 +38,14 @@ public sealed class BuiltInSourceCatalogTests
     {
         string[] retiredUrls =
         [
+            "https://raw.githubusercontent.com/Akshay7273/ProxyMan-free-proxy-list/main/protocols/http.txt",
+            "https://raw.githubusercontent.com/Akshay7273/ProxyMan-free-proxy-list/main/protocols/socks4.txt",
+            "https://raw.githubusercontent.com/Akshay7273/ProxyMan-free-proxy-list/main/protocols/socks5.txt",
+            "https://raw.githubusercontent.com/iamthebestm85/Proxy-Scraper-And-Checker/main/proxy.txt",
+            "https://raw.githubusercontent.com/just-not-google/full-free-proxy/main/http.txt",
+            "https://raw.githubusercontent.com/Allaux/fresh-proxy-list/main/http.txt",
+            "https://raw.githubusercontent.com/ProTechEx/PROXY-List/master/http.txt",
+            "https://raw.githubusercontent.com/hproxy-com/free-proxy-list/main/by-country/DZ.txt",
             "https://raw.githubusercontent.com/gproxynet/free-proxy-list/main/http.txt",
             "https://raw.githubusercontent.com/lanzm/MetaFetch/master/list.txt",
             "https://raw.githubusercontent.com/KhaiNguyenDuc/proxy-generator/main/proxies.txt",
@@ -53,22 +76,23 @@ public sealed class BuiltInSourceCatalogTests
             source.Name.StartsWith("HProxy country ", StringComparison.Ordinal) ||
             source.Name.StartsWith("Proxifly country ", StringComparison.Ordinal)).ToArray();
 
-        Assert.Equal(96, feeds.Length);
+        Assert.Equal(95, feeds.Length);
         Assert.All(feeds, source => Assert.True(
             source.Url.Contains("/countries/", StringComparison.Ordinal) ||
             source.Url.Contains("/by-country/", StringComparison.Ordinal)));
         Assert.DoesNotContain(feeds, source => source.Name is
             "Proxifly country MD" or "Proxifly country UZ" or
-            "Proxifly country CY" or "Proxifly country LU");
+            "Proxifly country CY" or "Proxifly country LU" or "HProxy country DZ");
     }
 
     [Fact]
-    public void IndependentExpansionAddsExactlyTwoHundredProviders()
+    public void ExpansionRetainsPublishedProviderFeeds()
     {
-        var feeds = BuiltInSourceCatalog.Sources.Skip(343).ToArray();
+        // Four retired core feeds and four retired expansion feeds are excluded.
+        var feeds = BuiltInSourceCatalog.Sources.Skip(351).ToArray();
 
-        Assert.Equal(200, feeds.Length);
-        Assert.Equal(200, feeds.Select(source => source.ProviderIdentity).Distinct(StringComparer.Ordinal).Count());
+        Assert.Equal(196, feeds.Length);
+        Assert.Equal(196, feeds.Select(source => source.ProviderIdentity).Distinct(StringComparer.Ordinal).Count());
     }
 
     [Fact]

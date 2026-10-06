@@ -7,6 +7,34 @@ namespace ProxyHarbor.Tests;
 public sealed class BoundedProxyCandidateSetTests
 {
     [Fact]
+    public void CursorAdmissionDistinguishesConfirmedDuplicateFromQuotaRejection()
+    {
+        var candidates = new BoundedProxyCandidateSet(1);
+        var retained = ProxyCandidateKey.Parse("8.8.8.8", 80, ProxyProtocol.Http);
+        var refused = ProxyCandidateKey.Parse("1.1.1.1", 80, ProxyProtocol.Http);
+        Assert.True(candidates.TryAccept(retained));
+        Assert.False(candidates.TryAccept(refused));
+        Assert.True(candidates.TryAccept(retained, preferred: true));
+        Assert.True(Assert.Single(candidates.ImportItems).Preferred);
+        Assert.Equal(1, candidates.Count);
+    }
+
+    [Fact]
+    public void EveryParallelCursorAcknowledgementRemainsInImportSet()
+    {
+        var candidates = new BoundedProxyCandidateSet(50);
+        var acknowledged = new System.Collections.Concurrent.ConcurrentBag<ProxyCandidateKey>();
+        Parallel.For(0, 10_000, index =>
+        {
+            var key = ProxyCandidateKey.Parse($"11.0.0.{index % 200 + 1}", 80, ProxyProtocol.Http);
+            if (candidates.TryAccept(key)) acknowledged.Add(key);
+        });
+        var retained = candidates.Items.Select(item => ProxyCandidateKey.Parse(item.Host, item.Port, item.Protocol)).ToHashSet();
+        Assert.Equal(50, retained.Count);
+        Assert.All(acknowledged, key => Assert.Contains(key, retained));
+    }
+
+    [Fact]
     public void ExactCapacityAndDuplicatesDoNotReportTruncation()
     {
         var candidates = new BoundedProxyCandidateSet(2);

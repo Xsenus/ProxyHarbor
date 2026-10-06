@@ -37,7 +37,17 @@ public static class DatabaseSeeder
             ["https://www.vpngate.net/api/iphone/"] =
                 "https://raw.githubusercontent.com/9xN/auto-ovpn/main/json/data.json",
             ["https://raw.githubusercontent.com/9xN/auto-ovpn/main/configs/server_0_JP.ovpn"] =
-                "https://raw.githubusercontent.com/9xN/auto-ovpn/main/json/data.json"
+                "https://raw.githubusercontent.com/9xN/auto-ovpn/main/json/data.json",
+            ["https://raw.githubusercontent.com/nukcrow/black-crow/main/sub/protocols/vless.txt"] =
+                "https://raw.githubusercontent.com/nukcrow/black-crow/main/sub/general/vless.txt",
+            ["https://raw.githubusercontent.com/nukcrow/black-crow/main/sub/protocols/vmess.txt"] =
+                "https://raw.githubusercontent.com/nukcrow/black-crow/main/sub/general/vmess.txt",
+            ["https://raw.githubusercontent.com/nukcrow/black-crow/main/sub/protocols/ss.txt"] =
+                "https://raw.githubusercontent.com/nukcrow/black-crow/main/sub/general/ss.txt",
+            ["https://raw.githubusercontent.com/nukcrow/black-crow/main/sub/protocols/trojan.txt"] =
+                "https://raw.githubusercontent.com/nukcrow/black-crow/main/sub/general/trojan.txt",
+            ["https://raw.githubusercontent.com/nukcrow/black-crow/main/sub/protocols/hysteria2.txt"] =
+                "https://raw.githubusercontent.com/nukcrow/black-crow/main/sub/general/all_configs.txt"
         };
 
     /// <summary>Добавляет недостающие feed'ы и обновляет их метаданные, сохраняя выбор Enabled/Disabled.</summary>
@@ -165,6 +175,16 @@ public static class DatabaseSeeder
         await db.Database.MigrateAsync(cancellationToken);
         var legacyUrls = new HashSet<string>(StringComparer.Ordinal)
         {
+            // October audit: four unavailable repositories, empty ProxyMan exports,
+            // and a removed HProxy country file. Other custom URLs remain untouched.
+            "https://raw.githubusercontent.com/Akshay7273/ProxyMan-free-proxy-list/main/protocols/http.txt",
+            "https://raw.githubusercontent.com/Akshay7273/ProxyMan-free-proxy-list/main/protocols/socks4.txt",
+            "https://raw.githubusercontent.com/Akshay7273/ProxyMan-free-proxy-list/main/protocols/socks5.txt",
+            "https://raw.githubusercontent.com/iamthebestm85/Proxy-Scraper-And-Checker/main/proxy.txt",
+            "https://raw.githubusercontent.com/just-not-google/full-free-proxy/main/http.txt",
+            "https://raw.githubusercontent.com/Allaux/fresh-proxy-list/main/http.txt",
+            "https://raw.githubusercontent.com/ProTechEx/PROXY-List/master/http.txt",
+            "https://raw.githubusercontent.com/hproxy-com/free-proxy-list/main/by-country/DZ.txt",
             "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/protocols/http/data.txt",
             "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/protocols/socks4/data.txt",
             "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/protocols/socks5/data.txt",
@@ -288,6 +308,28 @@ public static class DatabaseSeeder
         var existingVpnSourcesList = await db.VpnSources.ToListAsync(cancellationToken);
         var retiredVpnUrls = new HashSet<string>(StringComparer.Ordinal)
         {
+            "https://raw.githubusercontent.com/alexantSWE/V2ray-Config/main/Splitted-By-Protocol/ss.txt",
+            "https://raw.githubusercontent.com/alexantSWE/V2ray-Config/main/Splitted-By-Protocol/vless.txt",
+            "https://raw.githubusercontent.com/alexantSWE/V2ray-Config/main/Splitted-By-Protocol/vmess.txt",
+            "https://raw.githubusercontent.com/alexantSWE/V2ray-Config/main/Sub1.txt",
+            "https://raw.githubusercontent.com/alexantSWE/V2ray-Config/main/Splitted-By-Protocol/trojan.txt",
+            "https://raw.githubusercontent.com/alexantSWE/V2ray-Config/main/Sub3.txt",
+            "https://raw.githubusercontent.com/alexantSWE/V2ray-Config/main/Sub2.txt",
+            "https://raw.githubusercontent.com/alexantSWE/V2ray-Config/main/Sub4.txt",
+            "https://raw.githubusercontent.com/alexantSWE/V2ray-Config/main/Sub5.txt",
+            "https://raw.githubusercontent.com/alexantSWE/V2ray-Config/main/Sub6.txt",
+            "https://raw.githubusercontent.com/alexantSWE/V2ray-Config/main/Sub7.txt",
+            "https://raw.githubusercontent.com/alexantSWE/V2ray-Config/main/Sub9.txt",
+            "https://raw.githubusercontent.com/alexantSWE/V2ray-Config/main/Sub10.txt",
+            "https://raw.githubusercontent.com/alexantSWE/V2ray-Config/main/Sub8.txt",
+            "https://raw.githubusercontent.com/alexantSWE/V2ray-Config/main/Sub11.txt",
+            "https://raw.githubusercontent.com/alexantSWE/V2ray-Config/main/Sub12.txt",
+            "https://raw.githubusercontent.com/alexantSWE/V2ray-Config/main/Sub13.txt",
+            "https://raw.githubusercontent.com/alexantSWE/V2ray-Config/main/Sub14.txt",
+            "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/country/UZ/v2ray-base64-0001.txt",
+            "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/country/MD/v2ray-base64-0001.txt",
+            "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/country/DK/v2ray-base64-0001.txt",
+            "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/country/MO/v2ray-base64-0001.txt",
             "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/all-verified/v2ray-base64-0009.txt",
             "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/country/AF/v2ray-base64-0001.txt",
             "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/country/MU/v2ray-base64-0001.txt",

@@ -53,7 +53,7 @@ sequenceDiagram
 
 ### Каталог
 
-Встроенный каталог компилируется в приложение и содержит 543 proxy-feed от 283 независимых provider identities. GitHub raw feed считается принадлежащим owner репозитория; остальные — DNS hostname. Startup seed синхронизирует канонические URL, protocol, name и priority, сохраняя операторский `Enabled`, и удаляет только явно распознаваемые ранее встроенные нестабильные endpoint.
+Встроенный каталог компилируется в приложение и содержит 547 proxy-feed от 281 технической origin identity. GitHub raw feed считается принадлежащим owner репозитория; остальные — DNS hostname. Startup seed синхронизирует канонические URL, protocol, name и priority, сохраняя операторский `Enabled`, и удаляет только явно распознаваемые ранее встроенные нестабильные endpoint.
 
 Управляемые платные provider'ы находятся рядом с каталогом, но credential хранится в отдельной таблице как Data Protection ciphertext и не экспортируется в прикладной backup. В строке источника остаётся только безопасный базовый URL без query key. Collector сначала обрабатывает платную фазу, затем публичную: платный feed не может быть вытеснен общим candidate limit. Такие кандидаты получают одноразовый marker немедленной validation; queue claim выбирает marker до обычного `status → due time` порядка и после результата возвращает строку к штатному расписанию.
 
@@ -78,7 +78,7 @@ Parser принимает только bounded token:
 
 Hostname-прокси, private/loopback/link-local/documentation/benchmark/special-use адреса, port вне `1..65535`, неоднозначный decimal IPv4 и endpoint внутри большего identifier отклоняются. Компактный value-key хранит IP как два `ulong`, protocol/port/family как value fields; строка создаётся только перед persistence.
 
-`MaxProxiesPerSource` ограничивает один feed, `MaxCandidatesPerRun` — общий набор. Флаги `LastResultTruncated`, `SourcesTruncated` и `CandidateLimitReached` делают потерю полноты наблюдаемой.
+`MaxProxiesPerSource` ограничивает порцию одного feed за цикл, `MaxCandidatesPerRun` — общий набор. `ProxySourceImportStates` хранит immutable snapshot страниц канонических кандидатов и подтверждённый cursor. Текущий HTTP body продолжает проверять health, но не сбрасывает pending-хвост; `304` также позволяет читать следующую страницу. Cursor продвигается после bulk commit, а при отказе общей квоты остаётся на первом непринятом кандидате. Fairness использует последний подтверждённый прогресс внутри отдельно приоритетной платной и публичной фаз. Сжатый cache имеет ограничение 512 МиБ суммарно, SHA-256 и bounded decompression; завершённые payload удаляются. Cache отделён от `Sources`, поэтому обычный source-list не загружает большие binary payload. Флаги `LastResultTruncated`, `SourcesTruncated` и `CandidateLimitReached` сохраняют наблюдаемость лимита текущего цикла.
 
 ## Validation pipeline
 
