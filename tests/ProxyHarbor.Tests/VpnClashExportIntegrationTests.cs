@@ -1,7 +1,10 @@
+using System.Data.Common;
 using System.Security.Claims;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
+using Npgsql;
 using ProxyHarbor.Api;
 using ProxyHarbor.Api.Controllers;
 using ProxyHarbor.Domain;
@@ -13,6 +16,38 @@ namespace ProxyHarbor.Tests;
 [Collection(PostgresIntegrationGroup.Name)]
 public sealed class VpnClashExportIntegrationTests
 {
+    [Fact, Trait("Category", "PostgresIntegration")]
+    public async Task EmptyClashCatalogReturnsNotFoundWithProductionRetryStrategy()
+    {
+        await using var database = await SnapshotDatabase.CreateAsync();
+        if (database is null) return;
+        var result = Assert.IsType<ObjectResult>(await Controller(database, false).Export("clash"));
+        Assert.Equal(404, result.StatusCode);
+    }
+
+    [Fact, Trait("Category", "PostgresIntegration")]
+    public async Task TransientPageFailureRetriesTheWholeReadOnlySnapshotBeforeReturningYaml()
+    {
+        await using var database = await SnapshotDatabase.CreateAsync();
+        if (database is null) return;
+        await using (var db = database.Factory.CreateDbContext())
+        {
+            var source = Source();
+            db.VpnSources.Add(source);
+            db.VpnEndpoints.Add(Endpoint(source, "proxies: [{type: anytls, server: 8.8.8.8, port: 443, password: published}]"));
+            await db.SaveChangesAsync();
+        }
+        var failure = new TransientPageFailure();
+        var controller = Controller(database, true, failure);
+        var file = Assert.IsType<FileContentResult>(await controller.Export("clash", limit: 1));
+        Assert.Equal(2, failure.CountTransactions.Count);
+        Assert.NotSame(failure.CountTransactions[0], failure.CountTransactions[1]);
+        Assert.True(failure.Injected);
+        Assert.Single(VpnFeedParser.Parse(System.Text.Encoding.UTF8.GetString(file.FileContents), VpnProtocol.Vless));
+        Assert.Equal("1", controller.Response.Headers["X-Catalog-Total"]);
+        Assert.Equal("1", controller.Response.Headers["X-Export-Profiles"]);
+    }
+
     [Theory, Trait("Category", "PostgresIntegration")]
     [InlineData(false, 10)]
     [InlineData(true, 35)]
@@ -155,8 +190,45 @@ public sealed class VpnClashExportIntegrationTests
         };
     }
 
-    private static VpnController Controller(SnapshotDatabase database, bool paid) => new(database.Factory, new Access(paid))
-    { ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() } };
+    private static VpnController Controller(SnapshotDatabase database, bool paid, params DbCommandInterceptor[] interceptors)
+    {
+        using var db = database.Factory.CreateDbContext();
+        var options = new DbContextOptionsBuilder<ProxyHarborDbContext>()
+            .UseNpgsql(db.Database.GetConnectionString(), npgsql =>
+                npgsql.EnableRetryOnFailure(3, TimeSpan.FromSeconds(2), null))
+            .AddInterceptors(interceptors).Options;
+        var factory = new ProxySourceImportStoreIntegrationTests.SnapshotDbFactory(options);
+        using var retryingDb = factory.CreateDbContext();
+        Assert.True(retryingDb.Database.CreateExecutionStrategy().RetriesOnFailure);
+        return new VpnController(factory, new Access(paid))
+        { ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() } };
+    }
+
+    private sealed class TransientPageFailure : DbCommandInterceptor
+    {
+        internal List<DbTransaction> CountTransactions { get; } = [];
+        internal bool Injected { get; private set; }
+
+        public override async ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command, CommandEventData eventData, InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            if (!command.CommandText.Contains("\"VpnEndpoints\"", StringComparison.Ordinal)) return result;
+            Assert.NotNull(command.Transaction);
+            Assert.Equal(System.Data.IsolationLevel.RepeatableRead, command.Transaction.IsolationLevel);
+            await using var readOnly = new NpgsqlCommand("SHOW transaction_read_only",
+                (NpgsqlConnection)command.Connection!, (NpgsqlTransaction)command.Transaction);
+            Assert.Equal("on", await readOnly.ExecuteScalarAsync(cancellationToken));
+            if (command.CommandText.Contains("count(*)", StringComparison.Ordinal))
+                CountTransactions.Add(command.Transaction);
+            else if (!Injected)
+            {
+                Injected = true;
+                throw new PostgresException("Injected serialization failure", "ERROR", "ERROR", "40001");
+            }
+            return result;
+        }
+    }
 
     private sealed class Access(bool paid) : IFreeExportAccessService
     {

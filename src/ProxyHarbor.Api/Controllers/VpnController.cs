@@ -206,7 +206,8 @@ public sealed class VpnController(
         {
             using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(token);
             lifetime.CancelAfter(TimeSpan.FromMinutes(1));
-            return await ExportClashSnapshot(db, protocol, countries, limit, freshAfter, lifetime.Token);
+            return await BufferedReadSnapshot.ExecuteAsync(db,
+                readToken => ExportClashSnapshot(db, protocol, countries, limit, freshAfter, readToken), lifetime.Token);
         }
         catch (OperationCanceledException) when (!token.IsCancellationRequested)
         {
@@ -218,8 +219,6 @@ public sealed class VpnController(
     private async Task<IActionResult> ExportClashSnapshot(ProxyHarborDbContext db, VpnProtocol? protocol,
         string[] countries, int limit, DateTimeOffset freshAfter, CancellationToken token)
     {
-        await using var snapshot = db.Database.IsRelational()
-            ? await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.RepeatableRead, token) : null;
         if (db.Database.IsNpgsql()) await db.Database.ExecuteSqlRawAsync("SET TRANSACTION READ ONLY", token);
         var eligible = db.VpnEndpoints.AsNoTracking().Where(x =>
             x.Status == VpnEndpointStatus.Reachable && x.LastCheckedAt >= freshAfter &&
