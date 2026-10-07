@@ -230,6 +230,14 @@ public sealed class SourceApiCaptureSafetyTests
     [InlineData(true, 2)]
     [InlineData(false, 3)]
     [InlineData(true, 3)]
+    [InlineData(false, 4)]
+    [InlineData(true, 4)]
+    [InlineData(false, 5)]
+    [InlineData(true, 5)]
+    [InlineData(false, 6)]
+    [InlineData(true, 6)]
+    [InlineData(false, 7)]
+    [InlineData(true, 7)]
     public async Task GenericTransportCannotRequestSearchApiDirectlyOrThroughRedirect(bool redirect, int provider)
     {
         var apiUrl = provider switch
@@ -237,6 +245,10 @@ public sealed class SourceApiCaptureSafetyTests
             1 => ProxiwarePublicApi.Url,
             2 => RoundProxiesPublicApi.Url,
             3 => RoundProxiesPublicApi.Url.Replace("/api/get-free-proxies/", "/api%2Fget-free-proxies/", StringComparison.Ordinal),
+            4 => Socks5ProxiesPublicApi.Url,
+            5 => Socks5ProxiesPublicApi.Url.Replace("/api/proxies", "/api%2Fproxies", StringComparison.Ordinal),
+            6 => "https://api.socks5proxies.com/api/proxies/export/csv?limit=5000",
+            7 => "https://api.socks5proxies.com/api/v1/proxies?limit=100",
             _ => FreeProxyDbFeedFetcher.Url
         };
         using var handler = new ApiRedirectHandler(apiUrl);
@@ -284,7 +296,8 @@ public sealed class SourceApiCaptureSafetyTests
             Requests++;
             if (FreeProxyDbPageCapture.IsSearchUrl(request.RequestUri!.AbsoluteUri) ||
                 ProxiwarePublicApi.IsOriginUrl(request.RequestUri.AbsoluteUri) ||
-                RoundProxiesPublicApi.IsApiUrl(request.RequestUri.AbsoluteUri)) ApiRequested = true;
+                RoundProxiesPublicApi.IsApiUrl(request.RequestUri.AbsoluteUri) ||
+                Socks5ProxiesPublicApi.IsApiUrl(request.RequestUri.AbsoluteUri)) ApiRequested = true;
             var response = new HttpResponseMessage(System.Net.HttpStatusCode.Redirect);
             response.Headers.Location = new Uri(apiUrl);
             return Task.FromResult(response);

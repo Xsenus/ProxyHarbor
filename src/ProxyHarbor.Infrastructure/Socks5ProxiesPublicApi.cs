@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text.Json;
 
@@ -11,6 +12,24 @@ internal static class Socks5ProxiesPublicApi
     internal const string Origin = "https://api.socks5proxies.com";
     internal const int PageSize = 100;
     internal static bool Supports(string url) => string.Equals(url, Url, StringComparison.Ordinal);
+    internal static bool IsApiUrl(string url) => Uri.TryCreate(url, UriKind.Absolute, out var uri) &&
+        uri.Host.TrimEnd('.').Equals("api.socks5proxies.com", StringComparison.OrdinalIgnoreCase) &&
+        IsListPath(Uri.UnescapeDataString(uri.AbsolutePath).TrimEnd('/'));
+
+    private static bool IsListPath(string path) =>
+        path.Equals("/api/proxies", StringComparison.OrdinalIgnoreCase) || path.StartsWith("/api/proxies/", StringComparison.OrdinalIgnoreCase) ||
+        path.Equals("/api/v1/proxies", StringComparison.OrdinalIgnoreCase) || path.StartsWith("/api/v1/proxies/", StringComparison.OrdinalIgnoreCase);
+
+    internal static DateTimeOffset? RateLimitDeadline(HttpResponseHeaders headers, DateTimeOffset now, DateTimeOffset? retryAfter)
+    {
+        if (!headers.TryGetValues("X-RateLimit-Reset", out var values)) return retryAfter;
+        var raw = values.Take(2).ToArray();
+        if (raw.Length != 1 || raw[0].Length > 12 ||
+            !long.TryParse(raw[0], NumberStyles.None, CultureInfo.InvariantCulture, out var seconds) ||
+            seconds < 0 || seconds > DateTimeOffset.MaxValue.ToUnixTimeSeconds()) return retryAfter;
+        var reset = DateTimeOffset.FromUnixTimeSeconds(seconds);
+        return reset > now && (retryAfter is null || reset > retryAfter) ? reset : retryAfter;
+    }
 
     internal static (long Total, JsonElement Rows) InspectPage(JsonElement root, int pageIndex)
     {

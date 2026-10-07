@@ -45,6 +45,8 @@ internal static class SourceHttpFetcher
                     var now = DateTimeOffset.UtcNow;
                     var retryAt = response.Headers.RetryAfter?.Date ??
                         (response.Headers.RetryAfter?.Delta is { } delta ? now.Add(delta) : (DateTimeOffset?)null);
+                    if (sourceApiRequest && Socks5ProxiesPublicApi.IsApiUrl(url))
+                        retryAt = Socks5ProxiesPublicApi.RateLimitDeadline(response.Headers, now, retryAt);
                     if ((int)response.StatusCode == 429 || retryAt > now)
                         throw new SourceRateLimitException(retryAt > now ? retryAt.Value : now.AddHours(1), response.StatusCode);
                 }

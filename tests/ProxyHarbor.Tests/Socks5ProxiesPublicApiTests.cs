@@ -10,6 +10,31 @@ public sealed class Socks5ProxiesPublicApiTests
     private static readonly string[] MixedProtocols = ["socks4", "socks5"];
 
     [Theory]
+    [InlineData("invalid")]
+    [InlineData("-1")]
+    [InlineData("999999999999")]
+    [InlineData("0")]
+    public void InvalidAndExpiredQuotaHeadersCannotShortenRetryAfter(string reset)
+    {
+        using var response = new HttpResponseMessage();
+        response.Headers.TryAddWithoutValidation("X-RateLimit-Reset", reset);
+        var now = DateTimeOffset.UtcNow;
+        Assert.Equal(now.AddHours(1), Socks5ProxiesPublicApi.RateLimitDeadline(response.Headers, now, now.AddHours(1)));
+    }
+
+    [Fact]
+    public void ProviderQuotaResetAndRetryAfterPreserveTheLaterDeadline()
+    {
+        using var response = new HttpResponseMessage();
+        var now = DateTimeOffset.UtcNow;
+        var reset = DateTimeOffset.FromUnixTimeSeconds(now.AddHours(2).ToUnixTimeSeconds());
+        response.Headers.TryAddWithoutValidation("X-RateLimit-Reset", reset.ToUnixTimeSeconds().ToString(System.Globalization.CultureInfo.InvariantCulture));
+        Assert.Equal(reset, Socks5ProxiesPublicApi.RateLimitDeadline(response.Headers, now, null));
+        Assert.Equal(reset, Socks5ProxiesPublicApi.RateLimitDeadline(response.Headers, now, now.AddHours(1)));
+        Assert.Equal(now.AddHours(3), Socks5ProxiesPublicApi.RateLimitDeadline(response.Headers, now, now.AddHours(3)));
+    }
+
+    [Theory]
     [InlineData("{\"data\":[],\"meta\":{\"total\":0,\"limit\":25,\"offset\":0}}")]
     [InlineData("{\"data\":[],\"meta\":{\"total\":0,\"limit\":100,\"offset\":100}}")]
     [InlineData("{\"data\":[],\"meta\":{\"total\":-1,\"limit\":100,\"offset\":0}}")]
