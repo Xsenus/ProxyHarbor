@@ -12,7 +12,7 @@ internal sealed class FreeProxyDbSourceApiFetcher(IDbContextFactory<ProxyHarborD
         int? maximumNetworkPages = null)
     {
         owner.EnsureSupported();
-        var pageBudget = maximumNetworkPages ?? (ProxiwarePublicApi.Supports(owner.Url) ? 20 : 4);
+        var pageBudget = maximumNetworkPages ?? (ProxiwarePublicApi.Supports(owner.Url) || RoundProxiesPublicApi.Supports(owner.Url) ? 20 : 4);
         var store = new SourceApiCaptureStore(dbFactory);
         var checkpoint = await store.LoadAsync(owner, token);
         var capture = checkpoint?.Capture ?? new FreeProxyDbPageCapture();
@@ -119,6 +119,7 @@ internal sealed record SourceApiFetchResult(SourceFetchResult Fetch, SourceApiCa
 {
     internal DateTimeOffset NextRefreshAt => ProxiwarePublicApi.Supports(Checkpoint.Owner.Url)
         ? Checkpoint.Capture.Pages[^1].CapturedAt.AddMinutes(10)
+        : RoundProxiesPublicApi.Supports(Checkpoint.Owner.Url) ? Checkpoint.Capture.Pages[^1].CapturedAt.AddMinutes(5)
         : Checkpoint.Capture.Pages[^1].CapturedAt.AddHours(6);
 }
 

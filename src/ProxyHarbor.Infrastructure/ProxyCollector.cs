@@ -620,7 +620,7 @@ public sealed class ProxyCollector(
         CancellationToken token,
         Func<TimeSpan, CancellationToken, Task>? delayAsync = null)
     {
-        if (FreeProxyDbPageCapture.IsSearchUrl(url) || ProxiwarePublicApi.IsOriginUrl(url))
+        if (FreeProxyDbPageCapture.IsSearchUrl(url) || ProxiwarePublicApi.IsOriginUrl(url) || RoundProxiesPublicApi.IsApiUrl(url))
             throw new InvalidDataException("Постраничный API требует канонический URL зарегистрированного источника и сохраняемую очередь страниц.");
         var htmlList = MyProxyHtmlFeedAdapter.Supports(url);
         var result = await SourceHttpFetcher.FetchAsync(
@@ -966,6 +966,7 @@ internal static class SourceFetchSchedule
         // Public search documents per-IP/record quotas without numeric caps.
         // Keep successful full refreshes conservative; cached imports continue.
         if (ProxiwarePublicApi.Supports(url)) return fetchedAt.AddMinutes(10);
+        if (RoundProxiesPublicApi.Supports(url)) return fetchedAt.AddMinutes(5);
         if (FreeProxyDbPageCapture.Supports(url)) return fetchedAt.AddHours(6);
         if (MyProxyHtmlFeedAdapter.Supports(url)) return fetchedAt.AddHours(1);
         if (Uri.TryCreate(url, UriKind.Absolute, out var uri) &&
