@@ -16,6 +16,7 @@ internal sealed class PostgresAdvisoryLock : IAsyncDisposable
     internal const long VpnMutationKey = 0x50524856504E4D08;
     internal const long ProxyValidationClaimKey = 0x5052485056434C09;
     internal const long FreeProxyDbApiKey = 0x505248415049480A;
+    internal const long ProxiwareApiKey = 0x505248415049480B;
     internal const string CleanupFailureDataKey = "ProxyHarbor.AdvisoryLockCleanupFailure";
     private static long _cleanupFailures;
     private readonly NpgsqlConnection _connection;

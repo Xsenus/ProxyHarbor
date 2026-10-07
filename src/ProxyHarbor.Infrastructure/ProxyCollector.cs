@@ -324,7 +324,7 @@ public sealed class ProxyCollector(
             try
             {
                 importState = await importStore.LoadAsync(source, token);
-                var apiOwner = FreeProxyDbFeedFetcher.Supports(source.Url) ? SourceApiCaptureOwner.From(source) : null;
+                var apiOwner = FreeProxyDbPageCapture.SupportsHttp(source.Url) ? SourceApiCaptureOwner.From(source) : null;
                 var apiCheckpoint = apiOwner is null ? null : await new SourceApiCaptureStore(dbFactory).LoadAsync(apiOwner, token);
                 var apiComplete = apiCheckpoint?.Capture.Inspect(MaxSourceBytes).Complete == true;
                 if (!apiComplete && !SourceFetchSchedule.IsDue(source.NextFetchAt, collectionStartedAt, forceAllSources, source.Url))
@@ -620,8 +620,8 @@ public sealed class ProxyCollector(
         CancellationToken token,
         Func<TimeSpan, CancellationToken, Task>? delayAsync = null)
     {
-        if (FreeProxyDbPageCapture.IsSearchUrl(url))
-            throw new InvalidDataException("FreeProxyDB Search требует канонический URL зарегистрированного источника и сохраняемую очередь страниц.");
+        if (FreeProxyDbPageCapture.IsSearchUrl(url) || ProxiwarePublicApi.IsOriginUrl(url))
+            throw new InvalidDataException("Постраничный API требует канонический URL зарегистрированного источника и сохраняемую очередь страниц.");
         var htmlList = MyProxyHtmlFeedAdapter.Supports(url);
         var result = await SourceHttpFetcher.FetchAsync(
             client,
@@ -965,6 +965,7 @@ internal static class SourceFetchSchedule
     {
         // Public search documents per-IP/record quotas without numeric caps.
         // Keep successful full refreshes conservative; cached imports continue.
+        if (ProxiwarePublicApi.Supports(url)) return fetchedAt.AddMinutes(10);
         if (FreeProxyDbPageCapture.Supports(url)) return fetchedAt.AddHours(6);
         if (MyProxyHtmlFeedAdapter.Supports(url)) return fetchedAt.AddHours(1);
         if (Uri.TryCreate(url, UriKind.Absolute, out var uri) &&

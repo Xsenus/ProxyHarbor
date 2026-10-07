@@ -22,7 +22,7 @@ internal sealed class SourceApiCaptureStore(
             try
             {
                 var capture = FreeProxyDbPageCaptureCodec.Decode(state.Payload, state.PayloadHash, owner.MaximumBytes);
-                if (capture.Inspect(owner.MaximumBytes).Complete == state.Complete)
+                if (capture.Inspect(owner.MaximumBytes, owner.Url).Complete == state.Complete)
                     return new(state.Id, state.Version, owner, capture);
             }
             catch (Exception exception) when (exception is InvalidDataException or JsonException) { }
@@ -44,9 +44,9 @@ internal sealed class SourceApiCaptureStore(
         if (capture.Pages.Count != previousCount + 1 ||
             (expected is not null && !expected.Capture.Pages.SequenceEqual(capture.Pages.Take(previousCount))))
             throw new InvalidDataException("API checkpoint must extend the committed pages by one validated page.");
+        var complete = capture.Inspect(owner.MaximumBytes, owner.Url).Complete;
         var payload = FreeProxyDbPageCaptureCodec.Encode(capture, owner.MaximumBytes);
         var hash = SHA256.HashData(payload);
-        var complete = capture.Inspect(owner.MaximumBytes).Complete;
         // Stable tokens make an execution-strategy replay after a lost commit ACK idempotent.
         var id = expected?.Id ?? Guid.NewGuid();
         var version = Guid.NewGuid();
@@ -127,7 +127,7 @@ internal sealed record SourceApiCaptureOwner(Guid SourceId, bool Vpn, string Url
     internal void EnsureSupported()
     {
         if (SourceId == Guid.Empty || Protocol < 0 || Protocol > (Vpn ? 14 : 3) ||
-            !(Vpn ? FreeProxyDbPageCapture.SupportsVpn(Url) : FreeProxyDbFeedFetcher.Supports(Url)))
+            !(Vpn ? FreeProxyDbPageCapture.SupportsVpn(Url) : FreeProxyDbPageCapture.SupportsHttp(Url)))
             throw new InvalidDataException("Unsupported public API source configuration.");
     }
 }

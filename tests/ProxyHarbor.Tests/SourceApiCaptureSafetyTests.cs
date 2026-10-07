@@ -222,14 +222,17 @@ public sealed class SourceApiCaptureSafetyTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task GenericTransportCannotRequestSearchApiDirectlyOrThroughRedirect(bool redirect)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task GenericTransportCannotRequestSearchApiDirectlyOrThroughRedirect(bool redirect, bool proxiware)
     {
-        using var handler = new ApiRedirectHandler();
+        var apiUrl = proxiware ? ProxiwarePublicApi.Url : FreeProxyDbFeedFetcher.Url;
+        using var handler = new ApiRedirectHandler(apiUrl);
         using var client = new HttpClient(handler);
         await Assert.ThrowsAsync<InvalidDataException>(() => SourceHttpFetcher.FetchAsync(client,
-            redirect ? "https://1.1.1.1/alias" : FreeProxyDbFeedFetcher.Url,
+            redirect ? "https://1.1.1.1/alias" : apiUrl,
             null, null, 100_000, 2, 3, CancellationToken.None));
         Assert.Equal(redirect ? 1 : 0, handler.Requests);
         Assert.False(handler.ApiRequested);
@@ -262,16 +265,17 @@ public sealed class SourceApiCaptureSafetyTests
         }
     }
 
-    private sealed class ApiRedirectHandler : HttpMessageHandler
+    private sealed class ApiRedirectHandler(string apiUrl) : HttpMessageHandler
     {
         internal int Requests;
         internal bool ApiRequested;
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
         {
             Requests++;
-            if (FreeProxyDbPageCapture.IsSearchUrl(request.RequestUri!.AbsoluteUri)) ApiRequested = true;
+            if (FreeProxyDbPageCapture.IsSearchUrl(request.RequestUri!.AbsoluteUri) ||
+                ProxiwarePublicApi.IsOriginUrl(request.RequestUri.AbsoluteUri)) ApiRequested = true;
             var response = new HttpResponseMessage(System.Net.HttpStatusCode.Redirect);
-            response.Headers.Location = new Uri(FreeProxyDbFeedFetcher.Url);
+            response.Headers.Location = new Uri(apiUrl);
             return Task.FromResult(response);
         }
     }

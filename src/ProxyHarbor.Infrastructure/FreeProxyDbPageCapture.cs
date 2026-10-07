@@ -23,21 +23,24 @@ internal sealed class FreeProxyDbPageCapture
     internal IReadOnlyList<FreeProxyDbCapturedPage> Pages => Array.AsReadOnly(_pages);
 
     internal static bool Supports(string url) =>
-        FreeProxyDbFeedFetcher.Supports(url) || SupportsVpn(url);
+        SupportsHttp(url) || SupportsVpn(url);
+    internal static bool SupportsHttp(string url) => FreeProxyDbFeedFetcher.Supports(url) || ProxiwarePublicApi.Supports(url);
     internal static bool SupportsVpn(string url) => string.Equals(url, VpnUrl, StringComparison.Ordinal) ||
         string.Equals(url, MtProtoUrl, StringComparison.Ordinal);
     internal static bool IsSearchUrl(string url) => Uri.TryCreate(url, UriKind.Absolute, out var uri) &&
         uri.Host.Equals("freeproxydb.com", StringComparison.OrdinalIgnoreCase) &&
         uri.AbsolutePath.TrimEnd('/').Equals("/api/proxy/search", StringComparison.Ordinal);
-    internal static bool IsApiOriginUrl(string url) => Uri.TryCreate(url, UriKind.Absolute, out var uri) &&
-        uri.Host.TrimEnd('.').Equals("freeproxydb.com", StringComparison.OrdinalIgnoreCase);
+    internal static bool IsApiOriginUrl(string url) => ProxiwarePublicApi.IsOriginUrl(url) || (Uri.TryCreate(url, UriKind.Absolute, out var uri) &&
+        uri.Host.TrimEnd('.').Equals("freeproxydb.com", StringComparison.OrdinalIgnoreCase));
 
-    internal FreeProxyDbCaptureStatus Inspect(int maximumBytes)
+    internal FreeProxyDbCaptureStatus Inspect(int maximumBytes, string? sourceUrl = null)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumBytes);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(maximumBytes, MaximumCaptureBytes);
-        var rows = new Dictionary<long, JsonElement>();
-        var traversalIds = new HashSet<long>();
+        if (sourceUrl is not null && !Supports(sourceUrl)) throw InvalidCapture();
+        bool? proxiware = sourceUrl is null ? null : ProxiwarePublicApi.Supports(sourceUrl);
+        var rows = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+        var traversalIds = new HashSet<string>(StringComparer.Ordinal);
         var pageHashes = new HashSet<string>(StringComparer.Ordinal);
         var headHashes = new HashSet<string>(StringComparer.Ordinal);
         var nextPage = 1;
@@ -59,30 +62,50 @@ internal sealed class FreeProxyDbPageCapture
             if (bytes > MaximumPageBytes || bodyBytes > maximumBytes) throw InvalidCapture();
             using var document = JsonDocument.Parse(page.Content, new JsonDocumentOptions { MaxDepth = 32 });
             var root = document.RootElement;
-            if (root.ValueKind != JsonValueKind.Object ||
-                !root.TryGetProperty("status", out var status) || status.ValueKind != JsonValueKind.Number ||
-                !status.TryGetInt32(out var code) || code != 1 ||
-                !root.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Object ||
-                !data.TryGetProperty("total_count", out var count) || count.ValueKind != JsonValueKind.Number ||
-                !count.TryGetInt64(out total) ||
-                total is < 0 or > MaximumPages * 100 ||
-                !data.TryGetProperty("data", out var pageRows) || pageRows.ValueKind != JsonValueKind.Array ||
-                pageRows.GetArrayLength() > 100)
-                throw InvalidCapture();
-            var ids = new HashSet<long>();
-            foreach (var row in pageRows.EnumerateArray())
+            if (root.ValueKind != JsonValueKind.Object) throw InvalidCapture();
+            var currentProvider = root.TryGetProperty("total_proxies", out _);
+            if (proxiware is not null && currentProvider != proxiware) throw InvalidCapture();
+            proxiware = currentProvider;
+            JsonElement pageRows;
+            if (currentProvider)
             {
-                if (row.ValueKind != JsonValueKind.Object || !row.TryGetProperty("id", out var id) ||
-                    id.ValueKind != JsonValueKind.Number || !id.TryGetInt64(out var value) || value <= 0 || !ids.Add(value))
+                if ((root.TryGetProperty("success", out var success) && success.ValueKind == JsonValueKind.False) ||
+                    (root.TryGetProperty("status", out var state) && state.ValueKind == JsonValueKind.Number &&
+                        state.TryGetInt32(out var stateCode) && stateCode == 0) ||
+                    (root.TryGetProperty("error", out var error) && error.ValueKind != JsonValueKind.Null &&
+                        (error.ValueKind != JsonValueKind.String || !string.IsNullOrEmpty(error.GetString()))))
+                    throw InvalidCapture();
+                if (root.GetProperty("total_proxies").ValueKind != JsonValueKind.Number ||
+                    !root.GetProperty("total_proxies").TryGetInt64(out total) ||
+                    total is < 0 or > MaximumPages * 100 ||
+                    !root.TryGetProperty("proxies", out pageRows) || pageRows.ValueKind != JsonValueKind.Array ||
+                    pageRows.GetArrayLength() > 100) throw InvalidCapture();
+            }
+            else
+            {
+                if (root.ValueKind != JsonValueKind.Object ||
+                    !root.TryGetProperty("status", out var status) || status.ValueKind != JsonValueKind.Number ||
+                    !status.TryGetInt32(out var code) || code != 1 ||
+                    !root.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Object ||
+                    !data.TryGetProperty("total_count", out var count) || count.ValueKind != JsonValueKind.Number ||
+                    !count.TryGetInt64(out total) ||
+                    total is < 0 or > MaximumPages * 100 ||
+                    !data.TryGetProperty("data", out pageRows) || pageRows.ValueKind != JsonValueKind.Array ||
+                    pageRows.GetArrayLength() > 100)
                     throw InvalidCapture();
             }
-            var hash = Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(ids.Order())));
+            var ids = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var row in pageRows.EnumerateArray())
+            {
+                if (!ids.Add(RecordKey(row, currentProvider))) throw InvalidCapture();
+            }
+            var hash = Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(ids.Order(StringComparer.Ordinal))));
             if (ids.Count > 0 && !(head ? headHashes : pageHashes).Add(hash)) throw InvalidCapture();
             if (ids.Count == 0 && (head ? rows.Count < total : received < total)) throw InvalidCapture();
             var overlapsTraversal = ids.Overlaps(traversalIds);
             foreach (var row in pageRows.EnumerateArray())
             {
-                var id = row.GetProperty("id").GetInt64();
+                var id = RecordKey(row, currentProvider);
                 // A reconciled head was observed later, so it supersedes captured rows.
                 rows[id] = row.Clone();
                 if (!head) traversalIds.Add(id);
@@ -134,18 +157,21 @@ internal sealed class FreeProxyDbPageCapture
         if (!Supports(url)) throw new ArgumentException("Unsupported public API URL.", nameof(url));
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumNetworkPages);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(maximumNetworkPages, 100);
-        var status = capture.Inspect(maximumBytes);
+        var status = capture.Inspect(maximumBytes, url);
         for (var request = 0; request < maximumNetworkPages && !status.Complete; request++)
         {
             token.ThrowIfCancellationRequested();
-            var pageUrl = url.Replace("page_index=1&", $"page_index={status.NextPage}&", StringComparison.Ordinal);
+            var pageUrl = ProxiwarePublicApi.Supports(url)
+                ? url.Replace("page=1&", $"page={status.NextPage}&", StringComparison.Ordinal)
+                : url.Replace("page_index=1&", $"page_index={status.NextPage}&", StringComparison.Ordinal);
             var response = await fetchPage(pageUrl, token);
             if (response.NotModified || response.Content is null) throw InvalidCapture();
             var next = capture.Append(new FreeProxyDbCapturedPage(status.NextPage,
                 status.Reconciliation, DateTimeOffset.UtcNow, response.Content), maximumBytes);
+            _ = next.Inspect(maximumBytes, url);
             await commitCheckpoint(next, token);
             capture = next;
-            status = capture.Inspect(maximumBytes);
+            status = capture.Inspect(maximumBytes, url);
         }
         if (!status.Complete) return new(capture, null, null);
         using var output = new MemoryStream();
@@ -153,10 +179,11 @@ internal sealed class FreeProxyDbPageCapture
         {
             writer.WriteStartObject();
             writer.WriteStartArray("data");
-            foreach (var row in status.Rows.OrderByDescending(item => item.Key))
+            foreach (var row in status.Rows.OrderByDescending(item => item.Key, StringComparer.Ordinal))
             {
                 token.ThrowIfCancellationRequested();
-                row.Value.WriteTo(writer);
+                if (ProxiwarePublicApi.Supports(url)) ProxiwarePublicApi.WriteRecord(writer, row.Value);
+                else row.Value.WriteTo(writer);
                 if (writer.BytesCommitted + writer.BytesPending > maximumBytes) throw InvalidCapture();
             }
             writer.WriteEndArray();
@@ -168,9 +195,18 @@ internal sealed class FreeProxyDbPageCapture
 
     private static InvalidDataException InvalidCapture() =>
         new("Сохранённые API-страницы некорректны, повторяются или превышают безопасный лимит.");
+
+    private static string RecordKey(JsonElement row, bool proxiware)
+    {
+        if (proxiware) return ProxiwarePublicApi.RecordKey(row);
+        if (row.ValueKind != JsonValueKind.Object || !row.TryGetProperty("id", out var id) ||
+            id.ValueKind != JsonValueKind.Number || !id.TryGetInt64(out var value) || value <= 0)
+            throw InvalidCapture();
+        return "f:" + value.ToString("D19", System.Globalization.CultureInfo.InvariantCulture);
+    }
 }
 
 internal sealed record FreeProxyDbCapturedPage(int PageIndex, bool Reconciliation, DateTimeOffset CapturedAt, string Content);
 internal sealed record FreeProxyDbCaptureStatus(int NextPage, bool Reconciliation, bool Complete,
-    DateTimeOffset? ObservedAt, IReadOnlyDictionary<long, JsonElement> Rows);
+    DateTimeOffset? ObservedAt, IReadOnlyDictionary<string, JsonElement> Rows);
 internal sealed record FreeProxyDbCaptureAdvance(FreeProxyDbPageCapture Capture, string? Content, DateTimeOffset? ObservedAt);
