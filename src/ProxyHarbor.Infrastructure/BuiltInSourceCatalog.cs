@@ -12,7 +12,7 @@ public static class BuiltInSourceCatalog
     public static IReadOnlyList<BuiltInSource> Sources { get; } = RankSources(
     [
         // HTTP/HTTPS и смешанные feed'ы.
-        Feed(1, "ProxyScrape V4 Mixed", "ProxyScrape", "https://api.proxyscrape.com/v4/free-proxy-list/get?request=display_proxies&proxy_format=protocolipport&format=text", ProxyProtocol.Http),
+        Feed(1, "ProxyScrape V4 Mixed", "ProxyScrape", "https://api.proxyscrape.com/v4/free-proxy-list/get?request=display_proxies&proxy_format=protocolipport&format=json&skip=0&limit=2000", ProxyProtocol.Http),
         // October discovery: documented aggregate feeds, not country/archive mirrors.
         // Litport publishes the five-minute feed on live; main is a daily snapshot.
         Feed(1001, "Litport HTTP", "Litport", "https://raw.githubusercontent.com/litportnet/free-proxy-list/live/proxies/http.txt", ProxyProtocol.Http),

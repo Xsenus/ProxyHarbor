@@ -14,6 +14,8 @@ public static class DatabaseSeeder
     private static readonly IReadOnlyDictionary<string, string> CanonicalSourceUrlReplacements =
         new Dictionary<string, string>(StringComparer.Ordinal)
         {
+            ["https://api.proxyscrape.com/v4/free-proxy-list/get?request=display_proxies&proxy_format=protocolipport&format=text"] =
+                ProxyScrapePublicApi.Url,
             ["https://raw.githubusercontent.com/TheSpeedX/PROXY-List/refs/heads/master/http.txt"] =
                 "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt",
             ["https://raw.githubusercontent.com/TheSpeedX/PROXY-List/refs/heads/master/socks4.txt"] =

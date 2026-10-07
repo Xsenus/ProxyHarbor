@@ -122,6 +122,7 @@ internal sealed record SourceApiFetchResult(SourceFetchResult Fetch, SourceApiCa
         : Socks5ProxiesPublicApi.Supports(Checkpoint.Owner.Url) ? Checkpoint.Capture.Pages[^1].CapturedAt.AddMinutes(30)
         : RoundProxiesPublicApi.Supports(Checkpoint.Owner.Url) ? Checkpoint.Capture.Pages[^1].CapturedAt.AddMinutes(5)
         : ProxoraPublicApi.Supports(Checkpoint.Owner.Url) ? Checkpoint.Capture.Pages[^1].CapturedAt.AddMinutes(5)
+        : ProxyScrapePublicApi.Supports(Checkpoint.Owner.Url) ? Checkpoint.Capture.Pages[^1].CapturedAt.AddMinutes(5)
         : Checkpoint.Capture.Pages[^1].CapturedAt.AddHours(6);
 }
 
