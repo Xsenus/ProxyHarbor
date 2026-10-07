@@ -25,6 +25,7 @@ public sealed class VpnController(
     IOptions<CollectorOptions> collectorOptions,
     TimeProvider timeProvider) : ControllerBase
 {
+    private static readonly SemaphoreSlim ClashExportConcurrencyGate = new(2, 2);
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         Converters = { new JsonStringEnumConverter() }
@@ -111,24 +112,39 @@ public sealed class VpnController(
         });
     }
 
-    /// <summary>Возвращает страны доступных VPN endpoint для фирменного фильтра.</summary>
+    /// <summary>Возвращает страны свежих VPN endpoint для URI, Clash либо обоих представлений.</summary>
     [HttpGet("countries")]
-    [OutputCache(PolicyName = PublicOutputCachePolicies.Countries)]
-    public async Task<ActionResult<IReadOnlyList<ProxyCountryDto>>> Countries(CancellationToken token)
+    [OutputCache(PolicyName = PublicOutputCachePolicies.VpnCountries)]
+    [ProducesResponseType<IReadOnlyList<ProxyCountryDto>>(StatusCodes.Status200OK)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status400BadRequest)]
+    public async Task<ActionResult<IReadOnlyList<ProxyCountryDto>>> Countries(CancellationToken token,
+        [FromQuery] string format = "uri", [FromQuery] VpnProtocol? protocol = null)
     {
+        var normalizedFormat = format.ToLowerInvariant();
+        if (normalizedFormat is not ("uri" or "clash" or "all"))
+            return BadRequest(new ProblemDetails { Title = "VPN countries поддерживает uri, clash и all.", Status = 400 });
         await using var db = await dbFactory.CreateDbContextAsync(token);
         var freshAfter = timeProvider.GetUtcNow()
             .AddMinutes(-collectorOptions.Value.VpnPublicFreshnessMinutes);
-        var rows = await db.VpnEndpoints.AsNoTracking()
-            .Where(x => x.Status == VpnEndpointStatus.Reachable && x.LastCheckedAt >= freshAfter &&
-                x.CountryCode != null && x.ConnectionUri != null)
+        var query = db.VpnEndpoints.AsNoTracking().Where(x =>
+            x.Status == VpnEndpointStatus.Reachable && x.LastCheckedAt >= freshAfter && x.CountryCode != null);
+        if (protocol.HasValue) query = query.Where(x => x.Protocol == protocol.Value);
+        query = normalizedFormat switch
+        {
+            "uri" => query.Where(x => x.ConnectionUri != null),
+            "clash" => query.Where(x => x.ClashConfiguration != null &&
+                (x.ClashConfigurationObservedAt == null || x.LastCheckedAt >= x.ClashConfigurationObservedAt)),
+            _ => query.Where(x => x.ConnectionUri != null || (x.ClashConfiguration != null &&
+                (x.ClashConfigurationObservedAt == null || x.LastCheckedAt >= x.ClashConfigurationObservedAt)))
+        };
+        var rows = await query
             .GroupBy(x => x.CountryCode!)
             .Select(group => new ProxyCountryDto(group.Key, group.Count()))
             .ToArrayAsync(token);
         return Ok(rows.OrderByDescending(x => x.Count).ThenBy(x => x.Code, StringComparer.Ordinal).ToArray());
     }
 
-    /// <summary>Экспортирует готовые VPN URI в JSON либо TXT с явным описанием тарифа.</summary>
+    /// <summary>Экспортирует готовые VPN URI в JSON/TXT либо полные Clash YAML с ограничениями тарифа.</summary>
     [HttpGet("export/{format}")]
     [EnableRateLimiting("export")]
     public async Task<IActionResult> Export(
@@ -139,13 +155,14 @@ public sealed class VpnController(
         CancellationToken token = default)
     {
         var normalizedFormat = format.ToLowerInvariant();
-        if (normalizedFormat is not ("json" or "txt"))
-            return Problem("VPN export поддерживает json и txt.", statusCode: StatusCodes.Status400BadRequest);
+        if (normalizedFormat is not ("json" or "txt" or "clash"))
+            return Problem("VPN export поддерживает json, txt и clash.", statusCode: StatusCodes.Status400BadRequest);
         if (!TryNormalizeCountries(country, out var countries)) return InvalidCountries();
         limit = Math.Clamp(limit, 1, 5_000);
         await using var db = await dbFactory.CreateDbContextAsync(token);
         var freshAfter = timeProvider.GetUtcNow()
             .AddMinutes(-collectorOptions.Value.VpnPublicFreshnessMinutes);
+        if (normalizedFormat == "clash") return await ExportClash(db, protocol, countries, limit, freshAfter, token);
         var query = db.VpnEndpoints.AsNoTracking().Where(x =>
             x.Status == VpnEndpointStatus.Reachable && x.LastCheckedAt >= freshAfter &&
             x.ConnectionUri != null && x.CountryCode != null);
@@ -175,6 +192,114 @@ public sealed class VpnController(
         if (message is not null) text.Append("# ").AppendLine(message).Append("# total: ").AppendLine(total.ToString(CultureInfo.InvariantCulture));
         foreach (var item in items) text.AppendLine(item.ConnectionUri ?? $"{item.Host}:{item.Port}");
         return File(Encoding.UTF8.GetBytes(text.ToString()), "text/plain; charset=utf-8", "vpn-configurations.txt");
+    }
+
+    private async Task<IActionResult> ExportClash(ProxyHarborDbContext db, VpnProtocol? protocol,
+        string[] countries, int limit, DateTimeOffset freshAfter, CancellationToken token)
+    {
+        if (!await ClashExportConcurrencyGate.WaitAsync(0, token))
+        {
+            Response.Headers.RetryAfter = "1";
+            return Problem("Сервис уже формирует максимально допустимое число YAML-экспортов; повторите запрос через секунду.", statusCode: 503);
+        }
+        try
+        {
+            using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(token);
+            lifetime.CancelAfter(TimeSpan.FromMinutes(1));
+            return await ExportClashSnapshot(db, protocol, countries, limit, freshAfter, lifetime.Token);
+        }
+        catch (OperationCanceledException) when (!token.IsCancellationRequested)
+        {
+            return Problem("Время формирования полного YAML истекло. Уменьшите limit или измените фильтры.", statusCode: 503);
+        }
+        finally { ClashExportConcurrencyGate.Release(); }
+    }
+
+    private async Task<IActionResult> ExportClashSnapshot(ProxyHarborDbContext db, VpnProtocol? protocol,
+        string[] countries, int limit, DateTimeOffset freshAfter, CancellationToken token)
+    {
+        await using var snapshot = db.Database.IsRelational()
+            ? await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.RepeatableRead, token) : null;
+        if (db.Database.IsNpgsql()) await db.Database.ExecuteSqlRawAsync("SET TRANSACTION READ ONLY", token);
+        var eligible = db.VpnEndpoints.AsNoTracking().Where(x =>
+            x.Status == VpnEndpointStatus.Reachable && x.LastCheckedAt >= freshAfter &&
+            x.CountryCode != null && x.ClashConfiguration != null &&
+            (x.ClashConfigurationObservedAt == null || x.LastCheckedAt >= x.ClashConfigurationObservedAt));
+        var query = eligible;
+        if (protocol.HasValue) query = query.Where(x => x.Protocol == protocol.Value);
+        if (countries.Length > 0) query = query.Where(x => countries.Contains(x.CountryCode!));
+        var total = await query.CountAsync(token);
+        var paid = await accessService.HasPaidAccessAsync(CurrentUser, token);
+        var quota = paid ? limit : FreeExportAccessService.FreeVpnLimit;
+        var skip = paid ? 0 : Math.Max(0, (total - quota) / 2);
+        var selected = new List<VpnCandidate>();
+        var characters = 0;
+        var profiles = 0;
+        try
+        {
+            // Close each reader before dependency queries and retain at most 32 saved documents per page.
+            for (var offset = 0; offset < quota && profiles < quota; offset += 32)
+            {
+                var rows = await Ordered(query).Skip(skip + offset).Take(Math.Min(32, quota - offset))
+                    .Select(x => new VpnCandidate(x.Host, x.Port, x.Protocol, x.Transport)
+                    { ClashConfiguration = x.ClashConfiguration }).ToArrayAsync(token);
+                if (rows.Length == 0) break;
+                foreach (var candidate in rows)
+                {
+                    token.ThrowIfCancellationRequested();
+                    var count = ClashConfigurationExporter.ProfileCount(candidate);
+                    if (count > quota - profiles) continue;
+                    if (!await CurrentClashProfiles(eligible, candidate, token)) continue;
+                    if (candidate.ClashConfiguration!.Length > ClashConfigurationExporter.MaximumInputCharacters - characters)
+                        return Problem("Полный YAML превышает лимит размера. Уменьшите limit.", statusCode: 409);
+                    characters += candidate.ClashConfiguration.Length;
+                    profiles += count;
+                    selected.Add(candidate);
+                }
+            }
+            if (selected.Count == 0) return Problem("Нет свежих полных Clash-конфигураций в пределах лимита профилей.", statusCode: 404);
+            var body = ClashConfigurationExporter.Export(selected, quota);
+            Response.Headers.CacheControl = "private, no-store";
+            Response.Headers["X-Access-Tier"] = paid ? "paid" : "free";
+            Response.Headers["X-Catalog-Total"] = total.ToString(CultureInfo.InvariantCulture);
+            Response.Headers["X-Export-Limit"] = quota.ToString(CultureInfo.InvariantCulture);
+            Response.Headers["X-Export-Profiles"] = profiles.ToString(CultureInfo.InvariantCulture);
+            Response.Headers["X-Export-Configurations"] = selected.Count.ToString(CultureInfo.InvariantCulture);
+            if (!paid) Response.Headers["Link"] = "</account>; rel=\"upgrade\"";
+            return File(body, "application/yaml; charset=utf-8", "vpn-configurations.yaml");
+        }
+        catch (InvalidDataException)
+        {
+            return Problem("Невозможно экспортировать полные безопасные Clash-конфигурации. Уменьшите limit или измените фильтры.", statusCode: 409);
+        }
+    }
+
+    private static async Task<bool> CurrentClashProfiles(IQueryable<VpnEndpoint> eligible,
+        VpnCandidate candidate, CancellationToken token)
+    {
+        foreach (var batch in ClashConfigurationExporter.Profiles(candidate).Chunk(32))
+        {
+            var unique = batch.Distinct().ToArray();
+            var parameter = System.Linq.Expressions.Expression.Parameter(typeof(VpnEndpoint), "endpoint");
+            System.Linq.Expressions.Expression predicate = System.Linq.Expressions.Expression.Constant(false);
+            foreach (var profile in unique)
+            {
+                System.Linq.Expressions.Expression match = System.Linq.Expressions.Expression.Constant(true);
+                Equal(nameof(VpnEndpoint.Host), profile.Host);
+                Equal(nameof(VpnEndpoint.Port), profile.Port);
+                Equal(nameof(VpnEndpoint.Protocol), profile.Protocol);
+                Equal(nameof(VpnEndpoint.Transport), profile.Transport);
+                predicate = System.Linq.Expressions.Expression.OrElse(predicate, match);
+                void Equal<T>(string property, T value) => match = System.Linq.Expressions.Expression.AndAlso(match,
+                    System.Linq.Expressions.Expression.Equal(System.Linq.Expressions.Expression.Property(parameter, property),
+                        System.Linq.Expressions.Expression.Constant(value, typeof(T))));
+            }
+            var filter = System.Linq.Expressions.Expression.Lambda<Func<VpnEndpoint, bool>>(predicate, parameter);
+            var current = await eligible.Where(filter).Select(x => new VpnCandidate(x.Host, x.Port, x.Protocol, x.Transport)
+            { ClashConfiguration = x.ClashConfiguration }).ToArrayAsync(token);
+            if (unique.Any(expected => !current.Any(saved => ClashConfigurationExporter.SameSettings(expected, saved)))) return false;
+        }
+        return true;
     }
 
     [HttpGet("sources")]
@@ -307,6 +432,24 @@ public sealed class AdminVpnController(
         var source = await db.VpnSources.SingleOrDefaultAsync(x => x.Id == id, token); if (source is null) return NotFound();
         if (BuiltInVpnSourceCatalog.Sources.Any(x => x.Url == source.Url)) { source.Enabled = false; await db.SaveChangesAsync(token); return NoContent(); }
         db.VpnSources.Remove(source); await db.SaveChangesAsync(token); return NoContent();
+    }
+
+    [HttpGet("endpoints/{id:guid}/clash")]
+    public async Task<IActionResult> DownloadClash(Guid id, CancellationToken token = default)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(token);
+        var endpoint = await db.VpnEndpoints.AsNoTracking().SingleOrDefaultAsync(item => item.Id == id, token);
+        if (endpoint?.ClashConfiguration is null) return NotFound();
+        try
+        {
+            var candidate = new VpnCandidate(endpoint.Host, endpoint.Port, endpoint.Protocol, endpoint.Transport)
+            { ClashConfiguration = endpoint.ClashConfiguration };
+            return File(ClashConfigurationExporter.Export([candidate]), "application/yaml; charset=utf-8", $"proxyharbor-{id:N}.yaml");
+        }
+        catch (InvalidDataException)
+        {
+            return Problem("Сохранённая YAML-конфигурация не содержит безопасного полного подключения.", statusCode: 409);
+        }
     }
 
     [HttpGet("endpoints")]
@@ -498,7 +641,8 @@ public sealed record AdminVpnEndpointItem(Guid Id, string Host, int Port, string
     string Transport, VpnEndpointStatus Status, int? LatencyMs, DateTimeOffset FirstSeenAt, DateTimeOffset LastSeenAt,
     DateTimeOffset? LastCheckedAt, DateTimeOffset? NextCheckAt, int SuccessfulChecks, int FailedChecks,
     decimal SuccessRate, long KnownForSeconds, string? LastError, string? ConnectionUri,
-    DateTimeOffset? LastValidationAttemptAt = null, bool LastValidationDeferred = false)
+    DateTimeOffset? LastValidationAttemptAt = null, bool LastValidationDeferred = false,
+    bool HasClashConfiguration = false)
 {
     public static AdminVpnEndpointItem From(VpnEndpoint item, DateTimeOffset now)
     {
@@ -508,7 +652,7 @@ public sealed record AdminVpnEndpointItem(Guid Id, string Host, int Port, string
             item.LatencyMs, item.FirstSeenAt, item.LastSeenAt, item.LastCheckedAt, item.NextCheckAt,
             item.SuccessfulChecks, item.FailedChecks, successRate,
             Math.Max(0, (long)(now - item.FirstSeenAt).TotalSeconds), item.LastError, item.ConnectionUri,
-            item.LastValidationAttemptAt, item.LastValidationDeferred);
+            item.LastValidationAttemptAt, item.LastValidationDeferred, item.ClashConfiguration != null);
     }
 }
 #pragma warning restore CS1591

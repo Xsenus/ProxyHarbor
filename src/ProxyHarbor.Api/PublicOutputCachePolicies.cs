@@ -8,6 +8,7 @@ internal static class PublicOutputCachePolicies
     internal const string ProxyCatalog = "public-proxy-catalog";
     internal const string VpnCatalog = "public-vpn-catalog";
     internal const string Countries = "public-countries";
+    internal const string VpnCountries = "public-vpn-countries";
     internal const string Summary = "public-summary";
     internal const string Metrics = "prometheus-metrics";
     internal const string SeekFirstPage = "public-seek-first-page";
@@ -20,6 +21,7 @@ internal static class PublicOutputCachePolicies
         ["protocol", "maxLatencyMs", "minSuccessRate", "country"];
     internal static readonly string[] VpnListVaryByQuery =
         ["protocol", "status", "country"];
+    internal static readonly string[] VpnCountriesVaryByQuery = ["format", "protocol"];
     internal static readonly string[] SeekVaryByQuery =
         ["protocol", "maxLatencyMs", "minSuccessRate", "country", "pageSize"];
 

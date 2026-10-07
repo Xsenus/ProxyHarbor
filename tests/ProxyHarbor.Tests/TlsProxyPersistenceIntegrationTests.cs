@@ -157,6 +157,11 @@ public sealed class TlsProxyPersistenceIntegrationTests
             Assert.Equal(PostgresErrorCodes.CheckViolation, error.SqlState);
         }
         await using var verify = database.Factory.CreateDbContext();
+        // EF commits completed migration steps separately. The empty newer
+        // Clash schema can be downgraded before the TLS data guard rejects the
+        // next step; reapply it and verify recovery without losing TLS records.
+        Assert.Equal(["20261007052123_AddClashConfigurations"], await verify.Database.GetPendingMigrationsAsync());
+        await verify.Database.MigrateAsync();
         Assert.Equal(protocol, (await verify.Proxies.SingleAsync()).Protocol);
         Assert.Equal(protocol, (await verify.Sources.SingleAsync()).DefaultProtocol);
         Assert.Equal(protocol, (await verify.ProxySourceImportStates.SingleAsync()).SourceProtocol);

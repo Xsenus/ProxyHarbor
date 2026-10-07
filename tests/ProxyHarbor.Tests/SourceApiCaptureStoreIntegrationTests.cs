@@ -171,7 +171,7 @@ public sealed class SourceApiCaptureStoreIntegrationTests
             State(proxy.SourceId, null, [], SHA256.HashData(payload)),
             State(proxy.SourceId, null, payload, new byte[31]),
             State(proxy.SourceId, null, payload, SHA256.HashData(payload), (int)ProxyProtocol.HttpTlsUnverified + 1),
-            State(null, vpn.SourceId, payload, SHA256.HashData(payload), 9),
+            State(null, vpn.SourceId, payload, SHA256.HashData(payload), 15),
         })
         {
             await using var db = database.Factory.CreateDbContext();
@@ -181,6 +181,27 @@ public sealed class SourceApiCaptureStoreIntegrationTests
             Assert.Equal(Npgsql.PostgresErrorCodes.CheckViolation, postgres.SqlState);
             Assert.Contains(postgres.ConstraintName, ExpectedCaptureConstraints);
         }
+    }
+
+    [Theory, Trait("Category", "PostgresIntegration")]
+    [InlineData(VpnProtocol.AnyTls)]
+    [InlineData(VpnProtocol.Hysteria)]
+    [InlineData(VpnProtocol.ShadowsocksR)]
+    [InlineData(VpnProtocol.HttpProxy)]
+    [InlineData(VpnProtocol.Socks4Proxy)]
+    [InlineData(VpnProtocol.Socks5Proxy)]
+    public async Task NewVpnProtocolsCanCheckpointAndResumeSupportedApiSources(VpnProtocol protocol)
+    {
+        await using var database = await ProxySourceImportStoreIntegrationTests.SnapshotDatabase.CreateAsync();
+        if (database is null) return;
+        var owner = await AddOwnerAsync(database, true, protocol);
+        var store = new SourceApiCaptureStore(database.Factory);
+        var checkpoint = Assert.IsType<SourceApiCaptureCheckpoint>(await store.SaveAsync(owner, null, First(), default));
+        var resumed = Assert.IsType<SourceApiCaptureCheckpoint>(await new SourceApiCaptureStore(database.Factory).LoadAsync(owner, default));
+        Assert.Equal(checkpoint.Id, resumed.Id);
+        Assert.Equal(checkpoint.Version, resumed.Version);
+        Assert.Equal((int)protocol, resumed.Owner.Protocol);
+        Assert.Equal(checkpoint.Capture.Pages, resumed.Capture.Pages);
     }
 
     private static SourceApiCaptureState State(Guid? proxy, Guid? vpn, byte[] payload, byte[] hash, int protocol = 0) =>
@@ -231,12 +252,12 @@ public sealed class SourceApiCaptureStoreIntegrationTests
         data = new { total_count = total, data = ids.Select(id => new { id, protocol = "http", ip = "8.8.8.8", port = 80 }) }
     });
     private static async Task<SourceApiCaptureOwner> AddOwnerAsync(
-        ProxySourceImportStoreIntegrationTests.SnapshotDatabase database, bool vpn)
+        ProxySourceImportStoreIntegrationTests.SnapshotDatabase database, bool vpn, VpnProtocol protocol = VpnProtocol.Vless)
     {
         await using var db = database.Factory.CreateDbContext();
         if (vpn)
         {
-            var source = new VpnSource { Name = "API VPN", Provider = "Test fixture", License = "Test fixture", Url = FreeProxyDbPageCapture.VpnUrl, DefaultProtocol = VpnProtocol.Vless };
+            var source = new VpnSource { Name = "API VPN", Provider = "Test fixture", License = "Test fixture", Url = FreeProxyDbPageCapture.VpnUrl, DefaultProtocol = protocol };
             db.VpnSources.Add(source);
             await db.SaveChangesAsync();
             return SourceApiCaptureOwner.From(source);

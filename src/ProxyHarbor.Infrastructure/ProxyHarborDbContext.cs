@@ -486,7 +486,7 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
         apiCapture.ToTable(table =>
         {
             table.HasCheckConstraint("CK_SourceApiCaptureStates_Owner",
-                "(\"ProxySourceId\" IS NOT NULL AND \"VpnSourceId\" IS NULL AND \"SourceProtocol\" BETWEEN 0 AND 5) OR (\"ProxySourceId\" IS NULL AND \"VpnSourceId\" IS NOT NULL AND \"SourceProtocol\" BETWEEN 0 AND 8)");
+                "(\"ProxySourceId\" IS NOT NULL AND \"VpnSourceId\" IS NULL AND \"SourceProtocol\" BETWEEN 0 AND 5) OR (\"ProxySourceId\" IS NULL AND \"VpnSourceId\" IS NOT NULL AND \"SourceProtocol\" BETWEEN 0 AND 14)");
             table.HasCheckConstraint("CK_SourceApiCaptureStates_Payload",
                 "octet_length(\"Payload\") BETWEEN 8 AND 34554432 AND octet_length(\"PayloadHash\") = 32");
         });
@@ -518,7 +518,7 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
         vpnSource.Property(x => x.LastError).HasMaxLength(500);
         vpnSource.ToTable(table =>
         {
-            table.HasCheckConstraint("CK_VpnSources_ProtocolPriority", "\"DefaultProtocol\" BETWEEN 0 AND 8 AND \"Priority\" BETWEEN -10000 AND 10000");
+            table.HasCheckConstraint("CK_VpnSources_ProtocolPriority", "\"DefaultProtocol\" BETWEEN 0 AND 14 AND \"Priority\" BETWEEN -10000 AND 10000");
             table.HasCheckConstraint("CK_VpnSources_Counters", "\"LastItemCount\" >= 0 AND \"ConsecutiveFailures\" >= 0");
             table.HasCheckConstraint("CK_VpnSources_FetchTimeline", "\"LastSucceededAt\" IS NULL OR (\"LastFetchedAt\" IS NOT NULL AND \"LastSucceededAt\" <= \"LastFetchedAt\")");
             table.HasCheckConstraint("CK_VpnSources_ContentTimeline", "\"LastContentFetchedAt\" IS NULL OR (\"LastFetchedAt\" IS NOT NULL AND \"LastSucceededAt\" IS NOT NULL AND \"LastContentFetchedAt\" <= \"LastFetchedAt\" AND \"LastContentFetchedAt\" <= \"LastSucceededAt\")");
@@ -533,7 +533,7 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
         vpnImport.ToTable(table =>
         {
             table.HasCheckConstraint("CK_VpnSourceImportStates_Cursor",
-                "\"CandidateCount\" BETWEEN 1 AND 1000000 AND \"NextIndex\" BETWEEN 0 AND \"CandidateCount\" AND \"SourceProtocol\" BETWEEN 0 AND 8");
+                "\"CandidateCount\" BETWEEN 1 AND 1000000 AND \"NextIndex\" BETWEEN 0 AND \"CandidateCount\" AND \"SourceProtocol\" BETWEEN 0 AND 14");
             table.HasCheckConstraint("CK_VpnSourceImportStates_Payload",
                 "octet_length(\"Payload\") <= 50331648 AND octet_length(\"SnapshotBodyHash\") = 32 AND octet_length(\"FreshBodyHash\") = 32 AND ((\"NextIndex\" < \"CandidateCount\" AND octet_length(\"Payload\") > 16 AND octet_length(\"PayloadHash\") = 32) OR (\"NextIndex\" = \"CandidateCount\" AND octet_length(\"Payload\") = 0 AND octet_length(\"PayloadHash\") = 0))");
         });
@@ -545,13 +545,14 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
         vpnEndpoint.Property(x => x.Transport).HasMaxLength(8);
         vpnEndpoint.Property(x => x.CountryCode).HasMaxLength(2);
         vpnEndpoint.Property(x => x.ConnectionUri).HasMaxLength(16_384);
+        vpnEndpoint.Property(x => x.ClashConfiguration).HasMaxLength(16_384);
         vpnEndpoint.Property(x => x.LastError).HasMaxLength(500);
         vpnEndpoint.Property(x => x.LastValidationDeferred).HasDefaultValue(false);
         vpnEndpoint.HasOne(x => x.FirstSource).WithMany().HasForeignKey(x => x.FirstSourceId)
             .OnDelete(DeleteBehavior.SetNull);
         vpnEndpoint.ToTable(table =>
         {
-            table.HasCheckConstraint("CK_VpnEndpoints_Identity", "\"Port\" BETWEEN 1 AND 65535 AND \"Protocol\" BETWEEN 0 AND 8 AND \"Status\" BETWEEN 0 AND 3 AND \"Transport\" IN ('tcp', 'udp')");
+            table.HasCheckConstraint("CK_VpnEndpoints_Identity", "\"Port\" BETWEEN 1 AND 65535 AND \"Protocol\" BETWEEN 0 AND 14 AND \"Status\" BETWEEN 0 AND 3 AND \"Transport\" IN ('tcp', 'udp')");
             table.HasCheckConstraint("CK_VpnEndpoints_Counters", "\"SuccessfulChecks\" >= 0 AND \"FailedChecks\" >= 0");
             table.HasCheckConstraint("CK_VpnEndpoints_Timeline", "\"LastSeenAt\" >= \"FirstSeenAt\"");
             table.HasCheckConstraint("CK_VpnEndpoints_DeferredAttempt", "NOT \"LastValidationDeferred\" OR \"LastValidationAttemptAt\" IS NOT NULL");

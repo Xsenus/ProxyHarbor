@@ -9,6 +9,44 @@ namespace ProxyHarbor.Tests;
 
 public sealed class VpnCandidateSnapshotCodecTests
 {
+    [Theory]
+    [InlineData(false, "x")]
+    [InlineData(true, "x")]
+    [InlineData(true, "界")]
+    public void TextBoundedWindowsEventuallyDrainLongUrisAndAliasExpandedConfigurations(bool yaml, string character)
+    {
+        var setting = string.Concat(Enumerable.Repeat(character, 14_000));
+        var content = yaml
+            ? "setting: &long '" + setting + "'\nproxies: [" + string.Join(',', Enumerable.Range(1, 400).Select(port =>
+                $"{{name: node{port}, type: vless, server: 8.8.8.8, port: {port}, uuid: published, future-option: *long}}")) + "]"
+            : string.Join('\n', Enumerable.Range(1, 400).Select(port => $"vless://id@8.8.8.8:{port}#{setting}"));
+        var snapshot = VpnCandidateSnapshotCodec.Encode(content, VpnProtocol.Vless);
+        Assert.Equal(400, snapshot.UniqueCount);
+        var ports = new HashSet<int>();
+        var cursor = 0;
+        var windows = 0;
+        while (cursor < snapshot.UniqueCount)
+        {
+            Assert.Equal(new VpnSnapshotWindow(0, cursor, false), VpnCandidateSnapshotCodec.ReadWindow(snapshot.Payload, cursor, 400, _ => false));
+            long retainedBytes = 0;
+            var window = VpnCandidateSnapshotCodec.ReadWindow(snapshot.Payload, cursor, 400, candidate =>
+            {
+                retainedBytes += 2L * (candidate.Host.Length + (candidate.ConnectionUri?.Length ?? 0) + (candidate.ClashConfiguration?.Length ?? 0));
+                Assert.True(ports.Add(candidate.Port));
+                Assert.Contains(setting, yaml ? candidate.ClashConfiguration : candidate.ConnectionUri);
+                return true;
+            });
+            Assert.InRange(retainedBytes, 1, VpnCandidateSnapshotCodec.MaxWindowTextBytes);
+            Assert.InRange(window.Count, 1, 399);
+            Assert.Equal(cursor + window.Count, window.NextIndex);
+            Assert.Equal(window.NextIndex == snapshot.UniqueCount, window.Completed);
+            cursor = window.NextIndex;
+            windows++;
+        }
+        Assert.True(windows > 1);
+        Assert.Equal(Enumerable.Range(1, 400), ports.Order());
+    }
+
     [Fact]
     public void LegacyShadowsocksRoundTripsWithModernDuplicateAcrossBoundedWindows()
     {
@@ -270,13 +308,146 @@ public sealed class VpnCandidateSnapshotCodecTests
             VpnCandidateSnapshotCodec.ReadWindow(snapshot.Payload, 0, 1, _ => throw new InvalidOperationException()));
     }
 
-    private static byte[] WrapPage(byte[] page, int count)
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ClashSettingsAndDependenciesRoundTripAcrossWindows(bool base64)
+    {
+        const string yaml = "proxies: [{name: primary, type: anytls, server: example.com, port: 443, password: '0012', dialer-proxy: peer, future-option: {values: [a,b]}}, {name: peer, type: socks5, server: 8.8.8.8, port: 1080, username: user, password: secret}]";
+        var body = base64 ? Convert.ToBase64String(Encoding.UTF8.GetBytes(yaml)) : yaml;
+        var snapshot = VpnCandidateSnapshotCodec.Encode(body, VpnProtocol.Vless);
+        Assert.Equal(VpnCandidateSnapshotCodec.Magic, BinaryPrimitives.ReadInt32LittleEndian(snapshot.Payload));
+        Assert.Equal(2, snapshot.UniqueCount);
+        var received = new List<VpnCandidate>();
+        var first = VpnCandidateSnapshotCodec.ReadWindow(snapshot.Payload, 0, 1, candidate => { received.Add(candidate); return true; });
+        Assert.False(first.Completed);
+        var last = VpnCandidateSnapshotCodec.ReadWindow(snapshot.Payload, first.NextIndex, 1, candidate => { received.Add(candidate); return true; });
+        Assert.True(last.Completed);
+        Assert.Equal(VpnFeedParser.Parse(body, VpnProtocol.Vless), received);
+        Assert.All(received, candidate => { Assert.Null(candidate.ConnectionUri); Assert.True(ClashYamlFeedParser.IsValidStandalone(candidate)); });
+        Assert.Contains("0012", received[0].ClashConfiguration);
+        Assert.Contains("secret", received[0].ClashConfiguration);
+    }
+
+    [Fact]
+    public void LegacyVersionTwoSnapshotRemainsReadable()
+    {
+        const string uri = "vless://id@8.8.8.8:443#legacy";
+        var snapshot = WrapPage(Record(uri, null, includeConfiguration: false), 1);
+        var received = new List<VpnCandidate>();
+        Assert.True(VpnCandidateSnapshotCodec.ReadWindow(snapshot, 0, 1, candidate => { received.Add(candidate); return true; }).Completed);
+        Assert.Equal(new VpnCandidate("8.8.8.8", 443, VpnProtocol.Vless, "tcp", uri), Assert.Single(received));
+        var state = new VpnSourceImportState
+        {
+            SourceUrl = "https://example.com/feed",
+            CandidateCount = 1,
+            NextIndex = 0,
+            Payload = snapshot,
+            PayloadHash = System.Security.Cryptography.SHA256.HashData(snapshot),
+            SnapshotBodyHash = new byte[32],
+            FreshBodyHash = new byte[32]
+        };
+        Assert.True(VpnSourceImportStore.ReadWindow(state, 1, _ => true).Completed);
+    }
+
+    [Theory]
+    [InlineData("vless")]
+    [InlineData("vmess")]
+    [InlineData("trojan")]
+    [InlineData("ss")]
+    [InlineData("ssr")]
+    [InlineData("hysteria")]
+    [InlineData("hysteria2")]
+    [InlineData("tuic")]
+    [InlineData("wireguard")]
+    [InlineData("anytls")]
+    [InlineData("http")]
+    [InlineData("socks4")]
+    [InlineData("socks5")]
+    public void EverySupportedClashProtocolPreservesTransportAndConfiguration(string type)
+    {
+        var yaml = $"proxies: [{{type: {type}, server: 8.8.8.8, port: 443, password: published, cipher: aes-128-gcm}}]";
+        var snapshot = VpnCandidateSnapshotCodec.Encode(yaml, VpnProtocol.Vless);
+        var received = new List<VpnCandidate>();
+        Assert.True(VpnCandidateSnapshotCodec.ReadWindow(snapshot.Payload, 0, 1, candidate => { received.Add(candidate); return true; }).Completed);
+        Assert.Equal(VpnFeedParser.Parse(yaml, VpnProtocol.Vless), received);
+    }
+
+    [Fact]
+    public void DuplicateClashConfigurationKeepsNewestSettingsAcrossByteBoundedPages()
+    {
+        var nodes = Enumerable.Range(1, 30).Select(port => $"{{name: node{port}, type: vless, server: 8.8.8.8, port: {port}, password: first, future-option: '{new string('x', 10_000)}'}}");
+        var yaml = "proxies: [" + string.Join(',', nodes) + ",{name: latest, type: vless, server: 8.8.8.8, port: 1, password: latest}]";
+        var snapshot = VpnCandidateSnapshotCodec.Encode(yaml, VpnProtocol.Vless);
+        Assert.Equal(31, snapshot.RecordCount);
+        Assert.Equal(30, snapshot.UniqueCount);
+        var received = new List<VpnCandidate>();
+        for (var cursor = 0; cursor < snapshot.UniqueCount;)
+            cursor = VpnCandidateSnapshotCodec.ReadWindow(snapshot.Payload, cursor, 3, candidate => { received.Add(candidate); return true; }).NextIndex;
+        Assert.Equal(VpnFeedParser.Parse(yaml, VpnProtocol.Vless), received);
+        Assert.Contains("latest", received[0].ClashConfiguration);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("proxies: [{type: vless, server: 1.1.1.1, port: 443}]")]
+    [InlineData("proxies: [{type: vless, server: 127.0.0.1, port: 443}]")]
+    [InlineData("proxies: [{type: vless, server: 8.8.8.8, port: 444}]")]
+    [InlineData("proxies: [{type: trojan, server: 8.8.8.8, port: 443}]")]
+    [InlineData("proxies: [{type: vless, server: 8.8.8.8, port: 443, dialer-proxy: missing}]")]
+    [InlineData("proxies: [{type: vless, server: 8.8.8.8, port: 443}, {type: http, server: 127.0.0.1, port: 80}]")]
+    [InlineData("proxies: [{type: vless, server: 8.8.8.8, port: 443}]\nexternal-controller: 0.0.0.0:9090")]
+    public void CorruptConfigurationCannotBypassEndpointOrDependencyValidation(string configuration)
+    {
+        var snapshot = WrapPage(Record(null, configuration), 1, VpnCandidateSnapshotCodec.Magic);
+        Assert.Throws<InvalidDataException>(() => VpnCandidateSnapshotCodec.ReadWindow(snapshot, 0, 1, _ => throw new InvalidOperationException()));
+    }
+
+    [Fact]
+    public void NewVersionRevalidatesUriAndConfigurationIndependently()
+    {
+        const string yaml = "proxies: [{type: vless, server: 8.8.8.8, port: 443}]";
+        var valid = WrapPage(Record("vless://id@8.8.8.8:443", yaml), 1, VpnCandidateSnapshotCodec.Magic);
+        Assert.True(VpnCandidateSnapshotCodec.ReadWindow(valid, 0, 1, _ => true).Completed);
+        var invalid = WrapPage(Record("vless://id@127.0.0.1:443", yaml), 1, VpnCandidateSnapshotCodec.Magic);
+        Assert.Throws<InvalidDataException>(() => VpnCandidateSnapshotCodec.ReadWindow(invalid, 0, 1, _ => throw new InvalidOperationException()));
+    }
+
+    [Fact]
+    public void ChangingVersionThreeHeaderToSupportedLegacyVersionCannotAdmitNewRecordLayout()
+    {
+        var snapshot = VpnCandidateSnapshotCodec.Encode("vless://id@8.8.8.8:443", VpnProtocol.Vless);
+        BinaryPrimitives.WriteInt32LittleEndian(snapshot.Payload, VpnCandidateSnapshotCodec.LegacyMagic);
+        Assert.Throws<InvalidDataException>(() => VpnCandidateSnapshotCodec.ReadWindow(snapshot.Payload, 0, 1, _ => throw new InvalidOperationException()));
+    }
+
+    private static byte[] Record(string? uri, string? configuration, bool includeConfiguration = true)
+    {
+        using var record = new MemoryStream();
+        using var writer = new BinaryWriter(record);
+        var host = Encoding.UTF8.GetBytes("8.8.8.8");
+        writer.Write((ushort)host.Length);
+        writer.Write(host);
+        writer.Write((ushort)443);
+        writer.Write((byte)VpnProtocol.Vless);
+        writer.Write((byte)0);
+        writer.Write(uri is null ? -1 : Encoding.UTF8.GetByteCount(uri));
+        if (uri is not null) writer.Write(Encoding.UTF8.GetBytes(uri));
+        if (includeConfiguration)
+        {
+            writer.Write(configuration is null ? -1 : Encoding.UTF8.GetByteCount(configuration));
+            if (configuration is not null) writer.Write(Encoding.UTF8.GetBytes(configuration));
+        }
+        return record.ToArray();
+    }
+
+    private static byte[] WrapPage(byte[] page, int count, int magic = VpnCandidateSnapshotCodec.LegacyMagic)
     {
         var compressed = new byte[BrotliEncoder.GetMaxCompressedLength(page.Length)];
         Assert.True(BrotliEncoder.TryCompress(page, compressed, out var written, quality: 1, window: 16));
         using var output = new MemoryStream();
         using var writer = new BinaryWriter(output);
-        writer.Write(VpnCandidateSnapshotCodec.Magic);
+        writer.Write(magic);
         writer.Write(count);
         writer.Write(count);
         writer.Write(28 + written);

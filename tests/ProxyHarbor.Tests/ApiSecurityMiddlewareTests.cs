@@ -11,11 +11,13 @@ public sealed class ApiSecurityMiddlewareTests
 {
     private const string AdminKey = "integration-admin-key-at-least-24-chars";
 
-    [Fact]
-    public async Task MissingAdminKeyReturnsNonCacheableChallengeAndSecurityHeaders()
+    [Theory]
+    [InlineData("/api/v1/admin/sources")]
+    [InlineData("/api/v1/admin/vpn/endpoints/11111111-1111-1111-1111-111111111111/clash")]
+    public async Task MissingAdminKeyReturnsNonCacheableChallengeAndSecurityHeaders(string path)
     {
         var nextCalled = false;
-        var context = Context("/api/v1/admin/sources");
+        var context = Context(path);
         var pipeline = Pipeline(_ =>
         {
             nextCalled = true;
@@ -36,10 +38,12 @@ public sealed class ApiSecurityMiddlewareTests
         Assert.Equal(401, json.RootElement.GetProperty("status").GetInt32());
     }
 
-    [Fact]
-    public async Task CorrectAdminKeyPassesWithoutLeakingItIntoResponse()
+    [Theory]
+    [InlineData("/api/v1/admin/sources")]
+    [InlineData("/api/v1/admin/vpn/endpoints/11111111-1111-1111-1111-111111111111/clash")]
+    public async Task CorrectAdminKeyPassesWithoutLeakingItIntoResponse(string path)
     {
-        var context = Context("/api/v1/admin/sources");
+        var context = Context(path);
         context.Request.Headers["X-Admin-Key"] = AdminKey;
         var pipeline = Pipeline(async httpContext =>
         {
@@ -161,10 +165,12 @@ public sealed class ApiSecurityMiddlewareTests
         Assert.Equal("no-store", context.Response.Headers.CacheControl);
     }
 
-    [Fact]
-    public async Task AuthenticatedUserWithoutAdministratorRoleReceivesForbidden()
+    [Theory]
+    [InlineData("/api/v1/admin/diagnostics")]
+    [InlineData("/api/v1/admin/vpn/endpoints/11111111-1111-1111-1111-111111111111/clash")]
+    public async Task AuthenticatedUserWithoutAdministratorRoleReceivesForbidden(string path)
     {
-        var context = Context("/api/v1/admin/diagnostics");
+        var context = Context(path);
         context.User = new ClaimsPrincipal(new ClaimsIdentity(
         [
             new Claim(ClaimTypes.Name, "customer"),
