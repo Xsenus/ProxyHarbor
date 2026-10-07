@@ -622,7 +622,8 @@ public sealed class ProxyCollector(
     {
         if (FreeProxyDbPageCapture.IsSearchUrl(url))
             throw new InvalidDataException("FreeProxyDB Search требует канонический URL зарегистрированного источника и сохраняемую очередь страниц.");
-        return await SourceHttpFetcher.FetchAsync(
+        var htmlList = MyProxyHtmlFeedAdapter.Supports(url);
+        var result = await SourceHttpFetcher.FetchAsync(
             client,
             url,
             httpETag,
@@ -631,8 +632,13 @@ public sealed class ProxyCollector(
             options.Value.SourceTimeoutSeconds,
             options.Value.SourceRetryCount,
             token,
-            SourceFeedParser.EnsureSupportedMediaType,
-            delayAsync);
+            htmlList ? MyProxyHtmlFeedAdapter.EnsureSupportedMediaType : SourceFeedParser.EnsureSupportedMediaType,
+            delayAsync,
+            sameOriginRedirectsOnly: htmlList,
+            respectRateLimit: htmlList);
+        return htmlList && !result.NotModified
+            ? result with { Content = MyProxyHtmlFeedAdapter.Extract(url, result.Content ?? throw new InvalidDataException("Источник не содержит body.")) }
+            : result;
     }
 
     private async Task<int> BulkUpsertAsync(
@@ -960,6 +966,7 @@ internal static class SourceFetchSchedule
         // Public search documents per-IP/record quotas without numeric caps.
         // Keep successful full refreshes conservative; cached imports continue.
         if (FreeProxyDbPageCapture.Supports(url)) return fetchedAt.AddHours(6);
+        if (MyProxyHtmlFeedAdapter.Supports(url)) return fetchedAt.AddHours(1);
         if (Uri.TryCreate(url, UriKind.Absolute, out var uri) &&
             uri.Host.Equals("raw.githubusercontent.com", StringComparison.OrdinalIgnoreCase) &&
             uri.AbsolutePath.StartsWith("/litportnet/free-proxy-list/", StringComparison.OrdinalIgnoreCase))
