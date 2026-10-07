@@ -126,7 +126,7 @@ internal static class JsonProxyFeedParser
         var name = value.ValueKind == JsonValueKind.String ? value.GetString()?.ToLowerInvariant() : null;
         protocol = name switch
         {
-            "http" => ProxyProtocol.Http,
+            "http" or "http/https" => ProxyProtocol.Http,
             "https" => fallback is ProxyProtocol.HttpTls or ProxyProtocol.HttpTlsUnverified ? fallback : ProxyProtocol.Https,
             "httptls" or "http+tls" => ProxyProtocol.HttpTls,
             "httptlsunverified" or "http+tls-unverified" => ProxyProtocol.HttpTlsUnverified,
