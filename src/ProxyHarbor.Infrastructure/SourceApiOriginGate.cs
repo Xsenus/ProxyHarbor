@@ -10,12 +10,12 @@ internal sealed class SourceApiOriginGate(IDbContextFactory<ProxyHarborDbContext
     internal const string Origin = "https://freeproxydb.com";
     internal static readonly TimeSpan MinimumRequestInterval = TimeSpan.FromSeconds(10);
     private readonly int _provider = Provider(sourceUrl);
-    private string ProviderOrigin => _provider switch { 1 => ProxiwarePublicApi.Origin, 2 => RoundProxiesPublicApi.Origin, 3 => Socks5ProxiesPublicApi.Origin, _ => Origin };
-    internal TimeSpan RequestInterval => _provider == 0 ? MinimumRequestInterval : TimeSpan.FromSeconds(1);
+    private string ProviderOrigin => _provider switch { 1 => ProxiwarePublicApi.Origin, 2 => RoundProxiesPublicApi.Origin, 3 => Socks5ProxiesPublicApi.Origin, 4 => ProxoraPublicApi.Origin, _ => Origin };
+    internal TimeSpan RequestInterval => _provider == 4 ? TimeSpan.FromMinutes(1) : _provider == 0 ? MinimumRequestInterval : TimeSpan.FromSeconds(1);
 
     internal Task<PostgresAdvisoryLock?> TryAcquireAsync(CancellationToken token) =>
         PostgresAdvisoryLock.TryAcquireAsync(dbFactory,
-            _provider switch { 1 => PostgresAdvisoryLock.ProxiwareApiKey, 2 => PostgresAdvisoryLock.RoundProxiesApiKey, 3 => PostgresAdvisoryLock.Socks5ProxiesApiKey, _ => PostgresAdvisoryLock.FreeProxyDbApiKey }, token);
+            _provider switch { 1 => PostgresAdvisoryLock.ProxiwareApiKey, 2 => PostgresAdvisoryLock.RoundProxiesApiKey, 3 => PostgresAdvisoryLock.Socks5ProxiesApiKey, 4 => PostgresAdvisoryLock.ProxoraApiKey, _ => PostgresAdvisoryLock.FreeProxyDbApiKey }, token);
 
     internal async Task<DateTimeOffset?> ReadDeadlineAsync(CancellationToken token)
     {
@@ -47,6 +47,6 @@ internal sealed class SourceApiOriginGate(IDbContextFactory<ProxyHarborDbContext
         });
     }
 
-    private static int Provider(string url) => ProxiwarePublicApi.Supports(url) ? 1 : RoundProxiesPublicApi.Supports(url) ? 2 : Socks5ProxiesPublicApi.Supports(url) ? 3 :
+    private static int Provider(string url) => ProxiwarePublicApi.Supports(url) ? 1 : RoundProxiesPublicApi.Supports(url) ? 2 : Socks5ProxiesPublicApi.Supports(url) ? 3 : ProxoraPublicApi.Supports(url) ? 4 :
         FreeProxyDbPageCapture.Supports(url) ? 0 : throw new InvalidDataException("Unsupported public API provider.");
 }
