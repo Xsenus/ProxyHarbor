@@ -222,13 +222,23 @@ public sealed class SourceApiCaptureSafetyTests
     }
 
     [Theory]
-    [InlineData(false, false)]
-    [InlineData(true, false)]
-    [InlineData(false, true)]
-    [InlineData(true, true)]
-    public async Task GenericTransportCannotRequestSearchApiDirectlyOrThroughRedirect(bool redirect, bool proxiware)
+    [InlineData(false, 0)]
+    [InlineData(true, 0)]
+    [InlineData(false, 1)]
+    [InlineData(true, 1)]
+    [InlineData(false, 2)]
+    [InlineData(true, 2)]
+    [InlineData(false, 3)]
+    [InlineData(true, 3)]
+    public async Task GenericTransportCannotRequestSearchApiDirectlyOrThroughRedirect(bool redirect, int provider)
     {
-        var apiUrl = proxiware ? ProxiwarePublicApi.Url : FreeProxyDbFeedFetcher.Url;
+        var apiUrl = provider switch
+        {
+            1 => ProxiwarePublicApi.Url,
+            2 => RoundProxiesPublicApi.Url,
+            3 => RoundProxiesPublicApi.Url.Replace("/api/get-free-proxies/", "/api%2Fget-free-proxies/", StringComparison.Ordinal),
+            _ => FreeProxyDbFeedFetcher.Url
+        };
         using var handler = new ApiRedirectHandler(apiUrl);
         using var client = new HttpClient(handler);
         await Assert.ThrowsAsync<InvalidDataException>(() => SourceHttpFetcher.FetchAsync(client,
@@ -273,7 +283,8 @@ public sealed class SourceApiCaptureSafetyTests
         {
             Requests++;
             if (FreeProxyDbPageCapture.IsSearchUrl(request.RequestUri!.AbsoluteUri) ||
-                ProxiwarePublicApi.IsOriginUrl(request.RequestUri.AbsoluteUri)) ApiRequested = true;
+                ProxiwarePublicApi.IsOriginUrl(request.RequestUri.AbsoluteUri) ||
+                RoundProxiesPublicApi.IsApiUrl(request.RequestUri.AbsoluteUri)) ApiRequested = true;
             var response = new HttpResponseMessage(System.Net.HttpStatusCode.Redirect);
             response.Headers.Location = new Uri(apiUrl);
             return Task.FromResult(response);

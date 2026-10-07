@@ -9,13 +9,13 @@ internal sealed class SourceApiOriginGate(IDbContextFactory<ProxyHarborDbContext
 {
     internal const string Origin = "https://freeproxydb.com";
     internal static readonly TimeSpan MinimumRequestInterval = TimeSpan.FromSeconds(10);
-    private readonly bool _proxiware = Provider(sourceUrl);
-    private string ProviderOrigin => _proxiware ? ProxiwarePublicApi.Origin : Origin;
-    internal TimeSpan RequestInterval => _proxiware ? TimeSpan.FromSeconds(1) : MinimumRequestInterval;
+    private readonly int _provider = Provider(sourceUrl);
+    private string ProviderOrigin => _provider switch { 1 => ProxiwarePublicApi.Origin, 2 => RoundProxiesPublicApi.Origin, _ => Origin };
+    internal TimeSpan RequestInterval => _provider == 0 ? MinimumRequestInterval : TimeSpan.FromSeconds(1);
 
     internal Task<PostgresAdvisoryLock?> TryAcquireAsync(CancellationToken token) =>
         PostgresAdvisoryLock.TryAcquireAsync(dbFactory,
-            _proxiware ? PostgresAdvisoryLock.ProxiwareApiKey : PostgresAdvisoryLock.FreeProxyDbApiKey, token);
+            _provider switch { 1 => PostgresAdvisoryLock.ProxiwareApiKey, 2 => PostgresAdvisoryLock.RoundProxiesApiKey, _ => PostgresAdvisoryLock.FreeProxyDbApiKey }, token);
 
     internal async Task<DateTimeOffset?> ReadDeadlineAsync(CancellationToken token)
     {
@@ -47,6 +47,6 @@ internal sealed class SourceApiOriginGate(IDbContextFactory<ProxyHarborDbContext
         });
     }
 
-    private static bool Provider(string url) => ProxiwarePublicApi.Supports(url) ? true :
-        FreeProxyDbPageCapture.Supports(url) ? false : throw new InvalidDataException("Unsupported public API provider.");
+    private static int Provider(string url) => ProxiwarePublicApi.Supports(url) ? 1 : RoundProxiesPublicApi.Supports(url) ? 2 :
+        FreeProxyDbPageCapture.Supports(url) ? 0 : throw new InvalidDataException("Unsupported public API provider.");
 }
