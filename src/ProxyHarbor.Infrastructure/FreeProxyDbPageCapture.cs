@@ -24,13 +24,13 @@ internal sealed class FreeProxyDbPageCapture
 
     internal static bool Supports(string url) =>
         SupportsHttp(url) || SupportsVpn(url);
-    internal static bool SupportsHttp(string url) => FreeProxyDbFeedFetcher.Supports(url) || ProxiwarePublicApi.Supports(url) || RoundProxiesPublicApi.Supports(url) || Socks5ProxiesPublicApi.Supports(url) || ProxoraPublicApi.Supports(url);
+    internal static bool SupportsHttp(string url) => FreeProxyDbFeedFetcher.Supports(url) || ProxiwarePublicApi.Supports(url) || RoundProxiesPublicApi.Supports(url) || Socks5ProxiesPublicApi.Supports(url) || ProxoraPublicApi.Supports(url) || ProxyScrapePublicApi.Supports(url);
     internal static bool SupportsVpn(string url) => string.Equals(url, VpnUrl, StringComparison.Ordinal) ||
         string.Equals(url, MtProtoUrl, StringComparison.Ordinal);
     internal static bool IsSearchUrl(string url) => Uri.TryCreate(url, UriKind.Absolute, out var uri) &&
         uri.Host.Equals("freeproxydb.com", StringComparison.OrdinalIgnoreCase) &&
         uri.AbsolutePath.TrimEnd('/').Equals("/api/proxy/search", StringComparison.Ordinal);
-    internal static bool IsApiOriginUrl(string url) => ProxoraPublicApi.IsApiUrl(url) || Socks5ProxiesPublicApi.IsApiUrl(url) || RoundProxiesPublicApi.IsApiUrl(url) || ProxiwarePublicApi.IsOriginUrl(url) || (Uri.TryCreate(url, UriKind.Absolute, out var uri) &&
+    internal static bool IsApiOriginUrl(string url) => ProxyScrapePublicApi.IsApiUrl(url) || ProxoraPublicApi.IsApiUrl(url) || Socks5ProxiesPublicApi.IsApiUrl(url) || RoundProxiesPublicApi.IsApiUrl(url) || ProxiwarePublicApi.IsOriginUrl(url) || (Uri.TryCreate(url, UriKind.Absolute, out var uri) &&
         uri.Host.TrimEnd('.').Equals("freeproxydb.com", StringComparison.OrdinalIgnoreCase));
 
     internal FreeProxyDbCaptureStatus Inspect(int maximumBytes, string? sourceUrl = null)
@@ -38,7 +38,7 @@ internal sealed class FreeProxyDbPageCapture
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumBytes);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(maximumBytes, MaximumCaptureBytes);
         if (sourceUrl is not null && !Supports(sourceUrl)) throw InvalidCapture();
-        int? provider = sourceUrl is null ? null : ProxiwarePublicApi.Supports(sourceUrl) ? 1 : RoundProxiesPublicApi.Supports(sourceUrl) ? 2 : Socks5ProxiesPublicApi.Supports(sourceUrl) ? 3 : ProxoraPublicApi.Supports(sourceUrl) ? 4 : 0;
+        int? provider = sourceUrl is null ? null : ProxiwarePublicApi.Supports(sourceUrl) ? 1 : RoundProxiesPublicApi.Supports(sourceUrl) ? 2 : Socks5ProxiesPublicApi.Supports(sourceUrl) ? 3 : ProxoraPublicApi.Supports(sourceUrl) ? 4 : ProxyScrapePublicApi.Supports(sourceUrl) ? 5 : 0;
         var rows = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
         var traversalIds = new HashSet<string>(StringComparer.Ordinal);
         var pageHashes = new HashSet<string>(StringComparer.Ordinal);
@@ -63,7 +63,8 @@ internal sealed class FreeProxyDbPageCapture
             using var document = JsonDocument.Parse(page.Content, new JsonDocumentOptions { MaxDepth = 32 });
             var root = document.RootElement;
             if (root.ValueKind != JsonValueKind.Object) throw InvalidCapture();
-            var currentProvider = root.TryGetProperty("items", out var proxoraRows) && proxoraRows.ValueKind == JsonValueKind.Array && root.TryGetProperty("per_page", out _) ? 4 :
+            var currentProvider = root.TryGetProperty("total_records", out _) && root.TryGetProperty("proxies", out var proxyScrapeRows) && proxyScrapeRows.ValueKind == JsonValueKind.Array ? 5 :
+                root.TryGetProperty("items", out var proxoraRows) && proxoraRows.ValueKind == JsonValueKind.Array && root.TryGetProperty("per_page", out _) ? 4 :
                 root.TryGetProperty("total_proxies", out _) ? 1 :
                 root.TryGetProperty("total", out _) && root.TryGetProperty("data", out var providerData) && providerData.ValueKind == JsonValueKind.Array ? 2 :
                 root.TryGetProperty("meta", out var providerMeta) && providerMeta.ValueKind == JsonValueKind.Object &&
@@ -71,7 +72,7 @@ internal sealed class FreeProxyDbPageCapture
             if (provider is not null && currentProvider != provider) throw InvalidCapture();
             provider = currentProvider;
             JsonElement pageRows;
-            if (currentProvider is 1 or 2 or 3 or 4)
+            if (currentProvider is 1 or 2 or 3 or 4 or 5)
             {
                 if ((root.TryGetProperty("success", out var success) && success.ValueKind == JsonValueKind.False) ||
                     (root.TryGetProperty("status", out var state) && state.ValueKind == JsonValueKind.Number &&
@@ -79,7 +80,8 @@ internal sealed class FreeProxyDbPageCapture
                     (root.TryGetProperty("error", out var error) && error.ValueKind != JsonValueKind.Null &&
                         (error.ValueKind != JsonValueKind.String || !string.IsNullOrEmpty(error.GetString()))))
                     throw InvalidCapture();
-                if (currentProvider == 4) (total, pageRows) = ProxoraPublicApi.InspectPage(root, page.PageIndex);
+                if (currentProvider == 5) (total, pageRows) = ProxyScrapePublicApi.InspectPage(root, page.PageIndex);
+                else if (currentProvider == 4) (total, pageRows) = ProxoraPublicApi.InspectPage(root, page.PageIndex);
                 else if (currentProvider == 3) (total, pageRows) = Socks5ProxiesPublicApi.InspectPage(root, page.PageIndex);
                 else if (currentProvider == 2) (total, pageRows) = RoundProxiesPublicApi.InspectPage(root, page.PageIndex);
                 else if (root.GetProperty("total_proxies").ValueKind != JsonValueKind.Number ||
@@ -108,7 +110,7 @@ internal sealed class FreeProxyDbPageCapture
             }
             var hash = Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(ids.Order(StringComparer.Ordinal))));
             if (ids.Count > 0 && !(head ? headHashes : pageHashes).Add(hash)) throw InvalidCapture();
-            if (ids.Count == 0 && (head ? rows.Count < total : received < total)) throw InvalidCapture();
+            if (currentProvider != 5 && ids.Count == 0 && (head ? rows.Count < total : received < total)) throw InvalidCapture();
             var overlapsTraversal = ids.Overlaps(traversalIds);
             foreach (var row in pageRows.EnumerateArray())
             {
@@ -120,14 +122,14 @@ internal sealed class FreeProxyDbPageCapture
             observedAt = observedAt is null || page.CapturedAt < observedAt ? page.CapturedAt : observedAt;
             if (head)
             {
-                complete = (overlapsTraversal || total == 0) && rows.Count >= total;
+                complete = currentProvider == 5 ? overlapsTraversal || ids.Count == 0 : (overlapsTraversal || total == 0) && rows.Count >= total;
                 nextPage++;
             }
             else
             {
                 received += ids.Count;
                 nextPage++;
-                if (received >= total)
+                if (currentProvider == 5 ? ids.Count == 0 : received >= total)
                 {
                     head = true;
                     nextPage = 1;
@@ -168,14 +170,17 @@ internal sealed class FreeProxyDbPageCapture
         for (var request = 0; request < maximumNetworkPages && !status.Complete; request++)
         {
             token.ThrowIfCancellationRequested();
-            var pageUrl = Socks5ProxiesPublicApi.Supports(url)
+            var pageUrl = ProxyScrapePublicApi.Supports(url)
+                ? url.Replace("skip=0&", $"skip={(status.NextPage - 1) * ProxyScrapePublicApi.PageSize}&", StringComparison.Ordinal)
+                : Socks5ProxiesPublicApi.Supports(url)
                 ? url.Replace("offset=0&", $"offset={(status.NextPage - 1) * Socks5ProxiesPublicApi.PageSize}&", StringComparison.Ordinal)
                 : ProxiwarePublicApi.Supports(url) || RoundProxiesPublicApi.Supports(url) || ProxoraPublicApi.Supports(url)
                 ? url.Replace("page=1&", $"page={status.NextPage}&", StringComparison.Ordinal)
                 : url.Replace("page_index=1&", $"page_index={status.NextPage}&", StringComparison.Ordinal);
             var response = await fetchPage(pageUrl, token);
             if (response.NotModified || response.Content is null) throw InvalidCapture();
-            var content = Socks5ProxiesPublicApi.Supports(url)
+            var content = ProxyScrapePublicApi.Supports(url)
+                ? ProxyScrapePublicApi.CompactPage(response.Content, status.NextPage) : Socks5ProxiesPublicApi.Supports(url)
                 ? Socks5ProxiesPublicApi.CompactPage(response.Content, status.NextPage) : ProxoraPublicApi.Supports(url)
                 ? ProxoraPublicApi.CompactPage(response.Content, status.NextPage) : response.Content;
             var next = capture.Append(new FreeProxyDbCapturedPage(status.NextPage,
@@ -214,6 +219,7 @@ internal sealed class FreeProxyDbPageCapture
         if (provider == 2) return RoundProxiesPublicApi.RecordKey(row);
         if (provider == 3) return Socks5ProxiesPublicApi.RecordKey(row);
         if (provider == 4) return ProxoraPublicApi.RecordKey(row);
+        if (provider == 5) return ProxyScrapePublicApi.RecordKey(row);
         if (row.ValueKind != JsonValueKind.Object || !row.TryGetProperty("id", out var id) ||
             id.ValueKind != JsonValueKind.Number || !id.TryGetInt64(out var value) || value <= 0)
             throw InvalidCapture();

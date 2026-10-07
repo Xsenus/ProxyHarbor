@@ -751,6 +751,9 @@ public sealed class DatabaseSeederIntegrationTests
     [InlineData(
         "Fyvri HTTP",
         "https://raw.githubusercontent.com/fyvri/fresh-proxy-list/archive/storage/classic/http.txt")]
+    [InlineData(
+        "ProxyScrape V4 Mixed",
+        "https://api.proxyscrape.com/v4/free-proxy-list/get?request=display_proxies&proxy_format=protocolipport&format=text")]
     [Trait("Category", "PostgresIntegration")]
     public async Task StartupMigratesReplacedBuiltInUrlWithoutLosingSourceHistory(
         string canonicalName,

@@ -620,7 +620,7 @@ public sealed class ProxyCollector(
         CancellationToken token,
         Func<TimeSpan, CancellationToken, Task>? delayAsync = null)
     {
-        if (FreeProxyDbPageCapture.IsSearchUrl(url) || ProxiwarePublicApi.IsOriginUrl(url) || RoundProxiesPublicApi.IsApiUrl(url) || Socks5ProxiesPublicApi.IsApiUrl(url) || ProxoraPublicApi.IsApiUrl(url))
+        if (FreeProxyDbPageCapture.IsSearchUrl(url) || ProxiwarePublicApi.IsOriginUrl(url) || RoundProxiesPublicApi.IsApiUrl(url) || Socks5ProxiesPublicApi.IsApiUrl(url) || ProxoraPublicApi.IsApiUrl(url) || ProxyScrapePublicApi.IsApiUrl(url))
             throw new InvalidDataException("Постраничный API требует канонический URL зарегистрированного источника и сохраняемую очередь страниц.");
         var htmlList = MyProxyHtmlFeedAdapter.Supports(url);
         var result = await SourceHttpFetcher.FetchAsync(
@@ -969,6 +969,7 @@ internal static class SourceFetchSchedule
         if (RoundProxiesPublicApi.Supports(url)) return fetchedAt.AddMinutes(5);
         if (Socks5ProxiesPublicApi.Supports(url)) return fetchedAt.AddMinutes(30);
         if (ProxoraPublicApi.Supports(url)) return fetchedAt.AddMinutes(5);
+        if (ProxyScrapePublicApi.Supports(url)) return fetchedAt.AddMinutes(5);
         if (FreeProxyDbPageCapture.Supports(url)) return fetchedAt.AddHours(6);
         if (MyProxyHtmlFeedAdapter.Supports(url)) return fetchedAt.AddHours(1);
         if (Uri.TryCreate(url, UriKind.Absolute, out var uri) &&

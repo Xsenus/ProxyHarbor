@@ -16,7 +16,7 @@
 
 | № | Провайдер | Feed'ов | Протоколы | Представительный источник |
 |---:|---|---:|---|---|
-| 1 | ProxyScrape | 4 | Mixed, HTTP, SOCKS4, SOCKS5 | [официальный API](https://api.proxyscrape.com/v4/free-proxy-list/get?request=display_proxies&proxy_format=protocolipport&format=text) |
+| 1 | ProxyScrape | 4 | Mixed, HTTP, SOCKS4, SOCKS5 | [официальный API](https://api.proxyscrape.com/v4/free-proxy-list/get?request=display_proxies&proxy_format=protocolipport&format=json&skip=0&limit=2000) |
 | 2 | OpenProxyList | 4 | HTTP, HTTPS, SOCKS4, SOCKS5 | [openproxylist.xyz](https://openproxylist.xyz/http.txt) |
 | 3 | Proxifly | 4 | HTTP, HTTPS, SOCKS4, SOCKS5 | [GitHub](https://github.com/proxifly/free-proxy-list) |
 | 4 | TheSpeedX | 3 | HTTP, SOCKS4, SOCKS5 | [GitHub](https://github.com/TheSpeedX/PROXY-List) |

@@ -244,6 +244,12 @@ public sealed class SourceApiCaptureSafetyTests
     [InlineData(true, 9)]
     [InlineData(false, 10)]
     [InlineData(true, 10)]
+    [InlineData(false, 11)]
+    [InlineData(true, 11)]
+    [InlineData(false, 12)]
+    [InlineData(true, 12)]
+    [InlineData(false, 13)]
+    [InlineData(true, 13)]
     public async Task GenericTransportCannotRequestSearchApiDirectlyOrThroughRedirect(bool redirect, int provider)
     {
         var apiUrl = provider switch
@@ -258,6 +264,9 @@ public sealed class SourceApiCaptureSafetyTests
             8 => ProxoraPublicApi.Url,
             9 => ProxoraPublicApi.Url.Replace("/api/tools/free-proxies", "/api%2Ftools/free-proxies", StringComparison.Ordinal),
             10 => "https://api.proxora.io/api/tools/free-proxies/random?format=txt",
+            11 => ProxyScrapePublicApi.Url,
+            12 => ProxyScrapePublicApi.Url.Replace("/v4/free-proxy-list/get", "/v4%2Ffree-proxy-list/get", StringComparison.Ordinal),
+            13 => "https://api.proxyscrape.com/v4/free-proxy-list/get?request=display_proxies&format=text&skip=2000",
             _ => FreeProxyDbFeedFetcher.Url
         };
         using var handler = new ApiRedirectHandler(apiUrl);
@@ -306,7 +315,9 @@ public sealed class SourceApiCaptureSafetyTests
             if (FreeProxyDbPageCapture.IsSearchUrl(request.RequestUri!.AbsoluteUri) ||
                 ProxiwarePublicApi.IsOriginUrl(request.RequestUri.AbsoluteUri) ||
                 RoundProxiesPublicApi.IsApiUrl(request.RequestUri.AbsoluteUri) ||
-                Socks5ProxiesPublicApi.IsApiUrl(request.RequestUri.AbsoluteUri)) ApiRequested = true;
+                Socks5ProxiesPublicApi.IsApiUrl(request.RequestUri.AbsoluteUri) ||
+                ProxoraPublicApi.IsApiUrl(request.RequestUri.AbsoluteUri) ||
+                ProxyScrapePublicApi.IsApiUrl(request.RequestUri.AbsoluteUri)) ApiRequested = true;
             var response = new HttpResponseMessage(System.Net.HttpStatusCode.Redirect);
             response.Headers.Location = new Uri(apiUrl);
             return Task.FromResult(response);
