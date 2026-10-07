@@ -9,15 +9,16 @@ internal sealed class FreeProxyDbSourceApiFetcher(IDbContextFactory<ProxyHarborD
 {
     internal async Task<SourceApiFetchResult> FetchAsync(SourceApiCaptureOwner owner,
         Func<string, CancellationToken, Task<SourceFetchResult>> fetchPage, CancellationToken token,
-        int maximumNetworkPages = 4)
+        int? maximumNetworkPages = null)
     {
         owner.EnsureSupported();
+        var pageBudget = maximumNetworkPages ?? (ProxiwarePublicApi.Supports(owner.Url) ? 20 : 4);
         var store = new SourceApiCaptureStore(dbFactory);
         var checkpoint = await store.LoadAsync(owner, token);
         var capture = checkpoint?.Capture ?? new FreeProxyDbPageCapture();
         if (capture.Inspect(owner.MaximumBytes).Complete)
             return await AssembleAsync(networkObserved: false);
-        var gate = new SourceApiOriginGate(dbFactory);
+        var gate = new SourceApiOriginGate(dbFactory, owner.Url);
         await using var lease = await gate.TryAcquireAsync(token);
         if (lease is null) throw new SourceApiDeferredException(DateTimeOffset.UtcNow.AddMinutes(1));
         // Re-load under the distributed lease; another worker may have committed before acquisition.
@@ -28,14 +29,14 @@ internal sealed class FreeProxyDbSourceApiFetcher(IDbContextFactory<ProxyHarborD
         var deadline = await gate.ReadDeadlineAsync(token);
         if (deadline > DateTimeOffset.UtcNow) throw new SourceApiDeferredException(deadline.Value);
         var networkObserved = false;
-        var advanced = await AdvanceGuardedAsync(maximumNetworkPages, async (url, pageToken) =>
+        var advanced = await AdvanceGuardedAsync(pageBudget, async (url, pageToken) =>
             {
                 deadline = await gate.ReadDeadlineAsync(pageToken);
                 var now = DateTimeOffset.UtcNow;
                 if (deadline > now)
                 {
                     // Short pacing can finish in this bounded cycle; quota pauses return immediately.
-                    if (deadline.Value - now > SourceApiOriginGate.MinimumRequestInterval)
+                    if (deadline.Value - now > gate.RequestInterval)
                         throw new SourceApiDeferredException(deadline.Value);
                     await Task.Delay(deadline.Value - now, pageToken);
                 }
@@ -116,7 +117,9 @@ internal sealed class FreeProxyDbSourceApiFetcher(IDbContextFactory<ProxyHarborD
 internal sealed record SourceApiFetchResult(SourceFetchResult Fetch, SourceApiCaptureCheckpoint Checkpoint,
     DateTimeOffset ObservedAt, bool NetworkObserved)
 {
-    internal DateTimeOffset NextRefreshAt => Checkpoint.Capture.Pages[^1].CapturedAt.AddHours(6);
+    internal DateTimeOffset NextRefreshAt => ProxiwarePublicApi.Supports(Checkpoint.Owner.Url)
+        ? Checkpoint.Capture.Pages[^1].CapturedAt.AddMinutes(10)
+        : Checkpoint.Capture.Pages[^1].CapturedAt.AddHours(6);
 }
 
 internal sealed class SourceApiDeferredException(DateTimeOffset notBefore) : Exception("API collection deferred.")

@@ -116,7 +116,7 @@ internal static class SourceHttpFetcher
             // Generic aliases must not bypass the API queue/origin lease via redirects.
             // Only the durable API fetch callback sets sourceApiRequest after reserving its slot.
             if (!sourceApiRequest && FreeProxyDbPageCapture.IsApiOriginUrl(current.AbsoluteUri))
-                throw new InvalidDataException("FreeProxyDB Search требует сохраняемую очередь страниц и общий лимит запросов.");
+                throw new InvalidDataException("Постраничный API требует сохраняемую очередь страниц и общий лимит запросов.");
             if (!await NetworkSafety.IsSafePublicHttpsUrlAsync(current.AbsoluteUri, token))
                 throw new HttpRequestException(
                     "Источник или его перенаправление ведёт в запрещённую сеть.");

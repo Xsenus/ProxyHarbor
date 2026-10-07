@@ -3,26 +3,31 @@ using ProxyHarbor.Domain;
 
 namespace ProxyHarbor.Infrastructure;
 
-/// <summary>One distributed FreeProxyDB request lane, with durable pacing and Retry-After.</summary>
-internal sealed class SourceApiOriginGate(IDbContextFactory<ProxyHarborDbContext> dbFactory)
+/// <summary>One distributed request lane per supported provider, with durable pacing and Retry-After.</summary>
+internal sealed class SourceApiOriginGate(IDbContextFactory<ProxyHarborDbContext> dbFactory,
+    string sourceUrl = FreeProxyDbFeedFetcher.Url)
 {
     internal const string Origin = "https://freeproxydb.com";
     internal static readonly TimeSpan MinimumRequestInterval = TimeSpan.FromSeconds(10);
+    private readonly bool _proxiware = Provider(sourceUrl);
+    private string ProviderOrigin => _proxiware ? ProxiwarePublicApi.Origin : Origin;
+    internal TimeSpan RequestInterval => _proxiware ? TimeSpan.FromSeconds(1) : MinimumRequestInterval;
 
     internal Task<PostgresAdvisoryLock?> TryAcquireAsync(CancellationToken token) =>
-        PostgresAdvisoryLock.TryAcquireAsync(dbFactory, PostgresAdvisoryLock.FreeProxyDbApiKey, token);
+        PostgresAdvisoryLock.TryAcquireAsync(dbFactory,
+            _proxiware ? PostgresAdvisoryLock.ProxiwareApiKey : PostgresAdvisoryLock.FreeProxyDbApiKey, token);
 
     internal async Task<DateTimeOffset?> ReadDeadlineAsync(CancellationToken token)
     {
         await using var db = await dbFactory.CreateDbContextAsync(token);
-        return await db.SourceApiOriginStates.Where(state => state.Origin == Origin)
+        return await db.SourceApiOriginStates.Where(state => state.Origin == ProviderOrigin)
             .Select(state => (DateTimeOffset?)state.NotBefore).SingleOrDefaultAsync(token);
     }
 
     // Call under the origin session lease. Write pacing BEFORE the network request,
     // so a crashed worker cannot immediately be replaced by a burst from another worker.
     internal Task ReserveRequestAsync(DateTimeOffset startedAt, CancellationToken token) =>
-        ExtendDeadlineAsync(startedAt.Add(MinimumRequestInterval), token);
+        ExtendDeadlineAsync(startedAt.Add(RequestInterval), token);
 
     internal async Task ExtendDeadlineAsync(DateTimeOffset notBefore, CancellationToken token)
     {
@@ -35,10 +40,13 @@ internal sealed class SourceApiOriginGate(IDbContextFactory<ProxyHarborDbContext
             await using var db = await dbFactory.CreateDbContextAsync(token);
             // Atomic max prevents any shorter local pacing deadline from erasing a quota pause.
             await db.Database.ExecuteSqlInterpolatedAsync($"""
-                INSERT INTO "SourceApiOriginStates" ("Origin", "NotBefore") VALUES ({Origin}, {notBefore})
+                INSERT INTO "SourceApiOriginStates" ("Origin", "NotBefore") VALUES ({ProviderOrigin}, {notBefore})
                 ON CONFLICT ("Origin") DO UPDATE
                 SET "NotBefore" = GREATEST("SourceApiOriginStates"."NotBefore", EXCLUDED."NotBefore")
                 """, token);
         });
     }
+
+    private static bool Provider(string url) => ProxiwarePublicApi.Supports(url) ? true :
+        FreeProxyDbPageCapture.Supports(url) ? false : throw new InvalidDataException("Unsupported public API provider.");
 }
