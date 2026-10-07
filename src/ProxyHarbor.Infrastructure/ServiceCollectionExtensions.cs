@@ -15,6 +15,8 @@ public static class ServiceCollectionExtensions
             ?? throw new InvalidOperationException("Не задана строка подключения ConnectionStrings__Postgres.");
         services.AddOptions<CollectorOptions>().Bind(configuration.GetSection(CollectorOptions.Section))
             .Validate(x => x.CollectionIntervalMinutes is >= 1 and <= 10_080, "CollectionIntervalMinutes: 1..10080")
+            .Validate(x => x.CachedImportIntervalSeconds is 0 or >= 30 and <= 86_400,
+                "CachedImportIntervalSeconds: 0 либо 30..86400")
             .Validate(x => x.ValidationIntervalMinutes is >= 1 and <= 1_440, "ValidationIntervalMinutes: 1..1440")
             .Validate(x => x.PublicFreshnessMinutes is >= 2 and <= 2_880, "PublicFreshnessMinutes: 2..2880")
             .Validate(x => x.PublicFreshnessMinutes >= x.ValidationIntervalMinutes, "PublicFreshnessMinutes не может быть меньше ValidationIntervalMinutes")

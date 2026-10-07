@@ -56,6 +56,42 @@ public sealed class CollectorWorkerScheduleTests
             intervalMinutes: 15,
             (CollectorWorker.CycleOutcome)999,
             elapsed: TimeSpan.Zero));
+
+    [Theory]
+    [InlineData(null, true, 0)]
+    [InlineData(60, false, 1)]
+    [InlineData(60, true, 4)]
+    public async Task CachedPassesKeepTheOriginalDeadline(int? intervalSeconds, bool hasMore, int expectedPasses)
+    {
+        var clock = new SchedulingClock();
+        var passes = 0;
+        await CollectorWorker.WaitForNextCollectionAsync(TimeSpan.FromMinutes(5),
+            intervalSeconds is null ? null : TimeSpan.FromSeconds(intervalSeconds.Value),
+            _ => { passes++; clock.Advance(TimeSpan.FromSeconds(10)); return Task.FromResult(hasMore); },
+            (delay, _) => { clock.Advance(delay); return Task.CompletedTask; }, clock, CancellationToken.None);
+        Assert.Equal(expectedPasses, passes);
+        Assert.Equal(TimeSpan.FromMinutes(5), clock.Elapsed);
+    }
+
+    [Fact]
+    public async Task SlowCachedPassDoesNotAddAnotherWaitAfterDeadline()
+    {
+        var clock = new SchedulingClock();
+        var passes = 0;
+        await CollectorWorker.WaitForNextCollectionAsync(TimeSpan.FromMinutes(5), TimeSpan.FromSeconds(60),
+            _ => { passes++; clock.Advance(TimeSpan.FromMinutes(5)); return Task.FromResult(true); },
+            (delay, _) => { clock.Advance(delay); return Task.CompletedTask; }, clock, CancellationToken.None);
+        Assert.Equal(1, passes);
+        Assert.Equal(TimeSpan.FromMinutes(6), clock.Elapsed);
+    }
+
+    private sealed class SchedulingClock : TimeProvider
+    {
+        internal TimeSpan Elapsed { get; private set; }
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+        public override long GetTimestamp() => Elapsed.Ticks;
+        internal void Advance(TimeSpan delay) => Elapsed += delay;
+    }
 }
 
 /// <summary>Проверяет, что validator продолжает быстро осушать непустую очередь.</summary>

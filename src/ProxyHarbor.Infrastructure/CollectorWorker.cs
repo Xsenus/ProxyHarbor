@@ -38,7 +38,51 @@ public sealed class CollectorWorker(ProxyCollector collector, IOptions<Collector
             }
 
             var elapsed = TimeProvider.System.GetElapsedTime(startedAt);
-            await Task.Delay(NextDelay(options.Value.CollectionIntervalMinutes, outcome, elapsed), stoppingToken);
+            var delay = NextDelay(options.Value.CollectionIntervalMinutes, outcome, elapsed);
+            var cachedInterval = outcome == CycleOutcome.Succeeded && options.Value.CachedImportIntervalSeconds > 0
+                ? TimeSpan.FromSeconds(Math.Max(30, options.Value.CachedImportIntervalSeconds))
+                : (TimeSpan?)null;
+            await WaitForNextCollectionAsync(delay, cachedInterval, ImportCachedAsync,
+                Task.Delay, TimeProvider.System, stoppingToken);
+        }
+    }
+
+    private async Task<bool> ImportCachedAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            var run = await collector.ImportCachedSourcesAsync(cancellationToken);
+            return run is { CandidatesFound: > 0 };
+        }
+        catch (OperationAlreadyRunningException) { return false; }
+        catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            OperationalLogBoundary.Write(() => CollectionFailed(logger, exception));
+            return false;
+        }
+    }
+
+    // Измеряем оставшееся время от одного deadline: cached-проход не добавляет
+    // свой duration к штатному интервалу сетевого polling.
+    internal static async Task WaitForNextCollectionAsync(
+        TimeSpan delay, TimeSpan? cachedInterval,
+        Func<CancellationToken, Task<bool>> importCachedAsync,
+        Func<TimeSpan, CancellationToken, Task> waitAsync,
+        TimeProvider timeProvider, CancellationToken cancellationToken)
+    {
+        var startedAt = timeProvider.GetTimestamp();
+        while (true)
+        {
+            var remaining = delay - timeProvider.GetElapsedTime(startedAt);
+            if (remaining <= TimeSpan.Zero) return;
+            if (cachedInterval is null || cachedInterval <= TimeSpan.Zero || remaining <= cachedInterval)
+            {
+                await waitAsync(remaining, cancellationToken);
+                return;
+            }
+            await waitAsync(cachedInterval.Value, cancellationToken);
+            if (timeProvider.GetElapsedTime(startedAt) >= delay) return;
+            if (!await importCachedAsync(cancellationToken)) cachedInterval = null;
         }
     }
 

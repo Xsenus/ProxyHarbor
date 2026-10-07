@@ -42,7 +42,16 @@ public sealed class ProxyCollector(
         : ProxySourceCredentialProtection.Create(credentialProtectionProvider);
 
     /// <summary>Запускает один полный цикл сбора и возвращает его аудит.</summary>
-    public async Task<CollectionRun> CollectAsync(CancellationToken cancellationToken, bool forceAllSources = false)
+    public async Task<CollectionRun> CollectAsync(CancellationToken cancellationToken, bool forceAllSources = false) =>
+        await CollectCoreAsync(forceAllSources, cachedOnly: false, cancellationToken)
+        ?? throw new InvalidOperationException("Полный сбор не создал аудит.");
+
+    /// <summary>Продолжает только сохранённые публичные snapshots без HTTP-запросов и доступа к ключам.</summary>
+    internal Task<CollectionRun?> ImportCachedSourcesAsync(CancellationToken cancellationToken) =>
+        CollectCoreAsync(forceAllSources: false, cachedOnly: true, cancellationToken);
+
+    private async Task<CollectionRun?> CollectCoreAsync(
+        bool forceAllSources, bool cachedOnly, CancellationToken cancellationToken)
     {
         if (!await _runGate.WaitAsync(0, cancellationToken))
             throw new OperationAlreadyRunningException("сбор источников");
@@ -55,6 +64,13 @@ public sealed class ProxyCollector(
                 dbFactory, PostgresAdvisoryLock.CollectionKey, cancellationToken)
                 ?? throw new OperationAlreadyRunningException("сбор источников");
             await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+
+            if (cachedOnly && !await db.ProxySourceImportStates.AnyAsync(state =>
+                    state.NextIndex < state.CandidateCount && db.Sources.Any(source =>
+                        source.Id == state.ProxySourceId && source.Enabled &&
+                        source.Url == state.SourceUrl && source.DefaultProtocol == state.SourceProtocol &&
+                        source.Url != PaidProxySourceCatalog.BestProxiesUrl), cancellationToken))
+                return null;
 
             // Cluster lock доказывает, что живого collection-run в общей БД больше нет:
             // незавершённые строки могли остаться только после kill, power loss или обрыва БД.
@@ -76,8 +92,8 @@ public sealed class ProxyCollector(
                     .OrderBy(x => x.Priority).ToListAsync(cancellationToken);
                 var importStore = new ProxySourceImportStore(dbFactory);
                 var apiStore = new SourceApiCaptureStore(dbFactory);
-                await apiStore.CleanupAsync(cancellationToken);
-                var completeApiSources = (await db.SourceApiCaptureStates.AsNoTracking()
+                if (!cachedOnly) await apiStore.CleanupAsync(cancellationToken);
+                var completeApiSources = cachedOnly ? [] : (await db.SourceApiCaptureStates.AsNoTracking()
                     .Where(state => state.Complete && state.ProxySourceId != null)
                     .Select(state => state.ProxySourceId!.Value).ToArrayAsync(cancellationToken)).ToHashSet();
                 // Старые snapshots отключённых/изменённых feed'ов не должны занимать
@@ -96,11 +112,11 @@ public sealed class ProxyCollector(
                         state.CandidateCount,
                         state.LastProgressAt
                     }).ToDictionaryAsync(state => state.ProxySourceId, cancellationToken);
-                var sources = allSources.Where(source =>
-                        SourceFetchSchedule.IsDue(source.NextFetchAt, collectionStartedAt, forceAllSources, source.Url) ||
-                        completeApiSources.Contains(source.Id) ||
+                var sources = allSources.Where(source => (!cachedOnly || !PaidProxySourceCatalog.IsPaid(source)) && (
+                        !cachedOnly && (SourceFetchSchedule.IsDue(source.NextFetchAt, collectionStartedAt, forceAllSources, source.Url) ||
+                        completeApiSources.Contains(source.Id)) ||
                         (importMetadata.TryGetValue(source.Id, out var state) && state.SourceUrl == source.Url &&
-                            state.SourceProtocol == source.DefaultProtocol && state.NextIndex < state.CandidateCount))
+                            state.SourceProtocol == source.DefaultProtocol && state.NextIndex < state.CandidateCount)))
                     .OrderBy(source => importMetadata.TryGetValue(source.Id, out var state) &&
                         state.SourceUrl == source.Url && state.SourceProtocol == source.DefaultProtocol
                             ? state.LastProgressAt : null)
@@ -110,7 +126,7 @@ public sealed class ProxyCollector(
                 var importProgress = new ConcurrentBag<SourceImportProgress>();
                 var importFailures = new ConcurrentBag<Exception>();
                 var eligibleSourceIds = sources.Select(source => source.Id).ToArray();
-                var credentials = await db.ProxySourceCredentials.AsNoTracking()
+                var credentials = cachedOnly ? [] : await db.ProxySourceCredentials.AsNoTracking()
                     .Where(item => eligibleSourceIds.Contains(item.ProxySourceId))
                     .ToDictionaryAsync(item => item.ProxySourceId, cancellationToken);
                 var paidSources = sources.Where(PaidProxySourceCatalog.IsPaid).ToArray();
@@ -120,10 +136,10 @@ public sealed class ProxyCollector(
                 // миллионами кандидатов бесплатных feed'ов текущего цикла.
                 await CollectSourcesAsync(
                     paidSources, credentials, candidates, sourceResults,
-                    importStore, importProgress, importFailures, collectionStartedAt, forceAllSources, cancellationToken);
+                    importStore, importProgress, importFailures, collectionStartedAt, forceAllSources, cachedOnly, cancellationToken);
                 await CollectSourcesAsync(
                     publicSources, credentials, candidates, sourceResults,
-                    importStore, importProgress, importFailures, collectionStartedAt, forceAllSources, cancellationToken);
+                    importStore, importProgress, importFailures, collectionStartedAt, forceAllSources, cachedOnly, cancellationToken);
 
                 var sourceResultById = sourceResults.ToDictionary(result => result.Id);
                 var sourceIds = sourceResultById.Keys.ToArray();
@@ -303,11 +319,12 @@ public sealed class ProxyCollector(
         ConcurrentBag<Exception> importFailures,
         DateTimeOffset collectionStartedAt,
         bool forceAllSources,
+        bool cachedOnly,
         CancellationToken cancellationToken)
     {
         if (sources.Length == 0) return;
         var phaseIsPaid = PaidProxySourceCatalog.IsPaid(sources[0]);
-        var client = httpClientFactory.CreateClient(phaseIsPaid ? "paid-sources" : "sources");
+        var client = cachedOnly ? null : httpClientFactory.CreateClient(phaseIsPaid ? "paid-sources" : "sources");
         await Parallel.ForEachAsync(sources, new ParallelOptions
         {
             MaxDegreeOfParallelism = Math.Min(
@@ -324,6 +341,16 @@ public sealed class ProxyCollector(
             try
             {
                 importState = await importStore.LoadAsync(source, token);
+                if (cachedOnly)
+                {
+                    sourceResults.Add(new SourceCollectionResult(
+                        source.Id, source.Url, source.DefaultProtocol,
+                        source.LastItemCount, source.LastResultTruncated,
+                        source.HttpETag, source.HttpLastModifiedAt,
+                        ContentFetched: false, Error: null, FetchObserved: false));
+                    return;
+                }
+                ArgumentNullException.ThrowIfNull(client);
                 var apiOwner = FreeProxyDbPageCapture.SupportsHttp(source.Url) ? SourceApiCaptureOwner.From(source) : null;
                 var apiCheckpoint = apiOwner is null ? null : await new SourceApiCaptureStore(dbFactory).LoadAsync(apiOwner, token);
                 var apiComplete = apiCheckpoint?.Capture.Inspect(MaxSourceBytes).Complete == true;
