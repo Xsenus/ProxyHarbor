@@ -257,8 +257,14 @@ public static class DatabaseSeeder
         // полностью дублируют три агрегированных feed этого же origin-владельца.
         // Удаляем ранее встроенные записи семейства при обновлении; остальные
         // пользовательские источники по-прежнему не затрагиваются.
+        // Feed может вернуться в действующий каталог после восстановления upstream.
+        // Каталог имеет приоритет над старым retirement-list: иначе каждый startup
+        // удаляет и создаёт источник заново, сбрасывая Enabled, историю и snapshot.
+        var activeCatalogUrls = BuiltInSourceCatalog.Sources.Select(source => source.Url)
+            .ToHashSet(StringComparer.Ordinal);
         var legacySources = existingSources.Where(source =>
-            legacyUrls.Contains(source.Url) || IsRetiredXyzs996CountryFeed(source.Url)).ToArray();
+            !activeCatalogUrls.Contains(source.Url) &&
+            (legacyUrls.Contains(source.Url) || IsRetiredXyzs996CountryFeed(source.Url))).ToArray();
         db.Sources.RemoveRange(legacySources);
         var existing = existingSources
             .Except(legacySources)
