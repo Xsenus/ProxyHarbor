@@ -238,6 +238,12 @@ public sealed class SourceApiCaptureSafetyTests
     [InlineData(true, 6)]
     [InlineData(false, 7)]
     [InlineData(true, 7)]
+    [InlineData(false, 8)]
+    [InlineData(true, 8)]
+    [InlineData(false, 9)]
+    [InlineData(true, 9)]
+    [InlineData(false, 10)]
+    [InlineData(true, 10)]
     public async Task GenericTransportCannotRequestSearchApiDirectlyOrThroughRedirect(bool redirect, int provider)
     {
         var apiUrl = provider switch
@@ -249,6 +255,9 @@ public sealed class SourceApiCaptureSafetyTests
             5 => Socks5ProxiesPublicApi.Url.Replace("/api/proxies", "/api%2Fproxies", StringComparison.Ordinal),
             6 => "https://api.socks5proxies.com/api/proxies/export/csv?limit=5000",
             7 => "https://api.socks5proxies.com/api/v1/proxies?limit=100",
+            8 => ProxoraPublicApi.Url,
+            9 => ProxoraPublicApi.Url.Replace("/api/tools/free-proxies", "/api%2Ftools/free-proxies", StringComparison.Ordinal),
+            10 => "https://api.proxora.io/api/tools/free-proxies/random?format=txt",
             _ => FreeProxyDbFeedFetcher.Url
         };
         using var handler = new ApiRedirectHandler(apiUrl);

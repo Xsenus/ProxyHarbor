@@ -12,7 +12,7 @@ internal sealed class FreeProxyDbSourceApiFetcher(IDbContextFactory<ProxyHarborD
         int? maximumNetworkPages = null)
     {
         owner.EnsureSupported();
-        var pageBudget = maximumNetworkPages ?? (ProxiwarePublicApi.Supports(owner.Url) || RoundProxiesPublicApi.Supports(owner.Url) || Socks5ProxiesPublicApi.Supports(owner.Url) ? 20 : 4);
+        var pageBudget = maximumNetworkPages ?? (ProxoraPublicApi.Supports(owner.Url) ? 1 : ProxiwarePublicApi.Supports(owner.Url) || RoundProxiesPublicApi.Supports(owner.Url) || Socks5ProxiesPublicApi.Supports(owner.Url) ? 20 : 4);
         var store = new SourceApiCaptureStore(dbFactory);
         var checkpoint = await store.LoadAsync(owner, token);
         var capture = checkpoint?.Capture ?? new FreeProxyDbPageCapture();
@@ -121,6 +121,7 @@ internal sealed record SourceApiFetchResult(SourceFetchResult Fetch, SourceApiCa
         ? Checkpoint.Capture.Pages[^1].CapturedAt.AddMinutes(10)
         : Socks5ProxiesPublicApi.Supports(Checkpoint.Owner.Url) ? Checkpoint.Capture.Pages[^1].CapturedAt.AddMinutes(30)
         : RoundProxiesPublicApi.Supports(Checkpoint.Owner.Url) ? Checkpoint.Capture.Pages[^1].CapturedAt.AddMinutes(5)
+        : ProxoraPublicApi.Supports(Checkpoint.Owner.Url) ? Checkpoint.Capture.Pages[^1].CapturedAt.AddMinutes(5)
         : Checkpoint.Capture.Pages[^1].CapturedAt.AddHours(6);
 }
 
