@@ -60,6 +60,16 @@ public static class VpnFeedParser
         VpnProtocol fallback,
         CandidateSink result)
     {
+        if (ClashYamlFeedParser.LooksLike(content))
+        {
+            ClashYamlFeedParser.ParseAllTo(content, candidate =>
+            {
+                if (result.AtLimit) return false;
+                Add(candidate, result);
+                return !result.AtLimit;
+            });
+            return;
+        }
         if (fallback == VpnProtocol.MtProto && MtProtoLinkParser.TryReadJson(content, candidate =>
             {
                 if (result.AtLimit) return false;
@@ -322,7 +332,8 @@ public static class VpnFeedParser
         // files contain binary padding inside an otherwise parseable URI; Uri.TryCreate
         // accepts a subset of those values, but one such row would abort the whole COPY.
         // Reject the damaged candidate here so healthy neighbours still reach the catalog.
-        if (candidate.ConnectionUri?.Contains('\0') == true ||
+        if (candidate.ConnectionUri?.Contains('\0') == true || candidate.ClashConfiguration?.Contains('\0') == true ||
+            candidate.ClashConfiguration?.Length > ClashYamlFeedParser.MaximumConfigurationCharacters ||
             candidate.Port is < 1 or > 65_535 || candidate.Host.Length is 0 or > 253)
             return false;
         var host = candidate.Host.Trim('[', ']');
@@ -343,10 +354,11 @@ public static class VpnFeedParser
             normalized = normalized.PadRight((normalized.Length + 3) / 4 * 4, '=');
             var bytes = Convert.FromBase64String(normalized);
             if (bytes.Length > MaxDecodedLength) return false;
-            decoded = Encoding.UTF8.GetString(bytes);
+            decoded = StrictUtf8.GetString(bytes);
             return true;
         }
         catch (FormatException) { return false; }
+        catch (DecoderFallbackException) { return false; }
     }
 }
 
@@ -366,6 +378,8 @@ public readonly record struct VpnCandidate
     public string Transport { get; init; }
     /// <summary>Исходная готовая URI-конфигурация для импорта клиентом.</summary>
     public string? ConnectionUri { get; init; }
+    /// <summary>Standalone Clash YAML retaining the published connection settings.</summary>
+    public string? ClashConfiguration { get; init; }
 }
 
 internal readonly record struct VpnParseSummary(int UniqueCount, int RecordCount);

@@ -781,6 +781,8 @@ public sealed class BackupRestoreRoundTripIntegrationTests
         CountryCode = "DE",
         ConnectionUri = "vless://public-id@vpn.example.com:443?security=tls#round-trip",
         ConnectionUriObservedAt = SnapshotTime.AddMinutes(-5),
+        ClashConfiguration = "proxies: [{type: vless, server: vpn.example.com, port: 443, uuid: 00000000-0000-0000-0000-000000000001, tls: true, reality-opts: {public-key: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA, short-id: '0012'}}]",
+        ClashConfigurationObservedAt = SnapshotTime.AddMinutes(-3),
         Status = VpnEndpointStatus.Reachable,
         LatencyMs = 87,
         FirstSeenAt = SnapshotTime.AddDays(-3),

@@ -37,11 +37,26 @@ public sealed class SourceApiCaptureSafetyTests
     [InlineData(false, -1)]
     [InlineData(false, 4)]
     [InlineData(true, -1)]
-    [InlineData(true, 9)]
+    [InlineData(true, 15)]
     public void ProtocolOutsideOwnerContractCannotReachStorage(bool vpn, int protocol)
     {
         var owner = Owner with { Vpn = vpn, Protocol = protocol, Url = vpn ? FreeProxyDbPageCapture.VpnUrl : Owner.Url };
         Assert.Throws<InvalidDataException>(owner.EnsureSupported);
+    }
+
+    [Theory]
+    [InlineData(VpnProtocol.AnyTls)]
+    [InlineData(VpnProtocol.Hysteria)]
+    [InlineData(VpnProtocol.ShadowsocksR)]
+    [InlineData(VpnProtocol.HttpProxy)]
+    [InlineData(VpnProtocol.Socks4Proxy)]
+    [InlineData(VpnProtocol.Socks5Proxy)]
+    public void NewVpnProtocolsRemainBoundToSupportedPublicApiEndpoint(VpnProtocol protocol)
+    {
+        var owner = Owner with { Vpn = true, Protocol = (int)protocol, Url = FreeProxyDbPageCapture.VpnUrl };
+        owner.EnsureSupported();
+        Assert.Throws<InvalidDataException>((owner with { Url = "https://example.com/unmanaged" }).EnsureSupported);
+        Assert.Throws<InvalidDataException>((owner with { Url = owner.Url + "&key=private" }).EnsureSupported);
     }
 
     [Fact]

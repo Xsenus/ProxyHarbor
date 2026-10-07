@@ -50,6 +50,63 @@ describe('ProxyHarbor UI', () => {
     vi.unstubAllGlobals()
   })
 
+  it('downloads Clash YAML with the selected public protocol and country without pagination', async () => {
+    const originalFetch = vi.mocked(fetch).getMockImplementation()!
+    vi.mocked(fetch).mockImplementation(async (input, init) => String(input).includes('/api/v1/vpn/export/clash')
+      ? new Response('proxies: []', { headers: { 'Content-Type': 'application/yaml' } }) : originalFetch(input, init))
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: vi.fn(() => 'blob:public-clash') })
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined)
+    render(<App />)
+    const catalog = (await screen.findByRole('table', { name: 'Проверенные VPN-узлы' })).closest('section')!
+    fireEvent.click(within(catalog).getByRole('button', { name: 'Протокол VPN' }))
+    fireEvent.click(screen.getByRole('option', { name: 'Vless' }))
+    fireEvent.click(within(catalog).getByRole('button', { name: 'Страны' }))
+    fireEvent.click(within(catalog).getByRole('checkbox', { name: /Германия/ }))
+    fireEvent.click(within(catalog).getByRole('button', { name: 'Скачать Clash YAML' }))
+    await waitFor(() => expect(URL.createObjectURL).toHaveBeenCalledOnce())
+    const call = vi.mocked(fetch).mock.calls.find(([input]) => String(input).includes('/api/v1/vpn/export/clash'))!
+    const query = new URL(String(call[0]), 'https://proxyharbor.test').searchParams
+    expect([...query.entries()]).toEqual([['protocol', 'Vless'], ['country', 'DE']])
+    expect(call[1]).toEqual({ credentials: 'include' })
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([url]) => {
+      const request = new URL(String(url), 'https://proxyharbor.test')
+      return request.pathname === '/api/v1/vpn/countries' && request.searchParams.get('format') === 'all' && request.searchParams.get('protocol') === 'Vless'
+    })).toBe(true))
+  })
+
+  it('keeps YAML-only countries selectable when the URI table is empty', async () => {
+    const originalFetch = vi.mocked(fetch).getMockImplementation()!
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = new URL(String(input), 'https://proxyharbor.test')
+      if (url.pathname === '/api/v1/vpn/countries' && url.searchParams.get('format') === 'all') return jsonResponse([{ code: 'JP', count: 2 }])
+      if (url.pathname === '/api/v1/vpn') return jsonResponse({ items: [], total: 0, page: 1, pageSize: 10 })
+      if (url.pathname === '/api/v1/vpn/export/clash') return new Response('', { status: 404 })
+      return originalFetch(input, init)
+    })
+    render(<App />)
+    const catalog = (await screen.findByRole('table', { name: 'Проверенные VPN-узлы' })).closest('section')!
+    fireEvent.click(within(catalog).getByRole('button', { name: 'Страны' }))
+    const japan = await within(catalog).findByRole('checkbox', { name: /Япония/ })
+    fireEvent.click(japan)
+    fireEvent.click(within(catalog).getByRole('button', { name: 'Скачать Clash YAML' }))
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).endsWith('/api/v1/vpn/export/clash?country=JP'))).toBe(true))
+    expect(japan).toBeChecked()
+    expect(within(catalog).getByText('Для выбранных фильтров готовых VPN-ссылок пока нет.')).toBeInTheDocument()
+  })
+
+  it('shows a separate Clash export error and retries the export with cleared filters', async () => {
+    const originalFetch = vi.mocked(fetch).getMockImplementation()!
+    vi.mocked(fetch).mockImplementation(async (input, init) => String(input).includes('/api/v1/vpn/export/clash')
+      ? new Response('secret-body', { status: 404 }) : originalFetch(input, init))
+    render(<App />)
+    const button = await screen.findByRole('button', { name: 'Скачать Clash YAML' })
+    fireEvent.click(button)
+    expect(await screen.findByText('Для выбранных фильтров нет свежих полных Clash-конфигураций.')).toBeInTheDocument()
+    expect(screen.queryByText('secret-body')).not.toBeInTheDocument()
+    fireEvent.click(button)
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.filter(([url]) => String(url).endsWith('/api/v1/vpn/export/clash'))).toHaveLength(2))
+  })
+
   it('does not expose provider catalog or request its public endpoint', async () => {
     render(<App />)
     await screen.findByText('система активна')
@@ -98,6 +155,20 @@ describe('ProxyHarbor UI', () => {
       const url = String(input)
       return url.includes('/api/v1/vpn?') && url.includes('status=Reachable') && url.includes('pageSize=10')
     })).toBe(true)
+  })
+
+  it.each(['AnyTls', 'Hysteria', 'ShadowsocksR', 'HttpProxy', 'Socks4Proxy', 'Socks5Proxy'])('filters public VPN results by the new %s protocol', async protocol => {
+    const { container } = render(<App/>)
+    await screen.findByRole('table', { name: 'Проверенные VPN-узлы' })
+    const trigger = screen.getByRole('button', { name: 'Протокол VPN' })
+    fireEvent.click(trigger)
+    fireEvent.click(screen.getByRole('option', { name: protocol }))
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([input]) => {
+      const request = new URL(String(input), 'https://example.test')
+      return request.pathname === '/api/v1/vpn' && request.searchParams.get('protocol') === protocol
+    })).toBe(true))
+    await waitFor(() => expect(trigger).toHaveFocus())
+    expect(container.querySelector('select')).toBeNull()
   })
 
   it('copies a ready VPN connection URI from the catalog', async () => {

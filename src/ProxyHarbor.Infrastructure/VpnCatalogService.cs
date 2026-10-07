@@ -189,6 +189,7 @@ public sealed class VpnCatalogService(
                 protocol integer NOT NULL,
                 transport text NOT NULL,
                 connection_uri text NULL,
+                clash_configuration text NULL,
                 seen_at timestamptz NOT NULL,
                 PRIMARY KEY (source_id, host, port, protocol, transport)
             ) ON COMMIT DROP
@@ -197,7 +198,7 @@ public sealed class VpnCatalogService(
 
         await using (var writer = await connection.BeginBinaryImportAsync("""
             COPY vpn_import
-                (source_id, source_priority, host, port, protocol, transport, connection_uri, seen_at)
+                (source_id, source_priority, host, port, protocol, transport, connection_uri, clash_configuration, seen_at)
             FROM STDIN (FORMAT BINARY)
             """, token))
         {
@@ -216,6 +217,10 @@ public sealed class VpnCatalogService(
                         await writer.WriteNullAsync(token);
                     else
                         await writer.WriteAsync(candidate.ConnectionUri, NpgsqlDbType.Text, token);
+                    if (candidate.ClashConfiguration is null)
+                        await writer.WriteNullAsync(token);
+                    else
+                        await writer.WriteAsync(candidate.ClashConfiguration, NpgsqlDbType.Text, token);
                     await writer.WriteAsync(result.ObservedAt, NpgsqlDbType.TimestampTz, token);
                 }
             }
@@ -224,17 +229,25 @@ public sealed class VpnCatalogService(
 
         // DISTINCT ON выполняется один раз для INSERT и UPDATE. Без этого обе операции
         // независимо сортировали всю партию, что удваивало temp I/O на крупных feed.
-        // URI выбирается по времени наблюдения тела; priority разрешает только равные эпохи.
-        // LastSeenAt учитывает также свежие метаданные без готовой URI.
+        // URI и Clash выбираются независимо по времени наблюдения тела;
+        // priority разрешает только равные эпохи. LastSeenAt учитывает также
+        // свежие метаданные без готовой конфигурации любого формата.
         await using (var prepareEndpoints = new NpgsqlCommand("""
             CREATE TEMP TABLE vpn_import_endpoints ON COMMIT DROP AS
             SELECT DISTINCT ON (host, port, protocol, transport)
-                   source_id, host, port, protocol, transport, connection_uri, seen_at,
-                   MIN(seen_at) OVER (PARTITION BY host, port, protocol, transport) AS first_seen_at,
-                   MAX(seen_at) OVER (PARTITION BY host, port, protocol, transport) AS last_seen_at
+                   source_id, host, port, protocol, transport, seen_at,
+                   FIRST_VALUE(connection_uri) OVER uri_preference AS connection_uri,
+                   FIRST_VALUE(CASE WHEN connection_uri IS NOT NULL THEN seen_at END) OVER uri_preference AS uri_observed_at,
+                   FIRST_VALUE(clash_configuration) OVER clash_preference AS clash_configuration,
+                   FIRST_VALUE(CASE WHEN clash_configuration IS NOT NULL THEN seen_at END) OVER clash_preference AS clash_observed_at,
+                   MIN(seen_at) OVER identity AS first_seen_at,
+                   MAX(seen_at) OVER identity AS last_seen_at
             FROM vpn_import
+            WINDOW identity AS (PARTITION BY host, port, protocol, transport),
+                   uri_preference AS (identity ORDER BY (connection_uri IS NULL), seen_at DESC, source_priority, source_id),
+                   clash_preference AS (identity ORDER BY (clash_configuration IS NULL), seen_at DESC, source_priority, source_id)
             ORDER BY host, port, protocol, transport,
-                     (connection_uri IS NULL), seen_at DESC, source_priority, source_id;
+                     (connection_uri IS NULL AND clash_configuration IS NULL), seen_at DESC, source_priority, source_id;
             ANALYZE vpn_import;
             ANALYZE vpn_import_endpoints
             """, connection, transaction))
@@ -256,10 +269,11 @@ public sealed class VpnCatalogService(
         await using var insert = new NpgsqlCommand("""
             INSERT INTO "VpnEndpoints"
                 ("Id", "Host", "Port", "Protocol", "Transport", "CountryCode", "ConnectionUri", "ConnectionUriObservedAt",
+                 "ClashConfiguration", "ClashConfigurationObservedAt",
                  "Status", "LatencyMs", "FirstSeenAt", "LastSeenAt", "LastCheckedAt", "NextCheckAt",
                  "SuccessfulChecks", "FailedChecks", "LastError", "FirstSourceId")
             SELECT gen_random_uuid(), i.host, i.port, i.protocol, i.transport, NULL, i.connection_uri,
-                   CASE WHEN i.connection_uri IS NOT NULL THEN i.seen_at END,
+                   i.uri_observed_at, i.clash_configuration, i.clash_observed_at,
                    0, NULL, i.first_seen_at, i.last_seen_at, NULL, NULL, 0, 0, NULL, i.source_id
             FROM vpn_import_endpoints i
             WHERE NOT EXISTS (
@@ -278,13 +292,21 @@ public sealed class VpnCatalogService(
             UPDATE "VpnEndpoints" endpoint
             SET "LastSeenAt" = GREATEST(endpoint."LastSeenAt", preferred.last_seen_at),
                 "ConnectionUri" = CASE WHEN preferred.connection_uri IS NOT NULL AND
-                    (endpoint."ConnectionUri" IS NULL OR preferred.seen_at >=
+                    (endpoint."ConnectionUri" IS NULL OR preferred.uri_observed_at >=
                      COALESCE(endpoint."ConnectionUriObservedAt", endpoint."LastSeenAt"))
                     THEN preferred.connection_uri ELSE endpoint."ConnectionUri" END,
                 "ConnectionUriObservedAt" = CASE WHEN preferred.connection_uri IS NOT NULL AND
-                    (endpoint."ConnectionUri" IS NULL OR preferred.seen_at >=
+                    (endpoint."ConnectionUri" IS NULL OR preferred.uri_observed_at >=
                      COALESCE(endpoint."ConnectionUriObservedAt", endpoint."LastSeenAt"))
-                    THEN preferred.seen_at ELSE endpoint."ConnectionUriObservedAt" END
+                    THEN preferred.uri_observed_at ELSE endpoint."ConnectionUriObservedAt" END,
+                "ClashConfiguration" = CASE WHEN preferred.clash_configuration IS NOT NULL AND
+                    (endpoint."ClashConfiguration" IS NULL OR preferred.clash_observed_at >=
+                     COALESCE(endpoint."ClashConfigurationObservedAt", endpoint."LastSeenAt"))
+                    THEN preferred.clash_configuration ELSE endpoint."ClashConfiguration" END,
+                "ClashConfigurationObservedAt" = CASE WHEN preferred.clash_configuration IS NOT NULL AND
+                    (endpoint."ClashConfiguration" IS NULL OR preferred.clash_observed_at >=
+                     COALESCE(endpoint."ClashConfigurationObservedAt", endpoint."LastSeenAt"))
+                    THEN preferred.clash_observed_at ELSE endpoint."ClashConfigurationObservedAt" END
             FROM vpn_import_endpoints preferred
             WHERE endpoint."Host" = preferred.host
               AND endpoint."Port" = preferred.port
@@ -293,10 +315,15 @@ public sealed class VpnCatalogService(
               AND ((endpoint."LastSeenAt" < @refresh_before AND
                     preferred.last_seen_at > endpoint."LastSeenAt") OR
                    (preferred.connection_uri IS NOT NULL AND
-                    (endpoint."ConnectionUri" IS NULL OR preferred.seen_at >=
+                    (endpoint."ConnectionUri" IS NULL OR preferred.uri_observed_at >=
                      COALESCE(endpoint."ConnectionUriObservedAt", endpoint."LastSeenAt")) AND
                     (endpoint."ConnectionUri" IS DISTINCT FROM preferred.connection_uri OR
-                     endpoint."ConnectionUriObservedAt" IS DISTINCT FROM preferred.seen_at)))
+                     endpoint."ConnectionUriObservedAt" IS DISTINCT FROM preferred.uri_observed_at)) OR
+                   (preferred.clash_configuration IS NOT NULL AND
+                    (endpoint."ClashConfiguration" IS NULL OR preferred.clash_observed_at >=
+                     COALESCE(endpoint."ClashConfigurationObservedAt", endpoint."LastSeenAt")) AND
+                    (endpoint."ClashConfiguration" IS DISTINCT FROM preferred.clash_configuration OR
+                     endpoint."ClashConfigurationObservedAt" IS DISTINCT FROM preferred.clash_observed_at)))
             """, connection, transaction))
         {
             refreshEndpoints.Parameters.AddWithValue(

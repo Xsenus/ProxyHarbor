@@ -235,6 +235,10 @@ builder.Services.AddOutputCache(options =>
         .Expire(PublicOutputCachePolicies.CatalogExpiration)
         .SetVaryByQuery([])
         .VaryByValue(PublicOutputCachePolicies.CultureKey));
+    options.AddPolicy(PublicOutputCachePolicies.VpnCountries, policy => policy
+        .Expire(PublicOutputCachePolicies.CatalogExpiration)
+        .SetVaryByQuery(PublicOutputCachePolicies.VpnCountriesVaryByQuery)
+        .VaryByValue(PublicOutputCachePolicies.CultureKey));
     options.AddPolicy(PublicOutputCachePolicies.SeekFirstPage, policy => policy
         // Произвольные cursor продолжения не должны создавать одноразовые cache entries.
         .With(context => PublicOutputCachePolicies.IsSeekFirstPage(context.HttpContext))

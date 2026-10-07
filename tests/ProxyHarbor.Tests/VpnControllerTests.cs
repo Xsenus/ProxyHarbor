@@ -9,8 +9,221 @@ using ProxyHarbor.Infrastructure;
 namespace ProxyHarbor.Tests;
 
 /// <summary>Проверяет серверную пагинацию, фильтры и безопасное управление VPN-каталогом.</summary>
+[Collection(PostgresIntegrationGroup.Name)]
 public sealed class VpnControllerTests
 {
+    [Fact]
+    public async Task BusyClashExportIsBoundedAndCanceledRequestsReleaseTheirSlots()
+    {
+        var options = Options();
+        var access = new BlockingClashAccess();
+        VpnController Controller() => new(new TestDbFactory(options), access)
+        { ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() } };
+        using var cancellation = new CancellationTokenSource();
+        var first = Controller().Export("clash", token: cancellation.Token);
+        var second = Controller().Export("clash", token: cancellation.Token);
+        try
+        {
+            await access.BothStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            var rejected = Controller();
+            Assert.Equal(503, Assert.IsType<ObjectResult>(await rejected.Export("clash")).StatusCode);
+            Assert.Equal("1", rejected.Response.Headers.RetryAfter);
+        }
+        finally
+        {
+            cancellation.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await first);
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await second);
+        }
+        Assert.Equal(404, Assert.IsType<ObjectResult>(await PublicClash(options).Export("clash")).StatusCode);
+    }
+
+    private sealed class BlockingClashAccess : IFreeExportAccessService
+    {
+        internal TaskCompletionSource BothStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int started;
+        public async Task<bool> HasPaidAccessAsync(System.Security.Claims.ClaimsPrincipal principal, CancellationToken cancellationToken)
+        {
+            if (Interlocked.Increment(ref started) == 2) BothStarted.TrySetResult();
+            await Task.Delay(Timeout.Infinite, cancellationToken);
+            return false;
+        }
+        public Task<FreeExportAccess> AcquireAsync(System.Security.Claims.ClaimsPrincipal principal, string? remoteIp, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+    }
+
+    [Fact]
+    public async Task PublicClashExportAcceptsYamlOnlyEndpointsAndPreservesSettingsWithoutInventingUris()
+    {
+        var options = Options();
+        var source = Source("Clash", "https://8.8.8.8/clash.yaml");
+        var row = ClashEndpoint(source, "proxies: [{type: anytls, server: 8.8.8.8, port: 443, password: published, sni: tls.example.net}]");
+        await SeedAsync(options, source, row);
+        var controller = PublicClash(options);
+        var file = Assert.IsType<FileContentResult>(await controller.Export("CLASH", country: ["de"], protocol: VpnProtocol.AnyTls));
+        var body = System.Text.Encoding.UTF8.GetString(file.FileContents);
+        Assert.Equal("application/yaml; charset=utf-8", file.ContentType);
+        Assert.Equal("vpn-configurations.yaml", file.FileDownloadName);
+        Assert.Contains("published", body);
+        Assert.Contains("tls.example.net", body);
+        Assert.DoesNotContain("clash://", body);
+        Assert.Equal("free", controller.Response.Headers["X-Access-Tier"]);
+        Assert.Equal("1", controller.Response.Headers["X-Export-Profiles"]);
+        Assert.Equal("private, no-store", controller.Response.Headers.CacheControl);
+        Assert.Null(row.ConnectionUri);
+        Assert.Single(VpnFeedParser.Parse(body, VpnProtocol.Vless));
+    }
+
+    [Fact]
+    public async Task FreeClashExportCountsDependencyProfilesAndDoesNotDropTheDialerChain()
+    {
+        var options = Options();
+        var source = Source("Clash", "https://8.8.8.8/clash.yaml");
+        const string peer = "{name: peer, type: socks5, server: 1.1.1.1, port: 1080, password: peer-secret}";
+        var rows = Enumerable.Range(1, 12).Select(index => ClashEndpoint(source,
+            $"proxies: [{{name: main, type: vless, server: 8.8.8.{index}, port: 443, uuid: published, dialer-proxy: peer}}, {peer}]", $"8.8.8.{index}")).ToList();
+        rows.Add(ClashEndpoint(source, "proxies: [" + peer + "]"));
+        await SeedAsync(options, source, rows.ToArray());
+        var controller = PublicClash(options);
+        var file = Assert.IsType<FileContentResult>(await controller.Export("clash", protocol: VpnProtocol.Vless, limit: 5000));
+        var document = ClashYamlFeedReader.ReadRequired(System.Text.Encoding.UTF8.GetString(file.FileContents));
+        var profiles = (YamlDotNet.RepresentationModel.YamlSequenceNode)document.Children[new YamlDotNet.RepresentationModel.YamlScalarNode("proxies")];
+        Assert.Equal(10, profiles.Children.Count);
+        Assert.Equal("10", controller.Response.Headers["X-Export-Profiles"]);
+        Assert.Equal("5", controller.Response.Headers["X-Export-Configurations"]);
+        Assert.Equal("12", controller.Response.Headers["X-Catalog-Total"]);
+        Assert.Equal("10", controller.Response.Headers["X-Export-Limit"]);
+        foreach (var primary in profiles.Children.Cast<YamlDotNet.RepresentationModel.YamlMappingNode>().Where(node => node.Children.ContainsKey(new YamlDotNet.RepresentationModel.YamlScalarNode("dialer-proxy"))))
+        {
+            var dependency = primary.Children[new YamlDotNet.RepresentationModel.YamlScalarNode("dialer-proxy")];
+            Assert.Contains(profiles.Children.Cast<YamlDotNet.RepresentationModel.YamlMappingNode>(), node => node.Children[new YamlDotNet.RepresentationModel.YamlScalarNode("name")].Equals(dependency));
+        }
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("stale")]
+    [InlineData("country")]
+    [InlineData("pending")]
+    [InlineData("rotated")]
+    [InlineData("checked-before-observation")]
+    public async Task PublicClashExportRefusesUnvalidatedOrOutdatedDependencyCredentials(string fault)
+    {
+        var options = Options();
+        var source = Source("Clash", "https://8.8.8.8/clash.yaml");
+        var primary = ClashEndpoint(source, "proxies: [{name: main, type: vless, server: 8.8.8.8, port: 443, uuid: published, dialer-proxy: peer}, {name: peer, type: socks5, server: 1.1.1.1, port: 1080, password: old-secret}]", "8.8.8.8");
+        var peer = ClashEndpoint(source, $"proxies: [{{name: peer, type: socks5, server: 1.1.1.1, port: 1080, password: {(fault == "rotated" ? "new-secret" : "old-secret")}}}]");
+        if (fault == "stale") peer.LastCheckedAt = DateTimeOffset.UtcNow.AddDays(-1);
+        if (fault == "country") peer.CountryCode = null;
+        if (fault == "pending") peer.Status = VpnEndpointStatus.Pending;
+        if (fault == "checked-before-observation") peer.ClashConfigurationObservedAt = DateTimeOffset.UtcNow.AddMinutes(1);
+        await SeedAsync(options, source, fault == "missing" ? [primary] : [primary, peer]);
+        var result = Assert.IsType<ObjectResult>(await PublicClash(options).Export("clash", protocol: VpnProtocol.Vless));
+        Assert.Equal(404, result.StatusCode);
+        Assert.DoesNotContain("old-secret", System.Text.Json.JsonSerializer.Serialize(result.Value));
+        Assert.DoesNotContain("new-secret", System.Text.Json.JsonSerializer.Serialize(result.Value));
+    }
+
+    [Fact]
+    public async Task PaidClashExportHonorsRequestedProfileLimitAndCountryAndFreshnessFilters()
+    {
+        var options = Options();
+        var source = Source("Clash", "https://8.8.8.8/clash.yaml");
+        var rows = Enumerable.Range(1, 40).Select(index => ClashEndpoint(source, $"proxies: [{{type: vless, server: 8.8.8.{index}, port: 443, uuid: published}}]")).ToArray();
+        rows[0].CountryCode = "US";
+        rows[1].LastCheckedAt = DateTimeOffset.UtcNow.AddDays(-1);
+        rows[2].CountryCode = null;
+        rows[3].Status = VpnEndpointStatus.Unreachable;
+        await SeedAsync(options, source, rows);
+        var controller = PublicClash(options, paid: true);
+        Assert.IsType<FileContentResult>(await controller.Export("clash", country: ["DE"], limit: 35));
+        Assert.Equal("paid", controller.Response.Headers["X-Access-Tier"]);
+        Assert.Equal("36", controller.Response.Headers["X-Catalog-Total"]);
+        Assert.Equal("35", controller.Response.Headers["X-Export-Profiles"]);
+        Assert.Equal("35", controller.Response.Headers["X-Export-Configurations"]);
+        Assert.False(controller.Response.Headers.ContainsKey("Link"));
+    }
+
+    private static VpnEndpoint ClashEndpoint(VpnSource source, string yaml, string? host = null)
+    {
+        var parsed = VpnFeedParser.Parse(yaml, VpnProtocol.Vless);
+        var candidate = host is null ? parsed[0] : parsed.Single(item => item.Host == host);
+        var row = Endpoint(source, candidate.Host, candidate.Protocol, VpnEndpointStatus.Reachable, 10, "DE");
+        row.Port = candidate.Port;
+        row.Transport = candidate.Transport;
+        row.ClashConfiguration = candidate.ClashConfiguration;
+        return row;
+    }
+
+    [Fact]
+    public async Task OversizedPublicClashExportReturnsAnErrorInsteadOfSilentlyTruncatingSettings()
+    {
+        var options = Options();
+        var source = Source("Clash", "https://8.8.8.8/clash.yaml");
+        var extra = new string('x', 14_000);
+        var rows = Enumerable.Range(1, 300).Select(index => ClashEndpoint(source,
+            $"proxies: [{{type: vless, server: large-{index}.example.net, port: 443, uuid: published, future-option: '{extra}'}}]")).ToArray();
+        await SeedAsync(options, source, rows);
+        var result = Assert.IsType<ObjectResult>(await PublicClash(options, paid: true).Export("clash", limit: 300));
+        Assert.Equal(409, result.StatusCode);
+        Assert.DoesNotContain(extra, System.Text.Json.JsonSerializer.Serialize(result.Value));
+    }
+
+    private static VpnController PublicClash(DbContextOptions<ProxyHarborDbContext> options, bool paid = false)
+    {
+        var controller = paid ? new VpnController(new TestDbFactory(options)) : new VpnController(new TestDbFactory(options), new FreeAccessService());
+        controller.ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() };
+        return controller;
+    }
+
+    [Fact]
+    public async Task AdminClashDownloadReturnsCompleteYamlAndListingExposesOnlyAvailability()
+    {
+        var options = Options();
+        var source = Source("Clash", "https://8.8.8.8/clash.yaml");
+        var row = Endpoint(source, "8.8.8.8", VpnProtocol.AnyTls, VpnEndpointStatus.Pending, null);
+        row.ClashConfiguration = VpnFeedParser.Parse("proxies: [{type: anytls, server: 8.8.8.8, port: 443, password: published}]", VpnProtocol.Vless)[0].ClashConfiguration;
+        await SeedAsync(options, source, row);
+        var controller = Admin(options);
+        var file = Assert.IsType<FileContentResult>(await controller.DownloadClash(row.Id));
+        Assert.Equal("application/yaml; charset=utf-8", file.ContentType);
+        Assert.Equal($"proxyharbor-{row.Id:N}.yaml", file.FileDownloadName);
+        Assert.Contains("published", System.Text.Encoding.UTF8.GetString(file.FileContents));
+        Assert.Equal(VpnProtocol.AnyTls, Assert.Single(VpnFeedParser.Parse(System.Text.Encoding.UTF8.GetString(file.FileContents), VpnProtocol.Vless)).Protocol);
+        var page = AdminEndpointPage(await controller.Endpoints());
+        Assert.True(Assert.Single(page.Items).HasClashConfiguration);
+        Assert.DoesNotContain("published", System.Text.Json.JsonSerializer.Serialize(page));
+    }
+
+    [Fact]
+    public async Task AdminClashDownloadRejectsMissingOrMismatchedSavedConfigurationWithoutDisclosure()
+    {
+        var options = Options();
+        var source = Source("Clash", "https://8.8.8.8/clash.yaml");
+        var row = Endpoint(source, "8.8.8.8", VpnProtocol.Vless, VpnEndpointStatus.Pending, null);
+        await SeedAsync(options, source, row);
+        var controller = Admin(options);
+        Assert.IsType<NotFoundResult>(await controller.DownloadClash(Guid.NewGuid()));
+        Assert.IsType<NotFoundResult>(await controller.DownloadClash(row.Id));
+        await using (var db = new ProxyHarborDbContext(options))
+        {
+            var saved = await db.VpnEndpoints.SingleAsync();
+            saved.ClashConfiguration = "proxies: [{type: vless, server: 127.0.0.1, port: 443, password: private-secret}]";
+            await db.SaveChangesAsync();
+        }
+        var result = Assert.IsType<ObjectResult>(await controller.DownloadClash(row.Id));
+        Assert.Equal(409, result.StatusCode);
+        Assert.DoesNotContain("private-secret", System.Text.Json.JsonSerializer.Serialize(result.Value));
+    }
+
+    [Fact]
+    public void AdminClashDownloadInheritsAdministratorAuthorization()
+    {
+        var authorization = Assert.Single(typeof(AdminVpnController).GetCustomAttributes(typeof(Microsoft.AspNetCore.Authorization.AuthorizeAttribute), true));
+        Assert.Equal(UserRoles.Administrator, Assert.IsType<Microsoft.AspNetCore.Authorization.AuthorizeAttribute>(authorization).Roles);
+        Assert.Empty(typeof(AdminVpnController).GetMethod(nameof(AdminVpnController.DownloadClash))!.GetCustomAttributes(typeof(Microsoft.AspNetCore.Authorization.AllowAnonymousAttribute), true));
+    }
+
     [Fact]
     public async Task PublicCatalogDefaultsToReachableAndExcludesIncompleteEndpoints()
     {
@@ -65,6 +278,56 @@ public sealed class VpnControllerTests
         Assert.Equal(12, german.Total);
         Assert.All(german.Items, item => Assert.Equal("DE", item.CountryCode));
         Assert.Equal(["DE", "FR"], countries.Select(item => item.Code).Order().ToArray());
+    }
+
+    [Fact]
+    public async Task CountryRepresentationsIncludeYamlOnlyRowsWithoutDoubleCountingOrChangingLegacyUris()
+    {
+        var options = Options();
+        var source = Source("Countries", "https://8.8.8.8/countries.txt");
+        var now = DateTimeOffset.UtcNow;
+        var uri = Endpoint(source, "1.1.1.1", VpnProtocol.Vless, VpnEndpointStatus.Reachable, 1, "DE", "vless://published@1.1.1.1:443");
+        var yaml = Endpoint(source, "8.8.8.8", VpnProtocol.AnyTls, VpnEndpointStatus.Reachable, 2, "JP");
+        yaml.ClashConfiguration = "proxies: [{type: anytls, server: 8.8.8.8, port: 443, password: published}]";
+        yaml.ClashConfigurationObservedAt = now.AddMinutes(-1);
+        yaml.LastCheckedAt = now;
+        var both = Endpoint(source, "9.9.9.9", VpnProtocol.Vless, VpnEndpointStatus.Reachable, 3, "DE", "vless://published@9.9.9.9:443");
+        both.ClashConfiguration = "proxies: [{type: vless, server: 9.9.9.9, port: 443, uuid: published}]";
+        both.ClashConfigurationObservedAt = now.AddMinutes(-1);
+        both.LastCheckedAt = now;
+        var changed = Endpoint(source, "1.0.0.1", VpnProtocol.AnyTls, VpnEndpointStatus.Reachable, 4, "FR");
+        changed.ClashConfiguration = yaml.ClashConfiguration;
+        changed.LastCheckedAt = now.AddMinutes(-1);
+        changed.ClashConfigurationObservedAt = now;
+        var stale = Endpoint(source, "8.8.4.4", VpnProtocol.AnyTls, VpnEndpointStatus.Reachable, 5, "US");
+        stale.ClashConfiguration = yaml.ClashConfiguration;
+        stale.LastCheckedAt = now.AddDays(-7);
+        var unknown = Endpoint(source, "4.2.2.1", VpnProtocol.AnyTls, VpnEndpointStatus.Reachable, 6);
+        unknown.ClashConfiguration = yaml.ClashConfiguration;
+        unknown.LastCheckedAt = now;
+        var pending = Endpoint(source, "4.2.2.2", VpnProtocol.AnyTls, VpnEndpointStatus.Pending, 7, "GB");
+        pending.ClashConfiguration = yaml.ClashConfiguration;
+        pending.LastCheckedAt = now;
+        await SeedAsync(options, source, uri, yaml, both, changed, stale, unknown, pending);
+        var controller = new VpnController(new TestDbFactory(options), new FreeAccessService());
+
+        static IReadOnlyList<ProxyCountryDto> Rows(ActionResult<IReadOnlyList<ProxyCountryDto>> result) =>
+            Assert.IsAssignableFrom<IReadOnlyList<ProxyCountryDto>>(Assert.IsType<OkObjectResult>(result.Result).Value);
+        Assert.Equal([new ProxyCountryDto("DE", 2)], Rows(await controller.Countries(CancellationToken.None)));
+        Assert.Equal([new ProxyCountryDto("DE", 2), new ProxyCountryDto("JP", 1)], Rows(await controller.Countries(CancellationToken.None, "ALL")));
+        Assert.Equal([new ProxyCountryDto("DE", 1), new ProxyCountryDto("JP", 1)], Rows(await controller.Countries(CancellationToken.None, "clash")));
+        Assert.Equal([new ProxyCountryDto("JP", 1)], Rows(await controller.Countries(CancellationToken.None, "all", VpnProtocol.AnyTls)));
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("")]
+    [InlineData("yaml")]
+    public async Task CountryEndpointRejectsUnsupportedRepresentation(string format)
+    {
+        var controller = new VpnController(new TestDbFactory(Options()));
+        var result = await controller.Countries(CancellationToken.None, format);
+        Assert.IsType<BadRequestObjectResult>(result.Result);
     }
 
     [Fact]

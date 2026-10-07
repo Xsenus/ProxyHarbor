@@ -151,7 +151,7 @@ internal sealed class VpnSourceImportStore(
         (state.NextIndex == state.CandidateCount ? state.Payload.Length == 0 && state.PayloadHash.Length == 0 :
             state.Payload.Length is > 16 and <= VpnCandidateSnapshotCodec.MaxPayloadBytes &&
             state.PayloadHash.Length == SHA256.HashSizeInBytes &&
-            BinaryPrimitives.ReadInt32LittleEndian(state.Payload) == VpnCandidateSnapshotCodec.Magic &&
+            BinaryPrimitives.ReadInt32LittleEndian(state.Payload) is VpnCandidateSnapshotCodec.Magic or VpnCandidateSnapshotCodec.LegacyMagic &&
             BinaryPrimitives.ReadInt32LittleEndian(state.Payload.AsSpan(8)) == state.CandidateCount &&
             CryptographicOperations.FixedTimeEquals(SHA256.HashData(state.Payload), state.PayloadHash));
 }

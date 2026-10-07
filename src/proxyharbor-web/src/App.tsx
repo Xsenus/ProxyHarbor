@@ -1,3 +1,6 @@
+import { vpnProtocols, type VpnProtocol } from './vpnProtocols'
+import { ClashDownloadButton } from './components/ClashDownloadButton'
+import { clashDownloadMessages } from './clashDownloadMessages'
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Activity, ArrowDownToLine, ArrowRight, Ban, Bot, CalendarClock, Check, ChevronDown, Clock3, Copy, CreditCard, Database, Gauge, Globe2, HardDriveDownload, LayoutDashboard, LockKeyhole, LogOut, MessageCircle, MousePointerClick, Network, Pencil, Play, Plus, Radio, RefreshCw, Search, Server, ShieldCheck, ShieldOff, Star, Trash2, User, Users, Wifi, Workflow, X } from 'lucide-react'
 import { currentLocale, LanguageSwitcher, useI18n } from './i18n'
@@ -72,7 +75,7 @@ type SiteVisitorPage = PagedResult<SiteVisitor> & {summary:{pageViews:number;uni
 type SiteVisit = {id:number;ipAddress:string;userId?:string;userName?:string;email?:string;displayName?:string;page:string;visitedAt:string}
 type SiteVisitPage = PagedResult<SiteVisit> & {retentionDays:number}
 type SourceDraft = { name: string; url: string; protocol: Protocol; priority: number; enabled: boolean }
-type VpnProtocol = 'OpenVpn'|'WireGuard'|'Vless'|'Vmess'|'Trojan'|'Shadowsocks'|'Hysteria2'|'Tuic'|'MtProto'
+
 type VpnStatus = 'Pending'|'Reachable'|'Unreachable'|'UnsupportedTransport'
 type VpnEndpoint = {id:string;host:string;port:number;countryCode?:string;protocol:VpnProtocol;transport:'tcp'|'udp';status:VpnStatus;latencyMs?:number;firstSeenAt:string;lastSeenAt:string;lastCheckedAt?:string;nextCheckAt?:string;successfulChecks:number;failedChecks:number;successRate:number;knownForSeconds:number;lastError?:string;connectionUri?:string}
 const emptySourceDraft: SourceDraft = { name: '', url: '', protocol: 'Http', priority: 100, enabled: true }
@@ -840,8 +843,8 @@ function NotFoundPage() {
 
 /** Публичный VPN-каталог отдаёт готовые опубликованные URI без раскрытия внутренних feed. */
 function PublicVpnCatalog() {
-  const { t } = useI18n()
-  const protocols: VpnProtocol[] = ['OpenVpn','WireGuard','Vless','Vmess','Trojan','Shadowsocks','Hysteria2','Tuic','MtProto']
+  const { t, language } = useI18n()
+  const protocols = vpnProtocols
   const [items,setItems] = useState<VpnEndpoint[]>([])
   const [countries,setCountries] = useState<ProxyCountry[]>([])
   const [selectedCountries,setSelectedCountries] = useState<string[]>([])
@@ -853,16 +856,22 @@ function PublicVpnCatalog() {
   const [copied,setCopied] = useState('')
   const [loading,setLoading] = useState(true)
   const [error,setError] = useState('')
+  const [downloadError,setDownloadError] = useState('')
+  const exportQuery = new URLSearchParams()
+  if (protocol !== 'All') exportQuery.set('protocol',protocol)
+  selectedCountries.forEach(country=>exportQuery.append('country',country))
 
   const load = useCallback(async (signal?:AbortSignal) => {
     setLoading(true)
     try {
       const query = new URLSearchParams({page:String(page),pageSize:String(pageSize),status:'Reachable'})
+      const countryQuery = new URLSearchParams({format:'all'})
+      if (protocol !== 'All') countryQuery.set('protocol',protocol)
       if (protocol !== 'All') query.set('protocol',protocol)
       selectedCountries.forEach(country=>query.append('country',country))
       const [response,countriesResponse] = await Promise.all([
         fetch(`${API}/api/v1/vpn?${query}`,{signal,credentials:'include',headers:{'Accept-Language':currentLocale()}}),
-        fetch(`${API}/api/v1/vpn/countries`,{signal})
+        fetch(`${API}/api/v1/vpn/countries?${countryQuery}`,{signal})
       ])
       if (!response.ok||!countriesResponse.ok) throw new Error(await responseMessage(response,t('vpnCatalogUnavailable')))
       const [snapshot,countrySnapshot] = await Promise.all([
@@ -897,7 +906,9 @@ function PublicVpnCatalog() {
   const totalPages = Math.max(1,Math.ceil(total/pageSize))
   return <section id="vpn-catalog" className="catalog public-vpn-catalog" aria-labelledby="vpn-catalog-title">
     <div className="section-heading"><div><span className="kicker">VPN CATALOG</span><h2 id="vpn-catalog-title">{t('vpnCatalog')}</h2><p className="vpn-catalog-description">{t('vpnCatalogText')}</p></div><p>{t('vpnServerSelection',{count:formatNumber(total)})}</p></div>
-    <div className="vpn-public-toolbar"><div className="vpn-filter-group"><StyledSelect ariaLabel={t('vpnProtocolFilter')} value={protocol} onChange={value=>{setProtocol(value as VpnProtocol|'All');setPage(1)}} options={[['All',t('allVpnProtocols')],...protocols.map(value=>[value,value] as [string,string])]}/><CountryFilter countries={countries} selected={selectedCountries} onChange={value=>{setSelectedCountries(value);setPage(1)}}/></div><span className="vpn-safe-status"><ShieldCheck/>{t('available')}</span></div>
+    <div className="vpn-public-toolbar"><div className="vpn-filter-group"><StyledSelect ariaLabel={t('vpnProtocolFilter')} value={protocol} onChange={value=>{setProtocol(value as VpnProtocol|'All');setPage(1)}} options={[['All',t('allVpnProtocols')],...protocols.map(value=>[value,value] as [string,string])]}/><CountryFilter countries={countries} selected={selectedCountries} onChange={value=>{setSelectedCountries(value);setPage(1)}}/></div><ClashDownloadButton api={API} exportQuery={exportQuery.toString()} onError={setDownloadError}/><span className="vpn-safe-status"><ShieldCheck/>{t('available')}</span></div>
+    <p className="vpn-catalog-description">{clashDownloadMessages[language].hint}</p>
+    <ToastSignal kind="error" message={downloadError}/>
     <ToastSignal kind="error" message={error} action={{label:t('retry'),run:()=>void load()}}/>
     <div className="public-vpn-table" role="table" aria-label={t('vpnCatalog')} aria-busy={loading}>
       <div role="rowgroup"><div className="vpn-public-row vpn-public-head" role="row"><span role="columnheader">{t('address')}</span><span role="columnheader">{t('country')}</span><span role="columnheader">{t('protocol')}</span><span role="columnheader">{t('latency')}</span><span role="columnheader">{t('checked')}</span><span role="columnheader">{t('vpnConfig')}</span></div></div>

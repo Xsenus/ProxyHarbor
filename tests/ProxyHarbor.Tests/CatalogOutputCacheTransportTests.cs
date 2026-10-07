@@ -10,6 +10,36 @@ namespace ProxyHarbor.Tests;
 
 public sealed class CatalogOutputCacheTransportTests
 {
+    [Fact]
+    public async Task VpnCountryCacheSeparatesRepresentationsAndProtocolsOverHttp()
+    {
+        var builder = WebApplication.CreateSlimBuilder();
+        builder.Logging.ClearProviders();
+        builder.WebHost.ConfigureKestrel(server => server.Listen(IPAddress.Loopback, 0));
+        builder.Services.AddOutputCache(options => options.AddPolicy(PublicOutputCachePolicies.VpnCountries, policy => policy
+            .Expire(PublicOutputCachePolicies.CatalogExpiration)
+            .SetVaryByQuery(PublicOutputCachePolicies.VpnCountriesVaryByQuery)));
+        await using var app = builder.Build();
+        app.UseOutputCache();
+        var executions = 0;
+        app.MapGet("/countries", (HttpContext context) =>
+        {
+            Interlocked.Increment(ref executions);
+            return Results.Text($"{context.Request.Query["format"]}|{context.Request.Query["protocol"]}");
+        }).CacheOutput(PublicOutputCachePolicies.VpnCountries);
+        await app.StartAsync();
+        using var handler = new SocketsHttpHandler { UseProxy = false };
+        using var client = new HttpClient(handler) { BaseAddress = new Uri(app.Urls.Single()), Timeout = TimeSpan.FromSeconds(10) };
+        foreach (var query in new[] { "format=uri", "format=all", "format=clash", "format=all&protocol=AnyTls", "format=all&protocol=Vless" })
+        {
+            var expected = query.Replace("format=", "", StringComparison.Ordinal).Replace("&protocol=", "|", StringComparison.Ordinal);
+            if (!query.Contains('&')) expected += "|";
+            Assert.Equal(expected, await client.GetStringAsync($"/countries?{query}"));
+            Assert.Equal(expected, await client.GetStringAsync($"/countries?{query}"));
+        }
+        Assert.Equal(5, Volatile.Read(ref executions));
+    }
+
     [Theory]
     [InlineData(PublicOutputCachePolicies.ProxyCatalog)]
     [InlineData(PublicOutputCachePolicies.VpnCatalog)]

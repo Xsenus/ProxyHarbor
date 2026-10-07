@@ -48,7 +48,19 @@ public enum VpnProtocol
     /// <summary>URI протокола TUIC.</summary>
     Tuic,
     /// <summary>Публичная ссылка Telegram MTProxy.</summary>
-    MtProto
+    MtProto,
+    /// <summary>Clash configuration for AnyTLS.</summary>
+    AnyTls,
+    /// <summary>Clash configuration for Hysteria 1.</summary>
+    Hysteria,
+    /// <summary>Clash configuration for ShadowsocksR.</summary>
+    ShadowsocksR,
+    /// <summary>Clash configuration for an HTTP proxy, including published credentials and TLS settings.</summary>
+    HttpProxy,
+    /// <summary>Clash configuration for a SOCKS4 proxy.</summary>
+    Socks4Proxy,
+    /// <summary>Clash configuration for a SOCKS5 proxy.</summary>
+    Socks5Proxy
 }
 
 /// <summary>Результат безопасной проверки доступности VPN endpoint без использования опубликованных credentials.</summary>
@@ -86,6 +98,10 @@ public sealed class VpnEndpoint
     public string? ConnectionUri { get; set; }
     /// <summary>Время наблюдения сохранённой URI в полном теле feed, а не время импорта очереди.</summary>
     public DateTimeOffset? ConnectionUriObservedAt { get; set; }
+    /// <summary>Standalone Clash YAML preserving the published connection and static dependencies.</summary>
+    public string? ClashConfiguration { get; set; }
+    /// <summary>Time the saved Clash settings were observed in the complete source response.</summary>
+    public DateTimeOffset? ClashConfigurationObservedAt { get; set; }
     /// <summary>Текущее состояние доступности.</summary>
     public VpnEndpointStatus Status { get; set; } = VpnEndpointStatus.Pending;
     /// <summary>Задержка установления TCP-соединения.</summary>

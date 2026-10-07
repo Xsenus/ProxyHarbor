@@ -42,7 +42,7 @@ public sealed class VpnSourceImportStoreIntegrationTests
         {
             case "count": state.CandidateCount = 0; break;
             case "cursor": state.NextIndex = 2; break;
-            case "protocol": state.SourceProtocol = (VpnProtocol)9; break;
+            case "protocol": state.SourceProtocol = (VpnProtocol)15; break;
             case "empty": state.Payload = []; break;
             case "complete": state.NextIndex = 1; break;
             case "hash": state.PayloadHash = []; break;
@@ -223,7 +223,7 @@ public sealed class VpnSourceImportStoreIntegrationTests
             await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => VpnSourceImportStore.AcknowledgeAsync(db, checkpoint, 2, DateTimeOffset.UtcNow, default));
             await Assert.ThrowsAsync<ArgumentException>(() => VpnSourceImportStore.AcknowledgeAsync(db, checkpoint, 0, DateTimeOffset.UtcNow, default, [1], false));
             var corrupt = await db.VpnSourceImportStates.SingleAsync();
-            corrupt.Payload[0] ^= 1;
+            corrupt.Payload[0] = 0;
             corrupt.PayloadHash = SHA256.HashData(corrupt.Payload);
             db.Entry(corrupt).Property(item => item.Payload).IsModified = true;
             await db.SaveChangesAsync();

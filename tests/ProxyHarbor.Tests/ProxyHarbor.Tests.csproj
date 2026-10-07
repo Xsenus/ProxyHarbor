@@ -5,6 +5,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
+    <!-- The real OpenAPI HTTP contract test uses the framework XML documentation generator. -->
+    <InterceptorsNamespaces>$(InterceptorsNamespaces);Microsoft.AspNetCore.OpenApi.Generated</InterceptorsNamespaces>
     <!-- Имена xUnit-методов являются исполняемой спецификацией; CS1591 остаётся
          обязательной build-ошибкой для всех production-проектов. -->
     <NoWarn>$(NoWarn);CS1591</NoWarn>

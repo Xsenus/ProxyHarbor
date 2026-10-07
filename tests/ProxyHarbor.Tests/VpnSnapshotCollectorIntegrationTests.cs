@@ -15,6 +15,91 @@ namespace ProxyHarbor.Tests;
 public sealed class VpnSnapshotCollectorIntegrationTests
 {
     [Fact, Trait("Category", "PostgresIntegration")]
+    public async Task TextBoundedClashWindowsPersistEveryAliasExpandedRecordThroughCachedTail()
+    {
+        await using var database = await SnapshotDatabase.CreateAsync();
+        if (database is null) return;
+        await AddSourceAsync(database, "long-clash");
+        var setting = new string('x', 14_000);
+        var yaml = "setting: &long '" + setting + "'\nproxies: [" + string.Join(',', Enumerable.Range(1, 400).Select(port =>
+            $"{{name: node{port}, type: vless, server: 8.8.8.8, port: {port}, uuid: published, future-option: *long}}")) + "]";
+        using var clients = new FeedClients(_ => yaml) { MediaType = "application/yaml" };
+        var service = Service(database, clients, Settings(10_000));
+        var first = await service.CollectAsync();
+        Assert.InRange(first.Added, 1, 399);
+        await using (var db = database.Factory.CreateDbContext())
+            Assert.Equal(first.Added, (await db.VpnSourceImportStates.SingleAsync()).NextIndex);
+        var second = await service.CollectAsync();
+        Assert.Equal(400, first.Added + second.Added);
+        Assert.Equal(1, second.NotModified);
+        await using var verify = database.Factory.CreateDbContext();
+        var rows = await verify.VpnEndpoints.ToArrayAsync();
+        Assert.Equal(Enumerable.Range(1, 400), rows.Select(row => row.Port).Order());
+        Assert.All(rows, row => Assert.Contains(setting, row.ClashConfiguration));
+        var state = await verify.VpnSourceImportStates.SingleAsync();
+        Assert.Equal(400, state.NextIndex);
+        Assert.Empty(state.Payload);
+        Assert.Equal(400, await verify.VpnEndpointSources.CountAsync());
+    }
+
+    [Theory, Trait("Category", "PostgresIntegration")]
+    [InlineData("text/plain")]
+    [InlineData("text/yaml")]
+    [InlineData("application/yaml")]
+    [InlineData("application/x-yaml")]
+    public async Task ClashResponsePersistsCompleteConfigurationsAndDrainsCachedTailOn304(string mediaType)
+    {
+        await using var database = await SnapshotDatabase.CreateAsync();
+        if (database is null) return;
+        await AddSourceAsync(database, "clash");
+        const string yaml = "proxies: [{name: primary, type: anytls, server: 8.8.8.8, port: 443, password: '0012', dialer-proxy: peer, reality-opts: {public-key: preserved}}, {name: peer, type: socks5, server: 1.1.1.1, port: 1080, username: user, password: published}]";
+        using var clients = new FeedClients(_ => yaml) { MediaType = mediaType };
+        var service = Service(database, clients, Settings(1));
+        Assert.Equal(1, (await service.CollectAsync()).Added);
+        var resumed = await service.CollectAsync();
+        Assert.Equal(1, resumed.Added);
+        Assert.Equal(1, resumed.NotModified);
+        await using var db = database.Factory.CreateDbContext();
+        Assert.Null((await db.VpnSources.SingleAsync()).LastError);
+        var state = await db.VpnSourceImportStates.SingleAsync();
+        Assert.Equal(2, state.NextIndex);
+        Assert.Empty(state.Payload);
+        var rows = await db.VpnEndpoints.ToArrayAsync();
+        Assert.Equal(2, rows.Length);
+        var expected = VpnFeedParser.Parse(yaml, VpnProtocol.OpenVpn);
+        foreach (var row in rows)
+        {
+            var candidate = expected.Single(item => item.Host == row.Host);
+            Assert.Equal(candidate.Protocol, row.Protocol);
+            Assert.Equal(candidate.ClashConfiguration, row.ClashConfiguration);
+            Assert.Equal(state.CreatedAt, row.ClashConfigurationObservedAt);
+            Assert.Null(row.ConnectionUri);
+        }
+        Assert.Equal(2, await db.VpnEndpointSources.CountAsync());
+    }
+
+    [Theory, Trait("Category", "PostgresIntegration")]
+    [InlineData("missing")]
+    [InlineData("private")]
+    public async Task IncompleteOrUnsafeClashChainCannotPublishPartialCatalogOrQueue(string failure)
+    {
+        await using var database = await SnapshotDatabase.CreateAsync();
+        if (database is null) return;
+        await AddSourceAsync(database, "unsafe-clash");
+        var yaml = failure == "private"
+            ? "proxies: [{name: independent, type: http, server: 9.9.9.9, port: 80}, {name: primary, type: vless, server: 8.8.8.8, port: 443, uuid: published-secret, dialer-proxy: peer}, {name: peer, type: http, server: 127.0.0.1, port: 80}]"
+            : "proxies: [{name: independent, type: http, server: 9.9.9.9, port: 80}, {name: primary, type: vless, server: 8.8.8.8, port: 443, uuid: published-secret, dialer-proxy: missing}]";
+        using var clients = new FeedClients(_ => yaml) { MediaType = "application/yaml" };
+        Assert.Equal(0, (await Service(database, clients, Settings(1)).CollectAsync()).Succeeded);
+        await using var db = database.Factory.CreateDbContext();
+        Assert.Empty(await db.VpnEndpoints.ToArrayAsync());
+        Assert.Empty(await db.VpnEndpointSources.ToArrayAsync());
+        Assert.Empty(await db.VpnSourceImportStates.ToArrayAsync());
+        var error = Assert.IsType<string>((await db.VpnSources.SingleAsync()).LastError);
+        Assert.DoesNotContain("published-secret", error);
+    }
+
+    [Fact, Trait("Category", "PostgresIntegration")]
     public async Task LegacyShadowsocksPersistsOriginalUriAndDrainsCachedTailOn304()
     {
         await using var database = await SnapshotDatabase.CreateAsync();
@@ -375,6 +460,7 @@ public sealed class VpnSnapshotCollectorIntegrationTests
         private readonly Dictionary<string, string> versions = [];
         internal readonly List<bool> Validators = [];
         internal bool Fail;
+        internal string MediaType = "text/plain";
         internal Func<Task>? BeforeResponse;
         public HttpClient CreateClient(string name) => new(this, disposeHandler: false);
 
@@ -393,7 +479,7 @@ public sealed class VpnSnapshotCollectorIntegrationTests
             var response = new HttpResponseMessage(request.Headers.IfNoneMatch.Any(tag => tag.Tag == version)
                 ? HttpStatusCode.NotModified : HttpStatusCode.OK);
             response.Headers.ETag = new System.Net.Http.Headers.EntityTagHeaderValue(version);
-            if (response.StatusCode == HttpStatusCode.OK) response.Content = new StringContent(content);
+            if (response.StatusCode == HttpStatusCode.OK) response.Content = new StringContent(content, Encoding.UTF8, MediaType);
             return response;
         }
     }

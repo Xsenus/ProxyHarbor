@@ -91,7 +91,7 @@ public sealed class PublicOutputCachePolicyTests
     [InlineData(typeof(ProxiesController), nameof(ProxiesController.Get), PublicOutputCachePolicies.ProxyCatalog)]
     [InlineData(typeof(ProxiesController), nameof(ProxiesController.Countries), PublicOutputCachePolicies.Countries)]
     [InlineData(typeof(VpnController), nameof(VpnController.Get), PublicOutputCachePolicies.VpnCatalog)]
-    [InlineData(typeof(VpnController), nameof(VpnController.Countries), PublicOutputCachePolicies.Countries)]
+    [InlineData(typeof(VpnController), nameof(VpnController.Countries), PublicOutputCachePolicies.VpnCountries)]
     public void FrequentPublicEndpointsUseBoundedNamedPolicy(Type controller, string methodName, string policyName)
     {
         var method = controller.GetMethods().Single(method =>

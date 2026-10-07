@@ -8,12 +8,14 @@ namespace ProxyHarbor.Infrastructure;
 /// <summary>Индекс первых endpoint с последним URI из полного feed и bounded decompression страниц.</summary>
 internal static class VpnCandidateSnapshotCodec
 {
-    internal const int Magic = 0x50485632;
+    internal const int LegacyMagic = 0x50485632;
+    internal const int Magic = 0x50485633;
     internal const int MaxRecords = 1_000_000;
     internal const int MaxBodyBytes = 32 * 1024 * 1024;
     internal const int MaxPayloadBytes = 48 * 1024 * 1024;
     internal const int MaxPageBytes = 256 * 1024;
     internal const int MaxPageRecords = 2_048;
+    internal const int MaxWindowTextBytes = 8 * 1024 * 1024;
     private const int MaxUriBytes = 65_536;
     private const int MaxUriCharacters = 16_384;
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
@@ -38,9 +40,12 @@ internal static class VpnCandidateSnapshotCodec
         {
             var hostBytes = StrictUtf8.GetByteCount(candidate.Host);
             var uriBytes = candidate.ConnectionUri is null ? -1 : StrictUtf8.GetByteCount(candidate.ConnectionUri);
-            if (hostBytes is < 1 or > 253 || uriBytes > MaxUriBytes || candidate.ConnectionUri?.Length > MaxUriCharacters)
+            var configurationBytes = candidate.ClashConfiguration is null ? -1 : StrictUtf8.GetByteCount(candidate.ClashConfiguration);
+            if (hostBytes is < 1 or > 253 || uriBytes > MaxUriBytes || candidate.ConnectionUri?.Length > MaxUriCharacters ||
+                configurationBytes > ClashYamlFeedParser.MaximumConfigurationBytes ||
+                candidate.ClashConfiguration?.Length > ClashYamlFeedParser.MaximumConfigurationCharacters)
                 throw InvalidSnapshot();
-            var recordBytes = 10 + hostBytes + Math.Max(0, uriBytes);
+            var recordBytes = 14 + hostBytes + Math.Max(0, uriBytes) + Math.Max(0, configurationBytes);
             if (pageRecords == MaxPageRecords || used + recordBytes > MaxPageBytes) FlushPage();
             var identity = (candidate.Host, candidate.Port, candidate.Protocol, candidate.Transport);
             var location = ((int)output.Position, pageRecords);
@@ -60,6 +65,10 @@ internal static class VpnCandidateSnapshotCodec
             used += 8;
             if (uriBytes >= 0)
                 used += StrictUtf8.GetBytes(candidate.ConnectionUri.AsSpan(), page.AsSpan(used, uriBytes));
+            BinaryPrimitives.WriteInt32LittleEndian(page.AsSpan(used), configurationBytes);
+            used += 4;
+            if (configurationBytes >= 0)
+                used += StrictUtf8.GetBytes(candidate.ClashConfiguration.AsSpan(), page.AsSpan(used, configurationBytes));
             pageRecords++;
         });
         if (recordCount == 0) throw new InvalidDataException("VPN-источник не содержит распознаваемых публичных записей.");
@@ -101,8 +110,11 @@ internal static class VpnCandidateSnapshotCodec
         ArgumentNullException.ThrowIfNull(payload);
         ArgumentNullException.ThrowIfNull(accept);
         ArgumentOutOfRangeException.ThrowIfLessThan(maxRecords, 1);
-        if (payload.Length is < 16 or > MaxPayloadBytes || BinaryPrimitives.ReadInt32LittleEndian(payload) != Magic)
+        if (payload.Length is < 16 or > MaxPayloadBytes)
             throw InvalidSnapshot();
+        var magic = BinaryPrimitives.ReadInt32LittleEndian(payload);
+        if (magic is not (Magic or LegacyMagic)) throw InvalidSnapshot();
+        var hasConfigurations = magic == Magic;
         var count = BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(4));
         var uniqueCount = BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(8));
         if (count is < 1 or > MaxRecords || uniqueCount < 1 || uniqueCount > count) throw InvalidSnapshot();
@@ -123,7 +135,7 @@ internal static class VpnCandidateSnapshotCodec
             var compressedBytes = BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(position + 8));
             position += 12;
             if (pageCount is < 1 or > MaxPageRecords || pageCount > count - pageStart ||
-                plainBytes < pageCount * 11 || plainBytes > MaxPageBytes || compressedBytes < 1 ||
+                plainBytes < pageCount * (hasConfigurations ? 15 : 11) || plainBytes > MaxPageBytes || compressedBytes < 1 ||
                 compressedBytes > BrotliEncoder.GetMaxCompressedLength(MaxPageBytes) || compressedBytes > indexOffset - position)
                 throw InvalidSnapshot();
             pages.Add(pageOffset, (pageCount, plainBytes, compressedBytes));
@@ -136,6 +148,7 @@ internal static class VpnCandidateSnapshotCodec
         var cache = new Dictionary<int, (VpnCandidate[] Records, LinkedListNode<int> Node)>();
         var recent = new LinkedList<int>();
         var next = startIndex;
+        long returnedTextBytes = 0;
         while (next < uniqueCount && next - startIndex < maxRecords)
         {
             var entry = indexOffset + next * 8;
@@ -150,7 +163,7 @@ internal static class VpnCandidateSnapshotCodec
                     throw InvalidSnapshot();
                 var records = new VpnCandidate[metadata.Count];
                 var recordPosition = 0;
-                for (var index = 0; index < records.Length; index++) records[index] = ReadRecord(page, ref recordPosition);
+                for (var index = 0; index < records.Length; index++) records[index] = ReadRecord(page, ref recordPosition, hasConfigurations);
                 if (recordPosition != page.Length) throw InvalidSnapshot();
                 if (cache.Count == 4)
                 {
@@ -165,13 +178,21 @@ internal static class VpnCandidateSnapshotCodec
                 recent.Remove(decoded.Node);
                 recent.AddLast(decoded.Node);
             }
-            if (!accept(decoded.Records[recordIndex])) break;
+            var candidate = decoded.Records[recordIndex];
+            // Compressed aliases can expand a small feed into many long settings.
+            // Bound retained UTF-16 text as well as record count; the next window
+            // resumes at this exact identity rather than dropping the remainder.
+            var textBytes = 2L * (candidate.Host.Length + (candidate.ConnectionUri?.Length ?? 0) +
+                (candidate.ClashConfiguration?.Length ?? 0));
+            if (returnedTextBytes + textBytes > MaxWindowTextBytes) break;
+            if (!accept(candidate)) break;
+            returnedTextBytes += textBytes;
             next++;
         }
         return new VpnSnapshotWindow(next - startIndex, next, next == uniqueCount);
     }
 
-    private static VpnCandidate ReadRecord(ReadOnlySpan<byte> page, ref int position)
+    private static VpnCandidate ReadRecord(ReadOnlySpan<byte> page, ref int position, bool hasConfigurations)
     {
         if (position > page.Length - 2) throw InvalidSnapshot();
         var hostBytes = BinaryPrimitives.ReadUInt16LittleEndian(page[position..]);
@@ -186,18 +207,31 @@ internal static class VpnCandidateSnapshotCodec
         position += 8;
         if (port == 0 || !Enum.IsDefined(protocol) || transportByte > 1 || uriBytes < -1 ||
             uriBytes > MaxUriBytes || uriBytes > page.Length - position) throw InvalidSnapshot();
-        var requiresUdp = protocol is VpnProtocol.WireGuard or VpnProtocol.Hysteria2 or VpnProtocol.Tuic;
+        var requiresUdp = protocol is VpnProtocol.WireGuard or VpnProtocol.Hysteria or VpnProtocol.Hysteria2 or VpnProtocol.Tuic;
         if (protocol != VpnProtocol.OpenVpn && (transportByte == 1) != requiresUdp) throw InvalidSnapshot();
-        if (uriBytes == -1 && protocol is not (VpnProtocol.OpenVpn or VpnProtocol.WireGuard)) throw InvalidSnapshot();
         var uri = uriBytes < 0 ? null : ReadText(page.Slice(position, uriBytes));
         position += Math.Max(0, uriBytes);
-        var candidate = new VpnCandidate(host, port, protocol, transportByte == 1 ? "udp" : "tcp", uri);
+        string? configuration = null;
+        if (hasConfigurations)
+        {
+            if (position > page.Length - 4) throw InvalidSnapshot();
+            var configurationBytes = BinaryPrimitives.ReadInt32LittleEndian(page[position..]);
+            position += 4;
+            if (configurationBytes < -1 || configurationBytes > ClashYamlFeedParser.MaximumConfigurationBytes ||
+                configurationBytes > page.Length - position) throw InvalidSnapshot();
+            if (configurationBytes >= 0) configuration = ReadText(page.Slice(position, configurationBytes));
+            position += Math.Max(0, configurationBytes);
+        }
+        if (uri is null && configuration is null && protocol is not (VpnProtocol.OpenVpn or VpnProtocol.WireGuard)) throw InvalidSnapshot();
+        var candidate = new VpnCandidate(host, port, protocol, transportByte == 1 ? "udp" : "tcp", uri)
+        { ClashConfiguration = configuration };
         if (!VpnFeedParser.IsSafe(candidate) || host.Any(char.IsUpper) || uri?.Length > MaxUriCharacters)
             throw InvalidSnapshot();
         // Revalidate URI provenance independently of the serialized endpoint: a corrupt
         // cache cannot pair a public host with a private or different ready-to-import URI.
         if (uri is not null && VpnFeedParser.Parse(uri, protocol, 1) is { } parsed &&
-            (parsed.Count != 1 || parsed[0] != candidate)) throw InvalidSnapshot();
+            (parsed.Count != 1 || parsed[0] != candidate with { ClashConfiguration = null })) throw InvalidSnapshot();
+        if (configuration is not null && !ClashYamlFeedParser.IsValidStandalone(candidate)) throw InvalidSnapshot();
         return candidate;
     }
 
