@@ -6,6 +6,39 @@ namespace ProxyHarbor.Tests;
 public sealed class JsonProxyFeedParserTests
 {
     [Theory]
+    [InlineData(ProxyProtocol.Http)]
+    [InlineData(ProxyProtocol.Https)]
+    [InlineData(ProxyProtocol.Socks5)]
+    [InlineData(ProxyProtocol.HttpTls)]
+    [InlineData(ProxyProtocol.HttpTlsUnverified)]
+    public void CombinedHttpTypeUsesPlainHttpRegardlessOfFallback(ProxyProtocol fallback)
+    {
+        var parsed = SourceFeedParser.ParseRequired("""
+            [{"ip":"8.8.8.8","port":"8080","type":"HTTP/HTTPS"},
+             {"ip":"8.8.8.8","port":8080,"protocol":"http/https"},
+             {"ip":"1.1.1.1","port":1080,"protocols":["Http/Https","socks5"]}]
+            """, fallback);
+        Assert.Equal(
+            [("8.8.8.8", 8080, ProxyProtocol.Http), ("1.1.1.1", 1080, ProxyProtocol.Http),
+                ("1.1.1.1", 1080, ProxyProtocol.Socks5)], parsed);
+    }
+
+    [Theory]
+    [InlineData("{\"ip\":\"127.0.0.1\",\"port\":80,\"type\":\"HTTP/HTTPS\"}")]
+    [InlineData("{\"ip\":\"10.1.2.3\",\"port\":80,\"type\":\"HTTP/HTTPS\"}")]
+    [InlineData("{\"ip\":\"proxy.example\",\"port\":80,\"type\":\"HTTP/HTTPS\"}")]
+    [InlineData("{\"ip\":\"8.8.8.8\",\"port\":0,\"type\":\"HTTP/HTTPS\"}")]
+    [InlineData("{\"ip\":\"8.8.8.8\",\"port\":80,\"type\":\"HTTP/HTTPS\",\"password\":\"secret\"}")]
+    [InlineData("{\"ip\":\"8.8.8.8\",\"port\":80,\"type\":\"HTTP/HTTPS/SOCKS5\"}")]
+    public void CombinedTypeRetainsRecordSafetyChecks(string invalidRecord)
+    {
+        var parsed = SourceFeedParser.ParseRequired(
+            $"[{invalidRecord},{{\"ip\":\"1.1.1.1\",\"port\":8080,\"type\":\"HTTP/HTTPS\"}}]",
+            ProxyProtocol.HttpTlsUnverified);
+        Assert.Equal(("1.1.1.1", 8080, ProxyProtocol.Http), Assert.Single(parsed));
+    }
+
+    [Theory]
     [InlineData("ip")]
     [InlineData("ip_address")]
     [InlineData("host")]
