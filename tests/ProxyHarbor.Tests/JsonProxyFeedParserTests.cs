@@ -5,6 +5,59 @@ namespace ProxyHarbor.Tests;
 
 public sealed class JsonProxyFeedParserTests
 {
+    [Theory]
+    [InlineData("ip")]
+    [InlineData("ip_address")]
+    [InlineData("host")]
+    public void CombinedAddressAndPortPreservesExplicitProtocols(string field)
+    {
+        var body = $$"""
+            [{"{{field}}":"8.8.8.8:1080","protocols":["HTTP","socks4","SOCKS5","HTTP"]},
+             {"{{field}}":"[2606:4700:4700::1111]:443","protocol":"https"}]
+            """;
+        var parsed = SourceFeedParser.ParseRequired(body, ProxyProtocol.Http);
+        Assert.Equal(
+            [("8.8.8.8", 1080, ProxyProtocol.Http), ("8.8.8.8", 1080, ProxyProtocol.Socks4),
+                ("8.8.8.8", 1080, ProxyProtocol.Socks5), ("2606:4700:4700::1111", 443, ProxyProtocol.Https)], parsed);
+    }
+
+    [Theory]
+    [InlineData("{\"ip\":\"127.0.0.1:80\"}")]
+    [InlineData("{\"ip\":\"10.1.2.3:80\"}")]
+    [InlineData("{\"ip\":\"[::1]:80\"}")]
+    [InlineData("{\"ip\":\"proxy.example:80\"}")]
+    [InlineData("{\"ip\":\"http://8.8.8.8:80\"}")]
+    [InlineData("{\"ip\":\"socks5://8.8.8.8:80\",\"protocol\":\"http\"}")]
+    [InlineData("{\"ip\":\"user:password@8.8.8.8:80\"}")]
+    [InlineData("{\"ip\":\"error at 8.8.8.8:80\"}")]
+    [InlineData("{\"ip\":\"8.8.8.8:80/path\"}")]
+    [InlineData("{\"ip\":\"8.8.8.8:0\"}")]
+    [InlineData("{\"ip\":\"8.8.8.8:65536\"}")]
+    [InlineData("{\"ip\":\"008.8.8.8:80\"}")]
+    [InlineData("{\"ip\":\"8.8.8.8:80\",\"port\":443}")]
+    [InlineData("{\"ip\":\"8.8.8.8:80\",\"port\":null}")]
+    [InlineData("{\"ip\":\"8.8.8.8:80\",\"username\":\"user\"}")]
+    [InlineData("{\"ip\":\"8.8.8.8:80\",\"password\":\"password\"}")]
+    [InlineData("{\"ip\":\"8.8.8.8:80\",\"user\":false}")]
+    [InlineData("{\"ip\":\"8.8.8.8:80\",\"pass\":123}")]
+    [InlineData("{\"ip\":\"8.8.8.8:80\",\"protocol\":\"unsupported\"}")]
+    public void UnsafeCombinedRecordDoesNotDiscardHealthyNeighbor(string record)
+    {
+        var parsed = SourceFeedParser.ParseRequired(
+            $"[{record},{{\"ip\":\"1.1.1.1:443\",\"protocol\":\"https\"}}]", ProxyProtocol.Http);
+        Assert.Equal(("1.1.1.1", 443, ProxyProtocol.Https), Assert.Single(parsed));
+    }
+
+    [Fact]
+    public void CombinedRecordUsesFallbackAndRespectsGlobalBound()
+    {
+        var parsed = SourceFeedParser.ParseBoundedRequired("""
+            [{"ip":"8.8.8.8:1080"},{"ip":"8.8.8.8:1080"},{"ip":"1.1.1.1:1080"}]
+            """, ProxyProtocol.Socks5, 1);
+        Assert.Equal(("8.8.8.8", 1080, ProxyProtocol.Socks5), Assert.Single(parsed.Items));
+        Assert.True(parsed.Truncated);
+    }
+
     [Fact]
     public void StructuredApiRecordsExpandSupportedProtocolsAndNormalizePort()
     {

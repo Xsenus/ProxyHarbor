@@ -69,15 +69,26 @@ internal static class JsonProxyFeedParser
         if (value.TryGetProperty("ip_address", out var address) || value.TryGetProperty("ip", out address) ||
             value.TryGetProperty("host", out address))
         {
-            if (address.ValueKind != JsonValueKind.String || !value.TryGetProperty("port", out var port)) yield break;
+            if (address.ValueKind != JsonValueKind.String) yield break;
             var host = address.GetString()!;
-            if (!IPAddress.TryParse(host.Trim('[', ']'), out var ip) || !NetworkSafety.IsPublicAddress(ip)) yield break;
-            if (port.ValueKind is not (JsonValueKind.String or JsonValueKind.Number)) yield break;
-            var portText = port.ValueKind == JsonValueKind.String ? port.GetString() : port.GetRawText();
-            if (!int.TryParse(portText, NumberStyles.None, CultureInfo.InvariantCulture, out var portNumber) ||
-                portNumber is < 1 or > 65535) yield break;
-            portText = portNumber.ToString(CultureInfo.InvariantCulture);
-            var endpoint = host.Contains(':') && !host.StartsWith('[') ? $"[{host}]:{portText}" : $"{host}:{portText}";
+            var endpoint = host;
+            if (value.TryGetProperty("port", out var port))
+            {
+                if (!IPAddress.TryParse(host.Trim('[', ']'), out var ip) || !NetworkSafety.IsPublicAddress(ip)) yield break;
+                if (port.ValueKind is not (JsonValueKind.String or JsonValueKind.Number)) yield break;
+                var portText = port.ValueKind == JsonValueKind.String ? port.GetString() : port.GetRawText();
+                if (!int.TryParse(portText, NumberStyles.None, CultureInfo.InvariantCulture, out var portNumber) ||
+                    portNumber is < 1 or > 65535) yield break;
+                portText = portNumber.ToString(CultureInfo.InvariantCulture);
+                endpoint = host.Contains(':') && !host.StartsWith('[') ? $"[{host}]:{portText}" : $"{host}:{portText}";
+            }
+            else
+            {
+                // Some public JSON feeds put IP:port in the address field. Require
+                // an IP prefix so a URI scheme cannot override the record's protocol.
+                var separator = host.LastIndexOf(':');
+                if (separator <= 0 || !IPAddress.TryParse(host[..separator].Trim('[', ']'), out _)) yield break;
+            }
             foreach (var protocol in ReadProtocols(value, fallback))
                 if (ProxyParser.TryParseEndpoint(endpoint, protocol, out var parsed)) yield return parsed;
             yield break;
