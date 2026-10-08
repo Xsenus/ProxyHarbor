@@ -1,6 +1,5 @@
 using System.Globalization;
 using System.Net;
-using System.Text;
 
 namespace ProxyHarbor.Infrastructure;
 
@@ -48,7 +47,7 @@ internal static class HProxyCsvFeedAdapter
     internal static Document Parse(string content)
     {
         if (content.Length > 10_000_000) throw InvalidFormat();
-        using var rows = ReadRows(content.TrimStart('\uFEFF')).GetEnumerator();
+        using var rows = BoundedCsvReader.ReadRows(content.TrimStart('\uFEFF'), Headers.Length).GetEnumerator();
         if (!rows.MoveNext() || !rows.Current.SequenceEqual(Headers)) throw InvalidFormat();
         var unique = new HashSet<string>(StringComparer.Ordinal);
         var countries = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
@@ -80,49 +79,6 @@ internal static class HProxyCsvFeedAdapter
     {
         internal string Project(string? country) => country is null ? All :
             Countries.TryGetValue(country, out var result) ? result : throw InvalidFormat();
-    }
-
-    private static IEnumerable<string[]> ReadRows(string content)
-    {
-        var fields = new List<string>();
-        var field = new StringBuilder();
-        var quoted = false;
-        var closed = false;
-        for (var index = 0; index < content.Length; index++)
-        {
-            var c = content[index];
-            if (quoted)
-            {
-                if (c != '"') field.Append(c);
-                else if (index + 1 < content.Length && content[index + 1] == '"') { field.Append('"'); index++; }
-                else { quoted = false; closed = true; }
-            }
-            else if (c is ',' or '\r' or '\n')
-            {
-                fields.Add(field.ToString());
-                if (fields.Count > Headers.Length) throw InvalidFormat();
-                field.Clear();
-                closed = false;
-                if (c == ',') continue;
-                if (c == '\r' && index + 1 < content.Length && content[index + 1] == '\n') index++;
-                yield return fields.ToArray();
-                fields.Clear();
-            }
-            else if (closed) throw InvalidFormat();
-            else if (c == '"')
-            {
-                if (field.Length != 0) throw InvalidFormat();
-                quoted = true;
-            }
-            else field.Append(c);
-            if (field.Length > 16_384) throw InvalidFormat();
-        }
-        if (quoted) throw InvalidFormat();
-        if (fields.Count != 0 || field.Length != 0 || closed)
-        {
-            fields.Add(field.ToString());
-            yield return fields.ToArray();
-        }
     }
 
     private static InvalidDataException InvalidFormat() => new("Неизвестный формат полной CSV-выгрузки HProxy или отсутствуют прокси выбранной страны.");

@@ -5,6 +5,8 @@
 
 ## [Unreleased]
 
+- Исправлен импорт CSV Pxys: колонка protocol сохраняет HTTP/SOCKS4/SOCKS5 вместо ошибочного HTTP для всех строк. Неоднозначный HTTPS отложен до подтверждения транспорта; версия парсера заменяет только прежний CSV-кэш, сохраняя расписание и историю источников.
+
 - Исправлены транспортные профили 11 встроенных лент Dinoz, VannDev и Xnuvers по коду издателей: HTTP, CONNECT443 и TLS до прокси различаются. Повторный startup сохраняет идентификаторы, историю и backoff; старые курсоры не подходят новому протоколу.
 - Upgrade the web runtime TIFF library to the patched Alpine package, fixing CVE-2026-4775 without changing the image vulnerability scan policy.
 

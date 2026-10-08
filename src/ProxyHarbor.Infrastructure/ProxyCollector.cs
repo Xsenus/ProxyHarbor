@@ -66,6 +66,7 @@ public sealed class ProxyCollector(
             await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
 
             if (cachedOnly && !await db.ProxySourceImportStates.AnyAsync(state =>
+                    state.ParserVersion == (PxysCsvFeedAdapter.Urls.Contains(state.SourceUrl) ? 1 : 0) &&
                     state.NextIndex < state.CandidateCount && db.Sources.Any(source =>
                         source.Id == state.ProxySourceId && source.Enabled &&
                         source.Url == state.SourceUrl && source.DefaultProtocol == state.SourceProtocol &&
@@ -98,7 +99,8 @@ public sealed class ProxyCollector(
                     .Select(state => state.ProxySourceId!.Value).ToArrayAsync(cancellationToken)).ToHashSet();
                 // Старые snapshots отключённых/изменённых feed'ов не должны занимать
                 // storage-квоту постоянно; отсутствие state требует полного re-fetch.
-                await db.ProxySourceImportStates.Where(state => !db.Sources.Any(source =>
+                await db.ProxySourceImportStates.Where(state =>
+                        state.ParserVersion != (PxysCsvFeedAdapter.Urls.Contains(state.SourceUrl) ? 1 : 0) || !db.Sources.Any(source =>
                         source.Id == state.ProxySourceId && source.Enabled && source.Url == state.SourceUrl &&
                         source.DefaultProtocol == state.SourceProtocol))
                     .ExecuteDeleteAsync(cancellationToken);
@@ -675,6 +677,7 @@ public sealed class ProxyCollector(
         var parserPpList = ParserPpFeedAdapter.Supports(url);
         var ouroGateList = OuroGateFeedAdapter.Supports(url);
         var litportHttpsList = LitportHttpsFeedAdapter.Supports(url);
+        var pxysCsvList = PxysCsvFeedAdapter.Supports(url);
         var result = await SourceHttpFetcher.FetchAsync(
             client,
             url,
@@ -686,8 +689,10 @@ public sealed class ProxyCollector(
             token,
             htmlList ? MyProxyHtmlFeedAdapter.EnsureSupportedMediaType : SourceFeedParser.EnsureSupportedMediaType,
             delayAsync,
-            sameOriginRedirectsOnly: htmlList || countryConnectList || parserPpList || ouroGateList || litportHttpsList,
-            respectRateLimit: htmlList || countryConnectList || parserPpList || ouroGateList || litportHttpsList);
+            sameOriginRedirectsOnly: htmlList || countryConnectList || parserPpList || ouroGateList || litportHttpsList || pxysCsvList,
+            respectRateLimit: htmlList || countryConnectList || parserPpList || ouroGateList || litportHttpsList || pxysCsvList);
+        if (pxysCsvList && !result.NotModified)
+            return result with { Content = PxysCsvFeedAdapter.Extract(result.Content ?? throw new InvalidDataException("Источник не содержит body.")) };
         if (liveSocksList && !result.NotModified)
             return result with { Content = LiveSocksHtmlFeedAdapter.Extract(url, result.Content ?? throw new InvalidDataException("Источник не содержит body.")) };
         if (didsoftList && !result.NotModified)
