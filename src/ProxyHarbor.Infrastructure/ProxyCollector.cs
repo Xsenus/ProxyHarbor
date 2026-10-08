@@ -662,8 +662,15 @@ public sealed class ProxyCollector(
         }
         if (FreeProxyDbPageCapture.IsSearchUrl(url) || ProxiwarePublicApi.IsOriginUrl(url) || RoundProxiesPublicApi.IsApiUrl(url) || Socks5ProxiesPublicApi.IsApiUrl(url) || ProxoraPublicApi.IsApiUrl(url) || ProxyScrapePublicApi.IsApiUrl(url))
             throw new InvalidDataException("Постраничный API требует канонический URL зарегистрированного источника и сохраняемую очередь страниц.");
+        if (LiveSocksHtmlFeedAdapter.IsHome(url))
+            return await LiveSocksHtmlFeedAdapter.FetchLatestAsync(
+                (pageUrl, maximumBytes, fetchToken) => SourceHttpFetcher.FetchAsync(client, pageUrl,
+                    null, null, maximumBytes, options.Value.SourceTimeoutSeconds, options.Value.SourceRetryCount,
+                    fetchToken, MyProxyHtmlFeedAdapter.EnsureSupportedMediaType, delayAsync,
+                    sameOriginRedirectsOnly: true, respectRateLimit: true), MaxSourceBytes, token);
+        var liveSocksList = LiveSocksHtmlFeedAdapter.Supports(url);
         var didsoftList = DidsoftHtmlFeedAdapter.Supports(url);
-        var htmlList = MyProxyHtmlFeedAdapter.Supports(url) || didsoftList;
+        var htmlList = MyProxyHtmlFeedAdapter.Supports(url) || didsoftList || liveSocksList;
         var countryConnectList = HideIpConnectFeedAdapter.Supports(url);
         var parserPpList = ParserPpFeedAdapter.Supports(url);
         var ouroGateList = OuroGateFeedAdapter.Supports(url);
@@ -681,6 +688,8 @@ public sealed class ProxyCollector(
             delayAsync,
             sameOriginRedirectsOnly: htmlList || countryConnectList || parserPpList || ouroGateList || litportHttpsList,
             respectRateLimit: htmlList || countryConnectList || parserPpList || ouroGateList || litportHttpsList);
+        if (liveSocksList && !result.NotModified)
+            return result with { Content = LiveSocksHtmlFeedAdapter.Extract(url, result.Content ?? throw new InvalidDataException("Источник не содержит body.")) };
         if (didsoftList && !result.NotModified)
             return result with { Content = DidsoftHtmlFeedAdapter.Extract(url, result.Content ?? throw new InvalidDataException("Источник не содержит body.")) };
         if (litportHttpsList && !result.NotModified)
@@ -1028,6 +1037,7 @@ internal static class SourceFetchSchedule
         if (FreeProxyDbPageCapture.Supports(url)) return fetchedAt.AddHours(6);
         if (MyProxyHtmlFeedAdapter.Supports(url)) return fetchedAt.AddHours(1);
         if (DidsoftHtmlFeedAdapter.Supports(url)) return fetchedAt.AddMinutes(10);
+        if (LiveSocksHtmlFeedAdapter.Supports(url)) return fetchedAt.AddHours(1);
         if (HideIpConnectFeedAdapter.Supports(url)) return fetchedAt.AddMinutes(10);
         if (ParserPpFeedAdapter.Supports(url)) return fetchedAt.AddMinutes(30);
         if (OuroGateFeedAdapter.Supports(url)) return fetchedAt.AddMinutes(30);
