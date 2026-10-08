@@ -153,6 +153,7 @@ Defaults ниже соответствуют `src/ProxyHarbor.Api/appsettings.js
 |---|---:|---:|---|
 | `BackgroundWorkersEnabled` | `true` | bool | Фоновые циклы этой реплики |
 | `CollectionIntervalMinutes` | 5 | 1..10080 | Период полного сбора |
+| `CachedImportIntervalSeconds` | 0 | 0 либо 30..86400 | Дополнительный импорт сохранённых публичных proxy-снимков между полными сборами; 0 отключает. HTTP-запросы, ключи платных источников и расписание polling не используются |
 | `ValidationIntervalMinutes` | 2 | 1..1440 | Интервал повторной проверки Alive-прокси |
 | `PublicFreshnessMinutes` | 15 (60 в Docker Compose) | 2..2880 | Максимальный возраст Alive-проверки; не меньше validation interval |
 | `DeadRetryBaseMinutes` | 15 | 1..1440 | Начало exponential backoff Dead-прокси |
