@@ -650,6 +650,7 @@ public sealed class ProxyCollector(
         if (FreeProxyDbPageCapture.IsSearchUrl(url) || ProxiwarePublicApi.IsOriginUrl(url) || RoundProxiesPublicApi.IsApiUrl(url) || Socks5ProxiesPublicApi.IsApiUrl(url) || ProxoraPublicApi.IsApiUrl(url) || ProxyScrapePublicApi.IsApiUrl(url))
             throw new InvalidDataException("Постраничный API требует канонический URL зарегистрированного источника и сохраняемую очередь страниц.");
         var htmlList = MyProxyHtmlFeedAdapter.Supports(url);
+        var countryConnectList = HideIpConnectFeedAdapter.Supports(url);
         var result = await SourceHttpFetcher.FetchAsync(
             client,
             url,
@@ -661,8 +662,10 @@ public sealed class ProxyCollector(
             token,
             htmlList ? MyProxyHtmlFeedAdapter.EnsureSupportedMediaType : SourceFeedParser.EnsureSupportedMediaType,
             delayAsync,
-            sameOriginRedirectsOnly: htmlList,
-            respectRateLimit: htmlList);
+            sameOriginRedirectsOnly: htmlList || countryConnectList,
+            respectRateLimit: htmlList || countryConnectList);
+        if (countryConnectList && !result.NotModified)
+            return result with { Content = HideIpConnectFeedAdapter.Extract(url, result.Content ?? throw new InvalidDataException("Источник не содержит body.")) };
         return htmlList && !result.NotModified
             ? result with { Content = MyProxyHtmlFeedAdapter.Extract(url, result.Content ?? throw new InvalidDataException("Источник не содержит body.")) }
             : result;
@@ -999,6 +1002,7 @@ internal static class SourceFetchSchedule
         if (ProxyScrapePublicApi.Supports(url)) return fetchedAt.AddMinutes(5);
         if (FreeProxyDbPageCapture.Supports(url)) return fetchedAt.AddHours(6);
         if (MyProxyHtmlFeedAdapter.Supports(url)) return fetchedAt.AddHours(1);
+        if (HideIpConnectFeedAdapter.Supports(url)) return fetchedAt.AddMinutes(10);
         if (Uri.TryCreate(url, UriKind.Absolute, out var uri) &&
             uri.Host.Equals("raw.githubusercontent.com", StringComparison.OrdinalIgnoreCase) &&
             uri.AbsolutePath.StartsWith("/litportnet/free-proxy-list/", StringComparison.OrdinalIgnoreCase))
