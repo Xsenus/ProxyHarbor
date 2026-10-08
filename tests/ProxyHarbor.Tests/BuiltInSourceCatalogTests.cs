@@ -117,10 +117,23 @@ public sealed class BuiltInSourceCatalogTests
         Assert.Equal(95, feeds.Length);
         Assert.All(feeds, source => Assert.True(
             source.Url.Contains("/countries/", StringComparison.Ordinal) ||
-            source.Url.Contains("/by-country/", StringComparison.Ordinal)));
+            HProxyCsvFeedAdapter.TryGetCountry(source.Url, out var country) && country is not null));
         Assert.DoesNotContain(feeds, source => source.Name is
             "Proxifly country MD" or "Proxifly country UZ" or
             "Proxifly country CY" or "Proxifly country LU" or "HProxy country DZ");
+    }
+
+    [Fact]
+    public void HProxyMixedAndCountrySourcesUseTypedCsvAndHaveLegacyMigrations()
+    {
+        var feeds = BuiltInSourceCatalog.Sources.Where(source => HProxyCsvFeedAdapter.Supports(source.Url)).ToArray();
+        Assert.Equal(81, feeds.Length);
+        Assert.Equal(HProxyCsvFeedAdapter.Url, feeds.Single(source => source.Name == "HProxy All").Url);
+        Assert.Equal(80, feeds.Count(source => HProxyCsvFeedAdapter.TryGetCountry(source.Url, out var country) && country is not null));
+        var replacements = HProxyCsvFeedAdapter.LegacyUrlReplacements().ToArray();
+        Assert.Equal(162, replacements.Length);
+        Assert.All(feeds, source => Assert.Equal(2, replacements.Count(pair => pair.Value == source.Url)));
+        Assert.DoesNotContain(BuiltInSourceCatalog.Sources, source => source.Url.Contains("hproxy-com/free-proxy-list/main/by-country/", StringComparison.Ordinal));
     }
 
     [Fact]
