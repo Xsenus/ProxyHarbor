@@ -763,6 +763,9 @@ public sealed class DatabaseSeederIntegrationTests
     [InlineData(
         "XYZS996 All",
         "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/all.txt")]
+    [InlineData(
+        "Proxio Mixed",
+        "https://raw.githubusercontent.com/proxio-io/proxy-list/main/all.txt")]
     [Trait("Category", "PostgresIntegration")]
     public async Task StartupMigratesReplacedBuiltInUrlWithoutLosingSourceHistory(
         string canonicalName,
@@ -802,7 +805,7 @@ public sealed class DatabaseSeederIntegrationTests
                 source.ConsecutiveFailures = 2;
                 source.NextFetchAt = DateTimeOffset.UtcNow.AddHours(1);
                 source.LastError = "HTTP 400";
-                if (canonicalName is "Litport HTTPS" or "XYZS996 All")
+                if (canonicalName is "Litport HTTPS" or "XYZS996 All" or "Proxio Mixed")
                 {
                     var oldSnapshot = ProxyCandidateSnapshotCodec.Encode("8.8.8.8:8080\n1.1.1.1:3128", canonical.Protocol);
                     first.ProxySourceImportStates.Add(new ProxySourceImportState
@@ -838,7 +841,7 @@ public sealed class DatabaseSeederIntegrationTests
             Assert.Null(migrated.NextFetchAt);
             Assert.Null(migrated.LastError);
             Assert.Equal(BuiltInSourceCatalog.Sources.Count + 1, await verify.Sources.CountAsync());
-            if (canonicalName is "Litport HTTPS" or "XYZS996 All")
+            if (canonicalName is "Litport HTTPS" or "XYZS996 All" or "Proxio Mixed")
             {
                 var store = new ProxySourceImportStore(new PooledDbContextFactory<ProxyHarborDbContext>(options));
                 Assert.Null(await store.LoadAsync(migrated, CancellationToken.None));

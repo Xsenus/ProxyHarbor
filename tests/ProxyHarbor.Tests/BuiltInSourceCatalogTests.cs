@@ -8,6 +8,39 @@ namespace ProxyHarbor.Tests;
 public sealed class BuiltInSourceCatalogTests
 {
     [Fact]
+    public void ProxioMixedPreservesPublishedProtocolsAcrossSnapshotWindows()
+    {
+        var feed = BuiltInSourceCatalog.Sources.Single(source => source.Name == "Proxio Mixed");
+        Assert.Equal("https://raw.githubusercontent.com/proxio-io/proxy-list/main/all.json", feed.Url);
+        const string body = """
+            {"source":"https://proxio.io","count":3,"proxies":[
+              {"ip":"8.8.8.8","port":8080,"protocols":["HTTP","HTTPS"]},
+              {"ip":"1.1.1.1","port":1080,"protocols":["SOCKS4","SOCKS5"]},
+              {"ip":"9.9.9.9","port":2525,"protocols":["CONNECT25","CONNECT80"]}]}
+            """;
+        var parsed = SourceFeedParser.ParseRequired(body, feed.Protocol);
+        Assert.Equal(
+            [("8.8.8.8", 8080, ProxyProtocol.Http), ("8.8.8.8", 8080, ProxyProtocol.Https),
+             ("1.1.1.1", 1080, ProxyProtocol.Socks4), ("1.1.1.1", 1080, ProxyProtocol.Socks5)], parsed);
+        var snapshot = ProxyCandidateSnapshotCodec.Encode(body, feed.Protocol);
+        Assert.Equal(4, snapshot.Count);
+        var decoded = new List<ProxyCandidateKey>();
+        var index = 0;
+        while (true)
+        {
+            var window = ProxyCandidateSnapshotCodec.ReadWindow(snapshot.Payload, index, 1, candidate =>
+            {
+                decoded.Add(candidate);
+                return true;
+            });
+            Assert.True(window.NextIndex > index);
+            index = window.NextIndex;
+            if (window.Completed) break;
+        }
+        Assert.Equal(parsed, decoded.Select(candidate => candidate.ToEndpoint()).ToArray());
+    }
+
+    [Fact]
     public void OctoberSourcesUseDocumentedAggregatePathsAndLiveLitportBranch()
     {
         string[] publishers = ["Litport", "Maximilian Feix", "ProxyWhirl"];
