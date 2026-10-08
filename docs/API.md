@@ -241,7 +241,7 @@ Free-лимит Clash — 10 выдаваемых профилей, включа
 ```json
 {
   "lastAuditedOn": "2026-08-26",
-  "feedCount": 547,
+  "feedCount": 546,
   "providerCount": 80,
   "providers": [
     {

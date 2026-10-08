@@ -5,6 +5,10 @@ namespace ProxyHarbor.Infrastructure;
 /// <summary>Версионируемый каталог публичных proxy-feed endpoint'ов.</summary>
 public static class BuiltInSourceCatalog
 {
+    // Public repository and raw feed both returned 404 on 2026-10-09.
+    // Keep the identity so startup archives existing data without deleting it.
+    internal const string UnavailableLighscentUrl = "https://raw.githubusercontent.com/lighscent/proxies/master/http.txt";
+
     /// <summary>Дата последнего полного URL/live-аудита всех канонических feed'ов.</summary>
     public static DateOnly LastAuditedOn => new(2026, 10, 6);
 
@@ -434,7 +438,6 @@ public static class BuiltInSourceCatalog
             Wh1zz52|https://raw.githubusercontent.com/Wh1zz52/Proxy-List/main/proxies.txt|Http
             Skiddle-ID|https://raw.githubusercontent.com/Skiddle-ID/proxylist/main/proxies.txt|Http
             watashibeme|https://raw.githubusercontent.com/watashibeme/openproxy.space/main/http.txt|Http
-            lighscent|https://raw.githubusercontent.com/lighscent/proxies/master/http.txt|Http
             rdavydov|https://raw.githubusercontent.com/rdavydov/proxy-list/main/proxies/http.txt|Http
             wuye999|https://raw.githubusercontent.com/wuye999/proxy-365/main/SOCKS5.txt|Socks5
             merlinepedra|https://raw.githubusercontent.com/merlinepedra/PROXY-LIST-1/master/proxy-list.txt|Http

@@ -1,4 +1,6 @@
 $ErrorActionPreference = 'Stop'
+& (Join-Path $PSScriptRoot 'Test-BuiltInSourceSamples.ps1')
+
 
 # Контрактный тест запускает настоящий Audit-SourceFeeds.ps1 против локального
 # HTTP mock и не зависит от Docker, PostgreSQL или внешних proxy-feed'ов.

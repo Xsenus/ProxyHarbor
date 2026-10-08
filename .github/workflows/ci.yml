@@ -447,11 +447,11 @@ jobs:
             prom/prometheus:v3.13.2-distroless check metrics
           echo "$metrics" | grep 'proxyharbor_http_requests_total{route="stats",status="2xx"} 1'
           echo "$metrics" | grep 'proxyharbor_http_request_duration_seconds_count{route="stats"} 1'
-          echo "$metrics" | grep 'proxyharbor_sources_enabled 547'
+          echo "$metrics" | grep 'proxyharbor_sources_enabled 546'
           echo "$metrics" | grep 'proxyharbor_source_catalog_complete 1'
           echo "$metrics" | grep 'proxyharbor_builtin_catalog_audit_timestamp_seconds 1791244800'
-          echo "$metrics" | grep 'proxyharbor_builtin_sources_expected 547'
-          echo "$metrics" | grep 'proxyharbor_builtin_providers_expected 281'
+          echo "$metrics" | grep 'proxyharbor_builtin_sources_expected 546'
+          echo "$metrics" | grep 'proxyharbor_builtin_providers_expected 280'
           echo "$metrics" | grep 'proxyharbor_sources_truncated 0'
           echo "$metrics" | grep 'proxyharbor_last_collection_candidate_limit_reached 0'
           echo "$metrics" | grep 'proxyharbor_validation_attempts_last_5m 0'
@@ -915,11 +915,11 @@ jobs:
             .components.schemas.BackupTriggerResponse.properties.created.type == "string" and
             .components.schemas.BackupTriggerResponse.properties.sentToTelegram.type == "boolean"'
           metrics=$(curl --fail --silent http://127.0.0.1:5080/metrics)
-          echo "$metrics" | grep 'proxyharbor_sources_enabled 547'
+          echo "$metrics" | grep 'proxyharbor_sources_enabled 546'
           echo "$metrics" | grep 'proxyharbor_source_catalog_complete 1'
           echo "$metrics" | grep 'proxyharbor_builtin_catalog_audit_timestamp_seconds 1791244800'
-          echo "$metrics" | grep 'proxyharbor_builtin_sources_present 547'
-          echo "$metrics" | grep 'proxyharbor_builtin_providers_present 281'
+          echo "$metrics" | grep 'proxyharbor_builtin_sources_present 546'
+          echo "$metrics" | grep 'proxyharbor_builtin_providers_present 280'
           echo "$metrics" | grep 'proxyharbor_sources_truncated 0'
           echo "$metrics" | grep 'proxyharbor_last_collection_candidate_limit_reached 0'
           echo "$metrics" | grep 'proxyharbor_validation_attempts_last_5m 0'
@@ -1012,8 +1012,8 @@ jobs:
             http://127.0.0.1:5080/api/v1/admin/diagnostics)
           echo "$backup_diagnostics" | jq --exit-status \
             '.sourceCatalog.isComplete == true and
-             .sourceCatalog.expectedSources == 547 and
-             .sourceCatalog.expectedProviders == 281 and
+             .sourceCatalog.expectedSources == 546 and
+             .sourceCatalog.expectedProviders == 280 and
              .recentBackups[0].status == "completed" and
              .recentBackups[0].sizeBytes > 0 and
              .recentBackups[0].telegramConfigured == false and
