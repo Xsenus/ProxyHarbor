@@ -36,6 +36,9 @@ public sealed class ProxyCollector(
     private static readonly Action<ILogger, Exception?> ImportCleanupFailed =
         LoggerMessage.Define(LogLevel.Warning, new EventId(1004, "ImportCleanupFailed"),
             "Не удалось удалить временную таблицу proxy_import; она будет удалена при закрытии соединения.");
+    private static readonly Action<ILogger, int, int, int, Exception?> OuroGateProfilesUnsupported =
+        LoggerMessage.Define<int, int, int>(LogLevel.Warning, new EventId(1005, "OuroGateProfilesUnsupported"),
+            "OuroGate: {UnsupportedProfiles} профилей требуют отдельной поддержки; с авторизацией {AuthenticatedProfiles}, с DNS-адресом {DnsProfiles}. Публичные IP-профили импортируются отдельно.");
     private readonly SemaphoreSlim _runGate = new(1, 1);
     private readonly IDataProtector? _credentialProtector = credentialProtectionProvider is null
         ? null
@@ -700,7 +703,12 @@ public sealed class ProxyCollector(
         if (litportHttpsList && !result.NotModified)
             return result with { Content = LitportHttpsFeedAdapter.Extract(url, result.Content ?? throw new InvalidDataException("Источник не содержит body.")) };
         if (ouroGateList && !result.NotModified)
-            return result with { Content = OuroGateFeedAdapter.Extract(url, result.Content ?? throw new InvalidDataException("Источник не содержит body.")) };
+        {
+            var extraction = OuroGateFeedAdapter.ExtractWithReport(url, result.Content ?? throw new InvalidDataException("Источник не содержит body."));
+            if (extraction.UnsupportedProfiles > 0)
+                OuroGateProfilesUnsupported(logger, extraction.UnsupportedProfiles, extraction.AuthenticatedProfiles, extraction.DnsProfiles, null);
+            return result with { Content = extraction.Content };
+        }
         if (parserPpList && !result.NotModified)
             return result with { Content = ParserPpFeedAdapter.Extract(url, result.Content ?? throw new InvalidDataException("Источник не содержит body.")) };
         if (countryConnectList && !result.NotModified)
