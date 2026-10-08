@@ -649,6 +649,8 @@ public sealed class ProxyCollector(
         Func<TimeSpan, CancellationToken, Task>? delayAsync = null,
         HProxyCsvFetchScope? hproxyCsvScope = null)
     {
+        if (HideIpConnectFeedAdapter.IsUnresolvedConnectUrl(url))
+            throw new InvalidDataException("Опубликованный пример hideip.me использует CONNECT к HTTP-порту 80; поддержка CONNECT443 не подтверждена.");
         if (HProxyCsvFeedAdapter.Supports(url))
         {
             using var localScope = hproxyCsvScope is null ? new HProxyCsvFetchScope() : null;
