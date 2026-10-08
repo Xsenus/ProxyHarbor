@@ -45,6 +45,9 @@ public sealed class AdminDiagnosticsIntegrationTests
             {
                 await seed.Database.MigrateAsync();
                 var now = DateTimeOffset.UtcNow;
+                // This snapshot test needs an active lease and a scheduled check even
+                // when PostgreSQL setup or the diagnostics query takes over a minute.
+                var future = now.AddDays(1);
                 var leasedProxy = new ProxyEndpoint
                 {
                     Host = "8.8.8.8",
@@ -63,13 +66,13 @@ public sealed class AdminDiagnosticsIntegrationTests
                     {
                         Host = "9.9.9.9",
                         Port = 8080,
-                        NextCheckAt = now.AddMinutes(1)
+                        NextCheckAt = future
                     });
                 seed.ProxyValidationLeases.Add(new ProxyValidationLease
                 {
                     ProxyId = leasedProxy.Id,
                     LeaseId = Guid.NewGuid(),
-                    LeaseUntil = now.AddMinutes(1)
+                    LeaseUntil = future
                 });
                 seed.ValidationRuns.Add(new ValidationRun
                 {
