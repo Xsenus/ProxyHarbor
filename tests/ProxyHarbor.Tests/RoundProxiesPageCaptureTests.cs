@@ -10,6 +10,59 @@ public sealed class RoundProxiesPageCaptureTests
     private const int MaximumBytes = 1_000_000;
 
     [Fact]
+    public async Task EarlierHeadOverlapCompletesWhenNewOnlyTailFillsMissingRowsAfterRestart()
+    {
+        var prefix = FreeProxyDbPageCapture.Restore(RoundReconciliationFixture.Pages()[..3], MaximumBytes);
+        Assert.False(prefix.Inspect(MaximumBytes).Complete);
+        var payload = FreeProxyDbPageCaptureCodec.Encode(prefix, MaximumBytes);
+        prefix = FreeProxyDbPageCaptureCodec.Decode(payload, SHA256.HashData(payload), MaximumBytes);
+        var requests = 0;
+        var result = await FreeProxyDbPageCapture.AdvanceAsync(prefix, RoundProxiesPublicApi.Url, MaximumBytes, 1,
+            (url, _) =>
+            {
+                requests++;
+                Assert.Contains("page=2&", url, StringComparison.Ordinal);
+                return Task.FromResult(Response(RoundReconciliationFixture.Pages()[3].Content));
+            }, (_, _) => Task.CompletedTask, CancellationToken.None);
+        Assert.Equal(1, requests);
+        Assert.True(result.Capture.Inspect(MaximumBytes).Complete);
+        Assert.Equal(3, SourceFeedParser.ParseRequired(result.Content!, ProxyProtocol.Http).Count);
+    }
+
+    [Fact]
+    public async Task LegacyEmptyTailCheckpointPreservesAllPagesAndAssemblesWithoutMoreRequests()
+    {
+        var pages = RoundReconciliationFixture.Pages();
+        var capture = FreeProxyDbPageCapture.Restore(pages, MaximumBytes);
+        var payload = FreeProxyDbPageCaptureCodec.Encode(capture, MaximumBytes);
+        capture = FreeProxyDbPageCaptureCodec.Decode(payload, SHA256.HashData(payload), MaximumBytes);
+        Assert.Equal(pages, capture.Pages);
+        Assert.True(capture.Inspect(MaximumBytes).Complete);
+        var result = await FreeProxyDbPageCapture.AdvanceAsync(capture, RoundProxiesPublicApi.Url, MaximumBytes, 1,
+            (_, _) => throw new InvalidOperationException("Recovered capture requested another page"),
+            (_, _) => throw new InvalidOperationException("Recovered capture rewrote its checkpoint"), CancellationToken.None);
+        Assert.Equal(3, SourceFeedParser.ParseRequired(result.Content!, ProxyProtocol.Http).Count);
+        Assert.Equal(pages[0].CapturedAt, result.ObservedAt);
+        Assert.Throws<InvalidDataException>(() => capture.Append(new(5, true, DateTimeOffset.UtcNow, Page(5, 3)), MaximumBytes));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task HeadStillNeedsBothOverlapAndTheDeclaredRecordCount(bool hasOverlap)
+    {
+        var capture = FreeProxyDbPageCapture.Restore(RoundReconciliationFixture.Pages()[..2], MaximumBytes);
+        var head = hasOverlap ? Page(1, 4, Record("a", "8.8.8.8")) : Page(1, 3, Record("c", "9.9.9.9"));
+        capture = capture.Append(new(1, true, DateTimeOffset.UtcNow, head), MaximumBytes);
+        var tail = hasOverlap ? Record("c", "9.9.9.9") : Record("d", "4.2.2.2");
+        var result = await FreeProxyDbPageCapture.AdvanceAsync(capture, RoundProxiesPublicApi.Url, MaximumBytes, 1,
+            (_, _) => Task.FromResult(Response(Page(2, 4, tail))), (_, _) => Task.CompletedTask, CancellationToken.None);
+        Assert.Null(result.Content);
+        Assert.False(result.Capture.Inspect(MaximumBytes).Complete);
+        Assert.Equal(hasOverlap ? 3 : 4, result.Capture.Inspect(MaximumBytes).Rows.Count);
+    }
+
+    [Fact]
     public async Task MutableSortOverlapCannotPublishMissingRowsAndRestartReconcilesChangedHead()
     {
         var first = new FreeProxyDbPageCapture().Append(new(1, false, DateTimeOffset.UtcNow,
@@ -90,4 +143,18 @@ public sealed class RoundProxiesPageCaptureTests
     private static object Record(string id, string host, string protocol = "http") => new { _id = id, ip = host, port = 1080, protocols = new[] { protocol } };
     private static string Page(int page, int total, params object[] data) => JsonSerializer.Serialize(new { data, total, page, limit = 500 });
     private static SourceFetchResult Response(string body) => new(body, false, null, null);
+}
+
+internal static class RoundReconciliationFixture
+{
+    internal static FreeProxyDbCapturedPage[] Pages()
+    {
+        var observed = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        object Record(string id, string ip) => new { _id = id, ip, port = 1080, protocols = new[] { "http" } };
+        string Body(int page, int total, params object[] data) => JsonSerializer.Serialize(new { data, total, page, limit = 500 });
+        var a = Record("a", "8.8.8.8"); var b = Record("b", "1.1.1.1"); var c = Record("c", "9.9.9.9");
+        return [new(1, false, observed, Body(1, 3, a, b)), new(2, false, observed.AddSeconds(1), Body(2, 2)),
+            new(1, true, observed.AddSeconds(2), Body(1, 3, a, b)), new(2, true, observed.AddSeconds(3), Body(2, 3, c)),
+            new(3, true, observed.AddSeconds(4), Body(3, 3)), new(4, true, observed.AddSeconds(5), Body(4, 3))];
+    }
 }

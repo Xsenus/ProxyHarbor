@@ -11,6 +11,48 @@ namespace ProxyHarbor.Tests;
 public sealed class SourceApiCaptureStoreIntegrationTests
 {
     private static readonly string[] ExpectedCaptureConstraints = ["CK_SourceApiCaptureStates_Owner", "CK_SourceApiCaptureStates_Payload"];
+
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
+    public async Task LegacyIncompleteFlagRecoversFullReconciliationWithoutRequestsOrCheckpointReplacement()
+    {
+        await using var database = await ProxySourceImportStoreIntegrationTests.SnapshotDatabase.CreateAsync();
+        if (database is null) return;
+        var source = new ProxySource { Name = "Legacy Round capture", Url = RoundProxiesPublicApi.Url };
+        var owner = SourceApiCaptureOwner.From(source);
+        var pages = RoundReconciliationFixture.Pages();
+        var payload = FreeProxyDbPageCaptureCodec.Encode(FreeProxyDbPageCapture.Restore(pages, owner.MaximumBytes), owner.MaximumBytes);
+        var state = State(source.Id, null, payload, SHA256.HashData(payload));
+        state.SourceUrl = source.Url;
+        state.Complete = false;
+        await using (var db = database.Factory.CreateDbContext())
+        {
+            db.Sources.Add(source);
+            db.SourceApiCaptureStates.Add(state);
+            await db.SaveChangesAsync();
+        }
+        var fetched = await new FreeProxyDbSourceApiFetcher(database.Factory).FetchAsync(owner,
+            (_, _) => throw new InvalidOperationException("Recovered full checkpoint requested HTTP"), CancellationToken.None);
+        Assert.False(fetched.NetworkObserved);
+        Assert.Equal(state.Id, fetched.Checkpoint.Id);
+        Assert.Equal(state.Version, fetched.Checkpoint.Version);
+        Assert.Equal(pages, fetched.Checkpoint.Capture.Pages);
+        Assert.Equal(pages[0].CapturedAt, fetched.ObservedAt);
+        Assert.Equal(3, SourceFeedParser.ParseRequired(fetched.Fetch.Content!, ProxyProtocol.Http).Count);
+        await using (var db = database.Factory.CreateDbContext())
+        {
+            var preserved = await db.SourceApiCaptureStates.SingleAsync();
+            Assert.Equal(state.Id, preserved.Id);
+            Assert.Equal(state.Version, preserved.Version);
+            Assert.Equal(payload, preserved.Payload);
+            Assert.False(preserved.Complete);
+            Assert.Empty(await db.SourceApiOriginStates.ToArrayAsync());
+        }
+        var store = new SourceApiCaptureStore(database.Factory);
+        Assert.False(await store.DiscardAsync(fetched.Checkpoint with { Version = Guid.NewGuid() }, CancellationToken.None));
+        Assert.NotNull(await store.LoadAsync(owner, CancellationToken.None));
+        Assert.True(await store.DiscardAsync(fetched.Checkpoint, CancellationToken.None));
+    }
     [Fact]
     [Trait("Category", "PostgresIntegration")]
     public async Task CommittedPagesSurvive429RestartAndRemainUntilAdmission()
