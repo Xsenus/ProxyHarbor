@@ -45,6 +45,7 @@ internal sealed class FreeProxyDbPageCapture
         var headHashes = new HashSet<string>(StringComparer.Ordinal);
         var nextPage = 1;
         var head = false;
+        var reconciledOverlap = false;
         var complete = false;
         long received = 0;
         long bodyBytes = 0;
@@ -122,6 +123,7 @@ internal sealed class FreeProxyDbPageCapture
             observedAt = observedAt is null || page.CapturedAt < observedAt ? page.CapturedAt : observedAt;
             if (head)
             {
+                reconciledOverlap |= overlapsTraversal;
                 complete = currentProvider == 5 ? overlapsTraversal || ids.Count == 0 : (overlapsTraversal || total == 0) && rows.Count >= total;
                 nextPage++;
             }
@@ -136,13 +138,17 @@ internal sealed class FreeProxyDbPageCapture
                 }
             }
         }
+        // A new-only tail may fill the missing rows after an earlier head page
+        // overlapped the traversal. Check this after validating every stored page:
+        // older checkpoints can contain the redundant empty pages that followed.
+        if (head && reconciledOverlap && rows.Count >= total) complete = true;
         if (!complete && nextPage > MaximumPages) throw InvalidCapture();
         return new FreeProxyDbCaptureStatus(nextPage, head, complete, observedAt, rows);
     }
 
     internal FreeProxyDbPageCapture Append(FreeProxyDbCapturedPage page, int maximumBytes)
     {
-        if (_pages.Length >= MaximumPages * 2) throw InvalidCapture();
+        if (_pages.Length >= MaximumPages * 2 || Inspect(maximumBytes).Complete) throw InvalidCapture();
         var next = new FreeProxyDbPageCapture([.. _pages, page]);
         _ = next.Inspect(maximumBytes);
         return next;

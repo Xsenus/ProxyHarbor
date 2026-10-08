@@ -22,7 +22,11 @@ internal sealed class SourceApiCaptureStore(
             try
             {
                 var capture = FreeProxyDbPageCaptureCodec.Decode(state.Payload, state.PayloadHash, owner.MaximumBytes);
-                if (capture.Inspect(owner.MaximumBytes, owner.Url).Complete == state.Complete)
+                var complete = capture.Inspect(owner.MaximumBytes, owner.Url).Complete;
+                // Older workers could retain a valid full reconciliation with an
+                // incomplete flag. Recover it without changing its generation or
+                // deleting pages; a claimed completion still needs payload proof.
+                if (complete == state.Complete || complete)
                     return new(state.Id, state.Version, owner, capture);
             }
             catch (Exception exception) when (exception is InvalidDataException or JsonException) { }
