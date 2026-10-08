@@ -166,7 +166,7 @@ public sealed class ProxyValidationPersistenceIntegrationTests
         using var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
         var port = ((IPEndPoint)listener.LocalEndpoint).Port;
-        using var serverStop = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        using var serverStop = new CancellationTokenSource();
         var accepted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var server = Task.Run(async () =>
         {
@@ -218,6 +218,9 @@ public sealed class ProxyValidationPersistenceIntegrationTests
                 NullLogger<ProxyValidator>.Instance);
             using var cancellation = new CancellationTokenSource();
 
+            // Bound the network fixture after migrations and seeding, so database setup
+            // cannot exhaust its lifetime before the cancellation scenario starts.
+            serverStop.CancelAfter(TimeSpan.FromSeconds(15));
             var validation = validator.ValidateBatchAsync(cancellation.Token);
             await accepted.Task.WaitAsync(TimeSpan.FromSeconds(5));
             await cancellation.CancelAsync();
