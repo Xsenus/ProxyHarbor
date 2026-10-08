@@ -47,7 +47,7 @@ public sealed class AdminDiagnosticsIntegrationTests
                 var now = DateTimeOffset.UtcNow;
                 // This snapshot test needs an active lease and a scheduled check even
                 // when PostgreSQL setup or the diagnostics query takes over a minute.
-                var future = now.AddDays(1);
+                var future = DateTimeOffset.FromUnixTimeMilliseconds(now.AddDays(1).ToUnixTimeMilliseconds());
                 var leasedProxy = new ProxyEndpoint
                 {
                     Host = "8.8.8.8",
@@ -106,6 +106,11 @@ public sealed class AdminDiagnosticsIntegrationTests
                     LastItemCount = 12
                 });
                 await seed.SaveChangesAsync();
+                Assert.Equal(future, await seed.Proxies.AsNoTracking()
+                    .Where(proxy => proxy.Host == "9.9.9.9")
+                    .Select(proxy => proxy.NextCheckAt).SingleAsync());
+                Assert.Equal(future, await seed.ProxyValidationLeases.AsNoTracking()
+                    .Select(lease => lease.LeaseUntil).SingleAsync());
             }
 
             var mutation = new MutateAfterReadStartInterceptor("FROM \"ValidationRuns\"", async token =>
@@ -161,7 +166,8 @@ public sealed class AdminDiagnosticsIntegrationTests
             var root = json.RootElement;
             var queue = root.GetProperty("validationQueue");
             Assert.Equal(3, queue.GetProperty("total").GetInt32());
-            Assert.Equal(1, queue.GetProperty("due").GetInt32());
+            Assert.True(queue.GetProperty("due").GetInt32() == 1,
+                $"Unexpected diagnostic queue at {DateTimeOffset.UtcNow:O}: {queue.GetRawText()}");
             Assert.Equal(1, queue.GetProperty("leased").GetInt32());
             Assert.Equal(1, queue.GetProperty("scheduled").GetInt32());
             Assert.Equal(1, queue.GetProperty("staleUnseen").GetInt32());
