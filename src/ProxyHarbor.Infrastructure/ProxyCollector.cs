@@ -649,7 +649,8 @@ public sealed class ProxyCollector(
     {
         if (FreeProxyDbPageCapture.IsSearchUrl(url) || ProxiwarePublicApi.IsOriginUrl(url) || RoundProxiesPublicApi.IsApiUrl(url) || Socks5ProxiesPublicApi.IsApiUrl(url) || ProxoraPublicApi.IsApiUrl(url) || ProxyScrapePublicApi.IsApiUrl(url))
             throw new InvalidDataException("Постраничный API требует канонический URL зарегистрированного источника и сохраняемую очередь страниц.");
-        var htmlList = MyProxyHtmlFeedAdapter.Supports(url);
+        var didsoftList = DidsoftHtmlFeedAdapter.Supports(url);
+        var htmlList = MyProxyHtmlFeedAdapter.Supports(url) || didsoftList;
         var countryConnectList = HideIpConnectFeedAdapter.Supports(url);
         var parserPpList = ParserPpFeedAdapter.Supports(url);
         var ouroGateList = OuroGateFeedAdapter.Supports(url);
@@ -667,6 +668,8 @@ public sealed class ProxyCollector(
             delayAsync,
             sameOriginRedirectsOnly: htmlList || countryConnectList || parserPpList || ouroGateList || litportHttpsList,
             respectRateLimit: htmlList || countryConnectList || parserPpList || ouroGateList || litportHttpsList);
+        if (didsoftList && !result.NotModified)
+            return result with { Content = DidsoftHtmlFeedAdapter.Extract(url, result.Content ?? throw new InvalidDataException("Источник не содержит body.")) };
         if (litportHttpsList && !result.NotModified)
             return result with { Content = LitportHttpsFeedAdapter.Extract(url, result.Content ?? throw new InvalidDataException("Источник не содержит body.")) };
         if (ouroGateList && !result.NotModified)
@@ -1011,6 +1014,7 @@ internal static class SourceFetchSchedule
         if (ProxyScrapePublicApi.Supports(url)) return fetchedAt.AddMinutes(5);
         if (FreeProxyDbPageCapture.Supports(url)) return fetchedAt.AddHours(6);
         if (MyProxyHtmlFeedAdapter.Supports(url)) return fetchedAt.AddHours(1);
+        if (DidsoftHtmlFeedAdapter.Supports(url)) return fetchedAt.AddMinutes(10);
         if (HideIpConnectFeedAdapter.Supports(url)) return fetchedAt.AddMinutes(10);
         if (ParserPpFeedAdapter.Supports(url)) return fetchedAt.AddMinutes(30);
         if (OuroGateFeedAdapter.Supports(url)) return fetchedAt.AddMinutes(30);
