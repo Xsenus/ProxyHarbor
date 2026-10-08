@@ -325,6 +325,7 @@ public sealed class ProxyCollector(
         if (sources.Length == 0) return;
         var phaseIsPaid = PaidProxySourceCatalog.IsPaid(sources[0]);
         var client = cachedOnly ? null : httpClientFactory.CreateClient(phaseIsPaid ? "paid-sources" : "sources");
+        using var hproxyCsvScope = new HProxyCsvFetchScope();
         await Parallel.ForEachAsync(sources, new ParallelOptions
         {
             MaxDegreeOfParallelism = Math.Min(
@@ -446,7 +447,7 @@ public sealed class ProxyCollector(
                         source.Url,
                         useValidators ? source.HttpETag : null,
                         useValidators ? source.HttpLastModifiedAt : null,
-                        token);
+                        token, hproxyCsvScope: hproxyCsvScope);
                 }
 
                 if (fetched.NotModified)
@@ -645,8 +646,18 @@ public sealed class ProxyCollector(
         string? httpETag,
         DateTimeOffset? httpLastModifiedAt,
         CancellationToken token,
-        Func<TimeSpan, CancellationToken, Task>? delayAsync = null)
+        Func<TimeSpan, CancellationToken, Task>? delayAsync = null,
+        HProxyCsvFetchScope? hproxyCsvScope = null)
     {
+        if (HProxyCsvFeedAdapter.Supports(url))
+        {
+            using var localScope = hproxyCsvScope is null ? new HProxyCsvFetchScope() : null;
+            return await (hproxyCsvScope ?? localScope!).FetchAsync(url, httpETag, httpLastModifiedAt,
+                (etag, modified, fetchToken) => SourceHttpFetcher.FetchAsync(client, HProxyCsvFeedAdapter.FetchUrl(url),
+                    etag, modified, MaxSourceBytes, options.Value.SourceTimeoutSeconds, options.Value.SourceRetryCount,
+                    fetchToken, SourceFeedParser.EnsureSupportedMediaType, delayAsync,
+                    sameOriginRedirectsOnly: true, respectRateLimit: true), token);
+        }
         if (FreeProxyDbPageCapture.IsSearchUrl(url) || ProxiwarePublicApi.IsOriginUrl(url) || RoundProxiesPublicApi.IsApiUrl(url) || Socks5ProxiesPublicApi.IsApiUrl(url) || ProxoraPublicApi.IsApiUrl(url) || ProxyScrapePublicApi.IsApiUrl(url))
             throw new InvalidDataException("Постраничный API требует канонический URL зарегистрированного источника и сохраняемую очередь страниц.");
         var didsoftList = DidsoftHtmlFeedAdapter.Supports(url);

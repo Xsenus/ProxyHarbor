@@ -766,6 +766,10 @@ public sealed class DatabaseSeederIntegrationTests
     [InlineData(
         "Proxio Mixed",
         "https://raw.githubusercontent.com/proxio-io/proxy-list/main/all.txt")]
+    [InlineData("HProxy All", "https://raw.githubusercontent.com/hproxy-com/free-proxy-list/main/all.txt")]
+    [InlineData("HProxy US", "https://raw.githubusercontent.com/hproxy-com/free-proxy-list/main/by-country/US.txt")]
+    [InlineData("HProxy DE", "https://raw.githubusercontent.com/hproxy-com/free-proxy-list/refs/heads/main/by-country/DE.txt")]
+    [InlineData("HProxy country RU", "https://raw.githubusercontent.com/hproxy-com/free-proxy-list/main/by-country/RU.txt")]
     [Trait("Category", "PostgresIntegration")]
     public async Task StartupMigratesReplacedBuiltInUrlWithoutLosingSourceHistory(
         string canonicalName,
@@ -805,7 +809,7 @@ public sealed class DatabaseSeederIntegrationTests
                 source.ConsecutiveFailures = 2;
                 source.NextFetchAt = DateTimeOffset.UtcNow.AddHours(1);
                 source.LastError = "HTTP 400";
-                if (canonicalName is "Litport HTTPS" or "XYZS996 All" or "Proxio Mixed")
+                if (canonicalName is "Litport HTTPS" or "XYZS996 All" or "Proxio Mixed" || canonicalName.StartsWith("HProxy ", StringComparison.Ordinal))
                 {
                     var oldSnapshot = ProxyCandidateSnapshotCodec.Encode("8.8.8.8:8080\n1.1.1.1:3128", canonical.Protocol);
                     first.ProxySourceImportStates.Add(new ProxySourceImportState
@@ -841,7 +845,7 @@ public sealed class DatabaseSeederIntegrationTests
             Assert.Null(migrated.NextFetchAt);
             Assert.Null(migrated.LastError);
             Assert.Equal(BuiltInSourceCatalog.Sources.Count + 1, await verify.Sources.CountAsync());
-            if (canonicalName is "Litport HTTPS" or "XYZS996 All" or "Proxio Mixed")
+            if (canonicalName is "Litport HTTPS" or "XYZS996 All" or "Proxio Mixed" || canonicalName.StartsWith("HProxy ", StringComparison.Ordinal))
             {
                 var store = new ProxySourceImportStore(new PooledDbContextFactory<ProxyHarborDbContext>(options));
                 Assert.Null(await store.LoadAsync(migrated, CancellationToken.None));

@@ -25,7 +25,7 @@ $definitions = @(
 )
 
 foreach ($countrySet in @(
-    [pscustomobject]@{ Variable = 'hProxyCountries'; Provider = 'HProxy'; Prefix = 'https://raw.githubusercontent.com/hproxy-com/free-proxy-list/main/by-country/'; Suffix = '.txt' },
+    [pscustomobject]@{ Variable = 'hProxyCountries'; Provider = 'HProxy'; Prefix = 'https://raw.githubusercontent.com/hproxy-com/free-proxy-list/main/all.csv?country='; Suffix = '' },
     [pscustomobject]@{ Variable = 'proxiflyCountries'; Provider = 'Proxifly'; Prefix = 'https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/countries/'; Suffix = '/data.txt' }
 )) {
     $assignment = [regex]::Match(
@@ -71,6 +71,8 @@ $feeds = @($definitions | ForEach-Object {
         Provider = $provider
         ProviderIdentity = $providerIdentity
         Url = $url
+        # HProxy country is an application projection, not a publisher query parameter.
+        FetchUrl = if ($url -cmatch '^https://raw\.githubusercontent\.com/hproxy-com/free-proxy-list/main/all\.csv\?country=[A-Z]{2}$') { $url.Split('?')[0] } else { $url }
         Protocol = $protocol
     }
 })
@@ -144,7 +146,7 @@ $results = @($feeds | ForEach-Object -Parallel {
     $input = $null
     $body = $null
     try {
-        $request = [Net.Http.HttpRequestMessage]::new([Net.Http.HttpMethod]::Get, $feed.Url)
+        $request = [Net.Http.HttpRequestMessage]::new([Net.Http.HttpMethod]::Get, $feed.FetchUrl)
         $request.Headers.UserAgent.ParseAdd('ProxyHarbor-LiveAudit/1.0')
         $response = $client.SendAsync(
             $request,

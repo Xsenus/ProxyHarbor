@@ -243,7 +243,7 @@ public static class DatabaseSeeder
         // raw.githubusercontent.com принимает обе формы пути неравномерно: URL с
         // /refs/heads/ может начать возвращать 400 только для отдельных файлов.
         // Переносим строку на устойчивый canonical URL, сохраняя Id, Enabled и историю.
-        foreach (var (replacedUrl, canonicalUrl) in CanonicalSourceUrlReplacements)
+        foreach (var (replacedUrl, canonicalUrl) in CanonicalSourceUrlReplacements.Concat(HProxyCsvFeedAdapter.LegacyUrlReplacements()))
         {
             var replaced = existingSources.SingleOrDefault(source => source.Url == replacedUrl);
             if (replaced is null) continue;
