@@ -16,7 +16,7 @@ public static class BuiltInSourceCatalog
         // October discovery: documented aggregate feeds, not country/archive mirrors.
         // Litport publishes the five-minute feed on live; main is a daily snapshot.
         Feed(1001, "Litport HTTP", "Litport", "https://raw.githubusercontent.com/litportnet/free-proxy-list/live/proxies/http.txt", ProxyProtocol.Http),
-        Feed(1002, "Litport HTTPS", "Litport", "https://raw.githubusercontent.com/litportnet/free-proxy-list/live/proxies/https.txt", ProxyProtocol.Https),
+        Feed(1002, "Litport HTTPS", "Litport", "https://raw.githubusercontent.com/litportnet/free-proxy-list/live/proxies/https.json", ProxyProtocol.Https),
         Feed(1003, "Litport SOCKS4", "Litport", "https://raw.githubusercontent.com/litportnet/free-proxy-list/live/proxies/socks4.txt", ProxyProtocol.Socks4),
         Feed(1004, "Litport SOCKS5", "Litport", "https://raw.githubusercontent.com/litportnet/free-proxy-list/live/proxies/socks5.txt", ProxyProtocol.Socks5),
         Feed(1005, "Maximilian Feix HTTP", "Maximilian Feix", "https://raw.githubusercontent.com/maximilianfeix/free-proxy-list/main/http.txt", ProxyProtocol.Http),
@@ -232,7 +232,7 @@ public static class BuiltInSourceCatalog
         // Используем только агрегированные XYZS996 feed'ы. Country-файлы этого
         // генератора исчезают при временно пустой стране и потому не являются
         // стабильными независимыми источниками; их данные уже входят в all/http/https.
-        Feed(199, "XYZS996 All", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/all.txt", ProxyProtocol.Http),
+        Feed(199, "XYZS996 All", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/all/data.json", ProxyProtocol.Http),
         Feed(201, "XYZS996 HTTPS", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/https.txt", ProxyProtocol.Https),
         Feed(242, "Proxio Mixed", "Proxio", "https://raw.githubusercontent.com/proxio-io/proxy-list/main/all.txt", ProxyProtocol.Http),
         Feed(252, "Proxio HTTP", "Proxio", "https://raw.githubusercontent.com/proxio-io/proxy-list/main/http.txt", ProxyProtocol.Http),

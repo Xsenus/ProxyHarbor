@@ -19,7 +19,9 @@ public sealed class BuiltInSourceCatalogTests
             // is an independent opt-in transport and must not relabel their HTTPS lists.
             ProxyProtocol[] publishedProtocols = [ProxyProtocol.Http, ProxyProtocol.Https, ProxyProtocol.Socks4, ProxyProtocol.Socks5];
             Assert.Equal(publishedProtocols, feeds.Select(source => source.Protocol));
-            Assert.All(feeds, source => Assert.EndsWith(".txt", source.Url, StringComparison.Ordinal));
+            Assert.All(feeds, source => Assert.EndsWith(
+                publisher == "Litport" && source.Protocol == ProxyProtocol.Https ? ".json" : ".txt",
+                source.Url, StringComparison.Ordinal));
         }
         Assert.All(BuiltInSourceCatalog.Sources.Where(source => source.Provider == "Litport"), source =>
             Assert.Contains("/free-proxy-list/live/proxies/", source.Url, StringComparison.Ordinal));
@@ -107,7 +109,7 @@ public sealed class BuiltInSourceCatalogTests
 
         Assert.Equal(3, feeds.Length);
         Assert.DoesNotContain(feeds, source => source.Url.Contains("/proxies/countries/", StringComparison.Ordinal));
-        Assert.Contains(feeds, source => source.Url.EndsWith("/all.txt", StringComparison.Ordinal));
+        Assert.Contains(feeds, source => source.Url.EndsWith("/proxies/all/data.json", StringComparison.Ordinal));
         Assert.Contains(feeds, source => source.Url.EndsWith("/http.txt", StringComparison.Ordinal));
         Assert.Contains(feeds, source => source.Url.EndsWith("/https.txt", StringComparison.Ordinal));
     }
