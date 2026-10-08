@@ -6,6 +6,7 @@
 ## [Unreleased]
 
 - Исправлены транспортные профили 11 встроенных лент Dinoz, VannDev и Xnuvers по коду издателей: HTTP, CONNECT443 и TLS до прокси различаются. Повторный startup сохраняет идентификаторы, историю и backoff; старые курсоры не подходят новому протоколу.
+- Upgrade the web runtime TIFF library to the patched Alpine package, fixing CVE-2026-4775 without changing the image vulnerability scan policy.
 
 - Добавлен адаптер пользовательских источников Live Socks: главная страница выбирает свежую публикацию, таблицы сохраняют SOCKS4/SOCKS5 каждой строки. Неполная или неожиданная разметка отклоняется; ограничения HTTP, размера ответа и частоты обновления сохранены.
 
