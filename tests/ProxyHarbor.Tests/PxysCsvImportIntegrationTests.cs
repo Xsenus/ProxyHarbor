@@ -35,10 +35,11 @@ public sealed class PxysCsvImportIntegrationTests
         await using (var db = database.Factory.CreateDbContext())
         {
             var migrations = db.Database.GetMigrations().ToArray();
-            Assert.EndsWith("AddProxySourceParserVersion", migrations[^1]);
+            var versionIndex = Array.IndexOf(migrations, "20261008191125_AddProxySourceParserVersion");
+            Assert.True(versionIndex > 0);
             var migrator = db.GetService<IMigrator>();
-            await migrator.MigrateAsync(migrations[^2]);
-            await migrator.MigrateAsync(migrations[^1]);
+            await migrator.MigrateAsync(migrations[versionIndex - 1]);
+            await migrator.MigrateAsync();
             var migrated = await db.ProxySourceImportStates.AsNoTracking().SingleAsync();
             Assert.Equal(0, migrated.ParserVersion);
             Assert.Equal(old.SnapshotId, migrated.SnapshotId);
