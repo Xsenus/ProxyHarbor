@@ -578,7 +578,7 @@ public sealed class DatabaseSeederIntegrationTests
         const string retiredUrl =
             "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/countries/gr/data.txt";
         const string aggregateUrl =
-            "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/all.txt";
+            "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/all/data.json";
         const string customUrl = "https://example.com/operator-proxies.txt";
 
         try
@@ -757,6 +757,12 @@ public sealed class DatabaseSeederIntegrationTests
     [InlineData(
         "Proxy List Gamt HTTP",
         "https://raw.githubusercontent.com/Denisyoya/Proxy-List-Gamt/main/proxy/http.txt")]
+    [InlineData(
+        "Litport HTTPS",
+        "https://raw.githubusercontent.com/litportnet/free-proxy-list/live/proxies/https.txt")]
+    [InlineData(
+        "XYZS996 All",
+        "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/all.txt")]
     [Trait("Category", "PostgresIntegration")]
     public async Task StartupMigratesReplacedBuiltInUrlWithoutLosingSourceHistory(
         string canonicalName,
@@ -796,6 +802,21 @@ public sealed class DatabaseSeederIntegrationTests
                 source.ConsecutiveFailures = 2;
                 source.NextFetchAt = DateTimeOffset.UtcNow.AddHours(1);
                 source.LastError = "HTTP 400";
+                if (canonicalName is "Litport HTTPS" or "XYZS996 All")
+                {
+                    var oldSnapshot = ProxyCandidateSnapshotCodec.Encode("8.8.8.8:8080\n1.1.1.1:3128", canonical.Protocol);
+                    first.ProxySourceImportStates.Add(new ProxySourceImportState
+                    {
+                        ProxySourceId = source.Id,
+                        SourceUrl = replacedUrl,
+                        SourceProtocol = canonical.Protocol,
+                        CandidateCount = oldSnapshot.Count,
+                        NextIndex = 1,
+                        Payload = oldSnapshot.Payload,
+                        PayloadHash = System.Security.Cryptography.SHA256.HashData(oldSnapshot.Payload),
+                        CreatedAt = lastSucceededAt
+                    });
+                }
                 await first.SaveChangesAsync();
             }
 
@@ -817,6 +838,19 @@ public sealed class DatabaseSeederIntegrationTests
             Assert.Null(migrated.NextFetchAt);
             Assert.Null(migrated.LastError);
             Assert.Equal(BuiltInSourceCatalog.Sources.Count + 1, await verify.Sources.CountAsync());
+            if (canonicalName is "Litport HTTPS" or "XYZS996 All")
+            {
+                var store = new ProxySourceImportStore(new PooledDbContextFactory<ProxyHarborDbContext>(options));
+                Assert.Null(await store.LoadAsync(migrated, CancellationToken.None));
+                migrated.Enabled = true;
+                await verify.SaveChangesAsync();
+                var fresh = ProxyCandidateSnapshotCodec.Encode("https://8.8.8.8:8080\nsocks5://1.1.1.1:1080", canonical.Protocol);
+                var accepted = await store.BeginAsync(migrated, fresh, CancellationToken.None);
+                Assert.NotNull(accepted);
+                Assert.Equal(canonical.Url, accepted.SourceUrl);
+                Assert.Equal(0, accepted.NextIndex);
+                Assert.Equal(2, accepted.CandidateCount);
+            }
         }
         finally
         {

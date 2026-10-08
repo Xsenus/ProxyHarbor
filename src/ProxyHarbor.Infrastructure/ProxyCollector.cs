@@ -653,6 +653,7 @@ public sealed class ProxyCollector(
         var countryConnectList = HideIpConnectFeedAdapter.Supports(url);
         var parserPpList = ParserPpFeedAdapter.Supports(url);
         var ouroGateList = OuroGateFeedAdapter.Supports(url);
+        var litportHttpsList = LitportHttpsFeedAdapter.Supports(url);
         var result = await SourceHttpFetcher.FetchAsync(
             client,
             url,
@@ -664,8 +665,10 @@ public sealed class ProxyCollector(
             token,
             htmlList ? MyProxyHtmlFeedAdapter.EnsureSupportedMediaType : SourceFeedParser.EnsureSupportedMediaType,
             delayAsync,
-            sameOriginRedirectsOnly: htmlList || countryConnectList || parserPpList || ouroGateList,
-            respectRateLimit: htmlList || countryConnectList || parserPpList || ouroGateList);
+            sameOriginRedirectsOnly: htmlList || countryConnectList || parserPpList || ouroGateList || litportHttpsList,
+            respectRateLimit: htmlList || countryConnectList || parserPpList || ouroGateList || litportHttpsList);
+        if (litportHttpsList && !result.NotModified)
+            return result with { Content = LitportHttpsFeedAdapter.Extract(url, result.Content ?? throw new InvalidDataException("Источник не содержит body.")) };
         if (ouroGateList && !result.NotModified)
             return result with { Content = OuroGateFeedAdapter.Extract(url, result.Content ?? throw new InvalidDataException("Источник не содержит body.")) };
         if (parserPpList && !result.NotModified)
