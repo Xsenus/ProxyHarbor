@@ -67,7 +67,8 @@ internal static class JsonProxyFeedParser
         if (HasCredential(value, "username") || HasCredential(value, "password") ||
             HasCredential(value, "user") || HasCredential(value, "pass")) yield break;
         if (value.TryGetProperty("ip_address", out var address) || value.TryGetProperty("ip", out address) ||
-            value.TryGetProperty("host", out address) || value.TryGetProperty("addr", out address))
+            value.TryGetProperty("host", out address) || value.TryGetProperty("addr", out address) ||
+            value.TryGetProperty("ipAddress", out address))
         {
             if (address.ValueKind != JsonValueKind.String) yield break;
             var host = address.GetString()!;

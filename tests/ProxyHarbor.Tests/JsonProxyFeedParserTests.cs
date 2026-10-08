@@ -6,6 +6,78 @@ namespace ProxyHarbor.Tests;
 public sealed class JsonProxyFeedParserTests
 {
     [Fact]
+    public void PublicIpAddressEnvelopePreservesProtocolsAndSnapshotWindows()
+    {
+        const string body = """
+            {"proxy_amount":3,"proxies":[
+              {"ipAddress":"8.8.8.8","port":8080,"protocol":"HTTP","https":true},
+              {"ipAddress":"1.1.1.1","port":"1080","protocol":"SOCKS4"},
+              {"ipAddress":"2606:4700:4700::1111","port":1080,"protocol":"SOCKS5"}]}
+            """;
+        var parsed = SourceFeedParser.ParseRequired(body, ProxyProtocol.HttpTls);
+        Assert.Equal(
+            [("8.8.8.8", 8080, ProxyProtocol.Http), ("1.1.1.1", 1080, ProxyProtocol.Socks4),
+                ("2606:4700:4700::1111", 1080, ProxyProtocol.Socks5)], parsed);
+        var snapshot = ProxyCandidateSnapshotCodec.Encode(body, ProxyProtocol.HttpTls);
+        Assert.Equal(3, snapshot.Count);
+        var decoded = new List<ProxyCandidateKey>();
+        var cursor = 0;
+        while (true)
+        {
+            var window = ProxyCandidateSnapshotCodec.ReadWindow(snapshot.Payload, cursor, 1, candidate =>
+            {
+                decoded.Add(candidate);
+                return true;
+            });
+            Assert.True(window.NextIndex > cursor);
+            cursor = window.NextIndex;
+            if (window.Completed) break;
+        }
+        Assert.Equal(snapshot.Count, cursor);
+        Assert.Equal(parsed, decoded.Select(candidate => candidate.ToEndpoint()).ToArray());
+    }
+
+    [Theory]
+    [InlineData("127.0.0.1", "80", "")]
+    [InlineData("10.0.0.1", "80", "")]
+    [InlineData("::1", "80", "")]
+    [InlineData("proxy.example", "80", "")]
+    [InlineData("http://8.8.8.8", "80", "")]
+    [InlineData("8.8.8.8", "0", "")]
+    [InlineData("8.8.8.8", "65536", "")]
+    [InlineData("8.8.8.8", "80", ",\"password\":\"secret\"")]
+    [InlineData("8.8.8.8", "80", ",\"username\":\"account\"")]
+    [InlineData("8.8.8.8", "80", ",\"protocol\":\"unsupported\"")]
+    [InlineData("8.8.8.8", "80", ",\"success\":false")]
+    [InlineData("8.8.8.8", "80", ",\"status\":0")]
+    public void IpAddressRetainsSafetyChecksWithoutDiscardingHealthyNeighbor(string address, string port, string extra)
+    {
+        var body = $$"""
+            [{"ipAddress":"{{address}}","port":{{port}}{{extra}}},{"ipAddress":"1.1.1.1","port":443}]
+            """;
+        Assert.Equal(("1.1.1.1", 443, ProxyProtocol.Https),
+            Assert.Single(SourceFeedParser.ParseRequired(body, ProxyProtocol.Https)));
+    }
+
+    [Theory]
+    [InlineData("ip")]
+    [InlineData("ip_address")]
+    [InlineData("host")]
+    [InlineData("addr")]
+    public void ExistingAddressFieldTakesPrecedenceOverIpAddress(string field)
+    {
+        var body = $$"""[{"{{field}}":"127.0.0.1","ipAddress":"8.8.8.8","port":80}]""";
+        Assert.Throws<InvalidDataException>(() => SourceFeedParser.ParseRequired(body, ProxyProtocol.Http));
+    }
+
+    [Fact]
+    public void DiagnosticIpAddressDoesNotBecomeAFeed()
+    {
+        Assert.Throws<InvalidDataException>(() => SourceFeedParser.ParseRequired(
+            """{"error":{"ipAddress":"8.8.8.8","port":80},"message":"8.8.8.8:80"}""", ProxyProtocol.Http));
+    }
+
+    [Fact]
     public void PublicAddrEnvelopePreservesProtocolsAndSnapshotWindows()
     {
         const string body = """
