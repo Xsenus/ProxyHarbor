@@ -652,6 +652,7 @@ public sealed class ProxyCollector(
         var htmlList = MyProxyHtmlFeedAdapter.Supports(url);
         var countryConnectList = HideIpConnectFeedAdapter.Supports(url);
         var parserPpList = ParserPpFeedAdapter.Supports(url);
+        var ouroGateList = OuroGateFeedAdapter.Supports(url);
         var result = await SourceHttpFetcher.FetchAsync(
             client,
             url,
@@ -663,8 +664,10 @@ public sealed class ProxyCollector(
             token,
             htmlList ? MyProxyHtmlFeedAdapter.EnsureSupportedMediaType : SourceFeedParser.EnsureSupportedMediaType,
             delayAsync,
-            sameOriginRedirectsOnly: htmlList || countryConnectList || parserPpList,
-            respectRateLimit: htmlList || countryConnectList || parserPpList);
+            sameOriginRedirectsOnly: htmlList || countryConnectList || parserPpList || ouroGateList,
+            respectRateLimit: htmlList || countryConnectList || parserPpList || ouroGateList);
+        if (ouroGateList && !result.NotModified)
+            return result with { Content = OuroGateFeedAdapter.Extract(url, result.Content ?? throw new InvalidDataException("Источник не содержит body.")) };
         if (parserPpList && !result.NotModified)
             return result with { Content = ParserPpFeedAdapter.Extract(url, result.Content ?? throw new InvalidDataException("Источник не содержит body.")) };
         if (countryConnectList && !result.NotModified)
@@ -1007,6 +1010,7 @@ internal static class SourceFetchSchedule
         if (MyProxyHtmlFeedAdapter.Supports(url)) return fetchedAt.AddHours(1);
         if (HideIpConnectFeedAdapter.Supports(url)) return fetchedAt.AddMinutes(10);
         if (ParserPpFeedAdapter.Supports(url)) return fetchedAt.AddMinutes(30);
+        if (OuroGateFeedAdapter.Supports(url)) return fetchedAt.AddMinutes(30);
         if (Uri.TryCreate(url, UriKind.Absolute, out var uri) &&
             uri.Host.Equals("raw.githubusercontent.com", StringComparison.OrdinalIgnoreCase) &&
             uri.AbsolutePath.StartsWith("/litportnet/free-proxy-list/", StringComparison.OrdinalIgnoreCase))
