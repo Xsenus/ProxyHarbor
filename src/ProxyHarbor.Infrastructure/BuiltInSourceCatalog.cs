@@ -234,7 +234,7 @@ public static class BuiltInSourceCatalog
         // стабильными независимыми источниками; их данные уже входят в all/http/https.
         Feed(199, "XYZS996 All", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/proxies/all/data.json", ProxyProtocol.Http),
         Feed(201, "XYZS996 HTTPS", "XYZS996", "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/https.txt", ProxyProtocol.Https),
-        Feed(242, "Proxio Mixed", "Proxio", "https://raw.githubusercontent.com/proxio-io/proxy-list/main/all.txt", ProxyProtocol.Http),
+        Feed(242, "Proxio Mixed", "Proxio", "https://raw.githubusercontent.com/proxio-io/proxy-list/main/all.json", ProxyProtocol.Http),
         Feed(252, "Proxio HTTP", "Proxio", "https://raw.githubusercontent.com/proxio-io/proxy-list/main/http.txt", ProxyProtocol.Http),
         Feed(253, "Syscallh00k Mixed", "Syscallh00k", "https://raw.githubusercontent.com/Syscallh00k/proxy-list/main/all.txt", ProxyProtocol.Http),
         Feed(256, "Gifted Proxies HTTP", "Gifted Proxies", "https://raw.githubusercontent.com/mauricegift/free-proxies/master/files/http.json", ProxyProtocol.Http),
