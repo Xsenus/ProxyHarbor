@@ -754,6 +754,9 @@ public sealed class DatabaseSeederIntegrationTests
     [InlineData(
         "ProxyScrape V4 Mixed",
         "https://api.proxyscrape.com/v4/free-proxy-list/get?request=display_proxies&proxy_format=protocolipport&format=text")]
+    [InlineData(
+        "Proxy List Gamt HTTP",
+        "https://raw.githubusercontent.com/Denisyoya/Proxy-List-Gamt/main/proxy/http.txt")]
     [Trait("Category", "PostgresIntegration")]
     public async Task StartupMigratesReplacedBuiltInUrlWithoutLosingSourceHistory(
         string canonicalName,
