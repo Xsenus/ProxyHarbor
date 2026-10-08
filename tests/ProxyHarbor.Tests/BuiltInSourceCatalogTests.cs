@@ -175,6 +175,15 @@ public sealed class BuiltInSourceCatalogTests
     }
 
     [Fact]
+    public void GamtUsesCurrentPublishedHttpExport()
+    {
+        var source = Assert.Single(BuiltInSourceCatalog.Sources, feed => feed.Name == "Proxy List Gamt HTTP");
+        Assert.Equal("https://raw.githubusercontent.com/Denisyoya/Proxy-List-Gamt/main/results/txt/http.txt", source.Url);
+        Assert.Equal(ProxyProtocol.Http, source.Protocol);
+        Assert.DoesNotContain(BuiltInSourceCatalog.Sources, feed => feed.Url.Contains("Proxy-List-Gamt/main/proxy/", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void TheSpeedXAndDatabayUseCanonicalRawGithubBranchUrls()
     {
         var feeds = BuiltInSourceCatalog.Sources

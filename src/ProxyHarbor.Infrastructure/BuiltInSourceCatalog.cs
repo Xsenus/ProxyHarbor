@@ -381,7 +381,7 @@ public static class BuiltInSourceCatalog
         var rank = 421;
         yield return Feed(rank++, "NDT Proxy Scraper HTTP", "nguyenduytan", "https://raw.githubusercontent.com/nguyenduytan/NDT-Proxy-Scraper/main/http.txt", ProxyProtocol.Http);
         yield return Feed(rank++, "ProxyScraper HTTP", "ProxyScraper", "https://raw.githubusercontent.com/ProxyScraper/ProxyScraper/main/http.txt", ProxyProtocol.Http);
-        yield return Feed(rank++, "Proxy List Gamt HTTP", "Denisyoya", "https://raw.githubusercontent.com/Denisyoya/Proxy-List-Gamt/main/proxy/http.txt", ProxyProtocol.Http);
+        yield return Feed(rank++, "Proxy List Gamt HTTP", "Denisyoya", "https://raw.githubusercontent.com/Denisyoya/Proxy-List-Gamt/main/results/txt/http.txt", ProxyProtocol.Http);
         yield return Feed(rank++, "Ahahaabas HTTP", "ahahaabas", "https://raw.githubusercontent.com/ahahaabas/proxy-list-github/main/http.txt", ProxyProtocol.Http);
         yield return Feed(rank++, "Stormsia HTTP", "stormsia", "https://raw.githubusercontent.com/stormsia/proxy-list/main/http.txt", ProxyProtocol.Http);
         yield return Feed(rank++, "Lalifeier SOCKS4", "lalifeier", "https://raw.githubusercontent.com/lalifeier/proxy-scraper/main/proxies/socks4.txt", ProxyProtocol.Socks4);
