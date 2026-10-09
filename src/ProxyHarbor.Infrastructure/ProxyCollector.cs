@@ -39,6 +39,9 @@ public sealed class ProxyCollector(
     private static readonly Action<ILogger, int, int, int, Exception?> OuroGateProfilesUnsupported =
         LoggerMessage.Define<int, int, int>(LogLevel.Warning, new EventId(1005, "OuroGateProfilesUnsupported"),
             "OuroGate: {UnsupportedProfiles} профилей требуют отдельной поддержки; с авторизацией {AuthenticatedProfiles}, с DNS-адресом {DnsProfiles}. Публичные IP-профили импортируются отдельно.");
+    private static readonly Action<ILogger, int, Exception?> SingBoxProfilesUnsupported =
+        LoggerMessage.Define<int>(LogLevel.Warning, new EventId(1006, "SingBoxProfilesUnsupported"),
+            "Au1rxx sing-box: {UnsupportedProfiles} профилей требуют сохранения авторизации, DNS или TLS-настроек и не импортируются как обычные IP-прокси.");
     private readonly SemaphoreSlim _runGate = new(1, 1);
     private readonly IDataProtector? _credentialProtector = credentialProtectionProvider is null
         ? null
@@ -681,6 +684,7 @@ public sealed class ProxyCollector(
         var ouroGateList = OuroGateFeedAdapter.Supports(url);
         var litportHttpsList = LitportHttpsFeedAdapter.Supports(url);
         var pxysCsvList = PxysCsvFeedAdapter.Supports(url);
+        var singBoxList = Au1rxxSingBoxFeedAdapter.Supports(url);
         var result = await SourceHttpFetcher.FetchAsync(
             client,
             url,
@@ -692,8 +696,15 @@ public sealed class ProxyCollector(
             token,
             htmlList ? MyProxyHtmlFeedAdapter.EnsureSupportedMediaType : SourceFeedParser.EnsureSupportedMediaType,
             delayAsync,
-            sameOriginRedirectsOnly: htmlList || countryConnectList || parserPpList || ouroGateList || litportHttpsList || pxysCsvList,
-            respectRateLimit: htmlList || countryConnectList || parserPpList || ouroGateList || litportHttpsList || pxysCsvList);
+            sameOriginRedirectsOnly: htmlList || countryConnectList || parserPpList || ouroGateList || litportHttpsList || pxysCsvList || singBoxList,
+            respectRateLimit: htmlList || countryConnectList || parserPpList || ouroGateList || litportHttpsList || pxysCsvList || singBoxList);
+        if (singBoxList && !result.NotModified)
+        {
+            var extraction = Au1rxxSingBoxFeedAdapter.Extract(url, result.Content ?? throw new InvalidDataException("Источник не содержит body."));
+            if (extraction.HeldProfiles.Count > 0)
+                SingBoxProfilesUnsupported(logger, extraction.HeldProfiles.Count, null);
+            return result with { Content = extraction.Content };
+        }
         if (pxysCsvList && !result.NotModified)
             return result with { Content = PxysCsvFeedAdapter.Extract(result.Content ?? throw new InvalidDataException("Источник не содержит body.")) };
         if (liveSocksList && !result.NotModified)
@@ -1054,6 +1065,7 @@ internal static class SourceFetchSchedule
         if (HideIpConnectFeedAdapter.Supports(url)) return fetchedAt.AddMinutes(10);
         if (ParserPpFeedAdapter.Supports(url)) return fetchedAt.AddMinutes(30);
         if (OuroGateFeedAdapter.Supports(url)) return fetchedAt.AddMinutes(30);
+        if (Au1rxxSingBoxFeedAdapter.Supports(url)) return fetchedAt.AddMinutes(30);
         if (Uri.TryCreate(url, UriKind.Absolute, out var uri) &&
             uri.Host.Equals("raw.githubusercontent.com", StringComparison.OrdinalIgnoreCase) &&
             uri.AbsolutePath.StartsWith("/litportnet/free-proxy-list/", StringComparison.OrdinalIgnoreCase))

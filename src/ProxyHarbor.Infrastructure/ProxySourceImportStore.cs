@@ -9,7 +9,7 @@ namespace ProxyHarbor.Infrastructure;
 internal sealed class ProxySourceImportStore(
     IDbContextFactory<ProxyHarborDbContext> dbFactory, long maxStoredBytes = ProxySourceImportStore.MaxStoredBytes)
 {
-    internal static int ParserVersionForUrl(string url) => PxysCsvFeedAdapter.Supports(url) ? 1 : 0;
+    internal static int ParserVersionForUrl(string url) => PxysCsvFeedAdapter.Supports(url) || Au1rxxSingBoxFeedAdapter.Supports(url) ? 1 : 0;
 
     internal const long MaxStoredBytes = 512L * 1_024 * 1_024;
 
