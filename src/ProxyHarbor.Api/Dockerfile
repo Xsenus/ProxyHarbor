@@ -15,7 +15,7 @@ ARG SOURCE_REVISION=unknown
 RUN dotnet publish "src/ProxyHarbor.Api/ProxyHarbor.Api.csproj" -c Release -o /app --no-restore \
     /p:UseAppHost=false /p:Version="$VERSION" /p:SourceRevisionId="$SOURCE_REVISION" /p:ContinuousIntegrationBuild=true
 
-FROM mcr.microsoft.com/dotnet/aspnet:10.0.12-noble@sha256:2d584d8147faddb0d678c5748d47953e5b8e18621ed4fb7049a91381d9d7746f AS runtime
+FROM mcr.microsoft.com/dotnet/aspnet:10.0.12-noble@sha256:222759b391a1aaf241166672c8f99b2d4ada452e7b5319f3c6e8f265a37b5ad4 AS runtime
 # Production crashed repeatedly inside Alpine's musl loader. The supported Ubuntu/glibc
 # runtime removes that native failure surface; curl provides the container healthcheck
 # and libgssapi is loaded by Npgsql during streamed PostgreSQL backups.
