@@ -3,8 +3,8 @@ param(
     [ValidateRange(1, 300)][int]$TimeoutSeconds = 25,
     [ValidateRange(1024, 1048576)][int]$MaxBodyBytes = 262144,
     [ValidateRange(1, 64)][int]$ThrottleLimit = 12,
-    [ValidateRange(1, 10000)][int]$ExpectedFeeds = 547,
-    [ValidateRange(1, 10000)][int]$ExpectedProviders = 281,
+    [ValidateRange(1, 10000)][int]$ExpectedFeeds = 546,
+    [ValidateRange(1, 10000)][int]$ExpectedProviders = 280,
     [switch]$CatalogOnly,
     [string]$ReportPath
 )
@@ -127,6 +127,8 @@ if ($CatalogOnly) {
     return
 }
 
+. (Join-Path $PSScriptRoot 'Initialize-SourceEndpointSample.ps1')
+
 # Каждый worker читает только bounded начало распакованного ответа. Системный proxy
 # отключён, timeout охватывает connect, headers и body, финальный redirect обязан быть HTTPS.
 $results = @($feeds | ForEach-Object -Parallel {
@@ -169,11 +171,11 @@ $results = @($feeds | ForEach-Object -Parallel {
             if ($read -eq 0) { break }
             $body.Write($buffer, 0, $read)
         }
-        $text = [Text.Encoding]::UTF8.GetString($body.GetBuffer(), 0, [int]$body.Length)
-        # Границы совпадают с ProxyParser: IP:port внутри hostname, credential или
-        # дополнительных colon-полей не считается пригодным endpoint'ом.
-        if (-not [regex]::IsMatch($text, '(?<![A-Za-z0-9.:_@-])(?:\d{1,3}\.){3}\d{1,3}:\d{1,5}(?![A-Za-z0-9.:_@-])')) {
-            throw "no IP:port in first $($body.Length) decoded bytes"
+        # Plain-text boundaries stay unchanged. CSV/JSON require their explicit
+        # publisher schemas; this bounded sample is not full collector validation.
+        if (-not [ProxyHarbor.SourceAudit.SourceEndpointSample]::ContainsEndpoint(
+            $feed.Url, $body.ToArray(), $body.Length -lt $using:MaxBodyBytes)) {
+            throw "no supported endpoint in first $($body.Length) decoded bytes"
         }
 
         [pscustomobject]@{

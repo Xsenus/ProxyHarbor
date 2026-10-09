@@ -9,6 +9,163 @@ namespace ProxyHarbor.Tests;
 
 public sealed class VpnCandidateSnapshotCodecTests
 {
+    [Fact]
+    public void OriginalRecordWindowsRetainSupersededCredentialsAndExactDuplicates()
+    {
+        var legacy = "ss://" + Convert.ToBase64String(Encoding.UTF8.GetBytes("aes-256-gcm:old@8.8.8.8:443")) + "#old";
+        const string modern = "ss://aes-256-gcm:new@8.8.8.8:443#new";
+        const string other = "ss://aes-256-gcm:other@1.1.1.1:443";
+        var body = string.Join('\n', legacy, other, modern, modern);
+        var expected = new List<VpnCandidate>();
+        VpnFeedParser.ParseRecordsTo(body, VpnProtocol.Shadowsocks, 10, expected.Add);
+        var snapshot = VpnCandidateSnapshotCodec.Encode(body, VpnProtocol.Shadowsocks);
+        Assert.Equal(2, snapshot.UniqueCount);
+        Assert.Equal(4, snapshot.RecordCount);
+        var received = new List<VpnCandidate>();
+        var cursor = 0;
+        while (cursor < snapshot.RecordCount)
+        {
+            Assert.Equal(new VpnSnapshotWindow(0, cursor, false),
+                VpnCandidateSnapshotCodec.ReadRecordsWindow(snapshot.Payload, cursor, 2, _ => false));
+            var window = VpnCandidateSnapshotCodec.ReadRecordsWindow(snapshot.Payload, cursor, 2,
+                candidate => { received.Add(candidate); return true; });
+            Assert.InRange(window.Count, 1, 2);
+            Assert.Equal(cursor + window.Count, window.NextIndex);
+            cursor = window.NextIndex;
+        }
+        Assert.Equal(expected, received);
+        Assert.Equal(new VpnSnapshotWindow(0, snapshot.RecordCount, true),
+            VpnCandidateSnapshotCodec.ReadRecordsWindow(snapshot.Payload, snapshot.RecordCount, 1, _ => true));
+        var indexed = new List<VpnCandidate>();
+        Assert.True(VpnCandidateSnapshotCodec.ReadWindow(snapshot.Payload, 0, 10,
+            candidate => { indexed.Add(candidate); return true; }).Completed);
+        Assert.Equal(new[] { modern, other }, indexed.Select(candidate => candidate.ConnectionUri));
+    }
+
+    [Fact]
+    public void OriginalRecordCursorResumesAfterCallbackRefusesCandidate()
+    {
+        var content = string.Join('\n', Enumerable.Range(1, 6).Select(id => $"vless://id{id}@8.8.8.8:443?security=tls&sni=node.example#{id}"));
+        var snapshot = VpnCandidateSnapshotCodec.Encode(content, VpnProtocol.Vless);
+        Assert.Equal(1, snapshot.UniqueCount);
+        var received = new List<VpnCandidate>();
+        var first = VpnCandidateSnapshotCodec.ReadRecordsWindow(snapshot.Payload, 0, 6, candidate =>
+        {
+            if (received.Count == 2) return false;
+            received.Add(candidate);
+            return true;
+        });
+        Assert.Equal(new VpnSnapshotWindow(2, 2, false), first);
+        var last = VpnCandidateSnapshotCodec.ReadRecordsWindow(snapshot.Payload, first.NextIndex, 6,
+            candidate => { received.Add(candidate); return true; });
+        Assert.Equal(new VpnSnapshotWindow(4, 6, true), last);
+        var expected = new List<VpnCandidate>();
+        VpnFeedParser.ParseRecordsTo(content, VpnProtocol.Vless, 10, expected.Add);
+        Assert.Equal(expected, received);
+    }
+
+    [Theory]
+    [InlineData("x")]
+    [InlineData("界")]
+    public void OriginalYamlVariantsDrainAcrossPagesAndTextLimitedWindows(string character)
+    {
+        var setting = string.Concat(Enumerable.Repeat(character, 14_000));
+        var content = "setting: &long '" + setting + "'\nproxies: [" + string.Join(',', Enumerable.Range(1, 400).Select(id =>
+            $"{{name: node{id}, type: vless, server: 8.8.8.8, port: 443, uuid: id{id}, servername: node.example, future-option: *long}}")) + "]";
+        var expected = new List<VpnCandidate>();
+        VpnFeedParser.ParseRecordsTo(content, VpnProtocol.Vless, 500, expected.Add);
+        var snapshot = VpnCandidateSnapshotCodec.Encode(content, VpnProtocol.Vless);
+        Assert.Equal(1, snapshot.UniqueCount);
+        Assert.Equal(400, snapshot.RecordCount);
+        var received = new List<VpnCandidate>();
+        var cursor = 0;
+        var windows = 0;
+        while (cursor < snapshot.RecordCount)
+        {
+            long textBytes = 0;
+            var window = VpnCandidateSnapshotCodec.ReadRecordsWindow(snapshot.Payload, cursor, 400, candidate =>
+            {
+                textBytes += 2L * (candidate.Host.Length + (candidate.ConnectionUri?.Length ?? 0) + (candidate.ClashConfiguration?.Length ?? 0));
+                received.Add(candidate);
+                return true;
+            });
+            Assert.InRange(textBytes, 1, VpnCandidateSnapshotCodec.MaxWindowTextBytes);
+            Assert.InRange(window.Count, 1, 399);
+            Assert.Equal(cursor + window.Count, window.NextIndex);
+            Assert.Equal(window.NextIndex == snapshot.RecordCount, window.Completed);
+            cursor = window.NextIndex;
+            windows++;
+        }
+        Assert.True(windows > 1);
+        Assert.Equal(expected, received);
+    }
+
+    [Fact]
+    public void OriginalRecordsReaderSupportsLegacyUriOnlyPages()
+    {
+        const string first = "vless://first@8.8.8.8:443";
+        const string last = "vless://last@8.8.8.8:443";
+        var bytes = Record(first, null, includeConfiguration: false)
+            .Concat(Record(last, null, includeConfiguration: false)).ToArray();
+        var payload = WrapPage(bytes, 2);
+        var received = new List<VpnCandidate>();
+        Assert.Equal(new VpnSnapshotWindow(2, 2, true), VpnCandidateSnapshotCodec.ReadRecordsWindow(payload, 0, 10,
+            candidate => { received.Add(candidate); return true; }));
+        Assert.Equal(new[] { first, last }, received.Select(candidate => candidate.ConnectionUri));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(4)]
+    [InlineData(8)]
+    [InlineData(12)]
+    [InlineData(16)]
+    [InlineData(20)]
+    [InlineData(24)]
+    public void OriginalRecordsReaderRejectsCorruptLayoutBeforeAdmission(int offset)
+    {
+        var snapshot = VpnCandidateSnapshotCodec.Encode("vless://id@8.8.8.8:443", VpnProtocol.Vless);
+        BinaryPrimitives.WriteInt32LittleEndian(snapshot.Payload.AsSpan(offset), -1);
+        Assert.Throws<InvalidDataException>(() => VpnCandidateSnapshotCodec.ReadRecordsWindow(snapshot.Payload, 0, 10,
+            _ => throw new InvalidOperationException("Corrupt record was admitted")));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void OriginalRecordsReaderValidatesIndexLocationsWithoutUsingEndpointIndex(bool recordIndex)
+    {
+        var snapshot = VpnCandidateSnapshotCodec.Encode("vless://id@8.8.8.8:443", VpnProtocol.Vless);
+        var offset = BinaryPrimitives.ReadInt32LittleEndian(snapshot.Payload.AsSpan(12));
+        BinaryPrimitives.WriteInt32LittleEndian(snapshot.Payload.AsSpan(offset + (recordIndex ? 4 : 0)), int.MaxValue);
+        Assert.Throws<InvalidDataException>(() => VpnCandidateSnapshotCodec.ReadRecordsWindow(snapshot.Payload, 0, 10,
+            _ => throw new InvalidOperationException("Corrupt index was admitted")));
+    }
+
+    [Fact]
+    public void OriginalRecordsReaderRevalidatesSupersededUriProvenance()
+    {
+        var bytes = Record("vless://id@127.0.0.1:443", null)
+            .Concat(Record("vless://id@8.8.8.8:443", null)).ToArray();
+        var payload = WrapPage(bytes, 2, VpnCandidateSnapshotCodec.Magic);
+        Assert.Throws<InvalidDataException>(() => VpnCandidateSnapshotCodec.ReadRecordsWindow(payload, 0, 1,
+            _ => throw new InvalidOperationException("Private superseded URI was admitted")));
+    }
+
+    [Fact]
+    public void OriginalRecordsReaderValidatesBoundsAndPreservesCallbackExceptions()
+    {
+        var snapshot = VpnCandidateSnapshotCodec.Encode("vless://id@8.8.8.8:443", VpnProtocol.Vless);
+        Assert.Throws<ArgumentNullException>(() => VpnCandidateSnapshotCodec.ReadRecordsWindow(null!, 0, 1, _ => true));
+        Assert.Throws<ArgumentNullException>(() => VpnCandidateSnapshotCodec.ReadRecordsWindow(snapshot.Payload, 0, 1, null!));
+        Assert.Throws<ArgumentOutOfRangeException>(() => VpnCandidateSnapshotCodec.ReadRecordsWindow(snapshot.Payload, -1, 1, _ => true));
+        Assert.Throws<ArgumentOutOfRangeException>(() => VpnCandidateSnapshotCodec.ReadRecordsWindow(snapshot.Payload, 2, 1, _ => true));
+        Assert.Throws<ArgumentOutOfRangeException>(() => VpnCandidateSnapshotCodec.ReadRecordsWindow(snapshot.Payload, 0, 0, _ => true));
+        var failure = new InvalidOperationException("Callback failed");
+        Assert.Same(failure, Assert.Throws<InvalidOperationException>(() => VpnCandidateSnapshotCodec.ReadRecordsWindow(
+            snapshot.Payload, 0, 1, _ => throw failure)));
+    }
+
     [Theory]
     [InlineData(false, "x")]
     [InlineData(true, "x")]
@@ -341,6 +498,7 @@ public sealed class VpnCandidateSnapshotCodecTests
         {
             SourceUrl = "https://example.com/feed",
             CandidateCount = 1,
+            ProfileRecordCount = 1,
             NextIndex = 0,
             Payload = snapshot,
             PayloadHash = System.Security.Cryptography.SHA256.HashData(snapshot),

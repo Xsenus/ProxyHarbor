@@ -201,13 +201,13 @@ internal static class RestoreApplication
         await Console.Out.WriteLineAsync();
     }
 
-    /// <summary>Читает настройки из v5-v9, чья точная схема уже проверена валидатором.</summary>
+    /// <summary>Читает настройки из v5-v10, чья точная схема уже проверена валидатором.</summary>
     internal static RestoreSettingsInspection ReadSettingsInspection(ZipArchive archive)
     {
         var manifest = ReadJsonObject(archive, "manifest.json");
-        if (manifest.GetProperty("version").GetInt32() is not (5 or 6 or 7 or 8 or 9))
+        if (manifest.GetProperty("version").GetInt32() is not (5 or 6 or 7 or 8 or 9 or 10))
             throw new InvalidDataException(
-                "Полный снимок настроек доступен только для backup manifest v5-v9.");
+                "Полный снимок настроек доступен только для backup manifest v5-v10.");
 
         return new RestoreSettingsInspection(
             manifest,
@@ -358,6 +358,8 @@ internal static class RestoreApplication
                     _ = await ImportIdentityAsync<VpnEndpoint>(archive, "database/vpn-endpoints.json", db, token);
                 if (archive.GetEntry("database/vpn-endpoint-sources.json") is not null)
                     _ = await ImportIdentityAsync<VpnEndpointSource>(archive, "database/vpn-endpoint-sources.json", db, token);
+                if (archive.GetEntry("database/vpn-connection-profiles.json") is not null)
+                    _ = await ImportIdentityAsync<VpnConnectionProfile>(archive, "database/vpn-connection-profiles.json", db, token, VpnConnectionProfileIntegrity.Validate);
             }
             var proxyCount = await ImportAsync<ProxyEndpoint>(
                 archive,
@@ -978,7 +980,7 @@ internal sealed record RestoreOptions(
         dotnet run --project src/ProxyHarbor.Restore -- \
           --input ./proxyharbor.phbackup --replace-existing-data
 
-        Без подключения к БД вывести безопасные настройки manifest v5-v9 в JSON:
+        Без подключения к БД вывести безопасные настройки manifest v5-v10 в JSON:
           --input ./proxyharbor.phbackup --inspect-settings
 
         По умолчанию строка БД читается из ConnectionStrings__Postgres,

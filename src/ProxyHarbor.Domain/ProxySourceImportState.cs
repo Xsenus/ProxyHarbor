@@ -9,6 +9,8 @@ public sealed class ProxySourceImportState
     public required string SourceUrl { get; set; }
     /// <summary>Fallback протокол конфигурации снимка.</summary>
     public ProxyProtocol SourceProtocol { get; set; }
+    /// <summary>Version of source-specific parsing; zero preserves unaffected legacy imports.</summary>
+    public int ParserVersion { get; set; }
     /// <summary>Generation token исключает подтверждение прогресса другого снимка.</summary>
     public Guid SnapshotId { get; set; } = Guid.NewGuid();
     /// <summary>Время получения неизменяемого набора кандидатов.</summary>

@@ -11,6 +11,185 @@ namespace ProxyHarbor.Tests;
 [Collection(PostgresIntegrationGroup.Name)]
 public sealed class DatabaseSeederIntegrationTests
 {
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    [Trait("Category", "PostgresIntegration")]
+    public async Task UnavailablePublisherIsArchivedWithoutLosingHistoryOrImport(bool enabled)
+    {
+        await using var database = await ProxySourceImportStoreIntegrationTests.SnapshotDatabase.CreateAsync();
+        if (database is null) return;
+        var observedAt = new DateTimeOffset(2026, 10, 9, 0, 0, 0, TimeSpan.Zero);
+        var retired = new ProxySource
+        {
+            Name = "lighscent",
+            Url = BuiltInSourceCatalog.UnavailableLighscentUrl,
+            Enabled = true,
+            DefaultProtocol = ProxyProtocol.Http,
+            Priority = 3070,
+            LastFetchedAt = observedAt,
+            LastSucceededAt = observedAt.AddHours(-1),
+            LastContentFetchedAt = observedAt.AddHours(-2),
+            NextFetchAt = observedAt.AddHours(1),
+            HttpETag = "\"saved-body\"",
+            HttpLastModifiedAt = observedAt.AddHours(-3),
+            LastItemCount = 2,
+            LastResultTruncated = true,
+            ConsecutiveFailures = 3,
+            LastError = "HTTP 404"
+        };
+        var custom = new ProxySource { Name = "Custom source", Url = "https://example.org/custom.txt", Enabled = true };
+        await using (var initial = database.Factory.CreateDbContext())
+        {
+            initial.Sources.AddRange(retired, custom);
+            await initial.SaveChangesAsync();
+        }
+        var store = new ProxySourceImportStore(database.Factory);
+        var snapshot = Assert.IsType<ProxySourceImportState>(await store.BeginAsync(retired,
+            ProxyCandidateSnapshotCodec.Encode("8.8.8.8:80\n1.1.1.1:8080", ProxyProtocol.Http), CancellationToken.None));
+        Assert.True(await store.AcknowledgeCommittedImportAsync(snapshot, 1, observedAt, CancellationToken.None));
+        await using (var initial = database.Factory.CreateDbContext())
+        {
+            var source = await initial.Sources.SingleAsync(source => source.Id == retired.Id);
+            source.Enabled = enabled;
+            await initial.SaveChangesAsync();
+        }
+        for (var pass = 0; pass < 2; pass++)
+        {
+            await using var startup = database.Factory.CreateDbContext();
+            await DatabaseSeeder.InitializeAsync(startup);
+        }
+        await using var verify = database.Factory.CreateDbContext();
+        var archived = await verify.Sources.AsNoTracking().SingleAsync(source => source.Url == retired.Url);
+        Assert.Equal(retired.Id, archived.Id);
+        Assert.False(archived.Enabled);
+        Assert.Equal(retired.Name, archived.Name);
+        Assert.Equal(retired.Priority, archived.Priority);
+        Assert.Equal(retired.DefaultProtocol, archived.DefaultProtocol);
+        Assert.Equal(retired.LastFetchedAt, archived.LastFetchedAt);
+        Assert.Equal(retired.LastSucceededAt, archived.LastSucceededAt);
+        Assert.Equal(retired.LastContentFetchedAt, archived.LastContentFetchedAt);
+        Assert.Equal(retired.NextFetchAt, archived.NextFetchAt);
+        Assert.Equal(retired.HttpETag, archived.HttpETag);
+        Assert.Equal(retired.HttpLastModifiedAt, archived.HttpLastModifiedAt);
+        Assert.Equal(retired.LastItemCount, archived.LastItemCount);
+        Assert.Equal(retired.LastResultTruncated, archived.LastResultTruncated);
+        Assert.Equal(retired.ConsecutiveFailures, archived.ConsecutiveFailures);
+        Assert.Equal(retired.LastError, archived.LastError);
+        var saved = await verify.ProxySourceImportStates.AsNoTracking().SingleAsync(state => state.ProxySourceId == retired.Id);
+        Assert.Equal(snapshot.SnapshotId, saved.SnapshotId);
+        Assert.Equal(snapshot.Payload, saved.Payload);
+        Assert.Equal(1, saved.NextIndex);
+        var loaded = Assert.IsType<ProxySourceImportState>(await store.LoadAsync(archived, CancellationToken.None));
+        Assert.Equal(snapshot.SnapshotId, loaded.SnapshotId);
+        Assert.Null(await store.BeginAsync(archived,
+            ProxyCandidateSnapshotCodec.Encode("9.9.9.9:80", ProxyProtocol.Http), CancellationToken.None));
+        Assert.False(await store.AcknowledgeCommittedImportAsync(loaded, 2, observedAt, CancellationToken.None));
+        var preserved = await verify.ProxySourceImportStates.AsNoTracking().SingleAsync(state => state.ProxySourceId == retired.Id);
+        Assert.Equal(snapshot.SnapshotId, preserved.SnapshotId);
+        Assert.Equal(1, preserved.NextIndex);
+        var unchanged = await verify.Sources.AsNoTracking().SingleAsync(source => source.Id == custom.Id);
+        Assert.True(unchanged.Enabled);
+        Assert.Equal(custom.Name, unchanged.Name);
+        Assert.DoesNotContain(BuiltInSourceCatalog.Sources, source => source.Url == retired.Url);
+    }
+
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
+    public async Task PublisherProtocolCorrectionPreservesSourceHistoryAndRejectsOldImportCursor()
+    {
+        await using var database = await ProxySourceImportStoreIntegrationTests.SnapshotDatabase.CreateAsync();
+        if (database is null) return;
+        var observedAt = new DateTimeOffset(2026, 10, 8, 12, 0, 0, TimeSpan.Zero);
+        var definitions = BuiltInSourceCatalog.Sources.Where(source =>
+            source.Url == "https://raw.githubusercontent.com/dinoz0rg/proxy-list/main/checked_proxies/http.txt" ||
+            source.Url.StartsWith("https://raw.githubusercontent.com/Vann-Dev/proxy-list/main/proxies/https-tested/", StringComparison.Ordinal) ||
+            source.Url is "https://raw.githubusercontent.com/Xnuvers007/free-proxy/main/proxy_scheme.txt"
+                or "https://raw.githubusercontent.com/Xnuvers007/free-proxy/main/proxy_scheme_active.txt").ToArray();
+        Assert.Equal(11, definitions.Length);
+        await using (var initial = database.Factory.CreateDbContext())
+            await DatabaseSeeder.InitializeAsync(initial);
+        var store = new ProxySourceImportStore(database.Factory);
+        var previous = new Dictionary<string, (Guid Id, bool Enabled, ProxySourceImportState Snapshot)>(StringComparer.Ordinal);
+        foreach (var definition in definitions)
+        {
+            await using var db = database.Factory.CreateDbContext();
+            var source = await db.Sources.SingleAsync(source => source.Url == definition.Url);
+            source.DefaultProtocol = definition.Protocol == ProxyProtocol.Http ? ProxyProtocol.Https : ProxyProtocol.Http;
+            var enabledAfterSnapshot = previous.Count % 2 == 0;
+            source.Enabled = true;
+            source.LastFetchedAt = observedAt;
+            source.LastSucceededAt = observedAt.AddMinutes(-10);
+            source.LastContentFetchedAt = observedAt.AddMinutes(-20);
+            source.NextFetchAt = observedAt.AddHours(1);
+            source.HttpETag = "\"saved-body\"";
+            source.HttpLastModifiedAt = observedAt.AddMinutes(-30);
+            source.LastItemCount = 2;
+            source.LastResultTruncated = true;
+            source.ConsecutiveFailures = 2;
+            source.LastError = "temporary source failure";
+            await db.SaveChangesAsync();
+            var snapshot = Assert.IsType<ProxySourceImportState>(await store.BeginAsync(source,
+                ProxyCandidateSnapshotCodec.Encode("8.8.8.8:443\n1.1.1.1:8080", source.DefaultProtocol), CancellationToken.None));
+            Assert.True(await store.AcknowledgeCommittedImportAsync(snapshot, 1, observedAt, CancellationToken.None));
+            source.Enabled = enabledAfterSnapshot;
+            await db.SaveChangesAsync();
+            previous.Add(source.Url, (source.Id, source.Enabled, snapshot));
+        }
+        for (var pass = 0; pass < 2; pass++)
+        {
+            await using var restart = database.Factory.CreateDbContext();
+            await DatabaseSeeder.InitializeAsync(restart);
+        }
+        foreach (var definition in definitions)
+        {
+            await using var db = database.Factory.CreateDbContext();
+            var source = await db.Sources.AsNoTracking().SingleAsync(source => source.Url == definition.Url);
+            var saved = previous[source.Url];
+            Assert.Equal(saved.Id, source.Id);
+            Assert.Equal(saved.Enabled, source.Enabled);
+            Assert.Equal(definition.Protocol, source.DefaultProtocol);
+            Assert.Equal(observedAt, source.LastFetchedAt);
+            Assert.Equal(observedAt.AddMinutes(-10), source.LastSucceededAt);
+            Assert.Equal(observedAt.AddMinutes(-20), source.LastContentFetchedAt);
+            Assert.Equal(observedAt.AddHours(1), source.NextFetchAt);
+            Assert.Equal("\"saved-body\"", source.HttpETag);
+            Assert.Equal(observedAt.AddMinutes(-30), source.HttpLastModifiedAt);
+            Assert.Equal(2, source.LastItemCount);
+            Assert.True(source.LastResultTruncated);
+            Assert.Equal(2, source.ConsecutiveFailures);
+            Assert.Equal("temporary source failure", source.LastError);
+            Assert.Null(await store.LoadAsync(source, CancellationToken.None));
+            Assert.False(await store.AcknowledgeCommittedImportAsync(saved.Snapshot, 2, observedAt, CancellationToken.None));
+            var content = definition.Protocol == ProxyProtocol.HttpTls
+                ? "https://8.8.8.8:443\nhttp://1.1.1.1:8080"
+                : "8.8.8.8:443\n1.1.1.1:8080";
+            var admitted = await store.BeginAsync(source,
+                ProxyCandidateSnapshotCodec.Encode(content, source.DefaultProtocol), CancellationToken.None);
+            if (!source.Enabled)
+            {
+                Assert.Null(admitted);
+                var unchanged = await db.ProxySourceImportStates.SingleAsync(state => state.ProxySourceId == source.Id);
+                Assert.Equal(saved.Snapshot.SnapshotId, unchanged.SnapshotId);
+                Assert.Equal(1, unchanged.NextIndex);
+                continue;
+            }
+            var fresh = Assert.IsType<ProxySourceImportState>(admitted);
+            Assert.NotEqual(saved.Snapshot.SnapshotId, fresh.SnapshotId);
+            var decoded = new List<(string Host, int Port, ProxyProtocol Protocol)>();
+            var window = ProxySourceImportStore.ReadWindow(fresh, 2, candidate =>
+            {
+                decoded.Add(candidate.ToEndpoint());
+                return true;
+            });
+            Assert.True(window.Completed);
+            Assert.Equal(
+                [("8.8.8.8", 443, definition.Protocol),
+                 ("1.1.1.1", 8080, definition.Protocol == ProxyProtocol.HttpTls ? ProxyProtocol.Http : definition.Protocol)], decoded);
+            Assert.True(await store.AcknowledgeCommittedImportAsync(fresh, 2, observedAt, CancellationToken.None));
+        }
+    }
+
     [Fact]
     [Trait("Category", "PostgresIntegration")]
     public async Task RepeatedStartupPreservesEveryActiveCatalogSourceAndPendingSnapshot()

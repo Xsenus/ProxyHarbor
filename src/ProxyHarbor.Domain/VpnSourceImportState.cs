@@ -19,6 +19,10 @@ public sealed class VpnSourceImportState
     public int CandidateCount { get; set; }
     /// <summary>Первый unique endpoint, ещё не подтверждённый import commit.</summary>
     public int NextIndex { get; set; }
+    /// <summary>Original physical records, including all settings for a shared endpoint.</summary>
+    public int ProfileRecordCount { get; set; }
+    /// <summary>First original record not yet saved to the durable profile catalog.</summary>
+    public int ProfileNextIndex { get; set; }
     /// <summary>Compressed pages и индекс последних URI.</summary>
     public byte[] Payload { get; set; } = [];
     /// <summary>SHA-256 pending payload; очищается после полного импорта.</summary>

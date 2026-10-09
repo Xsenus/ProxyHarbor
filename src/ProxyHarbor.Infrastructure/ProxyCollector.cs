@@ -36,6 +36,12 @@ public sealed class ProxyCollector(
     private static readonly Action<ILogger, Exception?> ImportCleanupFailed =
         LoggerMessage.Define(LogLevel.Warning, new EventId(1004, "ImportCleanupFailed"),
             "Не удалось удалить временную таблицу proxy_import; она будет удалена при закрытии соединения.");
+    private static readonly Action<ILogger, int, int, int, Exception?> OuroGateProfilesUnsupported =
+        LoggerMessage.Define<int, int, int>(LogLevel.Warning, new EventId(1005, "OuroGateProfilesUnsupported"),
+            "OuroGate: {UnsupportedProfiles} профилей требуют отдельной поддержки; с авторизацией {AuthenticatedProfiles}, с DNS-адресом {DnsProfiles}. Публичные IP-профили импортируются отдельно.");
+    private static readonly Action<ILogger, int, Exception?> SingBoxProfilesUnsupported =
+        LoggerMessage.Define<int>(LogLevel.Warning, new EventId(1006, "SingBoxProfilesUnsupported"),
+            "Au1rxx sing-box: {UnsupportedProfiles} профилей требуют сохранения авторизации, DNS или TLS-настроек и не импортируются как обычные IP-прокси.");
     private readonly SemaphoreSlim _runGate = new(1, 1);
     private readonly IDataProtector? _credentialProtector = credentialProtectionProvider is null
         ? null
@@ -66,6 +72,7 @@ public sealed class ProxyCollector(
             await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
 
             if (cachedOnly && !await db.ProxySourceImportStates.AnyAsync(state =>
+                    state.ParserVersion == (PxysCsvFeedAdapter.Urls.Contains(state.SourceUrl) ? 1 : 0) &&
                     state.NextIndex < state.CandidateCount && db.Sources.Any(source =>
                         source.Id == state.ProxySourceId && source.Enabled &&
                         source.Url == state.SourceUrl && source.DefaultProtocol == state.SourceProtocol &&
@@ -98,7 +105,8 @@ public sealed class ProxyCollector(
                     .Select(state => state.ProxySourceId!.Value).ToArrayAsync(cancellationToken)).ToHashSet();
                 // Старые snapshots отключённых/изменённых feed'ов не должны занимать
                 // storage-квоту постоянно; отсутствие state требует полного re-fetch.
-                await db.ProxySourceImportStates.Where(state => !db.Sources.Any(source =>
+                await db.ProxySourceImportStates.Where(state =>
+                        state.ParserVersion != (PxysCsvFeedAdapter.Urls.Contains(state.SourceUrl) ? 1 : 0) || !db.Sources.Any(source =>
                         source.Id == state.ProxySourceId && source.Enabled && source.Url == state.SourceUrl &&
                         source.DefaultProtocol == state.SourceProtocol))
                     .ExecuteDeleteAsync(cancellationToken);
@@ -662,12 +670,21 @@ public sealed class ProxyCollector(
         }
         if (FreeProxyDbPageCapture.IsSearchUrl(url) || ProxiwarePublicApi.IsOriginUrl(url) || RoundProxiesPublicApi.IsApiUrl(url) || Socks5ProxiesPublicApi.IsApiUrl(url) || ProxoraPublicApi.IsApiUrl(url) || ProxyScrapePublicApi.IsApiUrl(url))
             throw new InvalidDataException("Постраничный API требует канонический URL зарегистрированного источника и сохраняемую очередь страниц.");
+        if (LiveSocksHtmlFeedAdapter.IsHome(url))
+            return await LiveSocksHtmlFeedAdapter.FetchLatestAsync(
+                (pageUrl, maximumBytes, fetchToken) => SourceHttpFetcher.FetchAsync(client, pageUrl,
+                    null, null, maximumBytes, options.Value.SourceTimeoutSeconds, options.Value.SourceRetryCount,
+                    fetchToken, MyProxyHtmlFeedAdapter.EnsureSupportedMediaType, delayAsync,
+                    sameOriginRedirectsOnly: true, respectRateLimit: true), MaxSourceBytes, token);
+        var liveSocksList = LiveSocksHtmlFeedAdapter.Supports(url);
         var didsoftList = DidsoftHtmlFeedAdapter.Supports(url);
-        var htmlList = MyProxyHtmlFeedAdapter.Supports(url) || didsoftList;
+        var htmlList = MyProxyHtmlFeedAdapter.Supports(url) || didsoftList || liveSocksList;
         var countryConnectList = HideIpConnectFeedAdapter.Supports(url);
         var parserPpList = ParserPpFeedAdapter.Supports(url);
         var ouroGateList = OuroGateFeedAdapter.Supports(url);
         var litportHttpsList = LitportHttpsFeedAdapter.Supports(url);
+        var pxysCsvList = PxysCsvFeedAdapter.Supports(url);
+        var singBoxList = Au1rxxSingBoxFeedAdapter.Supports(url);
         var result = await SourceHttpFetcher.FetchAsync(
             client,
             url,
@@ -679,14 +696,30 @@ public sealed class ProxyCollector(
             token,
             htmlList ? MyProxyHtmlFeedAdapter.EnsureSupportedMediaType : SourceFeedParser.EnsureSupportedMediaType,
             delayAsync,
-            sameOriginRedirectsOnly: htmlList || countryConnectList || parserPpList || ouroGateList || litportHttpsList,
-            respectRateLimit: htmlList || countryConnectList || parserPpList || ouroGateList || litportHttpsList);
+            sameOriginRedirectsOnly: htmlList || countryConnectList || parserPpList || ouroGateList || litportHttpsList || pxysCsvList || singBoxList,
+            respectRateLimit: htmlList || countryConnectList || parserPpList || ouroGateList || litportHttpsList || pxysCsvList || singBoxList);
+        if (singBoxList && !result.NotModified)
+        {
+            var extraction = Au1rxxSingBoxFeedAdapter.Extract(url, result.Content ?? throw new InvalidDataException("Источник не содержит body."));
+            if (extraction.HeldProfiles.Count > 0)
+                SingBoxProfilesUnsupported(logger, extraction.HeldProfiles.Count, null);
+            return result with { Content = extraction.Content };
+        }
+        if (pxysCsvList && !result.NotModified)
+            return result with { Content = PxysCsvFeedAdapter.Extract(result.Content ?? throw new InvalidDataException("Источник не содержит body.")) };
+        if (liveSocksList && !result.NotModified)
+            return result with { Content = LiveSocksHtmlFeedAdapter.Extract(url, result.Content ?? throw new InvalidDataException("Источник не содержит body.")) };
         if (didsoftList && !result.NotModified)
             return result with { Content = DidsoftHtmlFeedAdapter.Extract(url, result.Content ?? throw new InvalidDataException("Источник не содержит body.")) };
         if (litportHttpsList && !result.NotModified)
             return result with { Content = LitportHttpsFeedAdapter.Extract(url, result.Content ?? throw new InvalidDataException("Источник не содержит body.")) };
         if (ouroGateList && !result.NotModified)
-            return result with { Content = OuroGateFeedAdapter.Extract(url, result.Content ?? throw new InvalidDataException("Источник не содержит body.")) };
+        {
+            var extraction = OuroGateFeedAdapter.ExtractWithReport(url, result.Content ?? throw new InvalidDataException("Источник не содержит body."));
+            if (extraction.UnsupportedProfiles > 0)
+                OuroGateProfilesUnsupported(logger, extraction.UnsupportedProfiles, extraction.AuthenticatedProfiles, extraction.DnsProfiles, null);
+            return result with { Content = extraction.Content };
+        }
         if (parserPpList && !result.NotModified)
             return result with { Content = ParserPpFeedAdapter.Extract(url, result.Content ?? throw new InvalidDataException("Источник не содержит body.")) };
         if (countryConnectList && !result.NotModified)
@@ -1028,9 +1061,11 @@ internal static class SourceFetchSchedule
         if (FreeProxyDbPageCapture.Supports(url)) return fetchedAt.AddHours(6);
         if (MyProxyHtmlFeedAdapter.Supports(url)) return fetchedAt.AddHours(1);
         if (DidsoftHtmlFeedAdapter.Supports(url)) return fetchedAt.AddMinutes(10);
+        if (LiveSocksHtmlFeedAdapter.Supports(url)) return fetchedAt.AddHours(1);
         if (HideIpConnectFeedAdapter.Supports(url)) return fetchedAt.AddMinutes(10);
         if (ParserPpFeedAdapter.Supports(url)) return fetchedAt.AddMinutes(30);
         if (OuroGateFeedAdapter.Supports(url)) return fetchedAt.AddMinutes(30);
+        if (Au1rxxSingBoxFeedAdapter.Supports(url)) return fetchedAt.AddMinutes(30);
         if (Uri.TryCreate(url, UriKind.Absolute, out var uri) &&
             uri.Host.Equals("raw.githubusercontent.com", StringComparison.OrdinalIgnoreCase) &&
             uri.AbsolutePath.StartsWith("/litportnet/free-proxy-list/", StringComparison.OrdinalIgnoreCase))

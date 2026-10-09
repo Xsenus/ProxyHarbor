@@ -115,6 +115,7 @@ public sealed class VpnSnapshotCollectorIntegrationTests
         var resumed = await service.CollectAsync();
         Assert.Equal(1, resumed.Added);
         Assert.Equal(1, resumed.NotModified);
+        await DrainOriginalProfilesAsync(database, service, clients, 3);
         await using var db = database.Factory.CreateDbContext();
         Assert.Null((await db.VpnSources.SingleAsync()).LastError);
         var endpoints = await db.VpnEndpoints.ToArrayAsync();
@@ -122,6 +123,8 @@ public sealed class VpnSnapshotCollectorIntegrationTests
         Assert.All(endpoints, endpoint => Assert.Equal(VpnProtocol.Shadowsocks, endpoint.Protocol));
         Assert.Equal(last, endpoints.Single(endpoint => endpoint.Port == 443).ConnectionUri);
         Assert.Equal(neighbour, endpoints.Single(endpoint => endpoint.Port == 8388).ConnectionUri);
+        Assert.Equal(new[] { first, last, neighbour }.Order(),
+            (await db.VpnConnectionProfiles.Select(profile => profile.ConnectionUri).ToArrayAsync()).Order());
         Assert.Equal(2, await db.VpnEndpointSources.CountAsync());
         var state = await db.VpnSourceImportStates.SingleAsync();
         Assert.Equal(2, state.NextIndex);
@@ -146,10 +149,13 @@ public sealed class VpnSnapshotCollectorIntegrationTests
         var resumed = await service.CollectAsync();
         Assert.Equal(1, resumed.Added);
         Assert.Equal(1, resumed.NotModified);
+        await DrainOriginalProfilesAsync(database, service, clients, 3);
         await using var db = database.Factory.CreateDbContext();
         Assert.Null((await db.VpnSources.SingleAsync()).LastError);
         Assert.Equal(last, (await db.VpnEndpoints.SingleAsync(x => x.Port == 1)).ConnectionUri);
         Assert.Equal(neighbour, (await db.VpnEndpoints.SingleAsync(x => x.Port == 2)).ConnectionUri);
+        Assert.Equal(new[] { first, last, neighbour }.Order(),
+            (await db.VpnConnectionProfiles.Select(profile => profile.ConnectionUri).ToArrayAsync()).Order());
         Assert.Equal(2, await db.VpnEndpointSources.CountAsync());
         var state = await db.VpnSourceImportStates.SingleAsync();
         Assert.Equal(2, state.NextIndex);
@@ -184,6 +190,7 @@ public sealed class VpnSnapshotCollectorIntegrationTests
         var resumed = await service.CollectAsync();
         Assert.Equal(9_803, resumed.Added);
         Assert.Equal(1, resumed.NotModified);
+        await DrainOriginalProfilesAsync(database, service, clients, 10_004);
         await using var final = database.Factory.CreateDbContext();
         Assert.Equal(10_003, await final.VpnEndpoints.CountAsync());
         Assert.Equal(10_003, await final.VpnEndpointSources.CountAsync());
@@ -192,6 +199,8 @@ public sealed class VpnSnapshotCollectorIntegrationTests
         Assert.Equal(completed.CandidateCount, completed.NextIndex);
         Assert.Empty(completed.Payload);
         Assert.Empty(completed.PayloadHash);
+        Assert.Equal(10_004, await final.VpnConnectionProfiles.CountAsync());
+        Assert.Equal(2, await final.VpnConnectionProfiles.CountAsync(profile => profile.Port == 1));
         Assert.True(clients.Validators[1]);
     }
 
@@ -424,6 +433,54 @@ public sealed class VpnSnapshotCollectorIntegrationTests
             Assert.False(clients.Validators[1]);
         }
         else Assert.Empty(await final.VpnSourceImportStates.ToArrayAsync());
+    }
+
+    private static async Task DrainOriginalProfilesAsync(
+        SnapshotDatabase database, VpnCatalogService service, FeedClients clients, int expectedRecords)
+    {
+        VpnSource before;
+        await using (var db = database.Factory.CreateDbContext())
+        {
+            var source = await db.VpnSources.SingleAsync();
+            source.NextFetchAt = DateTimeOffset.UtcNow.AddDays(1);
+            await db.SaveChangesAsync();
+            await db.Entry(source).ReloadAsync();
+            before = source;
+        }
+        var requests = clients.Validators.Count;
+        for (var run = 0; run < 100; run++)
+        {
+            int previousIndex;
+            await using (var db = database.Factory.CreateDbContext())
+            {
+                var state = await db.VpnSourceImportStates.SingleAsync();
+                Assert.Equal(state.CandidateCount, state.NextIndex);
+                Assert.Equal(expectedRecords, state.ProfileRecordCount);
+                if (state.ProfileNextIndex == expectedRecords)
+                {
+                    Assert.Empty(state.Payload);
+                    Assert.Empty(state.PayloadHash);
+                    Assert.Equal(expectedRecords, await db.VpnConnectionProfiles.CountAsync());
+                    var after = await db.VpnSources.SingleAsync();
+                    Assert.Equal(before.LastFetchedAt, after.LastFetchedAt);
+                    Assert.Equal(before.LastSucceededAt, after.LastSucceededAt);
+                    Assert.Equal(before.NextFetchAt, after.NextFetchAt);
+                    Assert.Equal(requests, clients.Validators.Count);
+                    return;
+                }
+                Assert.NotEmpty(state.Payload);
+                Assert.NotEmpty(state.PayloadHash);
+                previousIndex = state.ProfileNextIndex;
+            }
+            var result = await service.CollectAsync();
+            Assert.Equal(0, result.Added);
+            Assert.Equal(0, result.Succeeded);
+            Assert.Equal(0, result.NotModified);
+            await using var progress = database.Factory.CreateDbContext();
+            var next = (await progress.VpnSourceImportStates.SingleAsync()).ProfileNextIndex;
+            Assert.InRange(next - previousIndex, 1, VpnSnapshotAdmission.MaximumProfileRecordsPerSource);
+        }
+        Assert.Fail("Original profile cursor did not complete within its bounded expected cycles.");
     }
 
     private static string Feed(int count, int firstPort = 1, string host = "8.8.8.8") =>

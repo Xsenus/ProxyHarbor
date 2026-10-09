@@ -272,6 +272,13 @@ public static class DatabaseSeeder
         // удаляет и создаёт источник заново, сбрасывая Enabled, историю и snapshot.
         var activeCatalogUrls = BuiltInSourceCatalog.Sources.Select(source => source.Url)
             .ToHashSet(StringComparer.Ordinal);
+        // An unavailable publisher is archived, not deleted: preserve its ID,
+        // history, validators, backoff and unfinished import for later recovery.
+        // Reinstating the URL in the active catalog takes precedence.
+        if (!activeCatalogUrls.Contains(BuiltInSourceCatalog.UnavailableLighscentUrl))
+            foreach (var unavailable in existingSources.Where(source => source.Url == BuiltInSourceCatalog.UnavailableLighscentUrl))
+                unavailable.Enabled = false;
+
         var legacySources = existingSources.Where(source =>
             !activeCatalogUrls.Contains(source.Url) &&
             (legacyUrls.Contains(source.Url) || IsRetiredXyzs996CountryFeed(source.Url))).ToArray();

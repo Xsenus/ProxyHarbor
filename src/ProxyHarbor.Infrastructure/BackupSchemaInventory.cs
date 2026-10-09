@@ -74,6 +74,7 @@ public static class BackupSchemaInventory
         Included("ValidationRuns", "database/validation-runs.json", "Validation audit."),
         Included("VpnEndpoints", "database/vpn-endpoints.json", "VPN catalog."),
         Included("VpnEndpointSources", "database/vpn-endpoint-sources.json", "VPN provenance links."),
+        new("VpnConnectionProfiles", BackupTableDisposition.Included, "database/vpn-connection-profiles.json", 10, "Original VPN settings variants and source observation epochs."),
         Included("VpnSources", "database/vpn-sources.json", "VPN source catalog and fetch state."),
         Ephemeral("VpnSourceImportStates", "Pending VPN payload and cursor must be re-fetched after restore, without hiding restored membership.")
     ];

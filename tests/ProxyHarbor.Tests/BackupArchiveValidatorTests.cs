@@ -112,6 +112,21 @@ public sealed class BackupArchiveValidatorTests
     }
 
     [Fact]
+    public void VersionTenRequiresAndAcceptsTheCompleteVpnProfileCatalog()
+    {
+        using var archive = CreateCurrentArchive(version: 10);
+        BackupArchiveValidator.Validate(archive);
+    }
+
+    [Fact]
+    public void VersionTenRejectsAnOmittedVpnProfileCatalog()
+    {
+        using var archive = CreateCurrentArchive(version: 10, omittedEntry: "database/vpn-connection-profiles.json");
+        var error = Assert.Throws<InvalidDataException>(() => BackupArchiveValidator.Validate(archive));
+        Assert.Contains("database/vpn-connection-profiles.json", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void VersionNineRequiresAndAcceptsDestinationOrchestrationTables()
     {
         using var archive = CreateCurrentArchive(version: 9);

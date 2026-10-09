@@ -56,7 +56,7 @@ public sealed class BackupSchemaInventoryTests
 
         Assert.All(included, item =>
         {
-            Assert.True(item.IntroducedInManifestVersion is 8 or 9);
+            Assert.True(item.IntroducedInManifestVersion is 8 or 9 or 10);
             Assert.StartsWith("database/", item.ArchiveEntry, StringComparison.Ordinal);
             Assert.EndsWith(".json", item.ArchiveEntry, StringComparison.Ordinal);
             Assert.DoesNotContain("..", item.ArchiveEntry, StringComparison.Ordinal);
@@ -67,12 +67,13 @@ public sealed class BackupSchemaInventoryTests
             included.Select(item => item.ArchiveEntry).Distinct(StringComparer.Ordinal).Count());
         Assert.All(ephemeral, item =>
         {
-            Assert.True(item.IntroducedInManifestVersion is 8 or 9);
+            Assert.True(item.IntroducedInManifestVersion is 8 or 9 or 10);
             Assert.Null(item.ArchiveEntry);
             Assert.False(string.IsNullOrWhiteSpace(item.Rationale));
         });
         Assert.Equal(["BackupDestinationHealthOutcomes", "ProxySourceImportStates", "ProxyValidationLeases", "SourceApiCaptureStates", "SourceApiOriginStates", "VpnSourceImportStates"],
             ephemeral.Select(item => item.TableName));
         Assert.Equal(6, included.Count(item => item.IntroducedInManifestVersion == 9));
+        Assert.Equal("VpnConnectionProfiles", Assert.Single(included, item => item.IntroducedInManifestVersion == 10).TableName);
     }
 }

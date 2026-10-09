@@ -9,6 +9,8 @@ namespace ProxyHarbor.Infrastructure;
 internal sealed class ProxySourceImportStore(
     IDbContextFactory<ProxyHarborDbContext> dbFactory, long maxStoredBytes = ProxySourceImportStore.MaxStoredBytes)
 {
+    internal static int ParserVersionForUrl(string url) => PxysCsvFeedAdapter.Supports(url) || Au1rxxSingBoxFeedAdapter.Supports(url) ? 1 : 0;
+
     internal const long MaxStoredBytes = 512L * 1_024 * 1_024;
 
     internal async Task<ProxySourceImportState?> LoadAsync(ProxySource source, CancellationToken token)
@@ -43,6 +45,7 @@ internal sealed class ProxySourceImportStore(
             ProxySourceId = source.Id,
             SourceUrl = source.Url,
             SourceProtocol = source.DefaultProtocol,
+            ParserVersion = ParserVersionForUrl(source.Url),
             CandidateCount = snapshot.Count,
             Payload = snapshot.Payload,
             PayloadHash = SHA256.HashData(snapshot.Payload),
@@ -83,14 +86,14 @@ internal sealed class ProxySourceImportStore(
     internal static ProxySnapshotWindow ReadWindow(
         ProxySourceImportState state, int maxResults, Func<ProxyCandidateKey, bool> accept)
     {
-        if (!ValidPayload(state)) throw new InvalidDataException("Сохранённый proxy-снимок повреждён.");
+        if (state.ParserVersion != ParserVersionForUrl(state.SourceUrl) || !ValidPayload(state)) throw new InvalidDataException("Сохранённый proxy-снимок повреждён.");
         return ProxyCandidateSnapshotCodec.ReadWindow(state.Payload, state.NextIndex, maxResults, accept);
     }
 
     internal async Task<bool> IsCurrentOrDiscardAsync(ProxySourceImportState state, CancellationToken token)
     {
         await using var db = await dbFactory.CreateDbContextAsync(token);
-        if (await db.Sources.AnyAsync(source => source.Id == state.ProxySourceId && source.Enabled &&
+        if (state.ParserVersion == ParserVersionForUrl(state.SourceUrl) && await db.Sources.AnyAsync(source => source.Id == state.ProxySourceId && source.Enabled &&
                 source.Url == state.SourceUrl && source.DefaultProtocol == state.SourceProtocol, token))
             return true;
         await db.ProxySourceImportStates.Where(item => item.ProxySourceId == state.ProxySourceId &&
@@ -113,12 +116,13 @@ internal sealed class ProxySourceImportStore(
             throw new ArgumentException("Некорректный hash свежего body.", nameof(freshBodyHash));
         if (nextIndex == state.NextIndex && preferFresh == state.PreferFresh) return false;
         if (nextIndex == state.NextIndex && preferFresh is null) return false;
+        if (state.ParserVersion != ParserVersionForUrl(state.SourceUrl)) return false;
         var completed = nextIndex == state.CandidateCount;
         await using var db = await dbFactory.CreateDbContextAsync(token);
         var updated = await db.ProxySourceImportStates.Where(item =>
                 item.ProxySourceId == state.ProxySourceId && item.SnapshotId == state.SnapshotId &&
                 item.NextIndex == state.NextIndex && item.CandidateCount == state.CandidateCount &&
-                item.PreferFresh == state.PreferFresh &&
+                item.PreferFresh == state.PreferFresh && item.ParserVersion == state.ParserVersion &&
                 item.SourceUrl == state.SourceUrl && item.SourceProtocol == state.SourceProtocol &&
                 db.Sources.Any(source => source.Id == item.ProxySourceId && source.Enabled &&
                     source.Url == item.SourceUrl && source.DefaultProtocol == item.SourceProtocol))
@@ -133,7 +137,8 @@ internal sealed class ProxySourceImportStore(
     }
 
     private static bool MatchesSource(ProxySourceImportState state, ProxySource source) =>
-        string.Equals(state.SourceUrl, source.Url, StringComparison.Ordinal) && state.SourceProtocol == source.DefaultProtocol;
+        string.Equals(state.SourceUrl, source.Url, StringComparison.Ordinal) && state.SourceProtocol == source.DefaultProtocol &&
+        state.ParserVersion == ParserVersionForUrl(source.Url);
 
     private static bool ValidPayload(ProxySourceImportState state) =>
         state.CandidateCount is > 0 and <= ProxyCandidateSnapshotCodec.MaxCandidates &&
@@ -148,9 +153,9 @@ internal sealed class ProxySourceImportStore(
 /// <summary>После admission сохраняются только узкие metadata; payload не удерживается до конца всего run.</summary>
 internal sealed record ProxySourceImportCheckpoint(
     Guid ProxySourceId, string SourceUrl, ProxyProtocol SourceProtocol,
-    Guid SnapshotId, int CandidateCount, int NextIndex, bool PreferFresh)
+    Guid SnapshotId, int CandidateCount, int NextIndex, bool PreferFresh, int ParserVersion)
 {
     internal static ProxySourceImportCheckpoint Capture(ProxySourceImportState state) => new(
         state.ProxySourceId, state.SourceUrl, state.SourceProtocol,
-        state.SnapshotId, state.CandidateCount, state.NextIndex, state.PreferFresh);
+        state.SnapshotId, state.CandidateCount, state.NextIndex, state.PreferFresh, state.ParserVersion);
 }

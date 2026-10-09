@@ -5,6 +5,10 @@ namespace ProxyHarbor.Infrastructure;
 /// <summary>Версионируемый каталог публичных proxy-feed endpoint'ов.</summary>
 public static class BuiltInSourceCatalog
 {
+    // Public repository and raw feed both returned 404 on 2026-10-09.
+    // Keep the identity so startup archives existing data without deleting it.
+    internal const string UnavailableLighscentUrl = "https://raw.githubusercontent.com/lighscent/proxies/master/http.txt";
+
     /// <summary>Дата последнего полного URL/live-аудита всех канонических feed'ов.</summary>
     public static DateOnly LastAuditedOn => new(2026, 10, 6);
 
@@ -122,7 +126,7 @@ public static class BuiltInSourceCatalog
         Feed(83, "RelayGlass HTTPS", "RelayGlass", "https://raw.githubusercontent.com/relayglass/free-proxy-list/main/protocol/https/https.txt", ProxyProtocol.Https),
         Feed(84, "RelayGlass SOCKS4", "RelayGlass", "https://raw.githubusercontent.com/relayglass/free-proxy-list/main/protocol/socks4/socks4.txt", ProxyProtocol.Socks4),
         Feed(85, "RelayGlass SOCKS5", "RelayGlass", "https://raw.githubusercontent.com/relayglass/free-proxy-list/main/protocol/socks5/socks5.txt", ProxyProtocol.Socks5),
-        Feed(89, "Dinoz HTTP", "Dinoz", "https://raw.githubusercontent.com/dinoz0rg/proxy-list/main/checked_proxies/http.txt", ProxyProtocol.Http),
+        Feed(89, "Dinoz HTTP", "Dinoz", "https://raw.githubusercontent.com/dinoz0rg/proxy-list/main/checked_proxies/http.txt", ProxyProtocol.Https),
         Feed(90, "Dinoz SOCKS4", "Dinoz", "https://raw.githubusercontent.com/dinoz0rg/proxy-list/main/checked_proxies/socks4.txt", ProxyProtocol.Socks4),
         Feed(91, "Dinoz SOCKS5", "Dinoz", "https://raw.githubusercontent.com/dinoz0rg/proxy-list/main/checked_proxies/socks5.txt", ProxyProtocol.Socks5),
         Feed(92, "Mzyui HTTP", "Mzyui", "https://raw.githubusercontent.com/mzyui/proxy-list/main/http.txt", ProxyProtocol.Http),
@@ -167,14 +171,14 @@ public static class BuiltInSourceCatalog
         Feed(128, "VannDev HTTP twitter", "VannDev", "https://raw.githubusercontent.com/Vann-Dev/proxy-list/main/proxies/http-tested/twitter.txt", ProxyProtocol.Http),
         Feed(129, "VannDev HTTP whatsapp", "VannDev", "https://raw.githubusercontent.com/Vann-Dev/proxy-list/main/proxies/http-tested/whatsapp.txt", ProxyProtocol.Http),
         Feed(130, "VannDev HTTP youtube", "VannDev", "https://raw.githubusercontent.com/Vann-Dev/proxy-list/main/proxies/http-tested/youtube.txt", ProxyProtocol.Http),
-        Feed(131, "VannDev HTTPS discord", "VannDev", "https://raw.githubusercontent.com/Vann-Dev/proxy-list/main/proxies/https-tested/discord.txt", ProxyProtocol.Https),
-        Feed(132, "VannDev HTTPS facebook", "VannDev", "https://raw.githubusercontent.com/Vann-Dev/proxy-list/main/proxies/https-tested/facebook.txt", ProxyProtocol.Https),
-        Feed(133, "VannDev HTTPS google", "VannDev", "https://raw.githubusercontent.com/Vann-Dev/proxy-list/main/proxies/https-tested/google.txt", ProxyProtocol.Https),
-        Feed(134, "VannDev HTTPS instagram", "VannDev", "https://raw.githubusercontent.com/Vann-Dev/proxy-list/main/proxies/https-tested/instagram.txt", ProxyProtocol.Https),
-        Feed(135, "VannDev HTTPS microsoft", "VannDev", "https://raw.githubusercontent.com/Vann-Dev/proxy-list/main/proxies/https-tested/microsoft.txt", ProxyProtocol.Https),
-        Feed(136, "VannDev HTTPS tiktok", "VannDev", "https://raw.githubusercontent.com/Vann-Dev/proxy-list/main/proxies/https-tested/tiktok.txt", ProxyProtocol.Https),
-        Feed(137, "VannDev HTTPS whatsapp", "VannDev", "https://raw.githubusercontent.com/Vann-Dev/proxy-list/main/proxies/https-tested/whatsapp.txt", ProxyProtocol.Https),
-        Feed(138, "VannDev HTTPS youtube", "VannDev", "https://raw.githubusercontent.com/Vann-Dev/proxy-list/main/proxies/https-tested/youtube.txt", ProxyProtocol.Https),
+        Feed(131, "VannDev HTTPS discord", "VannDev", "https://raw.githubusercontent.com/Vann-Dev/proxy-list/main/proxies/https-tested/discord.txt", ProxyProtocol.Http),
+        Feed(132, "VannDev HTTPS facebook", "VannDev", "https://raw.githubusercontent.com/Vann-Dev/proxy-list/main/proxies/https-tested/facebook.txt", ProxyProtocol.Http),
+        Feed(133, "VannDev HTTPS google", "VannDev", "https://raw.githubusercontent.com/Vann-Dev/proxy-list/main/proxies/https-tested/google.txt", ProxyProtocol.Http),
+        Feed(134, "VannDev HTTPS instagram", "VannDev", "https://raw.githubusercontent.com/Vann-Dev/proxy-list/main/proxies/https-tested/instagram.txt", ProxyProtocol.Http),
+        Feed(135, "VannDev HTTPS microsoft", "VannDev", "https://raw.githubusercontent.com/Vann-Dev/proxy-list/main/proxies/https-tested/microsoft.txt", ProxyProtocol.Http),
+        Feed(136, "VannDev HTTPS tiktok", "VannDev", "https://raw.githubusercontent.com/Vann-Dev/proxy-list/main/proxies/https-tested/tiktok.txt", ProxyProtocol.Http),
+        Feed(137, "VannDev HTTPS whatsapp", "VannDev", "https://raw.githubusercontent.com/Vann-Dev/proxy-list/main/proxies/https-tested/whatsapp.txt", ProxyProtocol.Http),
+        Feed(138, "VannDev HTTPS youtube", "VannDev", "https://raw.githubusercontent.com/Vann-Dev/proxy-list/main/proxies/https-tested/youtube.txt", ProxyProtocol.Http),
         Feed(139, "SoliSpirit HTTP", "SoliSpirit", "https://raw.githubusercontent.com/SoliSpirit/proxy-list/main/http.txt", ProxyProtocol.Http),
         Feed(140, "SoliSpirit HTTPS", "SoliSpirit", "https://raw.githubusercontent.com/SoliSpirit/proxy-list/main/https.txt", ProxyProtocol.Https),
         Feed(141, "SoliSpirit SOCKS4", "SoliSpirit", "https://raw.githubusercontent.com/SoliSpirit/proxy-list/main/socks4.txt", ProxyProtocol.Socks4),
@@ -226,8 +230,8 @@ public static class BuiltInSourceCatalog
         Feed(194, "KevinRiver HTTP", "KevinRiver", "https://raw.githubusercontent.com/kevinriverrrr-sudo/free-proxy-list/main/proxies/http.txt", ProxyProtocol.Http),
         Feed(195, "KevinRiver SOCKS5", "KevinRiver", "https://raw.githubusercontent.com/kevinriverrrr-sudo/free-proxy-list/main/proxies/socks5.txt", ProxyProtocol.Socks5),
         Feed(196, "Xnuvers Active", "Xnuvers", "https://raw.githubusercontent.com/Xnuvers007/free-proxy/main/proxy_active.txt", ProxyProtocol.Http),
-        Feed(197, "Xnuvers Scheme mixed", "Xnuvers", "https://raw.githubusercontent.com/Xnuvers007/free-proxy/main/proxy_scheme.txt", ProxyProtocol.Http),
-        Feed(198, "Xnuvers Scheme active", "Xnuvers", "https://raw.githubusercontent.com/Xnuvers007/free-proxy/main/proxy_scheme_active.txt", ProxyProtocol.Http),
+        Feed(197, "Xnuvers Scheme mixed", "Xnuvers", "https://raw.githubusercontent.com/Xnuvers007/free-proxy/main/proxy_scheme.txt", ProxyProtocol.HttpTls),
+        Feed(198, "Xnuvers Scheme active", "Xnuvers", "https://raw.githubusercontent.com/Xnuvers007/free-proxy/main/proxy_scheme_active.txt", ProxyProtocol.HttpTls),
 
         // Используем только агрегированные XYZS996 feed'ы. Country-файлы этого
         // генератора исчезают при временно пустой стране и потому не являются
@@ -434,7 +438,6 @@ public static class BuiltInSourceCatalog
             Wh1zz52|https://raw.githubusercontent.com/Wh1zz52/Proxy-List/main/proxies.txt|Http
             Skiddle-ID|https://raw.githubusercontent.com/Skiddle-ID/proxylist/main/proxies.txt|Http
             watashibeme|https://raw.githubusercontent.com/watashibeme/openproxy.space/main/http.txt|Http
-            lighscent|https://raw.githubusercontent.com/lighscent/proxies/master/http.txt|Http
             rdavydov|https://raw.githubusercontent.com/rdavydov/proxy-list/main/proxies/http.txt|Http
             wuye999|https://raw.githubusercontent.com/wuye999/proxy-365/main/SOCKS5.txt|Socks5
             merlinepedra|https://raw.githubusercontent.com/merlinepedra/PROXY-LIST-1/master/proxy-list.txt|Http

@@ -652,13 +652,13 @@ public sealed class MetricsControllerTests
         Assert.Contains("proxyharbor_source_catalog_healthy 0", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_builtin_catalog_audit_timestamp_seconds 1791244800", metrics,
             StringComparison.Ordinal);
-        Assert.Contains("proxyharbor_builtin_sources_expected 547", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_builtin_sources_expected 546", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_builtin_sources_present 1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_builtin_sources_enabled 1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_builtin_sources_healthy 0", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_builtin_sources_stale 0", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_builtin_sources_truncated 1", metrics, StringComparison.Ordinal);
-        Assert.Contains("proxyharbor_builtin_providers_expected 281", metrics, StringComparison.Ordinal);
+        Assert.Contains("proxyharbor_builtin_providers_expected 280", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_builtin_providers_present 1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_collection_runs_active 1", metrics, StringComparison.Ordinal);
         Assert.Contains("proxyharbor_validation_never_attempted 1", metrics, StringComparison.Ordinal);

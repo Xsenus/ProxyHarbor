@@ -8,6 +8,49 @@ namespace ProxyHarbor.Tests;
 public sealed class BuiltInSourceCatalogTests
 {
     [Fact]
+    public void PublisherCheckersDetermineTransportForDinozVannAndXnuvers()
+    {
+        var dinoz = Assert.Single(BuiltInSourceCatalog.Sources, source =>
+            source.Url == "https://raw.githubusercontent.com/dinoz0rg/proxy-list/main/checked_proxies/http.txt");
+        Assert.Equal(ProxyProtocol.Https, dinoz.Protocol);
+        Assert.Equal(ProxyProtocol.Https,
+            Assert.Single(SourceFeedParser.ParseRequired("8.8.8.8:443", dinoz.Protocol)).Protocol);
+
+        var vann = BuiltInSourceCatalog.Sources.Where(source =>
+            source.Url.StartsWith("https://raw.githubusercontent.com/Vann-Dev/proxy-list/main/proxies/https-tested/", StringComparison.Ordinal)).ToArray();
+        Assert.Equal(8, vann.Length);
+        Assert.All(vann, source =>
+        {
+            Assert.Equal(ProxyProtocol.Http, source.Protocol);
+            Assert.Equal(ProxyProtocol.Http,
+                Assert.Single(SourceFeedParser.ParseRequired("8.8.8.8:80", source.Protocol)).Protocol);
+        });
+
+        var xnuvers = BuiltInSourceCatalog.Sources.Where(source =>
+            source.Url is "https://raw.githubusercontent.com/Xnuvers007/free-proxy/main/proxy_scheme.txt"
+                or "https://raw.githubusercontent.com/Xnuvers007/free-proxy/main/proxy_scheme_active.txt").ToArray();
+        Assert.Equal(2, xnuvers.Length);
+        Assert.All(xnuvers, source =>
+        {
+            Assert.Equal(ProxyProtocol.HttpTls, source.Protocol);
+            const string content = "https://8.8.8.8:443\nhttp://1.1.1.1:8080";
+            Assert.Equal(
+                [("8.8.8.8", 443, ProxyProtocol.HttpTls), ("1.1.1.1", 8080, ProxyProtocol.Http)],
+                SourceFeedParser.ParseRequired(content, source.Protocol));
+            var snapshot = ProxyCandidateSnapshotCodec.Encode(content, source.Protocol);
+            var decoded = new List<(string Host, int Port, ProxyProtocol Protocol)>();
+            var window = ProxyCandidateSnapshotCodec.ReadWindow(snapshot.Payload, 0, 2, candidate =>
+            {
+                decoded.Add(candidate.ToEndpoint());
+                return true;
+            });
+            Assert.True(window.Completed);
+            Assert.Equal(
+                [("8.8.8.8", 443, ProxyProtocol.HttpTls), ("1.1.1.1", 8080, ProxyProtocol.Http)], decoded);
+        });
+    }
+
+    [Fact]
     public void ProxioMixedPreservesPublishedProtocolsAcrossSnapshotWindows()
     {
         var feed = BuiltInSourceCatalog.Sources.Single(source => source.Name == "Proxio Mixed");
@@ -63,12 +106,12 @@ public sealed class BuiltInSourceCatalogTests
     [Fact]
     public void CatalogContainsExpectedUniqueFeedsAndProviders()
     {
-        Assert.Equal(547, BuiltInSourceCatalog.Sources.Count);
-        Assert.Equal(547, BuiltInSourceCatalog.Sources.Select(x => x.Url).Distinct(StringComparer.OrdinalIgnoreCase).Count());
-        Assert.Equal(281, BuiltInSourceCatalog.Sources.Select(x => x.Provider).Distinct(StringComparer.OrdinalIgnoreCase).Count());
-        Assert.Equal(281, BuiltInSourceCatalog.Sources.Select(x => x.ProviderIdentity).Distinct(StringComparer.Ordinal).Count());
-        Assert.Equal(281, BuiltInSourceCatalog.ProviderCount);
-        Assert.Equal(Enumerable.Range(1, 547), BuiltInSourceCatalog.Sources.Select(x => x.Rank));
+        Assert.Equal(546, BuiltInSourceCatalog.Sources.Count);
+        Assert.Equal(546, BuiltInSourceCatalog.Sources.Select(x => x.Url).Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        Assert.Equal(280, BuiltInSourceCatalog.Sources.Select(x => x.Provider).Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        Assert.Equal(280, BuiltInSourceCatalog.Sources.Select(x => x.ProviderIdentity).Distinct(StringComparer.Ordinal).Count());
+        Assert.Equal(280, BuiltInSourceCatalog.ProviderCount);
+        Assert.Equal(Enumerable.Range(1, 546), BuiltInSourceCatalog.Sources.Select(x => x.Rank));
     }
 
     [Fact]
@@ -139,11 +182,11 @@ public sealed class BuiltInSourceCatalogTests
     [Fact]
     public void ExpansionRetainsPublishedProviderFeeds()
     {
-        // Four retired core feeds and four retired expansion feeds are excluded.
+        // The unavailable lighscent feed and previously retired feeds are excluded.
         var feeds = BuiltInSourceCatalog.Sources.Skip(351).ToArray();
 
-        Assert.Equal(196, feeds.Length);
-        Assert.Equal(196, feeds.Select(source => source.ProviderIdentity).Distinct(StringComparer.Ordinal).Count());
+        Assert.Equal(195, feeds.Length);
+        Assert.Equal(195, feeds.Select(source => source.ProviderIdentity).Distinct(StringComparer.Ordinal).Count());
     }
 
     [Fact]
@@ -186,16 +229,26 @@ public sealed class BuiltInSourceCatalogTests
         Assert.All(BuiltInSourceCatalog.Sources, source => Assert.True(Enum.IsDefined(source.Protocol)));
         var tlsFeeds = BuiltInSourceCatalog.Sources.Where(source =>
             source.Protocol is ProxyProtocol.HttpTls or ProxyProtocol.HttpTlsUnverified).ToArray();
-        Assert.Equal(36, tlsFeeds.Length);
-        Assert.All(tlsFeeds, source =>
+        Assert.Equal(38, tlsFeeds.Length);
+        var unverifiedFeeds = tlsFeeds.Where(source => source.Protocol == ProxyProtocol.HttpTlsUnverified).ToArray();
+        Assert.Equal(36, unverifiedFeeds.Length);
+        Assert.All(unverifiedFeeds, source =>
         {
             Assert.Equal("Proxifly", source.Provider);
             Assert.Equal(ProxyProtocol.HttpTlsUnverified, source.Protocol);
             Assert.True(source.Name == "Proxifly HTTPS" ||
                 source.Name.StartsWith("Proxifly country ", StringComparison.Ordinal));
         });
-        Assert.Equal(35, tlsFeeds.Count(source => source.Name.StartsWith("Proxifly country ", StringComparison.Ordinal)));
-        Assert.Single(tlsFeeds, source => source.Name == "Proxifly HTTPS");
+        Assert.Equal(35, unverifiedFeeds.Count(source => source.Name.StartsWith("Proxifly country ", StringComparison.Ordinal)));
+        Assert.Single(unverifiedFeeds, source => source.Name == "Proxifly HTTPS");
+        var strictFeeds = tlsFeeds.Where(source => source.Protocol == ProxyProtocol.HttpTls).ToArray();
+        Assert.Equal(2, strictFeeds.Length);
+        Assert.All(strictFeeds, source =>
+        {
+            Assert.Equal("Xnuvers", source.Provider);
+            Assert.True(source.Url is "https://raw.githubusercontent.com/Xnuvers007/free-proxy/main/proxy_scheme.txt"
+                or "https://raw.githubusercontent.com/Xnuvers007/free-proxy/main/proxy_scheme_active.txt");
+        });
     }
 
     [Fact]

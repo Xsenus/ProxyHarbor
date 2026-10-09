@@ -40,7 +40,7 @@ public sealed class VpnCatalogService(
         var collectionStartedAt = DateTimeOffset.UtcNow;
         var sources = await readDb.VpnSources.AsNoTracking().Where(x => x.Enabled &&
                 (forceAllSources || x.NextFetchAt == null || x.NextFetchAt <= collectionStartedAt ||
-                 readDb.VpnSourceImportStates.Any(state => state.VpnSourceId == x.Id && state.NextIndex < state.CandidateCount) ||
+                 readDb.VpnSourceImportStates.Any(state => state.VpnSourceId == x.Id && (state.NextIndex < state.CandidateCount || state.ProfileNextIndex < state.ProfileRecordCount)) ||
                  readDb.SourceApiCaptureStates.Any(state => state.VpnSourceId == x.Id && state.Complete)))
             .OrderBy(x => readDb.VpnSourceImportStates.Where(state => state.VpnSourceId == x.Id)
                 .Select(state => state.LastProgressAt).FirstOrDefault() ??
@@ -80,6 +80,7 @@ public sealed class VpnCatalogService(
             .ToDictionaryAsync(x => x.Id, token);
         var now = DateTimeOffset.UtcNow;
         var acceptedBatches = new List<VpnImportBatch>();
+        var profileBatches = new List<VpnImportBatch>();
         var cachedCandidates = 0;
         var succeededResults = new List<FetchResult>(results.Length);
         foreach (var result in results)
@@ -95,16 +96,19 @@ public sealed class VpnCatalogService(
             // CAS is checked before health or candidates enter this atomic import.
             if (result.Progress is { } progress)
             {
-                if (progress.NextIndex != progress.State.NextIndex || progress.PreferFresh != progress.State.PreferFresh)
+                if (progress.NextIndex != progress.State.NextIndex || progress.PreferFresh != progress.State.PreferFresh ||
+                    progress.ProfileNextIndex != progress.State.ProfileNextIndex)
                 {
                     if (!await VpnSourceImportStore.AcknowledgeAsync(db, progress.State, progress.NextIndex,
-                        now, token, progress.FreshBodyHash, progress.PreferFresh)) continue;
+                        now, token, progress.FreshBodyHash, progress.PreferFresh, progress.ProfileNextIndex)) continue;
                 }
                 else if (!await db.VpnSourceImportStates.AnyAsync(state => state.VpnSourceId == source.Id &&
                     state.SnapshotId == progress.State.SnapshotId && state.NextIndex == progress.State.NextIndex &&
-                    state.PreferFresh == progress.State.PreferFresh, token)) continue;
+                    state.PreferFresh == progress.State.PreferFresh &&
+                    state.ProfileNextIndex == progress.State.ProfileNextIndex && state.ProfileRecordCount == progress.State.ProfileRecordCount, token)) continue;
             }
             acceptedBatches.AddRange(result.Batches.Select(batch => batch with { Source = source }));
+            profileBatches.AddRange(result.ProfileBatches.Select(batch => batch with { Source = source }));
             if (!result.FetchObserved || result.Error is not null)
                 cachedCandidates += result.Batches.Sum(batch => batch.Candidates.Count);
             if (!result.FetchObserved)
@@ -149,6 +153,7 @@ public sealed class VpnCatalogService(
             now,
             options.Value.LastSeenRefreshMinutes,
             token);
+        await VpnConnectionProfileStore.UpsertAsync(db, profileBatches.Concat(acceptedBatches), token);
         await transaction.CommitAsync(token);
         var succeeded = succeededResults.Count;
         var contentFetched = succeededResults.Count(result => result.ContentFetched);
@@ -691,7 +696,7 @@ public sealed class VpnCatalogService(
 
             var admission = state is null ? null : admissions.Admit(source, state, tail, fresh, observedAt);
             results.Add(new(source, admission?.Batches ?? [], confirmedCount, contentFetched, etag, modified,
-                error, fetchedObserved, admission?.Progress, retryNotBefore));
+                error, fetchedObserved, admission?.Progress, admission?.ProfileBatches ?? [], retryNotBefore));
 
             List<VpnCandidate> ReadTail(VpnSourceImportState snapshot)
             {
@@ -713,12 +718,13 @@ public sealed class VpnCatalogService(
         string? Error,
         bool FetchObserved,
         VpnSourceImportProgress? Progress,
+        IReadOnlyList<VpnImportBatch> ProfileBatches,
         DateTimeOffset? RetryNotBefore = null);
 }
 
 /// <summary>Партия URI с фактическим временем наблюдения тела feed.</summary>
 internal sealed record VpnImportBatch(
-    VpnSource Source, IReadOnlyList<VpnCandidate> Candidates, DateTimeOffset ObservedAt);
+    VpnSource Source, IReadOnlyList<VpnCandidate> Candidates, DateTimeOffset ObservedAt, DateTimeOffset? FirstObservedAt = null);
 
 /// <summary>Сводка завершённого VPN-сбора.</summary>
 public sealed record VpnCollectionResult

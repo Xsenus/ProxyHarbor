@@ -182,6 +182,15 @@ public sealed class VpnClashObservationIntegrationTests
         var retained = await verify.VpnEndpoints.SingleAsync();
         Assert.Equal(observationOnly ? null : Configuration("protected"), retained.ClashConfiguration);
         Assert.Equal(Epoch, retained.ClashConfigurationObservedAt);
+        // Completed newer rollback steps do not roll back with the rejected protected step.
+        var migrations = verify.Database.GetMigrations().ToArray();
+        var protectedIndex = Array.IndexOf(migrations, "20261007052123_AddClashConfigurations");
+        Assert.True(protectedIndex >= 0);
+        Assert.Equal(migrations[(protectedIndex + 1)..], await verify.Database.GetPendingMigrationsAsync());
+        await verify.Database.MigrateAsync();
+        var recovered = await verify.VpnEndpoints.AsNoTracking().SingleAsync();
+        Assert.Equal(observationOnly ? null : Configuration("protected"), recovered.ClashConfiguration);
+        Assert.Equal(Epoch, recovered.ClashConfigurationObservedAt);
         Assert.Empty(await verify.Database.GetPendingMigrationsAsync());
     }
 

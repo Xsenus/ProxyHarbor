@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Data;
 using System.Data.Common;
 using System.Text.Json;
@@ -21,9 +22,11 @@ public sealed class AdminDiagnosticsIntegrationTests
 {
     private static readonly JsonSerializerOptions WebJsonOptions = new(JsonSerializerDefaults.Web);
 
-    [Fact]
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     [Trait("Category", "PostgresIntegration")]
-    public async Task DiagnosticsExcludeActiveLeaseFromDueBacklogAndEta()
+    public async Task DiagnosticsExcludeActiveLeaseFromDueBacklogAndEta(bool failFirstRead)
     {
         var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
         if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
@@ -45,6 +48,9 @@ public sealed class AdminDiagnosticsIntegrationTests
             {
                 await seed.Database.MigrateAsync();
                 var now = DateTimeOffset.UtcNow;
+                // This snapshot test needs an active lease and a scheduled check even
+                // when PostgreSQL setup or the diagnostics query takes over a minute.
+                var future = DateTimeOffset.FromUnixTimeMilliseconds(now.AddDays(1).ToUnixTimeMilliseconds());
                 var leasedProxy = new ProxyEndpoint
                 {
                     Host = "8.8.8.8",
@@ -63,13 +69,13 @@ public sealed class AdminDiagnosticsIntegrationTests
                     {
                         Host = "9.9.9.9",
                         Port = 8080,
-                        NextCheckAt = now.AddMinutes(1)
+                        NextCheckAt = future
                     });
                 seed.ProxyValidationLeases.Add(new ProxyValidationLease
                 {
                     ProxyId = leasedProxy.Id,
                     LeaseId = Guid.NewGuid(),
-                    LeaseUntil = now.AddMinutes(1)
+                    LeaseUntil = future
                 });
                 seed.ValidationRuns.Add(new ValidationRun
                 {
@@ -103,6 +109,11 @@ public sealed class AdminDiagnosticsIntegrationTests
                     LastItemCount = 12
                 });
                 await seed.SaveChangesAsync();
+                Assert.Equal(future, await seed.Proxies.AsNoTracking()
+                    .Where(proxy => proxy.Host == "9.9.9.9")
+                    .Select(proxy => proxy.NextCheckAt).SingleAsync());
+                Assert.Equal(future, await seed.ProxyValidationLeases.AsNoTracking()
+                    .Select(lease => lease.LeaseUntil).SingleAsync());
             }
 
             var mutation = new MutateAfterReadStartInterceptor("FROM \"ValidationRuns\"", async token =>
@@ -121,7 +132,8 @@ public sealed class AdminDiagnosticsIntegrationTests
                 await update.SaveChangesAsync(token);
             });
             var commandBudget = new DiagnosticsCommandBudgetInterceptor();
-            var diagnosticsFactory = RetryFactory(builder.ConnectionString, mutation, commandBudget);
+            var transientFailure = new FailFirstDiagnosticsReadInterceptor(failFirstRead);
+            var diagnosticsFactory = RetryFactory(builder.ConnectionString, commandBudget, transientFailure, mutation);
             var collectorOptions = Options.Create(new CollectorOptions
             {
                 ValidationConcurrency = 10,
@@ -158,7 +170,8 @@ public sealed class AdminDiagnosticsIntegrationTests
             var root = json.RootElement;
             var queue = root.GetProperty("validationQueue");
             Assert.Equal(3, queue.GetProperty("total").GetInt32());
-            Assert.Equal(1, queue.GetProperty("due").GetInt32());
+            Assert.True(queue.GetProperty("due").GetInt32() == 1,
+                $"Unexpected diagnostic queue at {DateTimeOffset.UtcNow:O}: {queue.GetRawText()}");
             Assert.Equal(1, queue.GetProperty("leased").GetInt32());
             Assert.Equal(1, queue.GetProperty("scheduled").GetInt32());
             Assert.Equal(1, queue.GetProperty("staleUnseen").GetInt32());
@@ -175,6 +188,10 @@ public sealed class AdminDiagnosticsIntegrationTests
             Assert.Single(root.GetProperty("recentValidationRuns").EnumerateArray());
             Assert.Single(root.GetProperty("recentBackups").EnumerateArray());
             Assert.Equal(1, commandBudget.Reads);
+            Assert.Equal(failFirstRead ? 1 : 0, transientFailure.InjectedFailures);
+            Assert.Equal(commandBudget.Attempts, commandBudget.Reads + commandBudget.FailedReads);
+            Assert.Equal(1, commandBudget.MaximumReadsPerTransaction);
+            if (failFirstRead) Assert.True(commandBudget.FailedReads >= 1);
             Assert.Equal(0, commandBudget.ReadsOutsideRepeatableRead);
             Assert.Contains("FROM \"Sources\"", commandBudget.LastCommand, StringComparison.Ordinal);
             Assert.Contains("FROM \"Runs\"", commandBudget.LastCommand, StringComparison.Ordinal);
@@ -184,6 +201,9 @@ public sealed class AdminDiagnosticsIntegrationTests
             var secondAction = await controller.Diagnostics(CancellationToken.None);
             Assert.IsType<OkObjectResult>(secondAction.Result);
             Assert.Equal(2, commandBudget.Reads);
+            Assert.Equal(commandBudget.Attempts, commandBudget.Reads + commandBudget.FailedReads);
+            Assert.Equal(1, commandBudget.MaximumReadsPerTransaction);
+            Assert.Equal(0, commandBudget.ReadsOutsideRepeatableRead);
             Assert.Equal(1, proxySnapshotCache.DatabaseReads);
             Assert.Equal(1, vpnSnapshotCache.DatabaseReads);
 
@@ -244,14 +264,42 @@ public sealed class AdminDiagnosticsIntegrationTests
         }
     }
 
-    /// <summary>Фиксирует один physical reader и обязательную snapshot isolation.</summary>
+    private static bool IsDiagnosticsRead(DbCommand command) =>
+        command.CommandText.Contains("pg_database_size(current_database())", StringComparison.Ordinal);
+
+    private sealed class FailFirstDiagnosticsReadInterceptor(bool enabled) : DbCommandInterceptor
+    {
+        private int _injectedFailures;
+        internal int InjectedFailures => Volatile.Read(ref _injectedFailures);
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            if (enabled && IsDiagnosticsRead(command) &&
+                Interlocked.CompareExchange(ref _injectedFailures, 1, 0) == 0)
+                throw new NpgsqlException("Simulated transient diagnostics read failure",
+                    new TimeoutException("Injected before the diagnostics snapshot is read"));
+            return ValueTask.FromResult(result);
+        }
+    }
+
+    /// <summary>One successful reader per response, one command per retry transaction.</summary>
     private sealed class DiagnosticsCommandBudgetInterceptor : DbCommandInterceptor
     {
         private int _reads;
+        private int _attempts;
+        private int _failedReads;
+        private readonly ConcurrentDictionary<Guid, int> _readsPerTransaction = new();
         private int _readsOutsideRepeatableRead;
         private string? _lastCommand;
 
         internal int Reads => Volatile.Read(ref _reads);
+        internal int Attempts => Volatile.Read(ref _attempts);
+        internal int FailedReads => Volatile.Read(ref _failedReads);
+        internal int MaximumReadsPerTransaction => _readsPerTransaction.Values.DefaultIfEmpty().Max();
         internal int ReadsOutsideRepeatableRead => Volatile.Read(ref _readsOutsideRepeatableRead);
         internal string LastCommand => Volatile.Read(ref _lastCommand) ?? string.Empty;
 
@@ -261,15 +309,36 @@ public sealed class AdminDiagnosticsIntegrationTests
             InterceptionResult<DbDataReader> result,
             CancellationToken cancellationToken = default)
         {
-            if (!command.CommandText.Contains("pg_database_size(current_database())", StringComparison.Ordinal))
+            if (!IsDiagnosticsRead(command))
                 return ValueTask.FromResult(result);
 
-            Interlocked.Increment(ref _reads);
+            Interlocked.Increment(ref _attempts);
+            var transaction = eventData.Context?.Database.CurrentTransaction;
+            _readsPerTransaction.AddOrUpdate(transaction?.TransactionId ?? Guid.Empty, 1, (_, count) => count + 1);
             Volatile.Write(ref _lastCommand, command.CommandText);
             if (eventData.Context?.Database.CurrentTransaction?.GetDbTransaction().IsolationLevel !=
                 IsolationLevel.RepeatableRead)
                 Interlocked.Increment(ref _readsOutsideRepeatableRead);
             return ValueTask.FromResult(result);
+        }
+
+        public override ValueTask<DbDataReader> ReaderExecutedAsync(
+            DbCommand command,
+            CommandExecutedEventData eventData,
+            DbDataReader result,
+            CancellationToken cancellationToken = default)
+        {
+            if (IsDiagnosticsRead(command)) Interlocked.Increment(ref _reads);
+            return ValueTask.FromResult(result);
+        }
+
+        public override Task CommandFailedAsync(
+            DbCommand command,
+            CommandErrorEventData eventData,
+            CancellationToken cancellationToken = default)
+        {
+            if (IsDiagnosticsRead(command)) Interlocked.Increment(ref _failedReads);
+            return Task.CompletedTask;
         }
     }
 }

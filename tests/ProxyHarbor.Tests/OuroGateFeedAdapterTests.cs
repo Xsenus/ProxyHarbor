@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using ProxyHarbor.Domain;
@@ -105,6 +106,112 @@ public sealed class OuroGateFeedAdapterTests
         }
         Assert.Equal(801, snapshot.Count);
         Assert.Equal(Enumerable.Range(1000, 801), accepted.Order());
+    }
+
+    [Fact]
+    public void MixedProfilesPreserveAllPublicIpRowsAndReportUnsupportedProfiles()
+    {
+        var rows = Enumerable.Range(1000, 59).Select(port => $"socks5://8.8.8.8:{port}")
+            .Concat(Enumerable.Range(2000, 5).Select(port => $"socks5://example-user:example-password@1.1.1.1:{port}"))
+            .Concat(Enumerable.Range(3000, 6).Select(port => $"socks5://example-user:example-password@proxy.example.org:{port}"));
+        var extraction = OuroGateFeedAdapter.ExtractWithReport(Url, WithRows(rows));
+        Assert.Equal(59, extraction.AcceptedRows);
+        Assert.Equal(11, extraction.UnsupportedProfiles);
+        Assert.Equal(11, extraction.AuthenticatedProfiles);
+        Assert.Equal(6, extraction.DnsProfiles);
+        var parsed = SourceFeedParser.ParseRequired(extraction.Content, ProxyProtocol.HttpTls);
+        Assert.Equal(59, parsed.Count);
+        Assert.All(parsed, candidate => Assert.Equal(ProxyProtocol.Socks5, candidate.Protocol));
+        Assert.DoesNotContain("example-user", extraction.Content, StringComparison.Ordinal);
+        Assert.DoesNotContain("example-password", extraction.Content, StringComparison.Ordinal);
+        Assert.DoesNotContain("proxy.example.org", extraction.Content, StringComparison.Ordinal);
+        Assert.DoesNotContain("1.1.1.1", extraction.Content, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void MixedRowsSurviveEverySnapshotWindowWithoutLosingSupportedTail()
+    {
+        var rows = Enumerable.Range(1000, 501).Select(port => $"socks4://8.8.8.8:{port}")
+            .Prepend("socks5://example-user:example-password@1.1.1.1:1080")
+            .Append("socks5://proxy.example.org:1080");
+        var extraction = OuroGateFeedAdapter.ExtractWithReport(Url, WithRows(rows));
+        Assert.Equal(501, extraction.AcceptedRows);
+        Assert.Equal(2, extraction.UnsupportedProfiles);
+        Assert.Equal(1, extraction.AuthenticatedProfiles);
+        Assert.Equal(1, extraction.DnsProfiles);
+        var snapshot = ProxyCandidateSnapshotCodec.Encode(extraction.Content, ProxyProtocol.Http);
+        var ports = new HashSet<int>();
+        var cursor = 0;
+        do
+        {
+            var window = ProxyCandidateSnapshotCodec.ReadWindow(snapshot.Payload, cursor, 200, candidate =>
+            {
+                Assert.Equal(ProxyProtocol.Socks4, candidate.ToEndpoint().Protocol);
+                Assert.True(ports.Add(candidate.ToEndpoint().Port));
+                return true;
+            });
+            Assert.True(window.NextIndex > cursor);
+            cursor = window.NextIndex;
+        } while (cursor < snapshot.Count);
+        Assert.Equal(Enumerable.Range(1000, 501), ports.Order());
+    }
+
+    [Theory]
+    [InlineData("socks5://example-user:example-password@127.0.0.1:1080")]
+    [InlineData("socks5://example-user:example-password@10.0.0.1:1080")]
+    [InlineData("socks5://example-user:example-password@010.0.0.1:1080")]
+    [InlineData("socks5://example-user:example-password@1.1.1.01:1080")]
+    [InlineData("socks5://example-user:example-password@2130706433:1080")]
+    [InlineData("socks5://example-user:example-password@0x7f000001:1080")]
+    [InlineData("socks5://example-user:example-password@localhost:1080")]
+    [InlineData("socks5://example-user:example-password@proxy.local:1080")]
+    [InlineData("socks5://example-user:example-password@proxy.internal:1080")]
+    [InlineData("socks5://example-user@8.8.8.8:1080")]
+    [InlineData("socks5://:example-password@8.8.8.8:1080")]
+    [InlineData("socks5://example-user:@8.8.8.8:1080")]
+    [InlineData("socks5://example-user:%invalid@8.8.8.8:1080")]
+    [InlineData("socks5://example-user:example-password@8.8.8.8:1080/path")]
+    [InlineData("socks5://example-user:example-password@8.8.8.8:1080?secret=example")]
+    [InlineData("socks5://example-user:example-password@8.8.8.8:1080#fragment")]
+    [InlineData("https://example-user:example-password@8.8.8.8:1080")]
+    public void MixedPayloadStillRejectsUnsafeOrMalformedRows(string endpoint)
+    {
+        var error = Assert.Throws<InvalidDataException>(() =>
+            OuroGateFeedAdapter.ExtractWithReport(Url, WithRows(["socks5://8.8.4.4:1080", endpoint])));
+        Assert.DoesNotContain("example-password", error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(endpoint, error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CollectorImportsSupportedMixedRowsAndLogsOnlyUnsupportedCounts()
+    {
+        var logger = new CaptureLogger();
+        var body = WithRows(["socks4://8.8.8.8:1080", "socks5://example-user:example-password@proxy.example.org:1080"]);
+        using var response = new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body) };
+        response.Headers.ETag = new EntityTagHeaderValue("\"mixed-country-map\"");
+        using var client = new HttpClient(new Handler(response));
+        using var collector = new ProxyCollector(null!, null!, Options.Create(new CollectorOptions { SourceRetryCount = 0 }), logger);
+        var result = await collector.FetchSourceStateAsync(client, Url, null, null, CancellationToken.None);
+        Assert.Equal("\"mixed-country-map\"", result.HttpETag);
+        Assert.Equal(ProxyProtocol.Socks4, Assert.Single(SourceFeedParser.ParseRequired(result.Content!, ProxyProtocol.Http)).Protocol);
+        var message = Assert.Single(logger.Messages);
+        Assert.Equal("OuroGateProfilesUnsupported", message.Event.Name);
+        Assert.DoesNotContain("example-user", message.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("example-password", message.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("proxy.example.org", message.Text, StringComparison.Ordinal);
+        Assert.Contains("1", message.Text, StringComparison.Ordinal);
+    }
+
+    private static string WithRows(IEnumerable<string> rows) =>
+        Body.Replace("\"socks5://8.8.8.8:1080\"", string.Join(',', rows.Select(row => JsonSerializer.Serialize(row))), StringComparison.Ordinal);
+
+    private sealed class CaptureLogger : ILogger<ProxyCollector>
+    {
+        internal List<(EventId Event, string Text)> Messages { get; } = [];
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) =>
+            Messages.Add((eventId, formatter(state, exception)));
     }
 
     [Fact]
