@@ -104,6 +104,9 @@ public sealed class DatabaseInvariantIntegrationTests
         "CK_UserApiTokenRequests_Duration",
         "CK_UserApiTokenRequests_ItemCount",
         "CK_UserApiTokenRequests_Status",
+        "CK_VpnConnectionProfiles_Identity",
+        "CK_VpnConnectionProfiles_Settings",
+        "CK_VpnConnectionProfiles_Timeline",
         "CK_VpnEndpoints_Counters",
         "CK_VpnEndpoints_DeferredAttempt",
         "CK_VpnEndpoints_Identity",
@@ -341,6 +344,12 @@ public sealed class DatabaseInvariantIntegrationTests
                 Port = 443,
                 LastValidationDeferred = true
             }));
+            await AssertRejectedAsync(options, db => AddInvalidVpnProfile(db, profile => profile.Port = 0),
+                "CK_VpnConnectionProfiles_Identity");
+            await AssertRejectedAsync(options, db => AddInvalidVpnProfile(db, profile => profile.ConnectionUri = null),
+                "CK_VpnConnectionProfiles_Settings");
+            await AssertRejectedAsync(options, db => AddInvalidVpnProfile(db, profile => profile.LastSeenAt = profile.FirstSeenAt.AddSeconds(-1)),
+                "CK_VpnConnectionProfiles_Timeline");
             await AssertRejectedAsync(options, db => db.Sources.Add(new ProxySource
             {
                 Name = "Invalid source",
@@ -400,6 +409,32 @@ public sealed class DatabaseInvariantIntegrationTests
         var postgres = Assert.IsType<PostgresException>(exception.InnerException);
         Assert.Equal(PostgresErrorCodes.CheckViolation, postgres.SqlState);
         if (expectedConstraint is not null) Assert.Equal(expectedConstraint, postgres.ConstraintName);
+    }
+
+    private static void AddInvalidVpnProfile(ProxyHarborDbContext db, Action<VpnConnectionProfile> invalidate)
+    {
+        var source = new VpnSource
+        {
+            Name = "Invalid profile",
+            Provider = "Fixture",
+            License = "MIT",
+            Url = $"https://example.org/vpn/{Guid.NewGuid():N}"
+        };
+        db.VpnSources.Add(source);
+        var profile = new VpnConnectionProfile
+        {
+            VpnSourceId = source.Id,
+            ProfileHash = new string('a', 64),
+            Host = "8.8.8.8",
+            Port = 443,
+            Protocol = VpnProtocol.Shadowsocks,
+            Transport = "tcp",
+            ConnectionUri = "ss://YWVzLTEyOC1nY206dGVzdA@8.8.8.8:443",
+            FirstSeenAt = DateTimeOffset.UtcNow,
+            LastSeenAt = DateTimeOffset.UtcNow
+        };
+        invalidate(profile);
+        db.VpnConnectionProfiles.Add(profile);
     }
 
     private static void AddImportState(ProxyHarborDbContext db, int nextIndex, int count, byte[] payload, byte[] hash)
