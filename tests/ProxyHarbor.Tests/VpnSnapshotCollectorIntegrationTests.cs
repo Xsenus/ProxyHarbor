@@ -444,6 +444,7 @@ public sealed class VpnSnapshotCollectorIntegrationTests
             var source = await db.VpnSources.SingleAsync();
             source.NextFetchAt = DateTimeOffset.UtcNow.AddDays(1);
             await db.SaveChangesAsync();
+            await db.Entry(source).ReloadAsync();
             before = source;
         }
         var requests = clients.Validators.Count;
