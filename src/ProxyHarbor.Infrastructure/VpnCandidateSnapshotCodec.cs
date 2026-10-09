@@ -110,39 +110,13 @@ internal static class VpnCandidateSnapshotCodec
         ArgumentNullException.ThrowIfNull(payload);
         ArgumentNullException.ThrowIfNull(accept);
         ArgumentOutOfRangeException.ThrowIfLessThan(maxRecords, 1);
-        if (payload.Length is < 16 or > MaxPayloadBytes)
-            throw InvalidSnapshot();
-        var magic = BinaryPrimitives.ReadInt32LittleEndian(payload);
-        if (magic is not (Magic or LegacyMagic)) throw InvalidSnapshot();
-        var hasConfigurations = magic == Magic;
-        var count = BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(4));
-        var uniqueCount = BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(8));
-        if (count is < 1 or > MaxRecords || uniqueCount < 1 || uniqueCount > count) throw InvalidSnapshot();
-        var indexOffset = BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(12));
-        if (indexOffset < 16 || indexOffset > payload.Length ||
-            payload.Length - indexOffset != uniqueCount * 8) throw InvalidSnapshot();
+        var layout = ReadLayout(payload);
+        var hasConfigurations = layout.HasConfigurations;
+        var uniqueCount = layout.UniqueCount;
+        var indexOffset = layout.IndexOffset;
+        var pages = layout.Pages;
         ArgumentOutOfRangeException.ThrowIfLessThan(startIndex, 0);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(startIndex, uniqueCount);
-        var position = 16;
-        var pageStart = 0;
-        var pages = new Dictionary<int, (int Count, int PlainBytes, int CompressedBytes)>();
-        while (pageStart < count)
-        {
-            if (position > indexOffset - 12) throw InvalidSnapshot();
-            var pageOffset = position;
-            var pageCount = BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(position));
-            var plainBytes = BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(position + 4));
-            var compressedBytes = BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(position + 8));
-            position += 12;
-            if (pageCount is < 1 or > MaxPageRecords || pageCount > count - pageStart ||
-                plainBytes < pageCount * (hasConfigurations ? 15 : 11) || plainBytes > MaxPageBytes || compressedBytes < 1 ||
-                compressedBytes > BrotliEncoder.GetMaxCompressedLength(MaxPageBytes) || compressedBytes > indexOffset - position)
-                throw InvalidSnapshot();
-            pages.Add(pageOffset, (pageCount, plainBytes, compressedBytes));
-            position += compressedBytes;
-            pageStart += pageCount;
-        }
-        if (position != indexOffset) throw InvalidSnapshot();
         // A hostile duplicate order may bounce between pages. Limit retained decoded
         // URI strings to four byte-bounded pages rather than the entire feed.
         var cache = new Dictionary<int, (VpnCandidate[] Records, LinkedListNode<int> Node)>();
@@ -158,13 +132,7 @@ internal static class VpnCandidateSnapshotCodec
                 throw InvalidSnapshot();
             if (!cache.TryGetValue(pageOffset, out var decoded))
             {
-                var page = new byte[metadata.PlainBytes];
-                if (!BrotliDecoder.TryDecompress(payload.AsSpan(pageOffset + 12, metadata.CompressedBytes), page, out var written) || written != page.Length)
-                    throw InvalidSnapshot();
-                var records = new VpnCandidate[metadata.Count];
-                var recordPosition = 0;
-                for (var index = 0; index < records.Length; index++) records[index] = ReadRecord(page, ref recordPosition, hasConfigurations);
-                if (recordPosition != page.Length) throw InvalidSnapshot();
+                var records = ReadPage(payload, pageOffset, metadata, hasConfigurations);
                 if (cache.Count == 4)
                 {
                     cache.Remove(recent.First!.Value);
@@ -191,6 +159,97 @@ internal static class VpnCandidateSnapshotCodec
         }
         return new VpnSnapshotWindow(next - startIndex, next, next == uniqueCount);
     }
+
+    /// <summary>Reads original feed records, including superseded settings for the same endpoint.</summary>
+    internal static VpnSnapshotWindow ReadRecordsWindow(
+        byte[] payload, int startIndex, int maxRecords, Func<VpnCandidate, bool> accept)
+    {
+        ArgumentNullException.ThrowIfNull(payload);
+        ArgumentNullException.ThrowIfNull(accept);
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxRecords, 1);
+        var layout = ReadLayout(payload);
+        ArgumentOutOfRangeException.ThrowIfLessThan(startIndex, 0);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(startIndex, layout.RecordCount);
+        for (var index = 0; index < layout.UniqueCount; index++)
+        {
+            var entry = layout.IndexOffset + index * 8;
+            var pageOffset = BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(entry));
+            var recordIndex = BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(entry + 4));
+            if (!layout.Pages.TryGetValue(pageOffset, out var metadata) || recordIndex < 0 || recordIndex >= metadata.Count)
+                throw InvalidSnapshot();
+        }
+        var next = startIndex;
+        long returnedTextBytes = 0;
+        foreach (var (pageOffset, metadata) in layout.Pages.OrderBy(entry => entry.Key))
+        {
+            if (next >= metadata.RecordStart + metadata.Count) continue;
+            if (next - startIndex >= maxRecords) break;
+            var records = ReadPage(payload, pageOffset, metadata, layout.HasConfigurations);
+            for (var index = next - metadata.RecordStart; index < records.Length && next - startIndex < maxRecords; index++)
+            {
+                var candidate = records[index];
+                var textBytes = 2L * (candidate.Host.Length + (candidate.ConnectionUri?.Length ?? 0) +
+                    (candidate.ClashConfiguration?.Length ?? 0));
+                if (returnedTextBytes + textBytes > MaxWindowTextBytes || !accept(candidate))
+                    return new VpnSnapshotWindow(next - startIndex, next, next == layout.RecordCount);
+                returnedTextBytes += textBytes;
+                next++;
+            }
+        }
+        return new VpnSnapshotWindow(next - startIndex, next, next == layout.RecordCount);
+    }
+
+    private static SnapshotLayout ReadLayout(byte[] payload)
+    {
+        if (payload.Length is < 16 or > MaxPayloadBytes)
+            throw InvalidSnapshot();
+        var magic = BinaryPrimitives.ReadInt32LittleEndian(payload);
+        if (magic is not (Magic or LegacyMagic)) throw InvalidSnapshot();
+        var hasConfigurations = magic == Magic;
+        var count = BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(4));
+        var uniqueCount = BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(8));
+        if (count is < 1 or > MaxRecords || uniqueCount < 1 || uniqueCount > count) throw InvalidSnapshot();
+        var indexOffset = BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(12));
+        if (indexOffset < 16 || indexOffset > payload.Length ||
+            payload.Length - indexOffset != uniqueCount * 8) throw InvalidSnapshot();
+        var position = 16;
+        var pageStart = 0;
+        var pages = new Dictionary<int, SnapshotPage>();
+        while (pageStart < count)
+        {
+            if (position > indexOffset - 12) throw InvalidSnapshot();
+            var pageOffset = position;
+            var pageCount = BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(position));
+            var plainBytes = BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(position + 4));
+            var compressedBytes = BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(position + 8));
+            position += 12;
+            if (pageCount is < 1 or > MaxPageRecords || pageCount > count - pageStart ||
+                plainBytes < pageCount * (hasConfigurations ? 15 : 11) || plainBytes > MaxPageBytes || compressedBytes < 1 ||
+                compressedBytes > BrotliEncoder.GetMaxCompressedLength(MaxPageBytes) || compressedBytes > indexOffset - position)
+                throw InvalidSnapshot();
+            pages.Add(pageOffset, new SnapshotPage(pageCount, plainBytes, compressedBytes, pageStart));
+            position += compressedBytes;
+            pageStart += pageCount;
+        }
+        if (position != indexOffset) throw InvalidSnapshot();
+        return new SnapshotLayout(hasConfigurations, count, uniqueCount, indexOffset, pages);
+    }
+
+    private static VpnCandidate[] ReadPage(byte[] payload, int pageOffset, SnapshotPage metadata, bool hasConfigurations)
+    {
+        var page = new byte[metadata.PlainBytes];
+        if (!BrotliDecoder.TryDecompress(payload.AsSpan(pageOffset + 12, metadata.CompressedBytes), page, out var written) || written != page.Length)
+            throw InvalidSnapshot();
+        var records = new VpnCandidate[metadata.Count];
+        var position = 0;
+        for (var index = 0; index < records.Length; index++) records[index] = ReadRecord(page, ref position, hasConfigurations);
+        if (position != page.Length) throw InvalidSnapshot();
+        return records;
+    }
+
+    private sealed record SnapshotLayout(bool HasConfigurations, int RecordCount, int UniqueCount, int IndexOffset,
+        IReadOnlyDictionary<int, SnapshotPage> Pages);
+    private readonly record struct SnapshotPage(int Count, int PlainBytes, int CompressedBytes, int RecordStart);
 
     private static VpnCandidate ReadRecord(ReadOnlySpan<byte> page, ref int position, bool hasConfigurations)
     {
