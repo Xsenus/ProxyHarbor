@@ -107,6 +107,7 @@ public sealed class VpnSnapshotAdmissionTests
         var source = Source();
         var state = State(source, Feed(1));
         state.NextIndex = 1;
+        state.ProfileNextIndex = state.ProfileRecordCount;
         state.Payload = [];
         state.PayloadHash = [];
         var result = new VpnSnapshotAdmission(1, 1).Admit(source, state, [], null, Epoch.AddHours(1));
@@ -127,7 +128,69 @@ public sealed class VpnSnapshotAdmissionTests
         })));
         Assert.Equal(13, results.Sum(result => Items(result).Length));
         Assert.Equal(13, results.Sum(result => result.Progress.NextIndex));
+        Assert.Equal(13, results.Sum(result => result.Progress.ProfileNextIndex));
+        Assert.Equal(13, results.Sum(result => result.ProfileBatches.Sum(batch => batch.Candidates.Count)));
         Assert.All(results, result => Assert.InRange(Items(result).Length, 0, 5));
+    }
+
+    [Fact]
+    public void ProfileLaneRetainsSupersededCredentialsAndResumesAfterEndpointCompletion()
+    {
+        var source = Source();
+        var state = State(source, "vless://old@8.8.8.8:443#one\nvless://new@8.8.8.8:443#two");
+        var first = new VpnSnapshotAdmission(1, 1).Admit(source, state, Tail(state), null, Epoch.AddHours(1));
+        Assert.Equal("vless://new@8.8.8.8:443#two", Assert.Single(Items(first)).ConnectionUri);
+        Assert.Equal("vless://old@8.8.8.8:443#one", Assert.Single(Assert.Single(first.ProfileBatches).Candidates).ConnectionUri);
+        Assert.Equal(1, first.Progress.ProfileNextIndex);
+        state.NextIndex = first.Progress.NextIndex;
+        state.ProfileNextIndex = first.Progress.ProfileNextIndex;
+        var second = new VpnSnapshotAdmission(1, 1).Admit(source, state, [], null, Epoch.AddHours(2));
+        Assert.Empty(second.Batches);
+        Assert.Equal(2, second.Progress.ProfileNextIndex);
+        Assert.Equal("vless://new@8.8.8.8:443#two", Assert.Single(Assert.Single(second.ProfileBatches).Candidates).ConnectionUri);
+        Assert.All(second.ProfileBatches, batch => Assert.Equal(Epoch, batch.ObservedAt));
+    }
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(1)]
+    public void ReconfirmedProfilesKeepOriginalFirstObservationAndDoNotRegressTheirTimeline(int hours)
+    {
+        var source = Source();
+        var state = State(source, Feed(3));
+        var fresh = VpnCandidateSnapshotCodec.Encode(Feed(3), VpnProtocol.Vless);
+        var result = new VpnSnapshotAdmission(1, 1).Admit(source, state, Tail(state), fresh, Epoch.AddHours(hours));
+        var batch = Assert.Single(result.ProfileBatches);
+        Assert.Equal(Epoch, batch.FirstObservedAt);
+        Assert.Equal(hours > 0 ? Epoch.AddHours(hours) : Epoch, batch.ObservedAt);
+    }
+
+    [Fact]
+    public void PendingOriginalProfilesDoNotFreezeFreshEndpointSettingsOrTheirObservationEpoch()
+    {
+        var source = Source();
+        var state = State(source, "vless://old@8.8.8.8:443\nvless://last@8.8.8.8:443");
+        state.NextIndex = state.CandidateCount;
+        var fresh = VpnCandidateSnapshotCodec.Encode("vless://rotated@8.8.8.8:443", VpnProtocol.Vless);
+        var result = new VpnSnapshotAdmission(1, 1).Admit(source, state, [], fresh, Epoch.AddHours(1));
+        Assert.Equal("vless://rotated@8.8.8.8:443", Assert.Single(Items(result)).ConnectionUri);
+        Assert.Equal(Epoch.AddHours(1), Assert.Single(result.Batches).ObservedAt);
+        Assert.Equal("vless://old@8.8.8.8:443", Assert.Single(Assert.Single(result.ProfileBatches).Candidates).ConnectionUri);
+        Assert.Equal(1, result.Progress.NextIndex);
+        Assert.Equal(1, result.Progress.ProfileNextIndex);
+        Assert.Equal(fresh.BodyHash, result.Progress.FreshBodyHash);
+        Assert.Equal(state.SnapshotId, result.Progress.State.SnapshotId);
+    }
+
+    [Fact]
+    public void LargeEndpointQuotaCannotExpandTheBoundedOriginalProfileWindow()
+    {
+        var source = Source();
+        var state = State(source, Feed(201));
+        var result = new VpnSnapshotAdmission(1_000, 20_000).Admit(source, state, Tail(state), null, Epoch.AddHours(1));
+        Assert.Equal(201, result.Progress.NextIndex);
+        Assert.Equal(VpnSnapshotAdmission.MaximumProfileRecordsPerSource, result.Progress.ProfileNextIndex);
+        Assert.Equal(200, Assert.Single(result.ProfileBatches).Candidates.Count);
     }
 
     [Theory]
@@ -162,6 +225,7 @@ public sealed class VpnSnapshotAdmissionTests
             SourceProtocol = source.DefaultProtocol,
             CreatedAt = Epoch,
             CandidateCount = snapshot.UniqueCount,
+            ProfileRecordCount = snapshot.RecordCount,
             Payload = snapshot.Payload,
             PayloadHash = SHA256.HashData(snapshot.Payload),
             SnapshotBodyHash = snapshot.BodyHash,

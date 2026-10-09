@@ -13,6 +13,8 @@ public sealed class VpnSourceImportStoreIntegrationTests
     [Theory, Trait("Category", "PostgresIntegration")]
     [InlineData("count", "CK_VpnSourceImportStates_Cursor")]
     [InlineData("cursor", "CK_VpnSourceImportStates_Cursor")]
+    [InlineData("profile-count", "CK_VpnSourceImportStates_Cursor")]
+    [InlineData("profile-cursor", "CK_VpnSourceImportStates_Cursor")]
     [InlineData("protocol", "CK_VpnSourceImportStates_Cursor")]
     [InlineData("empty", "CK_VpnSourceImportStates_Payload")]
     [InlineData("complete", "CK_VpnSourceImportStates_Payload")]
@@ -33,6 +35,7 @@ public sealed class VpnSourceImportStoreIntegrationTests
             SourceProtocol = source.DefaultProtocol,
             CreatedAt = DateTimeOffset.UtcNow,
             CandidateCount = 1,
+            ProfileRecordCount = snapshot.RecordCount,
             Payload = snapshot.Payload,
             PayloadHash = SHA256.HashData(snapshot.Payload),
             SnapshotBodyHash = snapshot.BodyHash,
@@ -42,9 +45,11 @@ public sealed class VpnSourceImportStoreIntegrationTests
         {
             case "count": state.CandidateCount = 0; break;
             case "cursor": state.NextIndex = 2; break;
+            case "profile-count": state.ProfileRecordCount = -1; break;
+            case "profile-cursor": state.ProfileNextIndex = state.ProfileRecordCount + 1; break;
             case "protocol": state.SourceProtocol = (VpnProtocol)15; break;
             case "empty": state.Payload = []; break;
-            case "complete": state.NextIndex = 1; break;
+            case "complete": state.NextIndex = 1; state.ProfileNextIndex = state.ProfileRecordCount; break;
             case "hash": state.PayloadHash = []; break;
             case "original": state.SnapshotBodyHash = []; break;
             case "fresh": state.FreshBodyHash = []; break;
@@ -87,7 +92,22 @@ public sealed class VpnSourceImportStoreIntegrationTests
         Assert.True(VpnSourceImportStore.ReadWindow(tail, 1, item => { received.Add(item); return true; }).Completed);
         Assert.Equal("8.8.8.8", received[1].Host);
         Assert.True(await CommitAckAsync(database, tail, 2));
+        var endpointsComplete = Assert.IsType<VpnSourceImportState>(await store.LoadAsync(source, default));
+        Assert.NotEmpty(endpointsComplete.Payload);
+        Assert.Equal(0, endpointsComplete.ProfileNextIndex);
+        Assert.Equal(3, endpointsComplete.ProfileRecordCount);
+        var stillRetained = Assert.IsType<VpnSourceImportState>(await store.BeginAsync(source, changed, DateTimeOffset.UtcNow, default));
+        Assert.Equal(state.SnapshotId, stillRetained.SnapshotId);
+        Assert.True(await CommitProfilesAsync(database, source, endpointsComplete, 3));
         var complete = Assert.IsType<VpnSourceImportState>(await store.LoadAsync(source, default));
+        await using (var profilesDb = database.Factory.CreateDbContext())
+        {
+            var profiles = await profilesDb.VpnConnectionProfiles.OrderBy(profile => profile.ConnectionUri).ToArrayAsync();
+            Assert.Equal(3, profiles.Length);
+            Assert.Contains(profiles, profile => profile.ConnectionUri == "vless://old@example.com:443");
+            Assert.Contains(profiles, profile => profile.ConnectionUri == "vless://latest@example.com:443");
+            Assert.All(profiles, profile => Assert.Equal(observedAt, profile.FirstSeenAt));
+        }
         Assert.Empty(complete.Payload);
         Assert.Empty(complete.PayloadHash);
         Assert.Equal(0, complete.StoredBytes);
@@ -174,6 +194,9 @@ public sealed class VpnSourceImportStoreIntegrationTests
         await using (var db = database.Factory.CreateDbContext())
             Assert.Equal(snapshot.Payload.Length, await db.VpnSourceImportStates.SumAsync(item => item.StoredBytes));
         Assert.True(await CommitAckAsync(database, admitted, 1));
+        var pendingProfiles = Assert.IsType<VpnSourceImportState>(await store.LoadAsync(sources.Single(item => item.Id == admitted.VpnSourceId), default));
+        await Assert.ThrowsAsync<InvalidDataException>(() => store.BeginAsync(sources.Single(item => item.Id != admitted.VpnSourceId), snapshot, DateTimeOffset.UtcNow, default));
+        Assert.True(await CommitProfilesAsync(database, sources.Single(item => item.Id == admitted.VpnSourceId), pendingProfiles, 1));
         Assert.NotNull(await store.BeginAsync(sources.Single(item => item.Id != admitted.VpnSourceId), snapshot, DateTimeOffset.UtcNow, default));
     }
 
@@ -232,6 +255,49 @@ public sealed class VpnSourceImportStoreIntegrationTests
         Assert.Null(await store.LoadAsync(source, default));
         await using (var db = database.Factory.CreateDbContext()) Assert.Empty(await db.VpnSourceImportStates.ToArrayAsync());
         Assert.NotNull(await store.BeginAsync(source, snapshot, DateTimeOffset.UtcNow, default));
+    }
+
+    private static async Task<bool> CommitProfilesAsync(SnapshotDatabase database, VpnSource source,
+        VpnSourceImportState state, int maximum, bool commit = true)
+    {
+        var records = new List<VpnCandidate>();
+        var window = VpnSourceImportStore.ReadProfilesWindow(state, maximum, item => { records.Add(item); return true; });
+        await using var db = database.Factory.CreateDbContext();
+        await using var transaction = await db.Database.BeginTransactionAsync();
+        var changed = await VpnSourceImportStore.AcknowledgeAsync(db, VpnSourceImportCheckpoint.Capture(state), state.NextIndex,
+            DateTimeOffset.UtcNow, default, profileNextIndex: window.NextIndex);
+        if (changed) await VpnConnectionProfileStore.UpsertAsync(db, [new VpnImportBatch(source, records, state.CreatedAt)], default);
+        if (commit) await transaction.CommitAsync();
+        return changed;
+    }
+
+    [Fact, Trait("Category", "PostgresIntegration")]
+    public async Task ProfilesAndCursorRollbackTogetherAndStaleWorkerCannotPublishOrClearSnapshot()
+    {
+        await using var database = await SnapshotDatabase.CreateAsync();
+        if (database is null) return;
+        var source = await AddSourceAsync(database, "profiles-atomic");
+        var store = new VpnSourceImportStore(database.Factory);
+        var body = "vless://old@8.8.8.8:443#one\nvless://new@8.8.8.8:443#two\nvless://old@8.8.8.8:443#one";
+        var state = Assert.IsType<VpnSourceImportState>(await store.BeginAsync(source,
+            VpnCandidateSnapshotCodec.Encode(body, VpnProtocol.Vless), DateTimeOffset.UtcNow, default));
+        Assert.True(await CommitProfilesAsync(database, source, state, 2, commit: false));
+        await using (var verify = database.Factory.CreateDbContext())
+        {
+            Assert.Empty(await verify.VpnConnectionProfiles.ToArrayAsync());
+            Assert.Equal(0, (await verify.VpnSourceImportStates.SingleAsync()).ProfileNextIndex);
+        }
+        Assert.True(await CommitProfilesAsync(database, source, state, 2));
+        Assert.False(await CommitProfilesAsync(database, source, state, 2));
+        var tail = Assert.IsType<VpnSourceImportState>(await store.LoadAsync(source, default));
+        Assert.True(await CommitProfilesAsync(database, source, tail, 1));
+        tail = Assert.IsType<VpnSourceImportState>(await store.LoadAsync(source, default));
+        Assert.NotEmpty(tail.Payload);
+        Assert.Equal(0, tail.NextIndex);
+        Assert.Equal(3, tail.ProfileNextIndex);
+        await using (var verify = database.Factory.CreateDbContext()) Assert.Equal(2, await verify.VpnConnectionProfiles.CountAsync());
+        Assert.True(await CommitAckAsync(database, tail, 1));
+        Assert.Empty(Assert.IsType<VpnSourceImportState>(await store.LoadAsync(source, default)).Payload);
     }
 
     private static async Task<VpnSource> AddSourceAsync(SnapshotDatabase database, string name)

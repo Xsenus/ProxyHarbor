@@ -414,6 +414,7 @@ public sealed class BackupRestoreRoundTripIntegrationTests
             SourceProtocol = source.DefaultProtocol,
             CreatedAt = SnapshotTime,
             CandidateCount = snapshot.UniqueCount,
+            ProfileRecordCount = snapshot.RecordCount,
             Payload = snapshot.Payload,
             PayloadHash = SHA256.HashData(snapshot.Payload),
             SnapshotBodyHash = snapshot.BodyHash,
@@ -520,6 +521,7 @@ public sealed class BackupRestoreRoundTripIntegrationTests
         db.VpnSources.Add(ExpectedVpnSource());
         db.VpnEndpoints.Add(ExpectedVpnEndpoint());
         db.VpnEndpointSources.Add(ExpectedVpnEndpointSource());
+        db.VpnConnectionProfiles.Add(ExpectedVpnConnectionProfile());
         db.Runs.Add(ExpectedCollectionRun());
         db.ValidationRuns.Add(ExpectedValidationRun());
         db.BackupRuns.Add(ExpectedBackupRun());
@@ -588,6 +590,7 @@ public sealed class BackupRestoreRoundTripIntegrationTests
         var vpnProvenance = await db.VpnEndpointSources.AsNoTracking().SingleAsync(link =>
             link.VpnEndpointId == SnapshotIds.VpnEndpoint && link.VpnSourceId == SnapshotIds.VpnSource);
         Assert.Equivalent(ExpectedVpnEndpointSource(), vpnProvenance, strict: true);
+        Assert.Equivalent(ExpectedVpnConnectionProfile(), await db.VpnConnectionProfiles.AsNoTracking().SingleAsync(), strict: true);
 
         var run = await db.Runs.AsNoTracking().SingleAsync();
         Assert.Equivalent(ExpectedCollectionRun(), run, strict: true);
@@ -794,6 +797,24 @@ public sealed class BackupRestoreRoundTripIntegrationTests
         LastError = "representative VPN endpoint detail",
         FirstSourceId = SnapshotIds.VpnSource
     };
+
+    private static VpnConnectionProfile ExpectedVpnConnectionProfile()
+    {
+        const string uri = "vless://published-settings@example.com:443?security=tls&sni=example.com#archived";
+        var candidate = new VpnCandidate("example.com", 443, VpnProtocol.Vless, "tcp", uri);
+        return new VpnConnectionProfile
+        {
+            VpnSourceId = SnapshotIds.VpnSource,
+            ProfileHash = VpnConnectionProfileIntegrity.ComputeHash(candidate),
+            Host = candidate.Host,
+            Port = candidate.Port,
+            Protocol = candidate.Protocol,
+            Transport = candidate.Transport,
+            ConnectionUri = uri,
+            FirstSeenAt = SnapshotTime,
+            LastSeenAt = SnapshotTime.AddHours(1)
+        };
+    }
 
     private static VpnEndpointSource ExpectedVpnEndpointSource() => new()
     {

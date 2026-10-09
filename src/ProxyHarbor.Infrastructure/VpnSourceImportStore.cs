@@ -33,7 +33,7 @@ internal sealed class VpnSourceImportStore(
     {
         await using var db = await dbFactory.CreateDbContextAsync(token);
         await db.VpnSourceImportStates.Where(item => item.VpnSourceId == state.VpnSourceId &&
-            item.SnapshotId == state.SnapshotId && item.NextIndex == state.NextIndex && item.PreferFresh == state.PreferFresh)
+            item.SnapshotId == state.SnapshotId && item.NextIndex == state.NextIndex && item.PreferFresh == state.PreferFresh && item.ProfileNextIndex == state.ProfileNextIndex)
             .ExecuteDeleteAsync(token);
     }
 
@@ -46,7 +46,7 @@ internal sealed class VpnSourceImportStore(
         if (!source.Enabled || !MatchesSource(state, source)) return null;
         if (ValidState(state)) return state;
         await db.VpnSourceImportStates.Where(item => item.VpnSourceId == state.VpnSourceId &&
-            item.SnapshotId == state.SnapshotId && item.NextIndex == state.NextIndex).ExecuteDeleteAsync(token);
+            item.SnapshotId == state.SnapshotId && item.NextIndex == state.NextIndex && item.ProfileNextIndex == state.ProfileNextIndex).ExecuteDeleteAsync(token);
         return null;
     }
 
@@ -70,6 +70,7 @@ internal sealed class VpnSourceImportStore(
             SourceProtocol = source.DefaultProtocol,
             CreatedAt = observedAt,
             CandidateCount = snapshot.UniqueCount,
+            ProfileRecordCount = snapshot.RecordCount,
             Payload = snapshot.Payload,
             PayloadHash = SHA256.HashData(snapshot.Payload),
             SnapshotBodyHash = snapshot.BodyHash,
@@ -84,7 +85,7 @@ internal sealed class VpnSourceImportStore(
         if (!await db.VpnSources.AnyAsync(item => item.Id == source.Id && item.Enabled &&
             item.Url == source.Url && item.DefaultProtocol == source.DefaultProtocol, token)) return null;
         var existing = await db.VpnSourceImportStates.SingleOrDefaultAsync(item => item.VpnSourceId == source.Id, token);
-        if (existing is not null && MatchesSource(existing, source) && existing.NextIndex < existing.CandidateCount && ValidState(existing))
+        if (existing is not null && MatchesSource(existing, source) && (existing.NextIndex < existing.CandidateCount || existing.ProfileNextIndex < existing.ProfileRecordCount) && ValidState(existing))
             return existing;
         var stored = await db.VpnSourceImportStates.SumAsync(item => (long)item.StoredBytes, token);
         if (stored - (existing?.StoredBytes ?? 0) + state.Payload.Length > maxStoredBytes)
@@ -110,10 +111,19 @@ internal sealed class VpnSourceImportStore(
         return VpnCandidateSnapshotCodec.ReadWindow(state.Payload, state.NextIndex, maximum, accept);
     }
 
+    internal static VpnSnapshotWindow ReadProfilesWindow(VpnSourceImportState state, int maximum, Func<VpnCandidate, bool> accept)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(maximum, 1);
+        ArgumentNullException.ThrowIfNull(accept);
+        if (!ValidState(state)) throw new InvalidDataException("Сохранённый VPN-снимок повреждён.");
+        if (state.ProfileNextIndex == state.ProfileRecordCount) return new(0, state.ProfileNextIndex, true);
+        return VpnCandidateSnapshotCodec.ReadRecordsWindow(state.Payload, state.ProfileNextIndex, maximum, accept);
+    }
+
     /// <summary>Успешный UPDATE не является commit: вызывающий сохраняет endpoint и CAS атомарно.</summary>
     internal static async Task<bool> AcknowledgeAsync(
         ProxyHarborDbContext db, VpnSourceImportCheckpoint state, int nextIndex,
-        DateTimeOffset committedAt, CancellationToken token, byte[]? freshBodyHash = null, bool? preferFresh = null)
+        DateTimeOffset committedAt, CancellationToken token, byte[]? freshBodyHash = null, bool? preferFresh = null, int? profileNextIndex = null)
     {
         if (db.Database.CurrentTransaction is null)
             throw new InvalidOperationException("VPN cursor требует import transaction.");
@@ -121,18 +131,24 @@ internal sealed class VpnSourceImportStore(
         ArgumentOutOfRangeException.ThrowIfGreaterThan(nextIndex, state.CandidateCount);
         if (freshBodyHash is not null && freshBodyHash.Length != SHA256.HashSizeInBytes)
             throw new ArgumentException("Некорректный hash свежего VPN body.", nameof(freshBodyHash));
-        if (nextIndex == state.NextIndex && (preferFresh is null || preferFresh == state.PreferFresh)) return false;
+        var profileNext = profileNextIndex ?? state.ProfileNextIndex;
+        ArgumentOutOfRangeException.ThrowIfLessThan(profileNext, state.ProfileNextIndex);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(profileNext, state.ProfileRecordCount);
+        if (nextIndex == state.NextIndex && profileNext == state.ProfileNextIndex &&
+            (preferFresh is null || preferFresh == state.PreferFresh)) return false;
         await PostgresAdvisoryLock.AcquireTransactionAsync((NpgsqlConnection)db.Database.GetDbConnection(),
             (NpgsqlTransaction)db.Database.CurrentTransaction.GetDbTransaction(), PostgresAdvisoryLock.VpnMutationKey, token);
-        var completed = nextIndex == state.CandidateCount;
+        var completed = nextIndex == state.CandidateCount && profileNext == state.ProfileRecordCount;
         var updated = await db.VpnSourceImportStates.Where(item => item.VpnSourceId == state.VpnSourceId &&
             item.SnapshotId == state.SnapshotId && item.NextIndex == state.NextIndex &&
             item.CandidateCount == state.CandidateCount && item.PreferFresh == state.PreferFresh &&
+            item.ProfileNextIndex == state.ProfileNextIndex && item.ProfileRecordCount == state.ProfileRecordCount &&
             item.SourceUrl == state.SourceUrl && item.SourceProtocol == state.SourceProtocol &&
             db.VpnSources.Any(source => source.Id == item.VpnSourceId && source.Enabled &&
                 source.Url == item.SourceUrl && source.DefaultProtocol == item.SourceProtocol))
             .ExecuteUpdateAsync(setters => setters
                 .SetProperty(item => item.NextIndex, nextIndex)
+                .SetProperty(item => item.ProfileNextIndex, profileNext)
                 .SetProperty(item => item.LastProgressAt, committedAt)
                 .SetProperty(item => item.PreferFresh, preferFresh ?? true)
                 .SetProperty(item => item.FreshBodyHash, item => freshBodyHash == null ? item.FreshBodyHash : freshBodyHash)
@@ -147,19 +163,24 @@ internal sealed class VpnSourceImportStore(
     private static bool ValidState(VpnSourceImportState state) =>
         state.CandidateCount is > 0 and <= VpnCandidateSnapshotCodec.MaxRecords &&
         state.NextIndex >= 0 && state.NextIndex <= state.CandidateCount &&
+        state.ProfileRecordCount is >= 0 and <= VpnCandidateSnapshotCodec.MaxRecords &&
+        state.ProfileNextIndex >= 0 && state.ProfileNextIndex <= state.ProfileRecordCount &&
         state.SnapshotBodyHash.Length == SHA256.HashSizeInBytes && state.FreshBodyHash.Length == SHA256.HashSizeInBytes &&
-        (state.NextIndex == state.CandidateCount ? state.Payload.Length == 0 && state.PayloadHash.Length == 0 :
+        (state.NextIndex == state.CandidateCount && state.ProfileNextIndex == state.ProfileRecordCount
+            ? state.Payload.Length == 0 && state.PayloadHash.Length == 0 :
             state.Payload.Length is > 16 and <= VpnCandidateSnapshotCodec.MaxPayloadBytes &&
             state.PayloadHash.Length == SHA256.HashSizeInBytes &&
             BinaryPrimitives.ReadInt32LittleEndian(state.Payload) is VpnCandidateSnapshotCodec.Magic or VpnCandidateSnapshotCodec.LegacyMagic &&
             BinaryPrimitives.ReadInt32LittleEndian(state.Payload.AsSpan(8)) == state.CandidateCount &&
+            BinaryPrimitives.ReadInt32LittleEndian(state.Payload.AsSpan(4)) == state.ProfileRecordCount &&
             CryptographicOperations.FixedTimeEquals(SHA256.HashData(state.Payload), state.PayloadHash));
 }
 
 /// <summary>Узкие metadata после admission не удерживают payload всех источников до commit.</summary>
 internal sealed record VpnSourceImportCheckpoint(Guid VpnSourceId, string SourceUrl, VpnProtocol SourceProtocol,
-    Guid SnapshotId, int CandidateCount, int NextIndex, bool PreferFresh)
+    Guid SnapshotId, int CandidateCount, int NextIndex, bool PreferFresh, int ProfileRecordCount, int ProfileNextIndex)
 {
     internal static VpnSourceImportCheckpoint Capture(VpnSourceImportState state) => new(state.VpnSourceId,
-        state.SourceUrl, state.SourceProtocol, state.SnapshotId, state.CandidateCount, state.NextIndex, state.PreferFresh);
+        state.SourceUrl, state.SourceProtocol, state.SnapshotId, state.CandidateCount, state.NextIndex, state.PreferFresh,
+        state.ProfileRecordCount, state.ProfileNextIndex);
 }

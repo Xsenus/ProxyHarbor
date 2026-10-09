@@ -59,6 +59,7 @@ public static class BackupArchiveValidator
         RequiredDatabaseEntries
             .Concat(["database/backup-runs.json", "database/validation-runs.json", "database/checker-nodes.json"])
             .Concat(["database/vpn-sources.json", "database/vpn-endpoints.json", "database/vpn-endpoint-sources.json"])
+            .Append("database/vpn-connection-profiles.json")
             .Concat(CurrentSettingsEntries)
             .Concat(IdentityEntries)
             .Append("database/payment-orders.json")
@@ -111,7 +112,7 @@ public static class BackupArchiveValidator
         if (!root.TryGetProperty("version", out var version) ||
             version.ValueKind != JsonValueKind.Number ||
             !version.TryGetInt32(out var versionNumber) ||
-            versionNumber is < 2 or > 9)
+            versionNumber is < 2 or > 10)
             throw new InvalidDataException("Версия manifest backup не поддерживается.");
         if (!root.TryGetProperty("secretsIncluded", out var secretsIncluded) ||
             secretsIncluded.ValueKind is not (JsonValueKind.True or JsonValueKind.False) ||
@@ -149,6 +150,10 @@ public static class BackupArchiveValidator
         if (versionNumber < 9 &&
             archive.Entries.Any(entry => VersionNineEntries.Contains(entry.FullName, StringComparer.Ordinal)))
             throw new InvalidDataException("Destination snapshot поддерживается только backup schema версии 9.");
+
+        if (versionNumber < 10 && archive.GetEntry("database/vpn-connection-profiles.json") is not null)
+            throw new InvalidDataException("VPN profile catalog requires backup manifest v10.");
+        if (versionNumber >= 10) _ = RequiredEntry(archive, "database/vpn-connection-profiles.json");
 
         foreach (var name in RequiredDatabaseEntries)
             _ = RequiredEntry(archive, name);

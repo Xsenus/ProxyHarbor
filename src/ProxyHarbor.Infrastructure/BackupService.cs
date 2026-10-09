@@ -494,6 +494,7 @@ public sealed class BackupService(
                 await WriteJsonAsync(archive, "database/vpn-sources.json", db.VpnSources.AsNoTracking().AsAsyncEnumerable(), token);
                 await WriteJsonAsync(archive, "database/vpn-endpoints.json", db.VpnEndpoints.AsNoTracking().AsAsyncEnumerable(), token);
                 await WriteJsonAsync(archive, "database/vpn-endpoint-sources.json", db.VpnEndpointSources.AsNoTracking().AsAsyncEnumerable(), token);
+                await WriteJsonAsync(archive, "database/vpn-connection-profiles.json", db.VpnConnectionProfiles.AsNoTracking().AsAsyncEnumerable(), token);
                 await WriteJsonAsync(archive, "database/runs.json", db.Runs.AsNoTracking().AsAsyncEnumerable(), token);
                 await WriteJsonAsync(archive, "database/validation-runs.json",
                     db.ValidationRuns.AsNoTracking().AsAsyncEnumerable(), token);
@@ -581,9 +582,10 @@ public sealed class BackupService(
                 await WriteJsonAsync(archive, "manifest.json",
                     new
                     {
+                        // v10 additionally preserves every published VPN profile; historical inventories remain frozen.
                         // v9 добавляет destination/copy/job model, не меняя строгую
                         // схему уже выпущенного v8. Архивы v2-v8 остаются совместимыми.
-                        version = 9,
+                        version = 10,
                         settingsSchemaVersion = 1,
                         createdAt = DateTimeOffset.UtcNow,
                         secretsIncluded = false,

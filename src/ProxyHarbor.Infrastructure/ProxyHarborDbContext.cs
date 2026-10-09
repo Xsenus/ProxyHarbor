@@ -25,6 +25,8 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
     public DbSet<VpnSource> VpnSources => Set<VpnSource>();
     /// <summary>Ephemeral cursor state полного VPN import.</summary>
     public DbSet<VpnSourceImportState> VpnSourceImportStates => Set<VpnSourceImportState>();
+    /// <summary>All published VPN settings and their source observations.</summary>
+    public DbSet<VpnConnectionProfile> VpnConnectionProfiles => Set<VpnConnectionProfile>();
     /// <summary>Validated pending API pages, kept until the full body is admitted.</summary>
     public DbSet<SourceApiCaptureState> SourceApiCaptureStates => Set<SourceApiCaptureState>();
     /// <summary>Shared durable API request deadlines.</summary>
@@ -533,9 +535,25 @@ public sealed class ProxyHarborDbContext(DbContextOptions<ProxyHarborDbContext> 
         vpnImport.ToTable(table =>
         {
             table.HasCheckConstraint("CK_VpnSourceImportStates_Cursor",
-                "\"CandidateCount\" BETWEEN 1 AND 1000000 AND \"NextIndex\" BETWEEN 0 AND \"CandidateCount\" AND \"SourceProtocol\" BETWEEN 0 AND 14");
+                "\"CandidateCount\" BETWEEN 1 AND 1000000 AND \"NextIndex\" BETWEEN 0 AND \"CandidateCount\" AND \"SourceProtocol\" BETWEEN 0 AND 14 AND \"ProfileRecordCount\" BETWEEN 0 AND 1000000 AND \"ProfileNextIndex\" BETWEEN 0 AND \"ProfileRecordCount\"");
             table.HasCheckConstraint("CK_VpnSourceImportStates_Payload",
-                "octet_length(\"Payload\") <= 50331648 AND octet_length(\"SnapshotBodyHash\") = 32 AND octet_length(\"FreshBodyHash\") = 32 AND ((\"NextIndex\" < \"CandidateCount\" AND octet_length(\"Payload\") > 16 AND octet_length(\"PayloadHash\") = 32) OR (\"NextIndex\" = \"CandidateCount\" AND octet_length(\"Payload\") = 0 AND octet_length(\"PayloadHash\") = 0))");
+                "octet_length(\"Payload\") <= 50331648 AND octet_length(\"SnapshotBodyHash\") = 32 AND octet_length(\"FreshBodyHash\") = 32 AND (((\"NextIndex\" < \"CandidateCount\" OR \"ProfileNextIndex\" < \"ProfileRecordCount\") AND octet_length(\"Payload\") > 16 AND octet_length(\"PayloadHash\") = 32) OR (\"NextIndex\" = \"CandidateCount\" AND \"ProfileNextIndex\" = \"ProfileRecordCount\" AND octet_length(\"Payload\") = 0 AND octet_length(\"PayloadHash\") = 0))");
+        });
+
+        var vpnProfile = builder.Entity<VpnConnectionProfile>();
+        vpnProfile.HasKey(x => new { x.VpnSourceId, x.ProfileHash });
+        vpnProfile.Property(x => x.ProfileHash).HasMaxLength(64);
+        vpnProfile.Property(x => x.Host).HasMaxLength(255);
+        vpnProfile.Property(x => x.Transport).HasMaxLength(8);
+        vpnProfile.Property(x => x.ConnectionUri).HasMaxLength(16_384);
+        vpnProfile.Property(x => x.ClashConfiguration).HasMaxLength(16_384);
+        vpnProfile.HasIndex(x => new { x.Host, x.Port, x.Protocol, x.Transport });
+        vpnProfile.HasOne<VpnSource>().WithMany().HasForeignKey(x => x.VpnSourceId).OnDelete(DeleteBehavior.Cascade);
+        vpnProfile.ToTable(table =>
+        {
+            table.HasCheckConstraint("CK_VpnConnectionProfiles_Identity", "\"Port\" BETWEEN 1 AND 65535 AND \"Protocol\" BETWEEN 0 AND 14 AND \"Transport\" IN ('tcp', 'udp') AND \"ProfileHash\" ~ '^[0-9a-f]{64}$'");
+            table.HasCheckConstraint("CK_VpnConnectionProfiles_Settings", "\"ConnectionUri\" IS NOT NULL OR \"ClashConfiguration\" IS NOT NULL");
+            table.HasCheckConstraint("CK_VpnConnectionProfiles_Timeline", "\"LastSeenAt\" >= \"FirstSeenAt\"");
         });
 
         var vpnEndpoint = builder.Entity<VpnEndpoint>();

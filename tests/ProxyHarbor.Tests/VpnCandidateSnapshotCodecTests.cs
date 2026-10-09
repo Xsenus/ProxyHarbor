@@ -498,6 +498,7 @@ public sealed class VpnCandidateSnapshotCodecTests
         {
             SourceUrl = "https://example.com/feed",
             CandidateCount = 1,
+            ProfileRecordCount = 1,
             NextIndex = 0,
             Payload = snapshot,
             PayloadHash = System.Security.Cryptography.SHA256.HashData(snapshot),

@@ -33,6 +33,9 @@ public sealed class VpnSourceImportStoreTests
     [InlineData("version")]
     [InlineData("header-count")]
     [InlineData("complete-payload")]
+    [InlineData("profile-count")]
+    [InlineData("profile-cursor")]
+    [InlineData("profile-header")]
     public void InvalidMetadataOrChecksumCannotAdmitAnyCandidate(string damage)
     {
         var state = Pending();
@@ -49,7 +52,10 @@ public sealed class VpnSourceImportStoreTests
             case "checksum": state.Payload[^1] ^= 1; break;
             case "version": state.Payload[0] ^= 1; state.PayloadHash = SHA256.HashData(state.Payload); break;
             case "header-count": state.CandidateCount = 2; break;
-            case "complete-payload": state.NextIndex = 1; break;
+            case "profile-count": state.ProfileRecordCount = -1; break;
+            case "profile-cursor": state.ProfileNextIndex = state.ProfileRecordCount + 1; break;
+            case "profile-header": state.ProfileRecordCount++; break;
+            case "complete-payload": state.NextIndex = 1; state.ProfileNextIndex = state.ProfileRecordCount; break;
         }
         Assert.Throws<InvalidDataException>(() => VpnSourceImportStore.ReadWindow(state, 1, _ => throw new InvalidOperationException()));
     }
@@ -59,6 +65,7 @@ public sealed class VpnSourceImportStoreTests
     {
         var state = Pending();
         state.NextIndex = state.CandidateCount;
+        state.ProfileNextIndex = state.ProfileRecordCount;
         state.Payload = [];
         state.PayloadHash = [];
         Assert.Equal(new VpnSnapshotWindow(0, 1, true), VpnSourceImportStore.ReadWindow(state, 1, _ => throw new InvalidOperationException()));
@@ -66,6 +73,24 @@ public sealed class VpnSourceImportStoreTests
         Assert.Throws<ArgumentNullException>(() => VpnSourceImportStore.ReadWindow(state, 1, null!));
         state.PayloadHash = new byte[32];
         Assert.Throws<InvalidDataException>(() => VpnSourceImportStore.ReadWindow(state, 1, _ => true));
+    }
+
+    [Fact]
+    public void EndpointCompletionCannotHideOriginalProfilesOrPermitEarlyPayloadRelease()
+    {
+        var state = Pending();
+        state.NextIndex = state.CandidateCount;
+        Assert.True(VpnSourceImportStore.ReadWindow(state, 1, _ => throw new InvalidOperationException()).Completed);
+        var records = new List<VpnCandidate>();
+        Assert.Equal(new VpnSnapshotWindow(1, 1, false), VpnSourceImportStore.ReadProfilesWindow(state, 1, item => { records.Add(item); return true; }));
+        Assert.Equal("vless://first@8.8.8.8:443", Assert.Single(records).ConnectionUri);
+        Assert.Equal(0, state.ProfileNextIndex);
+        state.ProfileNextIndex = 1;
+        Assert.True(VpnSourceImportStore.ReadProfilesWindow(state, 1, item => { records.Add(item); return true; }).Completed);
+        Assert.Equal("vless://latest@8.8.8.8:443", records[1].ConnectionUri);
+        state.Payload = [];
+        state.PayloadHash = [];
+        Assert.Throws<InvalidDataException>(() => VpnSourceImportStore.ReadProfilesWindow(state, 1, _ => true));
     }
 
     [Theory]
@@ -102,6 +127,7 @@ public sealed class VpnSourceImportStoreTests
             SourceProtocol = VpnProtocol.Vless,
             CreatedAt = DateTimeOffset.UtcNow,
             CandidateCount = snapshot.UniqueCount,
+            ProfileRecordCount = snapshot.RecordCount,
             Payload = snapshot.Payload,
             PayloadHash = SHA256.HashData(snapshot.Payload),
             SnapshotBodyHash = snapshot.BodyHash,

@@ -18,6 +18,7 @@ public sealed class RestoreSettingsInspectionTests
     [InlineData(7)]
     [InlineData(8)]
     [InlineData(9)]
+    [InlineData(10)]
     public void ReadsValidatedCurrentSettingsWithoutSecrets(int version)
     {
         using var archive = CreateArchive(version);
@@ -47,7 +48,7 @@ public sealed class RestoreSettingsInspectionTests
         var exception = Assert.Throws<InvalidDataException>(
             () => RestoreApplication.ReadSettingsInspection(archive));
 
-        Assert.Contains("только для backup manifest v5-v9", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("только для backup manifest v5-v10", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
