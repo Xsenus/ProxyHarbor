@@ -38,7 +38,7 @@ jobs:
         run: ./tools/Invoke-Gitleaks.ps1
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with: { dotnet-version: '10.0.401' }
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with: { node-version: '22', cache: npm, cache-dependency-path: src/proxyharbor-web/package-lock.json }
       - name: Pin npm with bulk-only security audit
         timeout-minutes: 3
@@ -233,7 +233,7 @@ jobs:
             --arg digest "$DIGEST" --arg revision "$REVISION" \
             '{component:$component,image:$image,version:$version,imageTag:$imageTag,digest:$digest,revision:$revision}' \
             > "release-metadata/$COMPONENT.json"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-metadata-${{ matrix.component }}
           path: release-metadata/${{ matrix.component }}.json
@@ -270,7 +270,7 @@ jobs:
             --directory native-agent/publish .
           (cd release-assets && sha256sum proxyharbor-checker-agent.tar.gz \
             > proxyharbor-checker-agent.tar.gz.sha256)
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-native-agent
           path: release-assets/*
@@ -289,12 +289,12 @@ jobs:
         id: release
         shell: pwsh
         run: ./tools/Get-ReleaseMetadata.ps1 -Tag $env:GITHUB_REF_NAME -RepositoryOwner $env:GITHUB_REPOSITORY_OWNER -OutputFile $env:GITHUB_OUTPUT
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: release-metadata-*
           path: release-metadata
           merge-multiple: true
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-native-agent
           path: release-assets
