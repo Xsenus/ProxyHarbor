@@ -1,4 +1,4 @@
-FROM node:22-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402 AS build
+FROM node:22-alpine@sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914 AS build
 WORKDIR /app
 COPY src/proxyharbor-web/package*.json ./
 # CI and release workflows audit this exact lockfile before publishing images.
@@ -9,7 +9,7 @@ ARG SOURCE_REVISION=unknown
 ENV VITE_APP_VERSION=$VERSION VITE_SOURCE_REVISION=$SOURCE_REVISION
 RUN npm run build
 
-FROM nginx:1.31-alpine@sha256:62ff2089abf5a9ed33bd232895bef5e22f7bb4b200675cec49a5ebc48e3d4ac8
+FROM nginx:1.31-alpine@sha256:a3554c0d0b48177b1413c26e01f695334428020d9df01243fbae3e11cfd17417
 RUN apk upgrade --no-cache libexpat libcrypto3 libssl3 libuuid pcre2 tiff
 COPY --chown=nginx:nginx src/proxyharbor-web/nginx.conf /etc/nginx/nginx.conf
 COPY --from=build --chown=nginx:nginx /app/dist /usr/share/nginx/html
