@@ -106,12 +106,17 @@ public sealed class BuiltInSourceCatalogTests
     [Fact]
     public void CatalogContainsExpectedUniqueFeedsAndProviders()
     {
-        Assert.Equal(546, BuiltInSourceCatalog.Sources.Count);
-        Assert.Equal(546, BuiltInSourceCatalog.Sources.Select(x => x.Url).Distinct(StringComparer.OrdinalIgnoreCase).Count());
-        Assert.Equal(280, BuiltInSourceCatalog.Sources.Select(x => x.Provider).Distinct(StringComparer.OrdinalIgnoreCase).Count());
-        Assert.Equal(280, BuiltInSourceCatalog.Sources.Select(x => x.ProviderIdentity).Distinct(StringComparer.Ordinal).Count());
-        Assert.Equal(280, BuiltInSourceCatalog.ProviderCount);
-        Assert.Equal(Enumerable.Range(1, 546), BuiltInSourceCatalog.Sources.Select(x => x.Rank));
+        Assert.Equal(533, BuiltInSourceCatalog.Sources.Count);
+        Assert.Equal(533, BuiltInSourceCatalog.Sources.Select(x => x.Url).Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        Assert.Equal(271, BuiltInSourceCatalog.Sources.Select(x => x.Provider).Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        Assert.Equal(271, BuiltInSourceCatalog.Sources.Select(x => x.ProviderIdentity).Distinct(StringComparer.Ordinal).Count());
+        Assert.Equal(271, BuiltInSourceCatalog.ProviderCount);
+        Assert.Equal(Enumerable.Range(1, 533), BuiltInSourceCatalog.Sources.Select(x => x.Rank));
+        Assert.DoesNotContain(BuiltInSourceCatalog.Sources,
+            source => BuiltInSourceCatalog.ArchivedUrls.Contains(source.Url));
+        Assert.Equal(
+            [ProxyProtocol.Http, ProxyProtocol.Https, ProxyProtocol.Socks4, ProxyProtocol.Socks5],
+            BuiltInSourceCatalog.Sources.Where(source => source.Provider == "Dahono").Select(source => source.Protocol));
     }
 
     [Fact]
@@ -185,8 +190,8 @@ public sealed class BuiltInSourceCatalogTests
         // The unavailable lighscent feed and previously retired feeds are excluded.
         var feeds = BuiltInSourceCatalog.Sources.Skip(351).ToArray();
 
-        Assert.Equal(195, feeds.Length);
-        Assert.Equal(195, feeds.Select(source => source.ProviderIdentity).Distinct(StringComparer.Ordinal).Count());
+        Assert.Equal(182, feeds.Length);
+        Assert.Equal(182, feeds.Select(source => source.ProviderIdentity).Distinct(StringComparer.Ordinal).Count());
     }
 
     [Fact]

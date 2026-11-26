@@ -121,8 +121,6 @@ public static class BuiltInVpnSourceCatalog
 
         // Независимые публичные каталоги, найденные и live-проверенные 28.08.2026.
         new("Nyein Ko Ko Aung mixed", "nyeinkokoaung404/V2ray-Configs", "https://raw.githubusercontent.com/nyeinkokoaung404/V2ray-Configs/main/All_Configs_Sub.txt", VpnProtocol.Vless, "MIT"),
-        new("Vovaplus secure VLESS", "VovaplusEXP/p-configs", "https://raw.githubusercontent.com/VovaplusEXP/p-configs/main/Splitted-By-Protocol-Secure/vless.txt", VpnProtocol.Vless, "GPL-3.0"),
-        new("Vovaplus secure VMess", "VovaplusEXP/p-configs", "https://raw.githubusercontent.com/VovaplusEXP/p-configs/main/Splitted-By-Protocol-Secure/vmess.txt", VpnProtocol.Vmess, "GPL-3.0"),
         new("RichTiTAN tested mixed", "RichTiTAN/V2rayTested", "https://raw.githubusercontent.com/RichTiTAN/V2rayTested/main/working_configs.txt", VpnProtocol.Vless, "GPL-3.0"),
         new("Danialsamadi mixed", "Danialsamadi/v2go", "https://raw.githubusercontent.com/Danialsamadi/v2go/main/AllConfigsSub.txt", VpnProtocol.Vless, "GPL-3.0"),
         new("MhdiTaheri mixed", "MhdiTaheri/V2rayCollector", "https://raw.githubusercontent.com/MhdiTaheri/V2rayCollector/main/sub/mix", VpnProtocol.Vless, "MIT"),
@@ -144,15 +142,10 @@ public static class BuiltInVpnSourceCatalog
         new("VestraNet Shadowsocks", "MustafaBaqer/VestraNet-Nodes", "https://raw.githubusercontent.com/MustafaBaqer/VestraNet-Nodes/main/protocols/shadowsocks.txt", VpnProtocol.Shadowsocks, "MIT"),
         new("VestraNet Hysteria2", "MustafaBaqer/VestraNet-Nodes", "https://raw.githubusercontent.com/MustafaBaqer/VestraNet-Nodes/main/protocols/hy2.txt", VpnProtocol.Hysteria2, "MIT"),
         new("VestraNet WireGuard", "MustafaBaqer/VestraNet-Nodes", "https://raw.githubusercontent.com/MustafaBaqer/VestraNet-Nodes/main/protocols/wireguard.txt", VpnProtocol.WireGuard, "MIT"),
-        new("Barabama mixed", "Barabama/FreeNodes", "https://raw.githubusercontent.com/Barabama/FreeNodes/feat/ai-crawler-v2/nodes/merged.txt", VpnProtocol.Vless, "MIT"),
+        new("Barabama mixed", "Barabama/FreeNodes", "https://raw.githubusercontent.com/Barabama/FreeNodes/main/nodes/merged.txt", VpnProtocol.Vless, "MIT"),
         new("Nexus Nodes mixed", "ninjastrikers/nexus-nodes", "https://raw.githubusercontent.com/ninjastrikers/nexus-nodes/main/configs/all.txt", VpnProtocol.Vless, "MIT"),
         new("Nexus Nodes VLESS", "ninjastrikers/nexus-nodes", "https://raw.githubusercontent.com/ninjastrikers/nexus-nodes/main/configs/vless.txt", VpnProtocol.Vless, "MIT"),
         new("Nexus Nodes VMess", "ninjastrikers/nexus-nodes", "https://raw.githubusercontent.com/ninjastrikers/nexus-nodes/main/configs/vmess.txt", VpnProtocol.Vmess, "MIT"),
-        new("Black Crow VLESS", "nukcrow/black-crow", "https://raw.githubusercontent.com/nukcrow/black-crow/main/sub/general/vless.txt", VpnProtocol.Vless, "Public subscription links (SUBSCRIPTIONS.md)"),
-        new("Black Crow VMess", "nukcrow/black-crow", "https://raw.githubusercontent.com/nukcrow/black-crow/main/sub/general/vmess.txt", VpnProtocol.Vmess, "Public subscription links (SUBSCRIPTIONS.md)"),
-        new("Black Crow Shadowsocks", "nukcrow/black-crow", "https://raw.githubusercontent.com/nukcrow/black-crow/main/sub/general/ss.txt", VpnProtocol.Shadowsocks, "Public subscription links (SUBSCRIPTIONS.md)"),
-        new("Black Crow Trojan", "nukcrow/black-crow", "https://raw.githubusercontent.com/nukcrow/black-crow/main/sub/general/trojan.txt", VpnProtocol.Trojan, "Public subscription links (SUBSCRIPTIONS.md)"),
-        new("Black Crow mixed", "nukcrow/black-crow", "https://raw.githubusercontent.com/nukcrow/black-crow/main/sub/general/all_configs.txt", VpnProtocol.Vless, "Public subscription links (SUBSCRIPTIONS.md)"),
 
         // Российские и зарубежные каталоги, live-проверенные 01.09.2026. Включены
         // только поддерживаемые URI/base64-feed с явной лицензией репозитория.
@@ -164,7 +157,6 @@ public static class BuiltInVpnSourceCatalog
         new("Russia mirror Shadowsocks", "kort0881/vpn-vless-configs-russia", "https://raw.githubusercontent.com/kort0881/vpn-vless-configs-russia/main/data/githubmirror/clean/ss.txt", VpnProtocol.Shadowsocks, "GPL-3.0"),
         new("Russia mirror Hysteria2", "kort0881/vpn-vless-configs-russia", "https://raw.githubusercontent.com/kort0881/vpn-vless-configs-russia/main/data/githubmirror/clean/hysteria2.txt", VpnProtocol.Hysteria2, "GPL-3.0"),
         new("ALIILA mixed", "ALIILAPRO/v2rayNG-Config", "https://raw.githubusercontent.com/ALIILAPRO/v2rayNG-Config/main/sub.txt", VpnProtocol.Vless, "GPL-3.0"),
-        new("Epodonios mixed", "Epodonios/v2ray-configs", "https://raw.githubusercontent.com/Epodonios/v2ray-configs/main/All_Configs_Sub.txt", VpnProtocol.Vless, "GPL-3.0"),
         new("Firmfox VLESS", "Firmfox/Proxify", "https://raw.githubusercontent.com/Firmfox/Proxify/main/v2ray_configs/separated_by_protocol/vless.txt", VpnProtocol.Vless, "GPL-3.0"),
         new("Firmfox VMess", "Firmfox/Proxify", "https://raw.githubusercontent.com/Firmfox/Proxify/main/v2ray_configs/separated_by_protocol/vmess.txt", VpnProtocol.Vmess, "GPL-3.0"),
         new("Firmfox Trojan", "Firmfox/Proxify", "https://raw.githubusercontent.com/Firmfox/Proxify/main/v2ray_configs/separated_by_protocol/trojan.txt", VpnProtocol.Trojan, "GPL-3.0"),
@@ -178,8 +170,6 @@ public static class BuiltInVpnSourceCatalog
         new("Au1rxx verified 4", "Au1rxx/free-vpn-subscriptions", "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/all-verified/v2ray-base64-0004.txt", VpnProtocol.Vless, "MIT"),
         new("Au1rxx verified 5", "Au1rxx/free-vpn-subscriptions", "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/all-verified/v2ray-base64-0005.txt", VpnProtocol.Vless, "MIT"),
         new("Au1rxx verified 6", "Au1rxx/free-vpn-subscriptions", "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/all-verified/v2ray-base64-0006.txt", VpnProtocol.Vless, "MIT"),
-        new("Au1rxx verified 7", "Au1rxx/free-vpn-subscriptions", "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/all-verified/v2ray-base64-0007.txt", VpnProtocol.Vless, "MIT"),
-        new("Au1rxx verified 8", "Au1rxx/free-vpn-subscriptions", "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/all-verified/v2ray-base64-0008.txt", VpnProtocol.Vless, "MIT"),
         new("MetaFetch mixed", "lanzm/MetaFetch", "https://raw.githubusercontent.com/lanzm/MetaFetch/master/list.txt", VpnProtocol.Vless, "MIT"),
 
         // Сто новых country-feed, live-проверенных с production VPS 10.09.2026.
@@ -197,7 +187,7 @@ public static class BuiltInVpnSourceCatalog
             "Saudi Arabia|Seychelles|South Africa|South Korea|Taiwan|Thailand|United Arab Emirates";
         const string au1rxxCountries =
             "RU UA KZ AM AL AT BG CH DE EE ES FI FR GB GR IE IT LT LV NL NO PL RO SE TR CZ " +
-            "AE AR AU BR CA CN HK ID IL IN JP KR MX MY NG PH";
+            "AE AR AU BR CA CN HK IL IN JP KR MX MY";
 
         foreach (var country in telegramCountries.Split('|', StringSplitOptions.RemoveEmptyEntries))
             yield return new($"Telegram collector country {country}",
@@ -209,6 +199,29 @@ public static class BuiltInVpnSourceCatalog
                 $"https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/country/{country}/v2ray-base64-0001.txt",
                 VpnProtocol.Vless, "MIT");
     }
+
+    internal static IReadOnlySet<string> ArchivedUrls { get; } = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "https://raw.githubusercontent.com/Barabama/FreeNodes/feat/ai-crawler-v2/nodes/merged.txt",
+        "https://raw.githubusercontent.com/VovaplusEXP/p-configs/main/Splitted-By-Protocol-Secure/vless.txt",
+        "https://raw.githubusercontent.com/VovaplusEXP/p-configs/main/Splitted-By-Protocol-Secure/vmess.txt",
+        "https://raw.githubusercontent.com/nukcrow/black-crow/main/sub/general/vless.txt",
+        "https://raw.githubusercontent.com/nukcrow/black-crow/main/sub/general/vmess.txt",
+        "https://raw.githubusercontent.com/nukcrow/black-crow/main/sub/general/ss.txt",
+        "https://raw.githubusercontent.com/nukcrow/black-crow/main/sub/general/trojan.txt",
+        "https://raw.githubusercontent.com/nukcrow/black-crow/main/sub/general/all_configs.txt",
+        "https://raw.githubusercontent.com/Epodonios/v2ray-configs/main/All_Configs_Sub.txt",
+        "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/all-verified/v2ray-base64-0007.txt",
+        "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/all-verified/v2ray-base64-0008.txt",
+        "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/country/ID/v2ray-base64-0001.txt",
+        "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/country/NG/v2ray-base64-0001.txt",
+        "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/country/PH/v2ray-base64-0001.txt",
+        "https://raw.githubusercontent.com/nukcrow/black-crow/main/sub/protocols/vless.txt",
+        "https://raw.githubusercontent.com/nukcrow/black-crow/main/sub/protocols/vmess.txt",
+        "https://raw.githubusercontent.com/nukcrow/black-crow/main/sub/protocols/ss.txt",
+        "https://raw.githubusercontent.com/nukcrow/black-crow/main/sub/protocols/trojan.txt",
+        "https://raw.githubusercontent.com/nukcrow/black-crow/main/sub/protocols/hysteria2.txt",
+    };
 
     /// <summary>Число независимых владельцев встроенных VPN feed.</summary>
     public static int ProviderCount { get; } = Sources.Select(source => source.Provider)

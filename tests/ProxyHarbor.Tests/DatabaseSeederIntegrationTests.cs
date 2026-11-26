@@ -12,18 +12,20 @@ namespace ProxyHarbor.Tests;
 public sealed class DatabaseSeederIntegrationTests
 {
     [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
+    [InlineData(BuiltInSourceCatalog.UnavailableLighscentUrl, true)]
+    [InlineData(BuiltInSourceCatalog.UnavailableLighscentUrl, false)]
+    [InlineData("https://raw.githubusercontent.com/Moleway/Free-Proxy-List/main/socks5.txt", true)]
+    [InlineData("https://raw.githubusercontent.com/tomjiu/proxy-pipeline/main/dist/online/http.txt", true)]
     [Trait("Category", "PostgresIntegration")]
-    public async Task UnavailablePublisherIsArchivedWithoutLosingHistoryOrImport(bool enabled)
+    public async Task UnavailablePublisherIsArchivedWithoutLosingHistoryOrImport(string url, bool enabled)
     {
         await using var database = await ProxySourceImportStoreIntegrationTests.SnapshotDatabase.CreateAsync();
         if (database is null) return;
         var observedAt = new DateTimeOffset(2026, 10, 9, 0, 0, 0, TimeSpan.Zero);
         var retired = new ProxySource
         {
-            Name = "lighscent",
-            Url = BuiltInSourceCatalog.UnavailableLighscentUrl,
+            Name = "Unavailable publisher",
+            Url = url,
             Enabled = true,
             DefaultProtocol = ProxyProtocol.Http,
             Priority = 3070,
@@ -1046,15 +1048,12 @@ public sealed class DatabaseSeederIntegrationTests
     }
 
     [Theory]
-    [InlineData("Auto OVPN catalog", "https://www.vpngate.net/api/iphone/")]
-    [InlineData("Auto OVPN catalog", "https://raw.githubusercontent.com/9xN/auto-ovpn/main/configs/server_0_JP.ovpn")]
-    [InlineData("Black Crow VLESS", "https://raw.githubusercontent.com/nukcrow/black-crow/main/sub/protocols/vless.txt")]
-    [InlineData("Black Crow VMess", "https://raw.githubusercontent.com/nukcrow/black-crow/main/sub/protocols/vmess.txt")]
-    [InlineData("Black Crow Shadowsocks", "https://raw.githubusercontent.com/nukcrow/black-crow/main/sub/protocols/ss.txt")]
-    [InlineData("Black Crow Trojan", "https://raw.githubusercontent.com/nukcrow/black-crow/main/sub/protocols/trojan.txt")]
-    [InlineData("Black Crow mixed", "https://raw.githubusercontent.com/nukcrow/black-crow/main/sub/protocols/hysteria2.txt")]
+    [InlineData("Auto OVPN catalog", "https://www.vpngate.net/api/iphone/", false)]
+    [InlineData("Auto OVPN catalog", "https://raw.githubusercontent.com/9xN/auto-ovpn/main/configs/server_0_JP.ovpn", false)]
+    [InlineData("Barabama mixed", "https://raw.githubusercontent.com/Barabama/FreeNodes/feat/ai-crawler-v2/nodes/merged.txt", true)]
+    [InlineData("Barabama mixed", "https://raw.githubusercontent.com/Barabama/FreeNodes/feat/ai-crawler-v2/nodes/merged.txt", false)]
     [Trait("Category", "PostgresIntegration")]
-    public async Task StartupMigratesReplacedVpnSourceAndResetsResourceState(string canonicalName, string replacedUrl)
+    public async Task StartupMigratesReplacedVpnSourceAndResetsResourceState(string canonicalName, string replacedUrl, bool enabled)
     {
         var baseConnectionString = Environment.GetEnvironmentVariable("PROXYHARBOR_INTEGRATION_POSTGRES");
         if (string.IsNullOrWhiteSpace(baseConnectionString)) return;
@@ -1082,9 +1081,7 @@ public sealed class DatabaseSeederIntegrationTests
                 source.Url = replacedUrl;
                 source.Name = "Legacy source name";
                 source.License = "Legacy publication terms";
-                if (replacedUrl.EndsWith("/hysteria2.txt", StringComparison.Ordinal))
-                    source.DefaultProtocol = VpnProtocol.Hysteria2;
-                source.Enabled = false;
+                source.Enabled = enabled;
                 source.LastFetchedAt = DateTimeOffset.UtcNow;
                 source.LastSucceededAt = source.LastFetchedAt.Value.AddHours(-1);
                 source.LastContentFetchedAt = source.LastSucceededAt;
@@ -1103,7 +1100,7 @@ public sealed class DatabaseSeederIntegrationTests
             await using var verify = new ProxyHarborDbContext(options);
             var migrated = await verify.VpnSources.SingleAsync(source => source.Url == canonical.Url);
             Assert.Equal(sourceId, migrated.Id);
-            Assert.False(migrated.Enabled);
+            Assert.Equal(enabled, migrated.Enabled);
             Assert.Equal(canonical.Name, migrated.Name);
             Assert.Equal(canonical.Provider, migrated.Provider);
             Assert.Equal(canonical.Protocol, migrated.DefaultProtocol);
@@ -1123,6 +1120,59 @@ public sealed class DatabaseSeederIntegrationTests
         {
             await using var drop = new NpgsqlCommand($"DROP SCHEMA {schema} CASCADE", admin);
             await drop.ExecuteNonQueryAsync();
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
+    public async Task StartupArchivesUnavailableVpnSourcesAndPreservesExistingBarabamaReplacement()
+    {
+        await using var database = await ProxySourceImportStoreIntegrationTests.SnapshotDatabase.CreateAsync();
+        if (database is null) return;
+
+        string[] archivedUrls =
+        [
+            "https://raw.githubusercontent.com/nukcrow/black-crow/main/sub/general/vless.txt",
+            "https://raw.githubusercontent.com/nukcrow/black-crow/main/sub/protocols/vless.txt",
+            "https://raw.githubusercontent.com/Barabama/FreeNodes/feat/ai-crawler-v2/nodes/merged.txt"
+        ];
+        var expected = archivedUrls.Select(url => new VpnSource
+        {
+            Name = "Unavailable source",
+            Provider = "Previous provider",
+            License = "MIT",
+            Url = url,
+            DefaultProtocol = VpnProtocol.Vless,
+            Enabled = true,
+            HttpETag = "previous-etag",
+            LastItemCount = 7,
+            LastError = "HTTP 404"
+        }).ToArray();
+
+        await using (var seed = database.Factory.CreateDbContext())
+        {
+            await DatabaseSeeder.InitializeAsync(seed);
+            seed.VpnSources.AddRange(expected);
+            await seed.SaveChangesAsync();
+        }
+        for (var pass = 0; pass < 2; pass++)
+        {
+            await using var startup = database.Factory.CreateDbContext();
+            await DatabaseSeeder.InitializeAsync(startup);
+        }
+
+        await using var verify = database.Factory.CreateDbContext();
+        var canonical = await verify.VpnSources.SingleAsync(source =>
+            source.Url == "https://raw.githubusercontent.com/Barabama/FreeNodes/main/nodes/merged.txt");
+        Assert.True(canonical.Enabled);
+        foreach (var old in expected)
+        {
+            var archived = await verify.VpnSources.SingleAsync(source => source.Url == old.Url);
+            Assert.Equal(old.Id, archived.Id);
+            Assert.False(archived.Enabled);
+            Assert.Equal(old.HttpETag, archived.HttpETag);
+            Assert.Equal(old.LastItemCount, archived.LastItemCount);
+            Assert.Equal(old.LastError, archived.LastError);
         }
     }
 

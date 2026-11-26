@@ -9,6 +9,35 @@ public static class BuiltInSourceCatalog
     // Keep the identity so startup archives existing data without deleting it.
     internal const string UnavailableLighscentUrl = "https://raw.githubusercontent.com/lighscent/proxies/master/http.txt";
 
+    // These exact URLs returned 404 from production. Keep existing rows and their history.
+    internal static IReadOnlySet<string> ArchivedUrls { get; } = new HashSet<string>(StringComparer.Ordinal)
+    {
+        UnavailableLighscentUrl,
+        "https://raw.githubusercontent.com/Moleway/Free-Proxy-List/main/socks4.txt",
+        "https://raw.githubusercontent.com/Moleway/Free-Proxy-List/main/socks5.txt",
+        "https://raw.githubusercontent.com/ebrasha/abdal-proxy-hub/refs/heads/main/https-proxy-list-by-EbraSha.txt",
+        "https://raw.githubusercontent.com/ebrasha/abdal-proxy-hub/refs/heads/main/socks4-proxy-list-by-EbraSha.txt",
+        "https://raw.githubusercontent.com/ebrasha/abdal-proxy-hub/refs/heads/main/socks5-proxy-list-by-EbraSha.txt",
+        "https://raw.githubusercontent.com/MrMarble/proxy-list/main/all.txt",
+        "https://raw.githubusercontent.com/tomjiu/proxy-pipeline/main/dist/online/http.txt",
+        "https://raw.githubusercontent.com/tomjiu/proxy-pipeline/main/dist/online/all.txt",
+        "https://raw.githubusercontent.com/tomjiu/proxy-pipeline/main/dist/online/socks4.txt",
+        "https://raw.githubusercontent.com/tomjiu/proxy-pipeline/main/dist/online/socks5.txt",
+        "https://raw.githubusercontent.com/kevinriverrrr-sudo/free-proxy-list/main/proxies/all.txt",
+        "https://raw.githubusercontent.com/kevinriverrrr-sudo/free-proxy-list/main/proxies/http.txt",
+        "https://raw.githubusercontent.com/kevinriverrrr-sudo/free-proxy-list/main/proxies/socks5.txt",
+        "https://raw.githubusercontent.com/azestkingscrown/Free_Proxy_List/main/working_proxies.txt",
+        "https://raw.githubusercontent.com/NetroIndonesia/proxy-live/main/http.txt",
+        "https://raw.githubusercontent.com/Moleway/Free-Proxy-List/main/http.txt",
+        "https://raw.githubusercontent.com/caedencode/proxy-list/main/http.txt",
+        "https://raw.githubusercontent.com/j0rd1s3rr4n0/api/main/proxy/http.txt",
+        "https://raw.githubusercontent.com/rolki-png/proxies/main/proxies/http.txt",
+        "https://raw.githubusercontent.com/Moleway/Free-Proxy-List/main/all.txt",
+        "https://raw.githubusercontent.com/Moleway/Free-Proxy-List/main/https.txt",
+        "https://raw.githubusercontent.com/nokturbay-droid/carflow-proxies/main/proxies/all_proxies.txt",
+        "https://raw.githubusercontent.com/ebrasha/abdal-proxy-hub/main/http-proxy-list-by-EbraSha.txt",
+    };
+
     /// <summary>Дата последнего полного URL/live-аудита всех канонических feed'ов.</summary>
     public static DateOnly LastAuditedOn => new(2026, 10, 6);
 
@@ -17,6 +46,10 @@ public static class BuiltInSourceCatalog
     [
         // HTTP/HTTPS и смешанные feed'ы.
         Feed(1, "ProxyScrape V4 Mixed", "ProxyScrape", "https://api.proxyscrape.com/v4/free-proxy-list/get?request=display_proxies&proxy_format=protocolipport&format=json&skip=0&limit=2000", ProxyProtocol.Http),
+        Feed(1013, "Dahono HTTP", "Dahono", "https://raw.githubusercontent.com/Dahono-com/free-proxy-list/main/proxies/http.txt", ProxyProtocol.Http),
+        Feed(1014, "Dahono HTTPS", "Dahono", "https://raw.githubusercontent.com/Dahono-com/free-proxy-list/main/proxies/https.txt", ProxyProtocol.Https),
+        Feed(1015, "Dahono SOCKS4", "Dahono", "https://raw.githubusercontent.com/Dahono-com/free-proxy-list/main/proxies/socks4.txt", ProxyProtocol.Socks4),
+        Feed(1016, "Dahono SOCKS5", "Dahono", "https://raw.githubusercontent.com/Dahono-com/free-proxy-list/main/proxies/socks5.txt", ProxyProtocol.Socks5),
         // October discovery: documented aggregate feeds, not country/archive mirrors.
         // Litport publishes the five-minute feed on live; main is a daily snapshot.
         Feed(1001, "Litport HTTP", "Litport", "https://raw.githubusercontent.com/litportnet/free-proxy-list/live/proxies/http.txt", ProxyProtocol.Http),
@@ -44,7 +77,6 @@ public static class BuiltInSourceCatalog
         Feed(10, "TuanMinPay HTTP", "TuanMinPay", "https://raw.githubusercontent.com/TuanMinPay/live-proxy/refs/heads/master/http.txt", ProxyProtocol.Http),
         Feed(11, "HProxy HTTP", "HProxy", "https://raw.githubusercontent.com/hproxy-com/free-proxy-list/refs/heads/main/http.txt", ProxyProtocol.Http),
         Feed(12, "ObcbO HTTP", "ObcbO", "https://raw.githubusercontent.com/ObcbO/getproxy/refs/heads/master/file/http.txt", ProxyProtocol.Http),
-        Feed(13, "EbraSha HTTPS", "Abdal Proxy Hub", "https://raw.githubusercontent.com/ebrasha/abdal-proxy-hub/refs/heads/main/https-proxy-list-by-EbraSha.txt", ProxyProtocol.Https),
         Feed(14, "Free-PROXY HTTP", "Dpangestuw", "https://raw.githubusercontent.com/dpangestuw/Free-PROXY/refs/heads/main/http_proxies.txt", ProxyProtocol.Http),
         Feed(15, "AnonymousWork HTTP", "AnonymousWork", "https://raw.githubusercontent.com/Anonym0usWork1221/Free-Proxies/refs/heads/main/proxy_files/http_proxies.txt", ProxyProtocol.Http),
         Feed(16, "r00tee HTTPS", "r00tee", "https://raw.githubusercontent.com/r00tee/Proxy-List/refs/heads/main/Https.txt", ProxyProtocol.Https),
@@ -65,7 +97,6 @@ public static class BuiltInSourceCatalog
         Feed(29, "TuanMinPay SOCKS4", "TuanMinPay", "https://raw.githubusercontent.com/TuanMinPay/live-proxy/refs/heads/master/socks4.txt", ProxyProtocol.Socks4),
         Feed(30, "HProxy SOCKS4", "HProxy", "https://raw.githubusercontent.com/hproxy-com/free-proxy-list/refs/heads/main/socks4.txt", ProxyProtocol.Socks4),
         Feed(31, "ObcbO SOCKS4", "ObcbO", "https://raw.githubusercontent.com/ObcbO/getproxy/refs/heads/master/file/socks4.txt", ProxyProtocol.Socks4),
-        Feed(32, "EbraSha SOCKS4", "Abdal Proxy Hub", "https://raw.githubusercontent.com/ebrasha/abdal-proxy-hub/refs/heads/main/socks4-proxy-list-by-EbraSha.txt", ProxyProtocol.Socks4),
         Feed(33, "Free-PROXY SOCKS4", "Dpangestuw", "https://raw.githubusercontent.com/dpangestuw/Free-PROXY/refs/heads/main/socks4_proxies.txt", ProxyProtocol.Socks4),
         Feed(34, "AnonymousWork SOCKS4", "AnonymousWork", "https://raw.githubusercontent.com/Anonym0usWork1221/Free-Proxies/refs/heads/main/proxy_files/socks4_proxies.txt", ProxyProtocol.Socks4),
         Feed(35, "r00tee SOCKS4", "r00tee", "https://raw.githubusercontent.com/r00tee/Proxy-List/refs/heads/main/Socks4.txt", ProxyProtocol.Socks4),
@@ -81,7 +112,6 @@ public static class BuiltInSourceCatalog
         Feed(43, "TuanMinPay SOCKS5", "TuanMinPay", "https://raw.githubusercontent.com/TuanMinPay/live-proxy/refs/heads/master/socks5.txt", ProxyProtocol.Socks5),
         Feed(44, "HProxy SOCKS5", "HProxy", "https://raw.githubusercontent.com/hproxy-com/free-proxy-list/refs/heads/main/socks5.txt", ProxyProtocol.Socks5),
         Feed(45, "ObcbO SOCKS5", "ObcbO", "https://raw.githubusercontent.com/ObcbO/getproxy/refs/heads/master/file/socks5.txt", ProxyProtocol.Socks5),
-        Feed(46, "EbraSha SOCKS5", "Abdal Proxy Hub", "https://raw.githubusercontent.com/ebrasha/abdal-proxy-hub/refs/heads/main/socks5-proxy-list-by-EbraSha.txt", ProxyProtocol.Socks5),
         Feed(47, "Free-PROXY SOCKS5", "Dpangestuw", "https://raw.githubusercontent.com/dpangestuw/Free-PROXY/refs/heads/main/socks5_proxies.txt", ProxyProtocol.Socks5),
         Feed(48, "AnonymousWork SOCKS5", "AnonymousWork", "https://raw.githubusercontent.com/Anonym0usWork1221/Free-Proxies/refs/heads/main/proxy_files/socks5_proxies.txt", ProxyProtocol.Socks5),
         Feed(49, "r00tee SOCKS5", "r00tee", "https://raw.githubusercontent.com/r00tee/Proxy-List/refs/heads/main/Socks5.txt", ProxyProtocol.Socks5),
@@ -118,7 +148,6 @@ public static class BuiltInSourceCatalog
         Feed(78, "BesJS Mixed", "BesJS", "https://raw.githubusercontent.com/Bes-js/public-proxy-list/main/proxies.txt", ProxyProtocol.Http),
         Feed(79, "TheRituRajPS HTTP", "TheRituRajPS", "https://raw.githubusercontent.com/theriturajps/proxy-list/main/proxies.txt", ProxyProtocol.Http),
         Feed(80, "NotThinks Mixed", "NotThinks", "https://raw.githubusercontent.com/notthinks/proxy-lists/main/alive.txt", ProxyProtocol.Http),
-        Feed(81, "MrMarble Mixed", "MrMarble", "https://raw.githubusercontent.com/MrMarble/proxy-list/main/all.txt", ProxyProtocol.Http),
 
         // Свежие независимые каталоги, проверенные 2026-08-24: каждый URL отдал
         // непустой текстовый список и принадлежит отдельному GitHub owner.
@@ -216,19 +245,12 @@ public static class BuiltInSourceCatalog
         Feed(173, "ProxyGenerator Google SOCKS4", "ProxyGenerator", "https://raw.githubusercontent.com/proxygenerator1/ProxyGenerator/main/ForSites/google.com/socks4.txt", ProxyProtocol.Socks4),
         Feed(174, "ProxyGenerator Google SOCKS5", "ProxyGenerator", "https://raw.githubusercontent.com/proxygenerator1/ProxyGenerator/main/ForSites/google.com/socks5.txt", ProxyProtocol.Socks5),
         Feed(180, "7and1 HTTP", "7and1", "https://raw.githubusercontent.com/7and1/free-proxy-list/main/proxies/protocols/http/data.txt", ProxyProtocol.Http),
-        Feed(183, "TomJiu HTTP", "TomJiu", "https://raw.githubusercontent.com/tomjiu/proxy-pipeline/main/dist/online/http.txt", ProxyProtocol.Http),
-        Feed(184, "TomJiu Mixed", "TomJiu", "https://raw.githubusercontent.com/tomjiu/proxy-pipeline/main/dist/online/all.txt", ProxyProtocol.Http),
-        Feed(185, "TomJiu SOCKS4", "TomJiu", "https://raw.githubusercontent.com/tomjiu/proxy-pipeline/main/dist/online/socks4.txt", ProxyProtocol.Socks4),
-        Feed(186, "TomJiu SOCKS5", "TomJiu", "https://raw.githubusercontent.com/tomjiu/proxy-pipeline/main/dist/online/socks5.txt", ProxyProtocol.Socks5),
         Feed(187, "GHSTFACES Mixed", "GHSTFACES", "https://raw.githubusercontent.com/GHSTFACES/PL/main/all.txt", ProxyProtocol.Http),
         Feed(188, "GHSTFACES HTTP", "GHSTFACES", "https://raw.githubusercontent.com/GHSTFACES/PL/main/http.txt", ProxyProtocol.Http),
         Feed(189, "GHSTFACES HTTPS", "GHSTFACES", "https://raw.githubusercontent.com/GHSTFACES/PL/main/https.txt", ProxyProtocol.Https),
         Feed(190, "GHSTFACES SOCKS4", "GHSTFACES", "https://raw.githubusercontent.com/GHSTFACES/PL/main/socks4.txt", ProxyProtocol.Socks4),
         Feed(191, "GHSTFACES SOCKS5", "GHSTFACES", "https://raw.githubusercontent.com/GHSTFACES/PL/main/socks5.txt", ProxyProtocol.Socks5),
         Feed(192, "Andigwandi Mixed", "Andigwandi", "https://raw.githubusercontent.com/andigwandi/free-proxy/main/proxy_list.txt", ProxyProtocol.Http),
-        Feed(193, "KevinRiver Mixed", "KevinRiver", "https://raw.githubusercontent.com/kevinriverrrr-sudo/free-proxy-list/main/proxies/all.txt", ProxyProtocol.Http),
-        Feed(194, "KevinRiver HTTP", "KevinRiver", "https://raw.githubusercontent.com/kevinriverrrr-sudo/free-proxy-list/main/proxies/http.txt", ProxyProtocol.Http),
-        Feed(195, "KevinRiver SOCKS5", "KevinRiver", "https://raw.githubusercontent.com/kevinriverrrr-sudo/free-proxy-list/main/proxies/socks5.txt", ProxyProtocol.Socks5),
         Feed(196, "Xnuvers Active", "Xnuvers", "https://raw.githubusercontent.com/Xnuvers007/free-proxy/main/proxy_active.txt", ProxyProtocol.Http),
         Feed(197, "Xnuvers Scheme mixed", "Xnuvers", "https://raw.githubusercontent.com/Xnuvers007/free-proxy/main/proxy_scheme.txt", ProxyProtocol.HttpTls),
         Feed(198, "Xnuvers Scheme active", "Xnuvers", "https://raw.githubusercontent.com/Xnuvers007/free-proxy/main/proxy_scheme_active.txt", ProxyProtocol.HttpTls),
@@ -279,7 +301,6 @@ public static class BuiltInSourceCatalog
         Feed(299, "Proxio HTTPS", "Proxio", "https://raw.githubusercontent.com/proxio-io/proxy-list/main/https.txt", ProxyProtocol.Https),
         Feed(300, "Proxio SOCKS4", "Proxio", "https://raw.githubusercontent.com/proxio-io/proxy-list/main/socks4.txt", ProxyProtocol.Socks4),
         Feed(301, "Proxio SOCKS5", "Proxio", "https://raw.githubusercontent.com/proxio-io/proxy-list/main/socks5.txt", ProxyProtocol.Socks5),
-        Feed(302, "Azest Kings Crown Mixed", "Azest Kings Crown", "https://raw.githubusercontent.com/azestkingscrown/Free_Proxy_List/main/working_proxies.txt", ProxyProtocol.Http),
         Feed(303, "Pxys Daily Mixed", "Pxys", "https://raw.githubusercontent.com/Pxys-io/DailyProxyList/master/working_proxies.txt", ProxyProtocol.Http),
         Feed(304, "Syscallh00k HTTP", "Syscallh00k", "https://raw.githubusercontent.com/Syscallh00k/proxy-list/main/http.txt", ProxyProtocol.Http),
         Feed(305, "Syscallh00k HTTPS", "Syscallh00k", "https://raw.githubusercontent.com/Syscallh00k/proxy-list/main/https.txt", ProxyProtocol.Https),
@@ -397,11 +418,9 @@ public static class BuiltInSourceCatalog
         yield return Feed(rank++, "Riyoway HTTP", "Riyoway", "https://raw.githubusercontent.com/Riyoway/Proxies/master/http.txt", ProxyProtocol.Http);
         yield return Feed(rank++, "RioMMO HTTP", "RioMMO", "https://raw.githubusercontent.com/RioMMO/ProxyFree/main/HTTP.txt", ProxyProtocol.Http);
         yield return Feed(rank++, "IPParrot HTTP", "IPParrot", "https://raw.githubusercontent.com/IPParrot/proxy_ips/main/proxies/http.txt", ProxyProtocol.Http);
-        yield return Feed(rank++, "Netro Indonesia HTTP", "NetroIndonesia", "https://raw.githubusercontent.com/NetroIndonesia/proxy-live/main/http.txt", ProxyProtocol.Http);
         yield return Feed(rank++, "Ian Lusule HTTP", "Ian-Lusule", "https://raw.githubusercontent.com/Ian-Lusule/Proxies/main/proxies/http.txt", ProxyProtocol.Http);
         yield return Feed(rank++, "Shubham Shendre HTTP", "shubhamshendre", "https://raw.githubusercontent.com/shubhamshendre/Free-Proxies/main/http.txt", ProxyProtocol.Http);
         yield return Feed(rank++, "Snove Emby Mixed", "snove999", "https://raw.githubusercontent.com/snove999/emby-proxy-list/main/all.txt", ProxyProtocol.Http);
-        yield return Feed(rank++, "Moleway HTTP", "Moleway", "https://raw.githubusercontent.com/Moleway/Free-Proxy-List/main/http.txt", ProxyProtocol.Http);
         yield return Feed(rank++, "6yyn HTTP", "6yyn", "https://raw.githubusercontent.com/6yyn/free-proxy-list/main/http.txt", ProxyProtocol.Http);
         yield return Feed(rank++, "Access At HTTP", "Access-At", "https://raw.githubusercontent.com/Access-At/proxy-list/main/http.txt", ProxyProtocol.Http);
         yield return Feed(rank++, "Krokmazagaga HTTP", "krokmazagaga", "https://raw.githubusercontent.com/krokmazagaga/http-proxy-list/main/http.txt", ProxyProtocol.Http);
@@ -509,7 +528,6 @@ public static class BuiltInSourceCatalog
             yoitelinuxherew-ship-it|https://raw.githubusercontent.com/yoitelinuxherew-ship-it/proxy-list.txt/main/proxy-list.txt|Http
             udman1336|https://raw.githubusercontent.com/udman1336/Proxy-List/main/proxies/http.txt|Http
             TundzhayDzhansaz|https://raw.githubusercontent.com/TundzhayDzhansaz/proxy-list-auto-pull-in-30min/main/proxies/http.txt|Http
-            caedencode|https://raw.githubusercontent.com/caedencode/proxy-list/main/http.txt|Http
             AdamParker19|https://raw.githubusercontent.com/AdamParker19/Proxy-list/main/proxy.txt|Http
             mrgadotti|https://raw.githubusercontent.com/mrgadotti/echolink-proxy-list/main/proxy.txt|Http
             iiTzAm1ne|https://raw.githubusercontent.com/iiTzAm1ne/ScrapperFor-FreeProxyList.net_v.1/main/http.txt|Http
@@ -601,7 +619,6 @@ public static class BuiltInSourceCatalog
     private static IEnumerable<BuiltInSource> ProxyListTopicIndependentProviderFeeds()
     {
         const string feeds = """
-            j0rd1s3rr4n0|https://raw.githubusercontent.com/j0rd1s3rr4n0/api/main/proxy/http.txt|Http
             uncrypt3d|https://raw.githubusercontent.com/uncrypt3d/Browser-with-Proxy-manager/main/proxies.txt|Http
             nguywnben|https://raw.githubusercontent.com/nguywnben/daily-proxy-updates/main/proxies/http.txt|Http
             antidoxable|https://raw.githubusercontent.com/antidoxable/ProxyChecker/master/proxies.txt|Http
@@ -614,7 +631,6 @@ public static class BuiltInSourceCatalog
             opsxcq|https://raw.githubusercontent.com/opsxcq/proxy-list/master/list.txt|Http
             pilo21|https://raw.githubusercontent.com/pilo21/TwitchBotting/main/proxy.txt|Http
             Timskt|https://raw.githubusercontent.com/Timskt/ProxyScraper/main/proxies.txt|Http
-            rolki-png|https://raw.githubusercontent.com/rolki-png/proxies/main/proxies/http.txt|Http
             0xarchit|https://raw.githubusercontent.com/0xarchit/duckduckgo-webscraper/main/proxies.txt|Http
             """;
 

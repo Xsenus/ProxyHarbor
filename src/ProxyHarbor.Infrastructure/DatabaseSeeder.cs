@@ -52,16 +52,8 @@ public static class DatabaseSeeder
                 "https://raw.githubusercontent.com/9xN/auto-ovpn/main/json/data.json",
             ["https://raw.githubusercontent.com/9xN/auto-ovpn/main/configs/server_0_JP.ovpn"] =
                 "https://raw.githubusercontent.com/9xN/auto-ovpn/main/json/data.json",
-            ["https://raw.githubusercontent.com/nukcrow/black-crow/main/sub/protocols/vless.txt"] =
-                "https://raw.githubusercontent.com/nukcrow/black-crow/main/sub/general/vless.txt",
-            ["https://raw.githubusercontent.com/nukcrow/black-crow/main/sub/protocols/vmess.txt"] =
-                "https://raw.githubusercontent.com/nukcrow/black-crow/main/sub/general/vmess.txt",
-            ["https://raw.githubusercontent.com/nukcrow/black-crow/main/sub/protocols/ss.txt"] =
-                "https://raw.githubusercontent.com/nukcrow/black-crow/main/sub/general/ss.txt",
-            ["https://raw.githubusercontent.com/nukcrow/black-crow/main/sub/protocols/trojan.txt"] =
-                "https://raw.githubusercontent.com/nukcrow/black-crow/main/sub/general/trojan.txt",
-            ["https://raw.githubusercontent.com/nukcrow/black-crow/main/sub/protocols/hysteria2.txt"] =
-                "https://raw.githubusercontent.com/nukcrow/black-crow/main/sub/general/all_configs.txt"
+            ["https://raw.githubusercontent.com/Barabama/FreeNodes/feat/ai-crawler-v2/nodes/merged.txt"] =
+                "https://raw.githubusercontent.com/Barabama/FreeNodes/main/nodes/merged.txt"
         };
 
     /// <summary>Добавляет недостающие feed'ы и обновляет их метаданные, сохраняя выбор Enabled/Disabled.</summary>
@@ -275,9 +267,9 @@ public static class DatabaseSeeder
         // An unavailable publisher is archived, not deleted: preserve its ID,
         // history, validators, backoff and unfinished import for later recovery.
         // Reinstating the URL in the active catalog takes precedence.
-        if (!activeCatalogUrls.Contains(BuiltInSourceCatalog.UnavailableLighscentUrl))
-            foreach (var unavailable in existingSources.Where(source => source.Url == BuiltInSourceCatalog.UnavailableLighscentUrl))
-                unavailable.Enabled = false;
+        foreach (var unavailable in existingSources.Where(source =>
+            BuiltInSourceCatalog.ArchivedUrls.Contains(source.Url) && !activeCatalogUrls.Contains(source.Url)))
+            unavailable.Enabled = false;
 
         var legacySources = existingSources.Where(source =>
             !activeCatalogUrls.Contains(source.Url) &&
@@ -370,6 +362,7 @@ public static class DatabaseSeeder
             var canonical = existingVpnSourcesList.SingleOrDefault(source => source.Url == canonicalUrl);
             if (canonical is not null)
             {
+                if (BuiltInVpnSourceCatalog.ArchivedUrls.Contains(replacedUrl)) continue;
                 db.VpnSources.Remove(replaced);
                 existingVpnSourcesList.Remove(replaced);
                 continue;
@@ -386,6 +379,12 @@ public static class DatabaseSeeder
             replaced.ConsecutiveFailures = 0;
             replaced.LastError = null;
         }
+
+        var activeVpnCatalogUrls = BuiltInVpnSourceCatalog.Sources.Select(source => source.Url)
+            .ToHashSet(StringComparer.Ordinal);
+        foreach (var unavailable in existingVpnSourcesList.Where(source =>
+            BuiltInVpnSourceCatalog.ArchivedUrls.Contains(source.Url) && !activeVpnCatalogUrls.Contains(source.Url)))
+            unavailable.Enabled = false;
 
         var existingVpnSources = existingVpnSourcesList.ToDictionary(x => x.Url, StringComparer.Ordinal);
         for (var index = 0; index < BuiltInVpnSourceCatalog.Sources.Count; index++)
