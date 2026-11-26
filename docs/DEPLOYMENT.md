@@ -198,8 +198,8 @@ curl --fail https://proxy.example.com/health/ready
 ### Сборка на VPS с небольшим объёмом RAM
 
 Для обычного обновления используйте artifact `runtime-images-<full-commit-sha>`
-из успешного CI run на `master`. Если artifact устарел, запустите новый CI для
-текущей вершины ветки через `gh workflow run ci.yml --ref master`.
+из успешного CI run на `main`. Если artifact устарел, запустите новый CI для
+текущей вершины ветки через `gh workflow run ci.yml --ref main`.
 Дождитесь успешного завершения всего CI и CodeQL
 для этого commit: наличие artifact само по себе не подтверждает остальные jobs.
 Artifact хранится семь дней и содержит ровно API, web и restore images, прошедшие
