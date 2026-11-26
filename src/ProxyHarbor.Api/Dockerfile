@@ -1,4 +1,4 @@
-FROM mcr.microsoft.com/dotnet/sdk:10.0.401-alpine3.23@sha256:3f9c03432d664163a90d20e3ed0a3784d0aa82c1b9cbd1a7dd4609fede95669e AS build
+FROM mcr.microsoft.com/dotnet/sdk:10.0.404-alpine3.24@sha256:0294f285d062afacc8b5f6d7febb0cd4ee879320e5585fa15f2f4ebf1feb9ba7 AS build
 WORKDIR /src
 COPY ["Directory.Build.props", "."]
 COPY ["NuGet.Config", "global.json", "./"]
@@ -15,12 +15,16 @@ ARG SOURCE_REVISION=unknown
 RUN dotnet publish "src/ProxyHarbor.Api/ProxyHarbor.Api.csproj" -c Release -o /app --no-restore \
     /p:UseAppHost=false /p:Version="$VERSION" /p:SourceRevisionId="$SOURCE_REVISION" /p:ContinuousIntegrationBuild=true
 
-FROM mcr.microsoft.com/dotnet/aspnet:10.0.12-noble@sha256:2d584d8147faddb0d678c5748d47953e5b8e18621ed4fb7049a91381d9d7746f AS runtime
+FROM mcr.microsoft.com/dotnet/aspnet:10.0.15-noble@sha256:aac50ceef10391e78a899e3d2ccd00bbafa2dcb56ccf4586cbccf00edb84fc21 AS runtime
 # Production crashed repeatedly inside Alpine's musl loader. The supported Ubuntu/glibc
 # runtime removes that native failure surface; curl provides the container healthcheck
 # and libgssapi is loaded by Npgsql during streamed PostgreSQL backups.
-# Install current Ubuntu security builds even when the pinned runtime contains older OpenSSL.
-RUN apt-get update && apt-get install -y --no-install-recommends curl libgssapi-krb5-2 libssl3t64 openssl && \
+# Use HTTPS while installing the patched APT packages and Ubuntu security builds.
+RUN sed -i 's|^URIs: http://|URIs: https://|' /etc/apt/sources.list.d/ubuntu.sources && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends apt libapt-pkg6.0t64 curl libgssapi-krb5-2 libssl3t64 openssl && \
+    dpkg --compare-versions "$(dpkg-query -W -f='${Version}' apt)" ge 2.8.4ubuntu0.1 && \
+    dpkg --compare-versions "$(dpkg-query -W -f='${Version}' libapt-pkg6.0t64)" ge 2.8.4ubuntu0.1 && \
     rm -rf /var/lib/apt/lists/* && \
     groupadd --system --gid 101 proxyharbor && \
     useradd --system --uid 100 --gid 101 --home-dir /app --no-create-home --shell /usr/sbin/nologin proxyharbor && \
