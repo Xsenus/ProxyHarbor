@@ -1,8 +1,9 @@
 name: CI
 on:
   push:
-    branches: [main]
+    branches: [master]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -723,7 +724,7 @@ jobs:
             http://127.0.0.1:9093/api/v2/alerts
 
       - name: Export tested runtime images for VPS deployment
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/master'
         shell: bash
         run: |
           bundle="$RUNNER_TEMP/runtime-images"
@@ -736,7 +737,7 @@ jobs:
           docker image save "${images[@]}" | gzip -1 > "$bundle/runtime-images.tar.gz"
           (cd "$bundle" && sha256sum runtime-images.tar.gz > SHA256SUMS)
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/master'
         with:
           name: runtime-images-${{ github.sha }}
           path: ${{ runner.temp }}/runtime-images/

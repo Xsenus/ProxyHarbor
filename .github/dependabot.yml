@@ -1,4 +1,5 @@
 version: 2
+# Плановые обновления версий выполняются вручную. Для security PR действует отдельный лимит GitHub.
 updates:
   - package-ecosystem: nuget
     directories:
@@ -17,7 +18,7 @@ updates:
       # Microsoft.AspNetCore.OpenApi 10.x requires Microsoft.OpenApi < 3.0.
       - dependency-name: Microsoft.OpenApi
         update-types: ["version-update:semver-major"]
-    open-pull-requests-limit: 2
+    open-pull-requests-limit: 0
 
   - package-ecosystem: npm
     directory: /src/proxyharbor-web
@@ -37,7 +38,7 @@ updates:
         update-types: ["version-update:semver-major"]
       - dependency-name: jsdom
         update-types: ["version-update:semver-major"]
-    open-pull-requests-limit: 2
+    open-pull-requests-limit: 0
 
   - package-ecosystem: github-actions
     directory: /
@@ -45,7 +46,7 @@ updates:
     groups:
       github-actions:
         patterns: ["*"]
-    open-pull-requests-limit: 1
+    open-pull-requests-limit: 0
 
   - package-ecosystem: docker
     directories:
@@ -62,4 +63,4 @@ updates:
       # Major image migrations require an explicit compatibility review.
       - dependency-name: "*"
         update-types: ["version-update:semver-major"]
-    open-pull-requests-limit: 2
+    open-pull-requests-limit: 0
