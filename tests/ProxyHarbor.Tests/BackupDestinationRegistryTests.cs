@@ -115,8 +115,8 @@ public sealed class BackupDestinationRegistryTests
             AllowedOperations = "put,verify,read"
         };
         var adapter = registry.Resolve(destination, route, BackupDestinationOperation.Put, 1);
-        Assert.Equal(20, adapter.Capabilities.Put.MaximumParts);
-        Assert.Equal(20L * 49 * 1024 * 1024, adapter.Capabilities.Put.MaximumBytes);
+        Assert.Equal(64, adapter.Capabilities.Put.MaximumParts);
+        Assert.Equal(64L * 49 * 1024 * 1024, adapter.Capabilities.Put.MaximumBytes);
 
         AssertRejection(
             BackupDestinationRouteRejection.UnsupportedOperation,

@@ -60,6 +60,22 @@ describe("runtime site settings", () => {
     expect(localStorage.getItem("proxyharbor.analytics-consent.v2")).toBeNull();
   });
 
+  it.each(["rejected", "accepted"])("keeps the banner closed on reload when revision 2 is %s", async (choice) => {
+    localStorage.setItem("proxyharbor.analytics-consent.v2", choice);
+    vi.mocked(fetch).mockImplementation(async () => response(configured(2)));
+
+    render(<SiteSettingsProvider><PrivacyControls /></SiteSettingsProvider>);
+
+    const preferences = await screen.findByRole("button", { name: "Настройки cookies" });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    fireEvent.click(preferences);
+    expect(screen.getByRole("dialog")).toHaveAttribute("aria-modal", "false");
+    fireEvent.click(screen.getByRole("button", { name: "Разрешить статистику" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(localStorage.getItem("proxyharbor.analytics-consent.v2")).toBe("accepted");
+    expect(localStorage.getItem("proxyharbor.analytics-consent.v1")).toBeNull();
+  });
+
   it("keeps third-party scripts disabled after choosing necessary cookies only", async () => {
     render(<SiteSettingsProvider><PrivacyControls /><AnalyticsIntegrations /></SiteSettingsProvider>);
     fireEvent.click(await screen.findByRole("button", { name: "Только необходимые" }));

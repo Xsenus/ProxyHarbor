@@ -11,8 +11,10 @@ public sealed class TelegramBackupDestinationAdapterTests
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
-    [Fact]
-    public async Task RecipientDeliveryUsesNativeMultipartTransportAndCleansParts()
+    [Theory]
+    [InlineData(5, 3)]
+    [InlineData(65, 33)]
+    public async Task RecipientDeliveryUsesNativeMultipartTransportAndCleansParts(int length, int expectedParts)
     {
         var recipientId = Guid.NewGuid();
         var resolver = new StubResolver(recipientId);
@@ -21,15 +23,16 @@ public sealed class TelegramBackupDestinationAdapterTests
             resolver, transport, new EphemeralDataProtectionProvider());
         var destination = Destination(recipientId, maximumPartBytes: 2);
         var path = Path.Combine(Path.GetTempPath(), $"telegram-adapter-{Guid.NewGuid():N}.phbackup");
-        await File.WriteAllBytesAsync(path, [1, 2, 3, 4, 5]);
+        await File.WriteAllBytesAsync(path, new byte[length]);
         try
         {
             var result = await adapter.PutAsync(destination, path, CancellationToken.None);
 
-            Assert.Equal(3, result.ConfirmedParts);
-            Assert.Equal(3, transport.Paths.Count);
+            Assert.Equal(expectedParts, result.ConfirmedParts);
+            Assert.Equal(expectedParts, transport.Paths.Count);
             Assert.All(transport.Paths, sent => Assert.False(File.Exists(sent)));
-            Assert.Equal(["1/3", "2/3", "3/3"], transport.Captions.Select(PartNumber));
+            Assert.Equal(Enumerable.Range(1, expectedParts).Select(number => $"{number}/{expectedParts}"),
+                transport.Captions.Select(PartNumber));
             Assert.Equal(recipientId, resolver.LastRecipientId);
         }
         finally
@@ -38,6 +41,29 @@ public sealed class TelegramBackupDestinationAdapterTests
             foreach (var part in Directory.EnumerateFiles(
                 Path.GetDirectoryName(path)!, $"{Path.GetFileName(path)}.part*"))
                 File.Delete(part);
+        }
+    }
+
+    [Fact]
+    public async Task BackupExceedingPartLimitIsRejectedBeforeSendingAnything()
+    {
+        var transport = new RecordingTransport();
+        var recipientId = Guid.NewGuid();
+        var adapter = new TelegramBackupDestinationAdapter(
+            new StubResolver(recipientId), transport, new EphemeralDataProtectionProvider());
+        var path = Path.Combine(Path.GetTempPath(), $"telegram-oversized-{Guid.NewGuid():N}.phbackup");
+        await File.WriteAllBytesAsync(path, new byte[65]);
+        try
+        {
+            var exception = await Assert.ThrowsAsync<BackupDestinationOperationException>(() =>
+                adapter.PutAsync(Destination(recipientId, maximumPartBytes: 1), path, CancellationToken.None));
+            Assert.Equal(BackupDestinationErrorCode.QuotaExceeded, exception.Failure.Code);
+            Assert.Empty(transport.Paths);
+            Assert.Equal(65L, new FileInfo(path).Length);
+        }
+        finally
+        {
+            File.Delete(path);
         }
     }
 

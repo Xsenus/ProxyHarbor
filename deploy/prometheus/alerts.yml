@@ -130,6 +130,7 @@ groups:
           and on() proxyharbor_builtin_sources_healthy
             / proxyharbor_builtin_sources_enabled < 0.95
         for: 1h
+        keep_firing_for: 2m
         labels:
           severity: warning
         annotations:
@@ -151,6 +152,7 @@ groups:
           and on() proxyharbor_builtin_vpn_sources_healthy
             / proxyharbor_builtin_vpn_sources_enabled < 0.95
         for: 1h
+        keep_firing_for: 2m
         labels:
           severity: warning
         annotations:
@@ -162,6 +164,7 @@ groups:
           proxyharbor_last_collection_candidate_limit_reached > 0
           or proxyharbor_last_collection_sources_truncated > 0
         for: 5m
+        keep_firing_for: 2m
         labels:
           severity: warning
         annotations:
@@ -208,6 +211,7 @@ groups:
           and on() proxyharbor_validation_estimated_drain_seconds
             > proxyharbor_public_freshness_seconds
         for: 10m
+        keep_firing_for: 2m
         labels:
           severity: warning
         annotations:
@@ -233,6 +237,7 @@ groups:
           and on() proxyharbor_vpn_validation_estimated_drain_seconds
             > proxyharbor_vpn_public_freshness_seconds
         for: 10m
+        keep_firing_for: 2m
         labels:
           severity: warning
         annotations:
@@ -284,6 +289,7 @@ groups:
           proxyharbor_last_backup_success == 0
           and on() proxyharbor_backup_enabled == 1
         for: 15m
+        keep_firing_for: 2m
         labels:
           severity: critical
         annotations:
@@ -300,6 +306,7 @@ groups:
           )
           and on() proxyharbor_backup_enabled == 1
         for: 15m
+        keep_firing_for: 2m
         labels:
           severity: critical
         annotations:

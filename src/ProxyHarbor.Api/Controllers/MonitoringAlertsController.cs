@@ -113,18 +113,21 @@ public sealed class MonitoringAlertsController(
 
         foreach (var alert in request.Alerts.Take(MaximumAlerts))
         {
+            var resolved = alert.Status == "resolved";
             var name = Value(alert.Labels, "alertname", "Без названия");
             var severity = Value(alert.Labels, "severity", "unknown");
             var summary = Value(alert.Annotations, "summary", string.Empty);
             var description = Value(alert.Annotations, "description", string.Empty);
-            builder.Append("\n\n<b>").Append(Encode(name)).Append("</b> · ")
+            builder.Append("\n\n");
+            if (firing && resolved) builder.Append("🟢 ");
+            builder.Append("<b>").Append(Encode(name)).Append("</b> · ")
                 .Append(Encode(severity));
             if (summary.Length > 0) builder.Append('\n').Append(Encode(summary));
             if (description.Length > 0 && !string.Equals(description, summary, StringComparison.Ordinal))
                 builder.Append('\n').Append(Encode(description));
             if (TryFormatTimestamp(alert.StartsAt, out var startsAt))
                 builder.Append("\nНачало: ").Append(startsAt);
-            if (!firing && TryFormatTimestamp(alert.EndsAt, out var endsAt))
+            if (resolved && TryFormatTimestamp(alert.EndsAt, out var endsAt))
                 builder.Append("\nЗавершено: ").Append(endsAt);
 
             if (builder.Length >= MaximumMessageLength) break;
@@ -139,7 +142,7 @@ public sealed class MonitoringAlertsController(
     {
         var bucket = now.ToUnixTimeSeconds() / IdempotencyWindowSeconds;
         var fingerprints = string.Join(',', request.Alerts
-            .Select(alert => alert.Fingerprint)
+            .Select(alert => $"{alert.Fingerprint}:{alert.Status}")
             .Order(StringComparer.Ordinal));
         var material = $"{request.Status}\n{request.GroupKey}\n{fingerprints}";
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(material))).ToLowerInvariant();
