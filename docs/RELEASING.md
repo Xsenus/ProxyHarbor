@@ -3,7 +3,7 @@
 ## Предварительные условия
 
 1. Настройте Git remote на целевой GitHub-репозиторий, включите GitHub Actions/Packages и ruleset, разрешающий создание `v*` tag только release-администраторам.
-2. Убедитесь, что CI и последний `Source feed audit` зелёные, рабочее дерево чистое, а `main` содержит нужный commit.
+2. Убедитесь, что CI и последний `Source feed audit` зелёные, рабочее дерево чистое, а `master` содержит нужный commit.
 3. Для private/internal GitHub Enterprise Cloud задайте repository variable `ENABLE_GITHUB_ATTESTATIONS=true`. В публичном репозитории attestation включается автоматически; на планах без private attestations BuildKit SBOM/provenance всё равно публикуются вместе с OCI manifest.
 4. Выберите строгую SemVer-версию. Примеры: `v1.0.0`, `v1.1.0-rc.1`; leading zero и tag без префикса `v` намеренно отклоняются.
 5. Перенесите относящиеся к выпуску пункты из `Unreleased` в датированный `## [X.Y.Z] - YYYY-MM-DD` раздел `CHANGELOG.md`. Release gate требует точное совпадение версии и хотя бы одну стандартную категорию изменений.
@@ -13,7 +13,7 @@
 Рекомендуется подписанный annotated tag:
 
 ```bash
-git switch main
+git switch master
 git pull --ff-only
 git tag -s v1.0.0 -m "ProxyHarbor 1.0.0"
 git push origin v1.0.0

@@ -6,7 +6,7 @@
 
 1. Запустите `./tools/Test-PublicationReadiness.ps1 -RequireCleanWorktree`, `./tools/Test-DocumentationLinks.ps1`, фактический `./tools/Invoke-Gitleaks.ps1` и полный локальный CI-набор из `CONTRIBUTING.md`.
 2. Создайте публичный репозиторий без автоматически сгенерированных README/LICENSE/.gitignore, чтобы не расходилась история.
-3. Добавьте remote и отправьте `main` обычным push. Не применяйте force push и не публикуйте `.env`, backup либо production dump.
+3. Добавьте remote и отправьте `master` обычным push. Установите `master` веткой по умолчанию. Не применяйте force push и не публикуйте `.env`, backup либо production dump.
 4. Дождитесь первого успешного выполнения CI и CodeQL до включения required checks: GitHub предлагает только checks, которые уже запускались.
 
 Пример после создания пустого репозитория:
@@ -14,7 +14,7 @@
 ```powershell
 git remote add origin https://github.com/YOUR_GITHUB_OWNER/ProxyHarbor.git
 git remote -v
-git push --set-upstream origin main
+git push --set-upstream origin master
 ```
 
 Если `origin` уже существует, сначала проверьте его через `git remote get-url origin`; не заменяйте неизвестный remote вслепую. После выбора владельца обновите clone URL в `README.md`.
@@ -28,18 +28,19 @@ git push --set-upstream origin main
 - В `Settings → Actions → General` разрешите Actions; default `GITHUB_TOKEN` оставьте read-only. Workflow сами запрашивают минимальные дополнительные permissions на уровне job.
 - Разрешите только используемые namespaces: `actions/*`, `docker/*`, `github/codeql-action/*`. Локальные скрипты Gitleaks/actionlint скачивают закреплённые архивы и проверяют SHA-256.
 - В [`Settings → Code security and analysis`](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/enabling-features-for-your-repository/managing-security-and-analysis-settings-for-your-repository) включите Dependency graph, Dependabot alerts/security updates, Code scanning, Secret scanning и Push protection.
+- Dependabot открывает PR для исправлений безопасности. Плановые обновления зависимостей оформляются вручную. Включите автоматическое удаление веток после слияния PR.
 - Включите Private vulnerability reporting. Публичные отчёты об уязвимостях запрещены политикой `SECURITY.md`.
 - Не добавляйте production-секреты в Actions variables. Текущие CI/release workflows используют только искусственные значения; runtime-секреты остаются на production host в Compose secret files.
 
-## Ruleset для `main`
+## Ruleset для `master`
 
 Создайте [active branch ruleset](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/creating-rulesets-for-a-repository) для default branch:
 
 - запрет удаления и force push;
 - pull request перед merge; для команды — минимум одно approval, для единственного владельца approval можно включить после добавления второго maintainer;
 - dismiss stale approvals и require resolution всех review conversations;
-- strict required status checks, ветка должна быть актуальна относительно `main`;
-- обязательные checks: `verify`, `Analyze csharp`, `Analyze javascript-typescript`;
+- strict required status checks, ветка должна быть актуальна относительно `master`;
+- обязательные проверки — `verify`, `postgres-integration`, `Analyze csharp`, `Analyze javascript-typescript`;
 - code scanning merge protection: блокировать новые CodeQL alerts уровня High/Critical;
 - bypass выдавать только release-администраторам и использовать лишь в аварийной процедуре.
 
@@ -53,10 +54,10 @@ git push --set-upstream origin main
 
 ## Проверка после первого push
 
-- README корректно отображает Mermaid-схему и ссылки;
+- README корректно отображает скриншоты и ссылки;
 - Issues показывают bug/source/documentation templates, blank issues отключены;
 - вкладка Security видит `SECURITY.md`, CodeQL и Dependabot;
-- CI job `verify` и оба CodeQL jobs завершились успешно;
+- задачи CI `verify` и `postgres-integration`, а также обе задачи CodeQL завершились успешно;
 - package/release workflows не запускаются без SemVer tag;
 - repository не содержит `.env`, `.phbackup`, dumps, audit artifacts или собранные proxy lists;
 - clone чистого репозитория проходит `Test-PublicationReadiness.ps1 -RequireCleanWorktree`.
