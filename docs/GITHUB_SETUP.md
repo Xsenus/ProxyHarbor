@@ -6,7 +6,7 @@
 
 1. Запустите `./tools/Test-PublicationReadiness.ps1 -RequireCleanWorktree`, `./tools/Test-DocumentationLinks.ps1`, фактический `./tools/Invoke-Gitleaks.ps1` и полный локальный CI-набор из `CONTRIBUTING.md`.
 2. Создайте публичный репозиторий без автоматически сгенерированных README/LICENSE/.gitignore, чтобы не расходилась история.
-3. Добавьте remote и отправьте `master` обычным push. Установите `master` веткой по умолчанию. Не применяйте force push и не публикуйте `.env`, backup либо production dump.
+3. Добавьте remote и отправьте `main` обычным push. Установите `main` веткой по умолчанию. Не применяйте force push и не публикуйте `.env`, backup либо production dump.
 4. Дождитесь первого успешного выполнения CI и CodeQL до включения required checks: GitHub предлагает только checks, которые уже запускались.
 
 Пример после создания пустого репозитория:
@@ -14,7 +14,7 @@
 ```powershell
 git remote add origin https://github.com/YOUR_GITHUB_OWNER/ProxyHarbor.git
 git remote -v
-git push --set-upstream origin master
+git push --set-upstream origin main
 ```
 
 Если `origin` уже существует, сначала проверьте его через `git remote get-url origin`; не заменяйте неизвестный remote вслепую. После выбора владельца обновите clone URL в `README.md`.
@@ -32,17 +32,17 @@ git push --set-upstream origin master
 - Включите Private vulnerability reporting. Публичные отчёты об уязвимостях запрещены политикой `SECURITY.md`.
 - Не добавляйте production-секреты в Actions variables. Текущие CI/release workflows используют только искусственные значения; runtime-секреты остаются на production host в Compose secret files.
 
-## Ruleset для `master`
+## Защита ветки `main`
 
 Создайте [active branch ruleset](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/creating-rulesets-for-a-repository) для default branch:
 
 - запрет удаления и force push;
-- pull request перед merge; для команды — минимум одно approval, для единственного владельца approval можно включить после добавления второго maintainer;
+- внесение изменений через pull request. Для репозитория с одним сопровождающим установите 0 обязательных одобрений. Увеличьте число одобрений после добавления второго сопровождающего.
 - dismiss stale approvals и require resolution всех review conversations;
-- strict required status checks, ветка должна быть актуальна относительно `master`;
+- strict required status checks, ветка должна быть актуальна относительно `main`;
 - обязательные проверки — `verify`, `postgres-integration`, `Analyze csharp`, `Analyze javascript-typescript`;
 - code scanning merge protection: блокировать новые CodeQL alerts уровня High/Critical;
-- bypass выдавать только release-администраторам и использовать лишь в аварийной процедуре.
+- применяйте правила защиты к администраторам репозитория.
 
 Отдельный active tag ruleset для `v*.*.*` должен запрещать изменение и удаление существующих тегов, а создание разрешать только release-администраторам. Сам release выполняется строго по `docs/RELEASING.md`.
 
