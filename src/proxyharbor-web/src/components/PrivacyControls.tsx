@@ -9,58 +9,48 @@ import {
   writeAnalyticsChoice,
 } from "../privacyPreferences";
 import { useSiteSettings } from "../siteSettingsContext";
+import type { SiteSettings } from "../siteSettingsModel";
 
 export function PrivacyControls() {
   const { settings, loading, analyticsReady } = useSiteSettings();
+  if (loading) return null;
+  return <PrivacyDialog key={settings.cookieConsentRevision} settings={settings} analyticsReady={analyticsReady} />;
+}
+
+function PrivacyDialog({ settings, analyticsReady }: { settings: SiteSettings; analyticsReady: boolean }) {
   const revision = settings.cookieConsentRevision;
   // Public descriptions and legal documents must be readable before consent.
   // Reading them is not a privacy choice and never enables analytics.
   const readingDocument = Object.hasOwn(publicInfoPaths, window.location.pathname.replace(/\/+$/, "") || "/");
   const [choice, setChoice] = useState(() => readAnalyticsChoice(revision));
-  const [open, setOpen] = useState(choice === null && !readingDocument);
+  const [preferencesOpen, setPreferencesOpen] = useState(false);
   const dialogRef = useRef<HTMLElement>(null);
   const required = choice === null && !readingDocument;
+  const open = required || preferencesOpen;
   const privacySignal = privacySignalEnabled();
 
   useEffect(() => {
     const refresh = () => setChoice(readAnalyticsChoice(revision));
-    const show = () => setOpen(true);
-    const synchronizeStorage = () => {
-      const next = readAnalyticsChoice(revision);
-      setChoice(next);
-      // Another tab can complete the initial choice or clear consent entirely.
-      // Keep explicitly opened settings visible when a known choice changes.
-      if (next === null && !readingDocument) setOpen(true);
-      else if (choice === null) setOpen(false);
-    };
+    const show = () => setPreferencesOpen(true);
     window.addEventListener(privacyPreferenceChanged, refresh);
     window.addEventListener(openPrivacyPreferences, show);
-    window.addEventListener("storage", synchronizeStorage);
+    window.addEventListener("storage", refresh);
     return () => {
       window.removeEventListener(privacyPreferenceChanged, refresh);
       window.removeEventListener(openPrivacyPreferences, show);
-      window.removeEventListener("storage", synchronizeStorage);
+      window.removeEventListener("storage", refresh);
     };
-  }, [revision, choice, readingDocument]);
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      const next = readAnalyticsChoice(revision);
-      setChoice(next);
-      if (next === null && !readingDocument) setOpen(true);
-    }, 0);
-    return () => window.clearTimeout(timer);
-  }, [revision, readingDocument]);
+  }, [revision]);
 
   useEffect(() => {
     const dialog = dialogRef.current;
-    if (!open || loading || !dialog) return;
+    if (!open || !dialog) return;
     const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     dialog.focus();
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape" && !required) {
         event.preventDefault();
-        setOpen(false);
+        setPreferencesOpen(false);
       }
       if (event.key !== "Tab" || !required) return;
       const controls = Array.from(dialog.querySelectorAll<HTMLElement>('a[href], button:not(:disabled)'));
@@ -79,16 +69,14 @@ export function PrivacyControls() {
       dialog.removeEventListener("keydown", onKeyDown);
       if (previousFocus?.isConnected) previousFocus.focus();
     };
-  }, [open, loading, required]);
+  }, [open, required]);
 
   const choose = (value: "accepted" | "rejected") => {
     const effective = privacySignal ? "rejected" : value;
     writeAnalyticsChoice(effective, revision);
     setChoice(effective);
-    setOpen(false);
+    setPreferencesOpen(false);
   };
-
-  if (loading) return null;
 
   const enabledAnalytics = [
     settings.analytics.firstPartyEnabled && "собственная статистика ProxyHarbor",
@@ -102,7 +90,7 @@ export function PrivacyControls() {
       {settings.cookies.showSettingsButton && (choice !== null || readingDocument) && <button
         className="privacy-settings-button"
         type="button"
-        onClick={() => setOpen(true)}
+        onClick={() => setPreferencesOpen(true)}
         aria-label="Настройки cookies"
       >
         <Settings2 /> Cookies
@@ -121,7 +109,7 @@ export function PrivacyControls() {
             className="privacy-consent-close"
             type="button"
             aria-label="Закрыть"
-            onClick={() => setOpen(false)}
+            onClick={() => setPreferencesOpen(false)}
           >
             <X />
           </button>}
@@ -138,6 +126,12 @@ export function PrivacyControls() {
             {required && <small>Для продолжения выберите один из вариантов.</small>}
             {privacySignal && (
               <small>Браузер передал GPC/DNT — необязательная статистика будет отключена.</small>
+            )}
+            {!privacySignal && !analyticsReady && (
+              <small>Настройки статистики недоступны. Вы можете продолжить с необходимыми cookies.</small>
+            )}
+            {!privacySignal && analyticsReady && enabledAnalytics.length === 0 && (
+              <small>На сайте используются только необходимые cookies.</small>
             )}
             {choice === "rejected" && (
               <small>Необязательная статистика отключена.</small>

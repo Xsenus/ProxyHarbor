@@ -186,6 +186,34 @@ tests:
         alertname: ProxyHarborVpnSourceCatalogUnhealthy
         exp_alerts: []
 
+  - name: Backup failure stays firing across one missing scrape and resolves after recovery
+    interval: 1m
+    input_series:
+      - series: proxyharbor_backup_enabled
+        values: '1x16 stale 1x6'
+      - series: proxyharbor_last_backup_success
+        values: '0x16 stale 0 1x5'
+    alert_rule_test:
+      - eval_time: 17m
+        alertname: ProxyHarborBackupFailed
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: Последний backup неуспешен
+              description: Зашифрованный снимок не завершился успешно либо первый backup не был создан.
+      - eval_time: 18m
+        alertname: ProxyHarborBackupFailed
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: Последний backup неуспешен
+              description: Зашифрованный снимок не завершился успешно либо первый backup не был создан.
+      - eval_time: 22m
+        alertname: ProxyHarborBackupFailed
+        exp_alerts: []
+
   - name: Runtime backup configuration read failure respects the grace period
     interval: 1m
     input_series:

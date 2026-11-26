@@ -33,7 +33,6 @@ public sealed class BackupService(
     private const string PublishedBackupPrefix = "proxyharbor-";
     private const string PublishedBackupSuffix = ".phbackup";
     private const string PublishedBackupTimestampFormat = "yyyyMMdd-HHmmss-ffff";
-    internal const int MaximumTelegramParts = 20;
     internal const string DeliveryPolicyErrorMarker = "[delivery-policy] ";
     private static readonly TimeSpan AuditWriteTimeout = TimeSpan.FromSeconds(15);
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -44,6 +43,9 @@ public sealed class BackupService(
     private static readonly Action<ILogger, string, Exception?> BackupCleanupFailed =
         LoggerMessage.Define<string>(LogLevel.Warning, new EventId(1204, "BackupCleanupFailed"),
             "Не удалось удалить временный backup-файл {BackupFile}; следующий запуск повторит точную orphan-очистку.");
+    private static readonly Action<ILogger, string, int, int, Exception?> TelegramPartConfirmed =
+        LoggerMessage.Define<string, int, int>(LogLevel.Information, new EventId(1206, "BackupTelegramPartConfirmed"),
+            "Telegram подтвердил backup {BackupFile}: часть {PartNumber}/{PartTotal}.");
     private readonly SemaphoreSlim _runGate = new(1, 1);
 
     /// <summary>Создаёт один снимок; секреты намеренно не сериализуются.</summary>
@@ -683,18 +685,23 @@ public sealed class BackupService(
     {
         var partLimit = maxTelegramFileSizeMb * 1024L * 1024L;
         var length = new FileInfo(path).Length;
+        var fileName = Path.GetFileName(path);
         // Проверяем предел до создания первого temporary part: слишком большой локальный
         // encrypted backup сохраняется для ручного получения, но не создаёт upload storm.
-        _ = BackupFileSplitter.RequiredPartCount(length, partLimit, MaximumTelegramParts);
+        _ = BackupFileSplitter.RequiredPartCount(length, partLimit, BackupFileSplitter.MaximumTelegramParts);
         if (length <= partLimit)
         {
             await SendDocumentAsync(path, "ProxyHarbor: зашифрованная резервная копия", botToken, chatId, token);
+            OperationalLogBoundary.Write(() => TelegramPartConfirmed(logger, fileName, 1, 1, null));
             return;
         }
 
         await foreach (var part in BackupFileSplitter.SplitAsync(
-            path, partLimit, MaximumTelegramParts, token))
+            path, partLimit, BackupFileSplitter.MaximumTelegramParts, token))
+        {
             await SendDocumentAsync(part.Path, $"ProxyHarbor backup — часть {part.Number}/{part.Total}", botToken, chatId, token);
+            OperationalLogBoundary.Write(() => TelegramPartConfirmed(logger, fileName, part.Number, part.Total, null));
+        }
     }
 
     /// <summary>Публикует partial-файл атомарно только после полной криптографической проверки.</summary>
@@ -1002,6 +1009,9 @@ internal sealed record BackupSettingsSnapshot(
 /// <summary>Потоково создаёт bounded temporary parts для native Telegram transport.</summary>
 public static class BackupFileSplitter
 {
+    /// <summary>Предел числа документов одного backup в Telegram. На диске создаётся одна часть за раз.</summary>
+    public const int MaximumTelegramParts = 64;
+
     /// <summary>Одна temporary часть и её позиция в наборе.</summary>
     public sealed record Part(string Path, int Number, int Total);
 

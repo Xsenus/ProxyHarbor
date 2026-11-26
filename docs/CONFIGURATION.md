@@ -203,7 +203,7 @@ DB-IP Lite имеет пониженную относительно коммер
 | `EncryptionKey` | пусто | при Enabled: 32..1024 Unicode characters, без control/surrogate ошибок |
 | `TelegramBotToken` | пусто | legacy fallback; новые настройки используют token основного бота |
 | `TelegramChatId` | пусто | legacy fallback; новые настройки сохраняют выбранный CRM-диалог |
-| `MaxTelegramFileSizeMb` | 49 | 1..49; максимум 20 частей |
+| `MaxTelegramFileSizeMb` | 49 | 1..49 МиБ на документ; до 64 документов одного бэкапа |
 | `SendToObjectStorage` | false | включает проверяемую доставку PHB3 в S3-совместимый bucket |
 | `ObjectStorageEndpoint` | пусто | абсолютный HTTPS endpoint без credentials/query/fragment |
 | `ObjectStorageRegion` | `ru-central1` | регион AWS Signature V4 |

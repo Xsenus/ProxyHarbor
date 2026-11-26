@@ -98,6 +98,27 @@ public sealed class MonitoringAlertsControllerTests
         Assert.NotEqual(key, MonitoringAlertsController.CreateIdempotencyKey(first, now));
     }
 
+    [Fact]
+    public void GroupedBackupNotificationShowsRecoveryAndDoesNotDeduplicateIt()
+    {
+        var notification = Notification();
+        notification.Alerts.Add(new AlertmanagerAlert
+        {
+            Fingerprint = "backup-stale",
+            Status = "firing",
+            Labels = new Dictionary<string, string> { ["alertname"] = "ProxyHarborBackupStale" }
+        });
+        var now = DateTimeOffset.FromUnixTimeSeconds(1_800_000_000);
+        var firingKey = MonitoringAlertsController.CreateIdempotencyKey(notification, now);
+        notification.Alerts[1].Status = "resolved";
+        notification.Alerts[1].EndsAt = "2026-11-26T04:30:00Z";
+
+        var message = MonitoringAlertsController.FormatMessage(notification);
+        Assert.Contains("🟢 <b>ProxyHarborBackupStale</b>", message, StringComparison.Ordinal);
+        Assert.Contains("Завершено: 2026-11-26 04:30:00 UTC", message, StringComparison.Ordinal);
+        Assert.NotEqual(firingKey, MonitoringAlertsController.CreateIdempotencyKey(notification, now));
+    }
+
     private static MonitoringAlertsController Controller(
         ProxyHarborDbContext db, IBackupConfigurationStore backupStore)
     {

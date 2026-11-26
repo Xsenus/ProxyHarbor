@@ -10,7 +10,6 @@ namespace ProxyHarbor.Api;
 /// <summary>Adapter поверх существующих resolver и Telegram runtime transport.</summary>
 public sealed class TelegramBackupDestinationAdapter : IBackupDestinationAdapter
 {
-    private const int MaximumParts = 20;
     private const long MaximumPartBytes = 49L * 1024 * 1024;
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
     private readonly ITelegramBackupDeliveryResolver? resolver;
@@ -36,7 +35,7 @@ public sealed class TelegramBackupDestinationAdapter : IBackupDestinationAdapter
 
     /// <inheritdoc />
     public BackupDestinationCapabilities Capabilities { get; } = new(
-        Put: new(true, MaximumPartBytes * MaximumParts, MaximumParts),
+        Put: new(true, MaximumPartBytes * BackupFileSplitter.MaximumTelegramParts, BackupFileSplitter.MaximumTelegramParts),
         Verify: new(false),
         Materialize: new(false),
         SupportsConditionalCreate: false,
@@ -69,7 +68,7 @@ public sealed class TelegramBackupDestinationAdapter : IBackupDestinationAdapter
         var sentParts = 0;
         try
         {
-            _ = BackupFileSplitter.RequiredPartCount(file.Length, partLimit, MaximumParts);
+            _ = BackupFileSplitter.RequiredPartCount(file.Length, partLimit, BackupFileSplitter.MaximumTelegramParts);
             TelegramBackupDelivery delivery;
             if (settings.RecipientId.HasValue)
             {
@@ -97,7 +96,7 @@ public sealed class TelegramBackupDestinationAdapter : IBackupDestinationAdapter
             }
 
             await foreach (var part in BackupFileSplitter.SplitAsync(
-                path, partLimit, MaximumParts, token))
+                path, partLimit, BackupFileSplitter.MaximumTelegramParts, token))
             {
                 await transport.SendAsync(
                     part.Path,
