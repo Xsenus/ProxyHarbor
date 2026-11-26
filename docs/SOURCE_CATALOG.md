@@ -1,6 +1,6 @@
 # Каталог провайдеров бесплатных прокси
 
-В `BuiltInSourceCatalog` входят 546 feed от 280 технической origin identity. Документ предназначен оператору; публичная главная страница источники не раскрывает. Таблица ниже описывает исходное ядро каталога, а полный канонический перечень URL, рангов и протоколов хранится в коде.
+В `BuiltInSourceCatalog` входят 533 feed от 271 технической origin identity. Документ предназначен оператору; публичная главная страница источники не раскрывает. Таблица ниже описывает исходное ядро каталога, а полный канонический перечень URL, рангов и протоколов хранится в коде.
 
 9 октября публичный репозиторий lighscent и его HTTP-feed вернули 404. URL исключён из активного каталога; при обновлении прежняя запись отключается с сохранением идентификатора, истории, HTTP validators, backoff и снимка импорта. Пользовательские URL не изменяются.
 
@@ -13,6 +13,9 @@
 | [Litport](https://github.com/litportnet/free-proxy-list) | HTTP, HTTPS, SOCKS4, SOCKS5 | Ветка `live`, не чаще одного запроса каждого файла в 5 минут; данные [CC0-1.0](https://github.com/litportnet/free-proxy-list/blob/main/LICENSE-DATA), код MIT. Ветка `main` содержит дневной снимок. |
 | [Maximilian Feix](https://github.com/maximilianfeix/free-proxy-list) | HTTP, HTTPS, SOCKS4, SOCKS5 | Часовые публикации; [MIT](https://github.com/maximilianfeix/free-proxy-list/blob/main/LICENSE). Условия и время публикации описаны в README провайдера. |
 | [ProxyWhirl](https://github.com/wyattowalsh/proxywhirl) | HTTP, HTTPS, SOCKS4, SOCKS5 | Опубликованные файлы `docs/proxy-lists`; [MIT](https://github.com/wyattowalsh/proxywhirl/blob/main/LICENSE). Используются HTTP validators и стандартный интервал сборщика; фиксированная частота публикации не предполагается. |
+| [Dahono](https://github.com/Dahono-com/free-proxy-list) | HTTP, HTTPS, SOCKS4, SOCKS5 | Четыре TXT из `main/proxies`, публикуются каждые три часа. [MIT и инструкция автоматического скачивания](https://github.com/Dahono-com/free-proxy-list#raw-lists). |
+
+26 ноября из активного каталога исключены подтверждённые 404 URL. Существующие записи отключаются с сохранением Id и истории.
 
 10 сентября 2026 года production-аудит проверил состояние всех встроенных feed. Девять проблемных proxy-источников заменены: пустой, HTML-страница, локальные loopback-порты, ошибочно классифицированная VPN-подписка и пять файлов больше безопасного лимита 10 МБ. Два исчезнувших country-feed Au1rxx удалены из VPN-каталога, а MetaFetch перенесён туда как VPN subscription. Новые URL проверены на HTTP 200 и непустой разбираемый ответ. Полный collector/validation прогон остаётся обязательным release-gate и не подменяется URL-проверкой.
 
@@ -27,7 +30,6 @@
 | 7 | TuanMinPay | 3 | HTTP, SOCKS4, SOCKS5 | [GitHub](https://github.com/TuanMinPay/live-proxy) |
 | 8 | HProxy | 25 | Mixed, HTTP, HTTPS, SOCKS4, SOCKS5, country feeds | [GitHub](https://github.com/hproxy-com/free-proxy-list) |
 | 9 | ObcbO | 3 | HTTP, SOCKS4, SOCKS5 | [GitHub](https://github.com/ObcbO/getproxy) |
-| 10 | Abdal Proxy Hub | 3 | HTTPS, SOCKS4, SOCKS5 | [GitHub](https://github.com/ebrasha/abdal-proxy-hub) |
 | 11 | Dpangestuw Free-PROXY | 3 | HTTP, SOCKS4, SOCKS5 | [GitHub](https://github.com/dpangestuw/Free-PROXY) |
 | 12 | AnonymousWork | 3 | HTTP, SOCKS4, SOCKS5 | [GitHub](https://github.com/Anonym0usWork1221/Free-Proxies) |
 | 13 | r00tee | 3 | HTTPS, SOCKS4, SOCKS5 | [GitHub](https://github.com/r00tee/Proxy-List) |
@@ -67,7 +69,6 @@
 | 47 | BesJS | 1 | Mixed | [GitHub](https://github.com/Bes-js/public-proxy-list) |
 | 48 | TheRituRajPS | 1 | HTTP | [GitHub](https://github.com/theriturajps/proxy-list) |
 | 49 | NotThinks | 1 | Mixed | [GitHub](https://github.com/notthinks/proxy-lists) |
-| 50 | MrMarble | 1 | Mixed | [GitHub](https://github.com/MrMarble/proxy-list) |
 | 51 | RelayGlass | 4 | HTTP, HTTPS, SOCKS4, SOCKS5 | [GitHub](https://github.com/relayglass/free-proxy-list) |
 | 52 | ProxyMan | 3 | HTTP, SOCKS4, SOCKS5 | [GitHub](https://github.com/Akshay7273/ProxyMan-free-proxy-list) |
 | 53 | Dinoz | 3 | HTTP, SOCKS4, SOCKS5 | [GitHub](https://github.com/dinoz0rg/proxy-list) |
@@ -88,13 +89,10 @@
 | 68 | ProxyGenerator | 19 | Mixed, HTTP, HTTPS, SOCKS4, SOCKS5, service-tested | [GitHub](https://github.com/proxygenerator1/ProxyGenerator) |
 | 69 | Seeh-Saah | 5 | Mixed, HTTP, HTTPS, SOCKS4, SOCKS5 | [GitHub](https://github.com/Seeh-Saah/awesome-free-proxy-list) |
 | 70 | 7and1 | 1 | HTTP | [GitHub](https://github.com/7and1/free-proxy-list) |
-| 71 | TomJiu | 4 | Mixed, HTTP, SOCKS4, SOCKS5 | [GitHub](https://github.com/tomjiu/proxy-pipeline) |
 | 72 | GHSTFACES | 5 | Mixed, HTTP, HTTPS, SOCKS4, SOCKS5 | [GitHub](https://github.com/GHSTFACES/PL) |
 | 73 | Andigwandi | 1 | Mixed | [GitHub](https://github.com/andigwandi/free-proxy) |
-| 74 | KevinRiver | 3 | Mixed, HTTP, SOCKS5 | [GitHub](https://github.com/kevinriverrrr-sudo/free-proxy-list) |
 | 75 | Xnuvers | 3 | Mixed | [GitHub](https://github.com/Xnuvers007/free-proxy) |
 | 76 | Proxio | 5 | Mixed, HTTP, HTTPS, SOCKS4, SOCKS5 | [GitHub](https://github.com/proxio-io/proxy-list) |
-| 77 | Azest Kings Crown | 1 | Mixed | [GitHub](https://github.com/azestkingscrown/Free_Proxy_List) |
 | 78 | Pxys | 2 | Mixed, CSV | [GitHub](https://github.com/Pxys-io/DailyProxyList) |
 | 79 | Syscallh00k | 5 | Mixed, HTTP, HTTPS, SOCKS4, SOCKS5 | [GitHub](https://github.com/Syscallh00k/proxy-list) |
 | 80 | Free Proxy API List | 3 | HTTP, SOCKS4, SOCKS5 | [GitHub](https://github.com/gnxD3RfTT2WE/free-proxy-api-list) |
@@ -108,6 +106,6 @@
 
 Доступность feed и работоспособность прокси — разные проверки. Source audit требует, чтобы каждый встроенный endpoint присутствовал, был включён, успешно и полностью обработан текущим production-циклом и вернул хотя бы одного кандидата. После межисточниковой дедупликации validator независимо открывает соединение через каждый кандидат, проверяет заявленный протокол, TLS/HTTP-маршрут, внешний адрес и задержку. В публичные JSON, XML, TXT и CSV попадают только недавно подтверждённые живые адреса.
 
-Бесплатные прокси меняются каждую минуту, поэтому нельзя честно обещать, что все строки внешнего feed будут рабочими. Гарантия сервиса другая и проверяемая: все 280 provider identities входят в сбор; неработающие адреса не публикуются; отказавший, пустой или усечённый feed отражается в diagnostics, Prometheus и еженедельном CI-аудите.
+Бесплатные прокси меняются каждую минуту, поэтому нельзя честно обещать, что все строки внешнего feed будут рабочими. Гарантия сервиса другая и проверяемая: все 271 provider identities входят в сбор; неработающие адреса не публикуются; отказавший, пустой или усечённый feed отражается в diagnostics, Prometheus и еженедельном CI-аудите.
 
-Все 546 URL, их протоколы и эксплуатационный порядок находятся в [`BuiltInSourceCatalog.cs`](../src/ProxyHarbor.Infrastructure/BuiltInSourceCatalog.cs). Команда воспроизводимого production-аудита описана в [`SOURCES.md`](SOURCES.md).
+Все 533 URL, их протоколы и эксплуатационный порядок находятся в [`BuiltInSourceCatalog.cs`](../src/ProxyHarbor.Infrastructure/BuiltInSourceCatalog.cs). Команда воспроизводимого production-аудита описана в [`SOURCES.md`](SOURCES.md).
